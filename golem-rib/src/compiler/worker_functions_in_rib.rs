@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{ComponentDependencies, FunctionName, InferredExpr, RibCompilationError};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -22,7 +23,8 @@ use golem_wasm::analysis::AnalysedType;
 // which has specific details, along with original type registry to construct this data.
 // These function calls are indeed worker invoke calls and nothing else.
 // If Rib has inbuilt function support, those will not be included here either.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct WorkerFunctionsInRib {
     pub function_calls: Vec<WorkerFunctionType>,
 }
@@ -66,7 +68,8 @@ impl WorkerFunctionsInRib {
 }
 
 // The type of a function call with worker (ephmeral or durable) in Rib script
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct WorkerFunctionType {
     pub function_name: FunctionName,
     pub parameter_types: Vec<AnalysedType>,

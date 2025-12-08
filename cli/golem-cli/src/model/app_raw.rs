@@ -1,11 +1,31 @@
-use crate::config::ProfileName;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::fs;
 use crate::log::LogColorize;
+use crate::model::cascade::property::map::MapMergeMode;
+use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::component::AppComponentType;
-use crate::model::Format;
+use crate::model::format::Format;
 use anyhow::{anyhow, Context};
-use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
-use serde::{Deserialize, Serialize};
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::diff;
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentName;
+use golem_common::model::http_api_definition::{GatewayBindingType, HttpApiDefinitionName};
+use indexmap::IndexMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use url::Url;
@@ -37,26 +57,26 @@ impl ApplicationWithSource {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Application {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temp_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wit_deps: Vec<String>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub templates: HashMap<String, ComponentTemplate>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub components: HashMap<String, Component>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub dependencies: HashMap<String, Vec<Dependency>>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub component_templates: IndexMap<String, ComponentTemplate>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub components: IndexMap<String, Component>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_api: Option<HttpApi>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<ProfileName, Profile>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub environments: IndexMap<String, Environment>,
 }
 
 impl Application {
@@ -72,93 +92,39 @@ impl Application {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
+    #[serde(default, skip_serializing_if = "TemplateReferences::is_empty")]
+    pub templates: TemplateReferences,
     #[serde(flatten)]
-    pub component_properties: ComponentProperties,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<String, ComponentProperties>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_profile: Option<String>,
-}
-
-impl ComponentTemplate {
-    pub fn merge_common_properties_into_profiles(self) -> Self {
-        Self {
-            component_properties: self.component_properties.clone(),
-            profiles: self
-                .profiles
-                .into_iter()
-                .map(|(name, profile)| {
-                    (
-                        name,
-                        self.component_properties
-                            .clone()
-                            .merge_with_overrides(profile),
-                    )
-                })
-                .collect(),
-            default_profile: self.default_profile,
-        }
-    }
+    pub component_properties: ComponentLayerProperties,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, ComponentLayerProperties>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Component {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub template: Option<String>,
+    #[serde(default, skip_serializing_if = "TemplateReferences::is_empty")]
+    pub templates: TemplateReferences,
     #[serde(flatten)]
-    pub component_properties: ComponentProperties,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<String, ComponentProperties>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_profile: Option<String>,
-}
-
-impl Component {
-    pub fn merge_common_properties_into_profiles<'a, I: IntoIterator<Item = &'a String>>(
-        mut self,
-        profile_names: I,
-    ) -> Self {
-        Self {
-            template: self.template.clone(),
-            component_properties: self.component_properties.clone(),
-            profiles: {
-                profile_names
-                    .into_iter()
-                    .map(|name| {
-                        (
-                            name.clone(),
-                            match self.profiles.remove(name) {
-                                Some(profile) => self
-                                    .component_properties
-                                    .clone()
-                                    .merge_with_overrides(profile),
-                                None => self.component_properties.clone(),
-                            },
-                        )
-                    })
-                    .collect()
-            },
-            default_profile: self.default_profile,
-        }
-    }
+    pub component_properties: ComponentLayerProperties,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, ComponentLayerProperties>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApi {
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub definitions: HashMap<String, HttpApiDefinition>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub deployments: HashMap<ProfileName, Vec<HttpApiDeployment>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub definitions: IndexMap<HttpApiDefinitionName, HttpApiDefinition>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub deployments: IndexMap<EnvironmentName, Vec<HttpApiDeployment>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDefinition {
+    // TODO: atomic: drop?
     pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<HttpApiDefinitionRoute>,
 }
@@ -192,7 +158,7 @@ pub struct HttpApiDefinitionBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_version: Option<u64>,
+    pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -201,41 +167,96 @@ pub struct HttpApiDefinitionBinding {
     pub response: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpApiDeployment {
-    pub host: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subdomain: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub definitions: Vec<String>,
+impl HttpApiDefinitionBinding {
+    pub fn to_diffable(&self) -> diff::HttpApiDefinitionBinding {
+        diff::HttpApiDefinitionBinding {
+            binding_type: match self.type_.unwrap_or_default() {
+                HttpApiDefinitionBindingType::Default => GatewayBindingType::Worker,
+                HttpApiDefinitionBindingType::CorsPreflight => GatewayBindingType::CorsPreflight,
+                HttpApiDefinitionBindingType::FileServer => GatewayBindingType::FileServer,
+                HttpApiDefinitionBindingType::HttpHandler => GatewayBindingType::HttpHandler,
+                HttpApiDefinitionBindingType::SwaggerUi => GatewayBindingType::SwaggerUi,
+            },
+            component_name: self.component_name.clone(),
+            worker_name: None, // TODO: atomic: check if we have restore it (and if it's agent compatible now)
+            idempotency_key: self.idempotency_key.clone(),
+            invocation_context: self.invocation_context.clone(),
+            response: self.response.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Profile {
+pub struct HttpApiDeployment {
+    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub definitions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Environment {
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub default: Option<bool>,
+    pub default: Option<Marker>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub project: Option<String>,
+    pub server: Option<Server>,
+    #[serde(skip_serializing_if = "Presets::is_empty", default)]
+    pub component_presets: Presets,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub url: Option<Url>,
+    pub cli: Option<CliOptions>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deployment: Option<DeploymentOptions>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum Server {
+    Builtin(BuiltinServer),
+    Custom(Box<CustomServer>),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum BuiltinServer {
+    Local,
+    Cloud,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CustomServer {
+    pub account: Option<String>,
+    pub url: Url,
     pub worker_url: Option<Url>,
+    pub allow_insecure: Option<bool>,
+    pub auth: CustomServerAuth,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum CustomServerAuth {
+    OAuth2 { oauth2: Marker },
+    Static { static_token: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CliOptions {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub format: Option<Format>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub build_profile: Option<String>,
+    pub auto_confirm: Option<Marker>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub auto_confirm: Option<bool>,
+    pub redeploy_agents: Option<Marker>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_agents: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_http_api: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_all: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub reset: Option<bool>,
+    pub reset: Option<Marker>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeploymentOptions {
+    // TODO: atomic
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -247,8 +268,80 @@ pub struct InitialComponentFile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
+pub enum Presets {
+    #[default]
+    None,
+    String(String),
+    List(Vec<String>),
+}
+
+impl Presets {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Presets::None => true,
+            Presets::String(s) => Self::parse(s).next().is_none(),
+            Presets::List(l) => l.is_empty(),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::None => vec![],
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l,
+        }
+    }
+
+    fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
+        s.split([',', '\n', '\r'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
+pub enum TemplateReferences {
+    #[default]
+    None,
+    String(String),
+    List(Vec<String>),
+}
+
+impl TemplateReferences {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            TemplateReferences::None => true,
+            TemplateReferences::String(s) => Self::parse(s).next().is_none(),
+            TemplateReferences::List(l) => l.is_empty(),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::None => vec![],
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l,
+        }
+    }
+
+    fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
+        s.split([',', '\n', '\r'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ComponentProperties {
+pub struct ComponentLayerProperties {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_wit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,69 +350,32 @@ pub struct ComponentProperties {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub build: Vec<BuildCommand>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_type: Option<AppComponentType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginInstallation>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<HashMap<String, String>>,
-}
-
-impl ComponentProperties {
-    pub fn merge_with_overrides(mut self, overrides: ComponentProperties) -> Self {
-        if overrides.source_wit.is_some() {
-            self.source_wit = overrides.source_wit;
-        }
-
-        if overrides.generated_wit.is_some() {
-            self.generated_wit = overrides.generated_wit;
-        }
-
-        if overrides.component_wasm.is_some() {
-            self.component_wasm = overrides.component_wasm;
-        }
-
-        if overrides.linked_wasm.is_some() {
-            self.linked_wasm = overrides.linked_wasm;
-        }
-
-        if !overrides.build.is_empty() {
-            self.build = overrides.build;
-        }
-
-        if !overrides.custom_commands.is_empty() {
-            self.custom_commands.extend(overrides.custom_commands)
-        }
-
-        if overrides.component_type.is_some() {
-            self.component_type = overrides.component_type;
-        }
-
-        let files = overrides.files.unwrap_or_default();
-        if !files.is_empty() {
-            self.files.get_or_insert_with(Vec::new).extend(files);
-        }
-
-        let plugins = overrides.plugins.unwrap_or_default();
-        if !plugins.is_empty() {
-            self.plugins.get_or_insert_with(Vec::new).extend(plugins);
-        }
-
-        let env = overrides.env.unwrap_or_default();
-        if !env.is_empty() {
-            self.env.get_or_insert_with(HashMap::new).extend(env);
-        }
-
-        self
-    }
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<Dependency>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -445,4 +501,30 @@ pub struct PluginInstallation {
     pub version: String,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub parameters: HashMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Marker;
+
+impl Serialize for Marker {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for Marker {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match bool::deserialize(deserializer)? {
+            true => Ok(Marker),
+            false => Err(serde::de::Error::custom(
+                "value must be `true`, `false` is not allowed",
+            )),
+        }
+    }
 }

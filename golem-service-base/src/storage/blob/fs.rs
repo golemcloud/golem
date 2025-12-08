@@ -14,10 +14,11 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -30,22 +31,20 @@ pub struct FileSystemBlobStorage {
 }
 
 impl FileSystemBlobStorage {
-    pub async fn new(root: &Path) -> Result<Self, String> {
+    pub async fn new(root: &Path) -> Result<Self, Error> {
         if async_fs::metadata(root).await.is_err() {
             async_fs::create_dir_all(root)
                 .await
-                .map_err(|err| format!("Failed to create local blob storage: {err}"))?
+                .map_err(|err| anyhow!("Failed to create local blob storage: {err}"))?
         }
-        let canonical = async_fs::canonicalize(root)
-            .await
-            .map_err(|err| err.to_string())?;
+        let canonical = async_fs::canonicalize(root).await?;
 
         let compilation_cache = canonical.join("compilation_cache");
 
         if async_fs::metadata(&compilation_cache).await.is_err() {
             async_fs::create_dir_all(&compilation_cache)
                 .await
-                .map_err(|err| format!("Failed to create compilation_cache directory: {err}"))?;
+                .context("Failed to create compilation_cache directory")?;
         }
 
         let custom_data = canonical.join("custom_data");
@@ -53,7 +52,7 @@ impl FileSystemBlobStorage {
         if async_fs::metadata(&custom_data).await.is_err() {
             async_fs::create_dir_all(&custom_data)
                 .await
-                .map_err(|err| format!("Failed to create custom_data directory: {err}"))?;
+                .context("Failed to create custom_data directory")?;
         }
 
         Ok(Self { root: canonical })
@@ -63,39 +62,39 @@ impl FileSystemBlobStorage {
         let mut result = self.root.clone();
 
         match namespace {
-            BlobStorageNamespace::CompilationCache { project_id } => {
+            BlobStorageNamespace::CompilationCache { environment_id } => {
                 result.push("compilation_cache");
-                result.push(project_id.to_string());
+                result.push(environment_id.to_string());
             }
-            BlobStorageNamespace::CustomStorage { project_id } => {
+            BlobStorageNamespace::CustomStorage { environment_id } => {
                 result.push("custom_data");
-                result.push(project_id.to_string());
+                result.push(environment_id.to_string());
             }
             BlobStorageNamespace::OplogPayload {
-                project_id,
+                environment_id,
                 worker_id,
             } => {
                 result.push("oplog_payload");
-                result.push(project_id.to_string());
+                result.push(environment_id.to_string());
                 result.push(worker_id.to_string());
             }
             BlobStorageNamespace::CompressedOplog {
-                project_id,
+                environment_id,
                 component_id,
                 level,
             } => {
                 result.push("compressed_oplog");
-                result.push(project_id.to_string());
+                result.push(environment_id.to_string());
                 result.push(component_id.to_string());
                 result.push(level.to_string());
             }
-            BlobStorageNamespace::InitialComponentFiles { project_id } => {
+            BlobStorageNamespace::InitialComponentFiles { environment_id } => {
                 result.push("initial_component_files");
-                result.push(project_id.to_string());
+                result.push(environment_id.to_string());
             }
-            BlobStorageNamespace::Components { project_id } => {
+            BlobStorageNamespace::Components { environment_id } => {
                 result.push("component_store");
-                result.push(project_id.to_string());
+                result.push(environment_id.to_string());
             }
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 result.push("plugin_wasm_files");
@@ -107,9 +106,9 @@ impl FileSystemBlobStorage {
         result
     }
 
-    fn ensure_path_is_inside_root(&self, path: &Path) -> Result<(), String> {
+    fn ensure_path_is_inside_root(&self, path: &Path) -> Result<(), Error> {
         if !path.starts_with(&self.root) {
-            Err(format!("Path {path:?} is not within: {:?}", self.root))
+            Err(anyhow!("Path {path:?} is not within: {:?}", self.root))
         } else {
             Ok(())
         }
@@ -124,14 +123,12 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
-            let data = async_fs::read(&full_path)
-                .await
-                .map_err(|err| format!("Failed to read file from {full_path:?}: {err}"))?;
+            let data = async_fs::read(&full_path).await?;
             Ok(Some(data))
         } else {
             Ok(None)
@@ -144,16 +141,14 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
-            let file = tokio::fs::File::open(&full_path)
-                .await
-                .map_err(|err| format!("Failed to open file at {full_path:?}: {err}"))?;
+            let file = tokio::fs::File::open(&full_path).await?;
             let stream = tokio_util::io::ReaderStream::new(file);
-            Ok(Some(Box::pin(stream.map_err(|err| err.to_string()))))
+            Ok(Some(Box::pin(stream.map_err(|err| err.into()))))
         } else {
             Ok(None)
         }
@@ -165,16 +160,14 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String> {
+    ) -> Result<Option<BlobMetadata>, Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
             let last_modified_at = metadata
-                .modified()
-                .map_err(|err| err.to_string())?
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map_err(|err| err.to_string())?
+                .modified()?
+                .duration_since(SystemTime::UNIX_EPOCH)?
                 .as_millis() as u64;
             Ok(Some(BlobMetadata {
                 last_modified_at: Timestamp::from(last_modified_at),
@@ -191,22 +184,20 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
+        data: &[u8],
+    ) -> Result<(), Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if let Some(parent) = full_path.parent() {
-            if async_fs::metadata(parent).await.is_err() {
-                async_fs::create_dir_all(parent).await.map_err(|err| {
-                    format!("Failed to create parent directory {parent:?}: {err}")
-                })?;
-            }
+        if let Some(parent) = full_path.parent()
+            && async_fs::metadata(parent).await.is_err()
+        {
+            async_fs::create_dir_all(parent).await?;
         }
 
-        async_fs::write(&full_path, data)
-            .await
-            .map_err(|err| format!("Failed to store file at {full_path:?}: {err}"))
+        async_fs::write(&full_path, data).await?;
+
+        Ok(())
     }
 
     async fn put_stream(
@@ -215,35 +206,28 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<(), String> {
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if let Some(parent) = full_path.parent() {
-            if async_fs::metadata(parent).await.is_err() {
-                async_fs::create_dir_all(parent).await.map_err(|err| {
-                    format!("Failed to create parent directory {parent:?}: {err}")
-                })?;
-            }
+        if let Some(parent) = full_path.parent()
+            && async_fs::metadata(parent).await.is_err()
+        {
+            async_fs::create_dir_all(parent).await?;
         }
 
-        let file = tokio::fs::File::create(&full_path)
-            .await
-            .map_err(|err| format!("Failed to create file at {full_path:?}: {err}"))?;
+        let file = tokio::fs::File::create(&full_path).await?;
 
         let mut writer = tokio::io::BufWriter::new(file);
 
         let mut stream = stream.make_stream_erased().await?;
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|err| err.to_string())?;
-            writer
-                .write_all(&chunk)
-                .await
-                .map_err(|err| err.to_string())?;
+            let chunk = chunk?;
+            writer.write_all(&chunk).await?;
         }
 
-        writer.flush().await.map_err(|err| err.to_string())?;
+        writer.flush().await?;
         Ok(())
     }
 
@@ -253,13 +237,12 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        async_fs::remove_file(&full_path)
-            .await
-            .map_err(|err| format!("Failed to delete file at {full_path:?}: {err}"))
+        async_fs::remove_file(&full_path).await?;
+        Ok(())
     }
 
     async fn create_dir(
@@ -268,13 +251,13 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        async_fs::create_dir_all(&full_path)
-            .await
-            .map_err(|err| err.to_string())
+        async_fs::create_dir_all(&full_path).await?;
+
+        Ok(())
     }
 
     async fn list_dir(
@@ -283,20 +266,15 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Error> {
         let namespace_root = self.path_of(&namespace, Path::new(""));
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        let mut entries = async_fs::read_dir(&full_path)
-            .await
-            .map_err(|err| err.to_string())?;
+        let mut entries = async_fs::read_dir(&full_path).await?;
 
         let mut result = Vec::new();
-        while let Some(entry) = TryStreamExt::try_next(&mut entries)
-            .await
-            .map_err(|err| err.to_string())?
-        {
+        while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
             if let Ok(path) = entry.path().strip_prefix(&namespace_root) {
                 result.push(path.to_path_buf());
             }
@@ -310,7 +288,7 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -320,7 +298,7 @@ impl BlobStorage for FileSystemBlobStorage {
             if err.kind() == std::io::ErrorKind::NotFound {
                 Ok(false)
             } else {
-                Err(err.to_string())
+                Err(err.into())
             }
         } else {
             Ok(true)
@@ -333,7 +311,7 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String> {
+    ) -> Result<ExistsResult, Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -355,15 +333,13 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let from_full_path = self.path_of(&namespace, from);
         let to_full_path = self.path_of(&namespace, to);
         self.ensure_path_is_inside_root(&from_full_path)?;
         self.ensure_path_is_inside_root(&to_full_path)?;
 
-        async_fs::copy(&from_full_path, &to_full_path)
-            .await
-            .map_err(|err| err.to_string())?;
+        async_fs::copy(&from_full_path, &to_full_path).await?;
         Ok(())
     }
 }

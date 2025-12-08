@@ -14,9 +14,7 @@
 
 pub mod default;
 
-use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
-};
+use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
@@ -25,8 +23,7 @@ use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
+use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -40,20 +37,25 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{
+    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
+};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::ResourceStore;
 use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
+use uuid::Uuid;
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
@@ -135,13 +137,13 @@ pub trait WorkerCtx:
         worker_config: WorkerConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -170,7 +172,7 @@ pub trait WorkerCtx:
     /// Gets the account created this worker
     fn created_by(&self) -> &AccountId;
 
-    fn component_metadata(&self) -> &golem_service_base::model::Component;
+    fn component_metadata(&self) -> &ComponentDto;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -210,12 +212,12 @@ pub trait FuelManagement {
     /// Borrows some fuel for the execution. The amount borrowed is not used by the execution engine,
     /// but the worker context can store it and use it in `is_out_of_fuel` to check if the worker is
     /// within the limits.
-    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError>;
+    async fn borrow_fuel(&mut self, current_level: i64) -> Result<(), WorkerExecutorError>;
 
     /// Same as `borrow_fuel` but synchronous as it is called from the epoch_deadline_callback.
     /// This assumes that there is a cached available resource limits that can be used to calculate
     /// borrow fuel without reaching out to external services.
-    fn borrow_fuel_sync(&mut self);
+    fn borrow_fuel_sync(&mut self, current_level: i64);
 
     /// Returns the remaining fuel that was previously borrowed. The remaining amount can be calculated
     /// by the current fuel level and some internal state of the worker context.
@@ -289,7 +291,11 @@ pub trait InvocationHooks {
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when a worker invocation fails
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision;
+    async fn on_invocation_failure(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+    ) -> RetryDecision;
 
     /// Called when a worker invocation succeeds
     /// Arguments:
@@ -322,16 +328,16 @@ pub trait UpdateManagement {
     /// Called when an update attempt has failed
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         details: Option<String>,
     );
 
     /// Called when an update attempt succeeded
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     );
 }
 
@@ -375,13 +381,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
-
-    /// Records the last known resource limits of a worker without activating it
-    async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        project_id: &ProjectId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError>;
 
     /// Callback called when the executor's shard assignment has been changed
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
@@ -453,7 +452,7 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()>;
 }
 

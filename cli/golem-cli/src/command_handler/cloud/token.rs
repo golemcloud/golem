@@ -18,10 +18,10 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::token::{TokenListView, TokenNewView};
-use crate::model::TokenId;
 use chrono::{DateTime, Utc};
 use golem_client::api::TokenClient;
-use golem_client::model::CreateTokenDto;
+use golem_client::model::TokenCreation;
+use golem_common::model::auth::TokenId;
 use std::sync::Arc;
 
 pub struct CloudTokenCommandHandler {
@@ -46,11 +46,13 @@ impl CloudTokenCommandHandler {
 
         let tokens = clients
             .token
-            .get_tokens(&clients.account_id().0)
+            .get_account_tokens(&clients.account_id().0)
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&TokenListView(tokens));
+        self.ctx
+            .log_handler()
+            .log_view(&TokenListView(tokens.values));
 
         Ok(())
     }
@@ -60,7 +62,7 @@ impl CloudTokenCommandHandler {
 
         let token = clients
             .token
-            .create_token(&clients.account_id().0, &CreateTokenDto { expires_at })
+            .create_token(&clients.account_id().0, &TokenCreation { expires_at })
             .await
             .map_service_error()?;
 
@@ -74,7 +76,7 @@ impl CloudTokenCommandHandler {
 
         clients
             .token
-            .delete_token(&clients.account_id().0, &token_id.0)
+            .delete_token(&token_id.0)
             .await
             .map_service_error()?;
 

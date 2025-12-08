@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app::AppComponentName;
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
+use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::analysed_type::{case, variant};
 use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
@@ -27,7 +27,7 @@ use wit_component::WitPrinter;
 use wit_parser::{PackageId, Resolve, SourceMap};
 
 pub fn generate_agent_wrapper_wit(
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
     agent_types: &[AgentType],
 ) -> anyhow::Result<AgentWrapperGeneratorContext> {
     let mut ctx = AgentWrapperGeneratorContextState::new(agent_types.to_vec());
@@ -72,7 +72,7 @@ impl AgentWrapperGeneratorContextState {
     }
 
     /// Generate the wrapper WIT that also imports and exports golem:agent/guest
-    fn generate_wit_source(&mut self, component_name: &AppComponentName) -> anyhow::Result<()> {
+    fn generate_wit_source(&mut self, component_name: &ComponentName) -> anyhow::Result<()> {
         if self.wrapper_package_wit_source.is_some() {
             return Err(anyhow!("generate_wit_source has been called already"));
         }
@@ -767,6 +767,7 @@ mod tests {
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
         NamedElementSchemas, TextDescriptor,
     };
+    use golem_common::model::component::ComponentName;
     use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };
@@ -775,7 +776,7 @@ mod tests {
 
     #[test]
     fn empty_agent_wrapper() {
-        let component_name = "example:empty".into();
+        let component_name = ComponentName("example:empty".to_string());
         let agent_types = vec![];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -807,7 +808,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_1() {
-        let component_name = "example:single1".into();
+        let component_name = ComponentName("example:single1".to_string());
         let agent_types = single_agent_wrapper_types();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -856,7 +857,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_2() {
-        let component_name = "example:single2".into();
+        let component_name = ComponentName("example:single2".to_string());
 
         let color = r#enum(&["red", "green", "blue"]).named("color");
 
@@ -1017,7 +1018,7 @@ mod tests {
 
     #[test]
     fn multi_agent_wrapper_2() {
-        let component_name = "example:multi1".into();
+        let component_name = ComponentName("example:multi1".to_string());
         let agent_types = test::multi_agent_wrapper_2_types();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1114,7 +1115,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_1_using_wit_keywords() {
-        let component_name = "example:single1".into();
+        let component_name = ComponentName("example:single1".to_string());
         let agent_types = agent_type_with_wit_keywords();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1163,7 +1164,7 @@ mod tests {
 
     #[test]
     fn bug_multiple_types_called_element() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = reproducer_for_multiple_types_called_element();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1238,7 +1239,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_1_test_in_package_name() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = single_agent_wrapper_types();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1287,7 +1288,7 @@ mod tests {
 
     #[test]
     pub fn enum_type() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = reproducer_for_issue_with_enums();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1327,7 +1328,7 @@ mod tests {
 
     #[test]
     pub fn result_type() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = reproducer_for_issue_with_result_types();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1356,7 +1357,7 @@ mod tests {
 
     #[test]
     pub fn multimodal_untagged_variant_in_out() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = test::multimodal_untagged_variant_in_out();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1408,7 +1409,7 @@ mod tests {
 
     #[test]
     pub fn char_type() {
-        let component_name = "test:agent".into();
+        let component_name = "test:agent".try_into().unwrap();
         let agent_types = test::char_type();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1438,7 +1439,7 @@ mod tests {
 
     #[test]
     pub fn unit_result_type() {
-        let component_name = "test:agent".into();
+        let component_name = "test:agent".try_into().unwrap();
         let agent_types = test::unit_result_type();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)

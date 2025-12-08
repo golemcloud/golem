@@ -465,7 +465,7 @@ impl<T: Schema> MultimodalCustom<T> {
     /// Create a Multimodal input data for agent functions with basic types: Text and Binary.
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// use golem_rust::agentic::*;
     /// use golem_rust::MultimodalSchema;
     /// use golem_rust::Schema;

@@ -24,6 +24,33 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ApplicationName(String);
+
+impl ApplicationName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for ApplicationName {
+    fn from(name: &str) -> Self {
+        ApplicationName(name.to_string())
+    }
+}
+
+impl From<String> for ApplicationName {
+    fn from(name: String) -> Self {
+        ApplicationName(name)
+    }
+}
+
+impl fmt::Display for ApplicationName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ComponentName(String);
 
 static COMPONENT_NAME_SPLIT_REGEX: LazyLock<Regex> =
@@ -381,6 +408,23 @@ pub enum TargetExistsResolveDecision {
     Merge(MergeContents),
 }
 
+pub struct DocDependencyGroup {
+    pub name: &'static str,
+    pub dependencies: Vec<DocDependency>,
+}
+
+pub struct DocDependency {
+    pub name: &'static str,
+    pub env_vars: Vec<DocDependencyEnvVar>,
+    pub url: String,
+}
+
+pub struct DocDependencyEnvVar {
+    pub name: &'static str,
+    pub value: &'static str,
+    pub comment: &'static str,
+}
+
 #[derive(Debug, Clone)]
 pub struct Template {
     pub name: TemplateName,
@@ -396,6 +440,7 @@ pub struct Template {
 
 #[derive(Debug, Clone)]
 pub struct TemplateParameters {
+    pub application_name: ApplicationName,
     pub component_name: ComponentName,
     pub package_name: PackageName,
     pub target_path: PathBuf,
@@ -430,6 +475,7 @@ pub(crate) enum Transform {
     ManifestHints,
     TsSdk,
     RustSdk,
+    ApplicationName,
 }
 
 #[derive(Debug, Clone, Default)]

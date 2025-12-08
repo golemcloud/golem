@@ -12,33 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account;
 pub mod agent;
+pub mod api_domain;
+pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod certificate;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod deployment;
+pub mod diff;
+pub mod domain_registration;
+pub mod environment;
+pub mod environment_plugin_grant;
+pub mod environment_share;
 pub mod error;
 pub mod exports;
+pub mod http_api_definition;
+pub mod http_api_deployment;
 pub mod invocation_context;
+pub mod login;
 pub mod lucene;
 pub mod oplog;
-pub mod plugin;
-mod poem;
-pub mod project;
+pub mod plan;
+pub mod plugin_registration;
+pub mod poem;
 pub mod protobuf;
 pub mod regions;
+pub mod reports;
+pub mod security_scheme;
 pub mod trim_date;
 pub mod worker;
 
-#[cfg(test)]
-mod tests;
-
 pub use crate::base_model::*;
+
+use self::component::ComponentId;
+use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
+use self::environment::EnvironmentId;
+use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
-use crate::SafeDisplay;
+use crate::{declare_structs, SafeDisplay};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -50,16 +67,23 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
 use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Add;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime};
-use typed_path::Utf8UnixPathBuf;
+use std::time::Duration;
 use url::Url;
 use uuid::{uuid, Uuid};
+
+#[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
+pub struct Page<
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> {
+    pub values: Vec<T>,
+}
 
 pub trait PoemTypeRequirements:
     poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON
@@ -208,18 +232,24 @@ impl FromValue for Timestamp {
     }
 }
 
+declare_structs! {
+    pub struct VersionInfo {
+        pub version: String,
+    }
+}
+
 /// Associates a worker-id with its owner project
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 #[desert(evolution())]
 pub struct OwnedWorkerId {
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
 }
 
 impl OwnedWorkerId {
-    pub fn new(project_id: &ProjectId, worker_id: &WorkerId) -> Self {
+    pub fn new(environment_id: &EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            project_id: project_id.clone(),
+            environment_id: *environment_id,
             worker_id: worker_id.clone(),
         }
     }
@@ -228,12 +258,12 @@ impl OwnedWorkerId {
         self.worker_id.clone()
     }
 
-    pub fn project_id(&self) -> ProjectId {
-        self.project_id.clone()
+    pub fn environment_id(&self) -> EnvironmentId {
+        self.environment_id
     }
 
     pub fn component_id(&self) -> ComponentId {
-        self.worker_id.component_id.clone()
+        self.worker_id.component_id
     }
 
     pub fn worker_name(&self) -> String {
@@ -243,7 +273,7 @@ impl OwnedWorkerId {
 
 impl Display for OwnedWorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.project_id, self.worker_id)
+        write!(f, "{}/{}", self.environment_id(), self.worker_id)
     }
 }
 
@@ -260,7 +290,7 @@ pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
         account_id: AccountId,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
     },
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
@@ -288,10 +318,10 @@ impl ScheduledAction {
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
         match self {
             ScheduledAction::CompletePromise {
-                project_id,
+                environment_id,
                 promise_id,
                 ..
-            } => OwnedWorkerId::new(project_id, &promise_id.worker_id),
+            } => OwnedWorkerId::new(environment_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
@@ -515,40 +545,66 @@ impl Display for IdempotencyKey {
     }
 }
 
+impl From<&str> for IdempotencyKey {
+    fn from(s: &str) -> Self {
+        IdempotencyKey {
+            value: s.to_string(),
+        }
+    }
+}
+
+impl From<String> for IdempotencyKey {
+    fn from(s: String) -> Self {
+        IdempotencyKey { value: s }
+    }
+}
+
+impl FromStr for IdempotencyKey {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(IdempotencyKey {
+            value: s.to_string(),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub wasi_config_vars: BTreeMap<String, String>,
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
+    pub original_phantom_id: Option<Uuid>,
 }
 
 impl WorkerMetadata {
     pub fn default(
         worker_id: WorkerId,
         created_by: AccountId,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     ) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
             args: vec![],
             env: vec![],
-            project_id,
+            environment_id,
             created_by,
             wasi_config_vars: BTreeMap::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
+            original_phantom_id: None,
         }
     }
 
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(&self.project_id, &self.worker_id)
+        OwnedWorkerId::new(&self.environment_id, &self.worker_id)
     }
 }
 
@@ -607,16 +663,16 @@ pub struct WorkerStatusRecord {
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub current_idempotency_key: Option<IdempotencyKey>,
-    pub component_version: ComponentVersion,
+    pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
-    pub active_plugins: HashSet<PluginInstallationId>,
+    pub active_plugins: HashSet<PluginPriority>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
-    pub component_version_for_replay: ComponentVersion,
+    pub component_revision_for_replay: ComponentRevision,
     /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
     /// the last invocation boundary.
     pub current_retry_count: HashMap<OplogIndex, u32>,
@@ -634,14 +690,14 @@ impl Default for WorkerStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
-            component_version: 0,
+            component_revision: ComponentRevision(0),
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
-            component_version_for_replay: 0,
+            component_revision_for_replay: ComponentRevision(0),
             current_retry_count: HashMap::new(),
         }
     }
@@ -651,7 +707,7 @@ impl Default for WorkerStatusRecord {
 #[desert(evolution())]
 pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_revision: ComponentRevision,
     pub details: Option<String>,
 }
 
@@ -659,7 +715,7 @@ pub struct FailedUpdateRecord {
 #[desert(evolution())]
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_revision: ComponentRevision,
 }
 
 /// Represents last known status of a worker
@@ -777,7 +833,7 @@ impl From<WorkerStatus> for i32 {
 #[desert(evolution())]
 pub enum WorkerInvocation {
     ManualUpdate {
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
     },
     ExportedFunction {
         idempotency_key: IdempotencyKey,
@@ -821,49 +877,6 @@ impl WorkerInvocation {
 pub struct TimestampedWorkerInvocation {
     pub timestamp: Timestamp,
     pub invocation: WorkerInvocation,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialOrd,
-    Ord,
-    derive_more::FromStr,
-    Eq,
-    Hash,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-)]
-#[serde(transparent)]
-#[desert(transparent)]
-pub struct AccountId {
-    pub value: String,
-}
-
-impl AccountId {
-    pub fn generate() -> Self {
-        Self {
-            value: Uuid::new_v4().to_string(),
-        }
-    }
-}
-
-impl From<&str> for AccountId {
-    fn from(value: &str) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-}
-
-impl Display for AccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.value)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
@@ -914,11 +927,11 @@ impl Display for WorkerStatusFilter {
 #[desert(evolution())]
 pub struct WorkerVersionFilter {
     pub comparator: FilterComparator,
-    pub value: ComponentVersion,
+    pub value: ComponentRevision,
 }
 
 impl WorkerVersionFilter {
-    pub fn new(comparator: FilterComparator, value: ComponentVersion) -> Self {
+    pub fn new(comparator: FilterComparator, value: ComponentRevision) -> Self {
         Self { comparator, value }
     }
 }
@@ -1129,8 +1142,8 @@ impl WorkerFilter {
                 comparator.matches(&metadata.worker_id.worker_name, &value)
             }
             WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
-                let version: ComponentVersion = metadata.last_known_status.component_version;
-                comparator.matches(&version, &value)
+                let revision: ComponentRevision = metadata.last_known_status.component_revision;
+                comparator.matches(&revision, &value)
             }
             WorkerFilter::Env(WorkerEnvFilter {
                 name,
@@ -1219,7 +1232,7 @@ impl WorkerFilter {
         WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter::new(name, comparator, value))
     }
 
-    pub fn new_version(comparator: FilterComparator, value: ComponentVersion) -> Self {
+    pub fn new_version(comparator: FilterComparator, value: ComponentRevision) -> Self {
         WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
     }
 
@@ -1645,217 +1658,60 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, BinaryCodec)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub struct Empty {}
 
-/// Key that can be used to identify a component file.
-/// All files with the same content will have the same key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, poem_openapi::NewType)]
-pub struct InitialComponentFileKey(pub String);
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UntypedJsonBody(pub serde_json::Value);
 
-impl Display for InitialComponentFileKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+impl poem_openapi::types::Type for UntypedJsonBody {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> Cow<'static, str> {
+        "UntypedJsonBody".into()
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Reference(Self::name().into_owned())
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        registry.create_schema::<Self, _>(Self::name().into_owned(), |_| {
+            let mut schema = poem_openapi::registry::MetaSchema::new("object");
+            schema.description = Some("A json body without a static schema");
+            schema
+        });
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
     }
 }
 
-/// Path inside a component filesystem. Must be
-/// - absolute (start with '/')
-/// - not contain ".." components
-/// - not contain "." components
-/// - use '/' as a separator
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ComponentFilePath(Utf8UnixPathBuf);
-
-impl ComponentFilePath {
-    pub fn from_abs_str(s: &str) -> Result<Self, String> {
-        let buf: Utf8UnixPathBuf = s.into();
-        if !buf.is_absolute() {
-            return Err("Path must be absolute".to_string());
-        }
-
-        Ok(ComponentFilePath(buf.normalize()))
-    }
-
-    pub fn from_rel_str(s: &str) -> Result<Self, String> {
-        Self::from_abs_str(&format!("/{s}"))
-    }
-
-    pub fn from_either_str(s: &str) -> Result<Self, String> {
-        if s.starts_with('/') {
-            Self::from_abs_str(s)
-        } else {
-            Self::from_rel_str(s)
-        }
-    }
-
-    pub fn as_path(&self) -> &Utf8UnixPathBuf {
-        &self.0
-    }
-
-    pub fn to_rel_string(&self) -> String {
-        self.0.strip_prefix("/").unwrap().to_string()
-    }
-
-    pub fn extend(&mut self, path: &str) -> Result<(), String> {
-        self.0.push_checked(path).map_err(|e| e.to_string())
+impl poem_openapi::types::ToJSON for UntypedJsonBody {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(self.0.clone())
     }
 }
 
-impl Display for ComponentFilePath {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Serialize for ComponentFilePath {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        Serialize::serialize(&self.to_string(), serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ComponentFilePath {
-    fn deserialize<D>(deserializer: D) -> Result<ComponentFilePath, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let str = <String as Deserialize>::deserialize(deserializer)?;
-        Self::from_abs_str(&str).map_err(de::Error::custom)
-    }
-}
-
-impl TryFrom<&str> for ComponentFilePath {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::from_either_str(value)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, poem_openapi::Enum)]
-#[serde(rename_all = "kebab-case")]
-#[oai(rename_all = "kebab-case")]
-pub enum ComponentFilePermissions {
-    ReadOnly,
-    ReadWrite,
-}
-
-impl ComponentFilePermissions {
-    pub fn as_compact_str(&self) -> &'static str {
-        match self {
-            ComponentFilePermissions::ReadOnly => "ro",
-            ComponentFilePermissions::ReadWrite => "rw",
-        }
-    }
-    pub fn from_compact_str(s: &str) -> Result<Self, String> {
-        match s {
-            "ro" => Ok(ComponentFilePermissions::ReadOnly),
-            "rw" => Ok(ComponentFilePermissions::ReadWrite),
-            _ => Err(format!("Unknown permissions: {s}")),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct InitialComponentFile {
-    pub key: InitialComponentFileKey,
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
-
-impl InitialComponentFile {
-    pub fn is_read_only(&self) -> bool {
-        self.permissions == ComponentFilePermissions::ReadOnly
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentFilePathWithPermissions {
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
-
-impl ComponentFilePathWithPermissions {
-    pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
-        self.path.extend(path)
-    }
-}
-
-impl Display for ComponentFilePathWithPermissions {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).unwrap())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentFilePathWithPermissionsList {
-    pub values: Vec<ComponentFilePathWithPermissions>,
-}
-
-impl Display for ComponentFilePathWithPermissionsList {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).unwrap())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GetFileSystemNodeResult {
-    Ok(Vec<ComponentFileSystemNode>),
-    File(ComponentFileSystemNode),
-    NotFound,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ComponentFileSystemNodeDetails {
-    File {
-        permissions: ComponentFilePermissions,
-        size: u64,
-    },
-    Directory,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ComponentFileSystemNode {
-    pub name: String,
-    pub last_modified: SystemTime,
-    pub details: ComponentFileSystemNodeDetails,
-}
-
-// Custom Deserialize is replaced with Simple Deserialize
-#[derive(
-    Debug, Clone, PartialEq, Serialize, BinaryCodec, Default, Deserialize, poem_openapi::Enum,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "kebab-case")]
-#[oai(rename_all = "kebab-case")]
-pub enum GatewayBindingType {
-    #[default]
-    Default,
-    FileServer,
-    HttpHandler,
-    CorsPreflight,
-    SwaggerUi,
-}
-
-impl TryFrom<String> for GatewayBindingType {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "default" => Ok(GatewayBindingType::Default),
-            "file-server" => Ok(GatewayBindingType::FileServer),
-            _ => Err(format!("Invalid WorkerBindingType: {value}")),
+impl poem_openapi::types::ParseFromJSON for UntypedJsonBody {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(json) => Ok(Self(json)),
+            _ => Err(poem_openapi::types::ParseError::<UntypedJsonBody>::custom(
+                "Received empty value for UntypedJsonBody",
+            )),
         }
     }
 }
@@ -1878,152 +1734,12 @@ impl From<golem_wasm::AgentId> for WorkerId {
     }
 }
 
-impl From<golem_wasm::ComponentId> for ComponentId {
-    fn from(host: golem_wasm::ComponentId) -> Self {
-        let high_bits = host.uuid.high_bits;
-        let low_bits = host.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
-    }
-}
-
-impl From<ComponentId> for golem_wasm::ComponentId {
-    fn from(component_id: ComponentId) -> Self {
-        let (high_bits, low_bits) = component_id.0.as_u64_pair();
-
-        golem_wasm::ComponentId {
-            uuid: golem_wasm::Uuid {
-                high_bits,
-                low_bits,
-            },
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, IntoValue, FromValue, BinaryCodec)]
 pub enum ForkResult {
     /// The original worker that called `fork`
     Original,
     /// The new worker
     Forked,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, BinaryCodec, Serialize, Deserialize, Union, IntoValue, FromValue,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "camelCase")]
-#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
-pub enum RevertWorkerTarget {
-    RevertToOplogIndex(RevertToOplogIndex),
-    RevertLastInvocations(RevertLastInvocations),
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
-    ) -> Result<Self, Self::Error> {
-        match value.target {
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
-                Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
-            }
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
-                Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
-            }
-            None => Err("Missing field: target".to_string()),
-        }
-    }
-}
-
-impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
-    fn from(value: RevertWorkerTarget) -> Self {
-        match value {
-            RevertWorkerTarget::RevertToOplogIndex(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
-            },
-            RevertWorkerTarget::RevertLastInvocations(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
-            },
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-    FromValue,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertToOplogIndex {
-    pub last_oplog_index: OplogIndex,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
-        }
-    }
-}
-
-impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
-    fn from(value: RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: u64::from(value.last_oplog_index) as i64,
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-    FromValue,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertLastInvocations {
-    pub number_of_invocations: u64,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as u64,
-        }
-    }
-}
-
-impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
-    fn from(value: RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as i64,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]

@@ -1,0 +1,1567 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::app::error::CustomCommandError;
+use crate::command::app::AppSubcommand;
+use crate::command::builtin_app_subcommands;
+use crate::command::shared_args::{
+    AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
+};
+use crate::command_handler::app::deploy_diff::{DeployDiff, DeployQuickDiff};
+use crate::command_handler::Handlers;
+use crate::context::Context;
+use crate::diagnose::diagnose;
+use crate::error::service::AnyhowMapServiceError;
+use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
+use crate::fs;
+use crate::fuzzy::{Error, FuzzySearch};
+use crate::log::{
+    log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent, LogOutput, Output,
+};
+use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
+use crate::model::deploy::DeployConfig;
+use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::text::diff::log_unified_diff;
+use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
+use crate::model::text::help::AvailableComponentNamesHelp;
+use crate::model::text::server::ToFormattedServerContext;
+use crate::model::worker::AgentUpdateMode;
+use anyhow::{anyhow, bail};
+use colored::Colorize;
+use golem_client::api::{ApplicationClient, EnvironmentClient};
+use golem_client::model::{ApplicationCreation, DeploymentCreation};
+use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
+use golem_common::model::deployment::DeploymentVersion;
+use golem_common::model::diff;
+use golem_common::model::diff::{Diffable, Hashable};
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
+use golem_templates::add_component_by_template;
+use golem_templates::model::{
+    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
+};
+use itertools::Itertools;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use strum::IntoEnumIterator;
+use tracing::debug;
+
+mod deploy_diff;
+
+pub struct AppCommandHandler {
+    ctx: Arc<Context>,
+}
+
+impl AppCommandHandler {
+    pub fn new(ctx: Arc<Context>) -> Self {
+        Self { ctx }
+    }
+
+    pub async fn handle_command(&self, subcommand: AppSubcommand) -> anyhow::Result<()> {
+        match subcommand {
+            AppSubcommand::New {
+                application_name,
+                language,
+            } => self.cmd_new(application_name, language).await,
+            AppSubcommand::Build {
+                component_name,
+                build: build_args,
+            } => self.cmd_build(component_name, build_args).await,
+            AppSubcommand::Deploy {
+                plan,
+                stage,
+                approve_staging_steps,
+                version,
+                revision,
+                force_build,
+                deploy_args,
+            } => {
+                self.cmd_deploy(
+                    plan,
+                    stage,
+                    approve_staging_steps,
+                    version,
+                    revision,
+                    force_build,
+                    deploy_args,
+                )
+                .await
+            }
+            AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
+            AppSubcommand::UpdateAgents {
+                component_name,
+                update_mode,
+                r#await,
+            } => {
+                self.cmd_update_workers(component_name.component_name, update_mode, r#await)
+                    .await
+            }
+            AppSubcommand::RedeployAgents { component_name } => {
+                self.cmd_redeploy_workers(component_name.component_name)
+                    .await
+            }
+            AppSubcommand::Diagnose { component_name } => self.cmd_diagnose(component_name).await,
+            AppSubcommand::ListAgentTypes {} => self.cmd_list_agent_types().await,
+            AppSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
+        }
+    }
+
+    async fn cmd_new(
+        &self,
+        application_name: Option<String>,
+        languages: Vec<GuestLanguage>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+
+        {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.opt();
+            match app_ctx {
+                Ok(None) => {
+                    // NOP, there is no app
+                }
+                _ => {
+                    log_error("The current directory is part of an existing application.");
+                    logln("");
+                    logln("Switch to a directory that is not part of an application or use");
+                    logln(format!(
+                        "the '{}' command to create a component in the current application.",
+                        "component new".log_color_highlight()
+                    ));
+                    logln("");
+                    bail!(NonSuccessfulExit);
+                }
+            }
+        }
+
+        let Some((application_name, components)) = ({
+            match application_name {
+                Some(application_name) => Some((application_name, vec![])),
+                None => self
+                    .ctx
+                    .interactive_handler()
+                    .select_new_app_name_and_components()?
+                    .map(|new_app| (new_app.app_name, new_app.templated_component_names)),
+            }
+        }) else {
+            log_error("Both APPLICATION_NAME and LANGUAGES are required in non-interactive mode");
+            logln("");
+            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+        };
+
+        if components.is_empty() && languages.is_empty() {
+            log_error("LANGUAGES are required in non-interactive mode");
+            logln("");
+            logln("Either specify languages or use the new command without APPLICATION_NAME to use the interactive wizard!");
+            logln("");
+            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+        }
+
+        let app_dir = PathBuf::from(&application_name);
+        if app_dir.exists() {
+            bail!(
+                "Application directory already exists: {}",
+                app_dir.log_color_error_highlight()
+            );
+        }
+
+        fs::create_dir_all(&app_dir)?;
+        log_action(
+            "Created",
+            format!(
+                "application directory: {}",
+                app_dir.display().to_string().log_color_highlight()
+            ),
+        );
+
+        let application_name = TemplateApplicationName::from(application_name);
+
+        if components.is_empty() {
+            let common_templates = languages
+                .iter()
+                .map(|language| {
+                    self.get_template(&language.id(), self.ctx.dev_mode())
+                        .map(|(common, _component)| common)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            {
+                let _indent = LogIndent::new();
+                // TODO: cleanup add_component_by_example, so we don't have to pass a dummy arg
+                let dummy_package_name = PackageName::from_string("app:comp").unwrap();
+                for common_template in common_templates.into_iter().flatten() {
+                    match add_component_by_template(
+                        Some(common_template),
+                        None,
+                        &app_dir,
+                        &application_name,
+                        &dummy_package_name,
+                        Some(self.ctx.template_sdk_overrides()),
+                    ) {
+                        Ok(()) => {
+                            log_action(
+                                "Added",
+                                format!(
+                                    "common template for {}",
+                                    common_template.language.name().log_color_highlight()
+                                ),
+                            );
+                        }
+                        Err(error) => {
+                            bail!("Failed to add common template for new app: {:#}", error)
+                        }
+                    }
+                }
+            }
+        } else {
+            for (template, component_package_name) in &components {
+                log_action(
+                    "Adding",
+                    format!(
+                        "component {}",
+                        component_package_name
+                            .to_string_with_colon()
+                            .log_color_highlight()
+                    ),
+                );
+                let (common_template, component_template) =
+                    self.get_template(template, self.ctx.dev_mode())?;
+                match add_component_by_template(
+                    common_template,
+                    Some(component_template),
+                    &app_dir,
+                    &application_name,
+                    component_package_name,
+                    Some(self.ctx.template_sdk_overrides()),
+                ) {
+                    Ok(()) => {
+                        log_action(
+                            "Added",
+                            format!(
+                                "new app component {}",
+                                component_package_name
+                                    .to_string_with_colon()
+                                    .log_color_highlight()
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        bail!("Failed to create new app component: {}", error)
+                    }
+                }
+            }
+        }
+
+        log_action(
+            "Created",
+            format!(
+                "application {}",
+                application_name.as_str().log_color_highlight()
+            ),
+        );
+
+        logln("");
+
+        if components.is_empty() {
+            logln(
+                format!(
+                    "To add components to the application, switch to the {} directory, and use the `{}` command.",
+                    application_name.as_str().log_color_highlight(),
+                    "component new".log_color_highlight(),
+                )
+            );
+        } else {
+            logln(
+                format!(
+                    "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
+                    application_name.as_str().log_color_highlight(),
+                    "app build".log_color_highlight(),
+                    "app deploy".log_color_highlight(),
+                )
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn cmd_build(
+        &self,
+        component_name: AppOptionalComponentNames,
+        build_args: BuildArgs,
+    ) -> anyhow::Result<()> {
+        self.build(
+            component_name.component_name,
+            Some(build_args),
+            &ApplicationComponentSelectMode::All,
+        )
+        .await
+    }
+
+    async fn cmd_clean(&self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
+        self.clean(
+            component_name.component_name,
+            &ApplicationComponentSelectMode::All,
+        )
+        .await
+    }
+
+    async fn cmd_deploy(
+        &self,
+        plan: bool,
+        stage: bool,
+        approve_staging_steps: bool,
+        version: Option<String>,
+        revision: Option<ComponentRevision>,
+        force_build: ForceBuildArg,
+        deploy_args: DeployArgs,
+    ) -> anyhow::Result<()> {
+        if let Some(version) = version {
+            self.deploy_by_version(version, deploy_args).await
+        } else if let Some(revision) = revision {
+            self.deploy_by_revision(revision, deploy_args).await
+        } else {
+            self.deploy(DeployConfig {
+                plan,
+                stage,
+                approve_staging_steps,
+                force_build: Some(force_build),
+                deploy_args,
+            })
+            .await
+        }
+    }
+
+    async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
+        if command.len() != 1 {
+            bail!(
+                "Expected exactly one custom subcommand, got: {}",
+                command.join(" ").log_color_error_highlight()
+            );
+        }
+
+        let command = command[0].strip_prefix(":").unwrap_or(&command[0]);
+
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        if let Err(error) = app_ctx.custom_command(command).await {
+            match error {
+                CustomCommandError::CommandNotFound => {
+                    logln("");
+                    log_error(format!(
+                        "Request command app command {} not found!",
+                        command.log_color_error_highlight()
+                    ));
+                    logln("");
+
+                    app_ctx.log_dynamic_help(&DynamicHelpSections::show_custom_commands(
+                        builtin_app_subcommands(),
+                    ))?;
+
+                    logln(
+                        "Available builtin commands:"
+                            .log_color_help_group()
+                            .to_string(),
+                    );
+                    let app_subcommands = builtin_app_subcommands();
+                    for subcommand in &app_subcommands {
+                        logln(format!("  {}", subcommand.bold()));
+                    }
+                    logln("");
+
+                    bail!(NonSuccessfulExit)
+                }
+                CustomCommandError::CommandError { error } => {
+                    bail!(
+                        "Command {} failed: {error}",
+                        command.log_color_error_highlight()
+                    )
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn cmd_update_workers(
+        &self,
+        component_names: Vec<ComponentName>,
+        update_mode: AgentUpdateMode,
+        await_update: bool,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
+            .await?;
+
+        let components = self.components_for_deploy_args().await?;
+        self.ctx
+            .component_handler()
+            .update_workers_by_components(&components, update_mode, await_update)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn cmd_redeploy_workers(
+        &self,
+        component_names: Vec<ComponentName>,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
+            .await?;
+
+        let components = self.components_for_deploy_args().await?;
+        self.ctx
+            .component_handler()
+            .redeploy_workers_by_components(&components)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
+        // TODO: atomic: missing client method
+        /*
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None)
+            .await?;
+
+        let clients = self.ctx.golem_clients().await?;
+        let result = clients
+            .agent_types
+            .get_all_agent_types(project.as_ref().map(|p| &p.project_id.0))
+            .todo: map svc err
+            .await?;
+
+        self.ctx.log_handler().log_view(&result);
+
+        Ok(())
+        */
+        todo!()
+    }
+
+    async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
+        self.diagnose(
+            component_names.component_name,
+            &ApplicationComponentSelectMode::All,
+        )
+        .await
+    }
+
+    async fn deploy_by_version(
+        &self,
+        _version: String,
+        _deploy_args: DeployArgs,
+    ) -> anyhow::Result<()> {
+        // TODO: atomic: missing client method
+        todo!()
+    }
+
+    async fn deploy_by_revision(
+        &self,
+        _version: ComponentRevision,
+        _deploy_args: DeployArgs,
+    ) -> anyhow::Result<()> {
+        // TODO: atomic: missing client method
+        todo!()
+    }
+
+    pub async fn deploy(&self, config: DeployConfig) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        self.build(
+            vec![],
+            config.force_build.as_ref().map(|force_build| BuildArgs {
+                step: vec![],
+                force_build: force_build.clone(),
+            }),
+            &ApplicationComponentSelectMode::All,
+        )
+        .await?;
+
+        let Some(deploy_diff) = self.prepare_deployment(environment).await? else {
+            if config.plan {
+                log_skipping_up_to_date("planning, no changes detected");
+            } else {
+                log_skipping_up_to_date("deployment, no changes detected");
+            }
+
+            return Ok(());
+        };
+
+        if config.plan {
+            return Ok(());
+        }
+
+        if !self.ctx.interactive_handler().confirm_deploy_by_plan(
+            &deploy_diff.environment.application_name,
+            &deploy_diff.environment.environment_name,
+            &self
+                .ctx
+                .manifest_environment()
+                .map(|env| env.environment.to_formatted_server_context())
+                .unwrap_or("???".to_string()),
+        )? {
+            return Ok(());
+        }
+
+        self.apply_changes_to_stage(config.approve_staging_steps, &deploy_diff)
+            .await?;
+        if config.stage {
+            return Ok(());
+        }
+
+        self.apply_staged_changes_to_environment(&deploy_diff)
+            .await?;
+
+        if config.deploy_args.is_any_set() {
+            let env_deploy_args = self.ctx.deploy_args();
+
+            let components = self
+                .ctx
+                .golem_clients()
+                .await?
+                .environment
+                .get_environment_components(&deploy_diff.environment.environment_id.0)
+                .await?
+                .values;
+
+            if let Some(update_mode) = &config.deploy_args.update_agents {
+                self.ctx
+                    .component_handler()
+                    .update_workers_by_components(&components, *update_mode, true)
+                    .await?;
+            } else if config.deploy_args.redeploy_agents(env_deploy_args) {
+                self.ctx
+                    .component_handler()
+                    .redeploy_workers_by_components(&components)
+                    .await?;
+            } else if config.deploy_args.delete_agents(env_deploy_args) {
+                self.ctx
+                    .component_handler()
+                    .delete_workers(&components)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn prepare_deployment(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<Option<DeployDiff>> {
+        log_action("Preparing", "deployment");
+        let _indent = LogIndent::new();
+
+        let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
+
+        if deploy_quick_diff.is_up_to_date() {
+            return Ok(None);
+        }
+
+        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
+
+        log_action("Diffing", "");
+
+        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+        debug!("deploy_diff: {:#?}", deploy_diff);
+
+        let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
+        debug!("detailed deploy_diff: {:#?}", deploy_diff);
+
+        let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
+        let stage_is_same_as_server = deploy_diff.is_stage_same_as_server();
+
+        {
+            let _indent = LogIndent::new();
+
+            log_action(
+                "Comparing",
+                format!(
+                    "staging area with current deployment: {}",
+                    if stage_is_same_as_server {
+                        "SAME".green()
+                    } else {
+                        "DIFFERENT".yellow()
+                    }
+                ),
+            );
+
+            if !stage_is_same_as_server {
+                match &unified_diffs.diff_stage {
+                    Some(diff) => {
+                        log_action("Diffing", "with staging area");
+                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        log_unified_diff(diff);
+                    }
+                    None => {
+                        log_skipping_up_to_date("diffing with staging area");
+                    }
+                }
+            }
+
+            {
+                if stage_is_same_as_server {
+                    log_action("Diffing", "with staging area and current deployment");
+                } else {
+                    log_action("Diffing", "with current deployment");
+                }
+
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                log_unified_diff(&unified_diffs.diff);
+            }
+        }
+
+        {
+            log_action("Planning", "");
+            let _indent = LogIndent::new();
+
+            if !stage_is_same_as_server {
+                match &deploy_diff.diff_stage {
+                    Some(diff_stage) => {
+                        log_action("Planned", "changes to be applied to the staging area:");
+                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        self.ctx.log_handler().log_view(diff_stage)
+                    }
+                    None => log_skipping_up_to_date("planning changes for staging area"),
+                }
+            }
+
+            {
+                if stage_is_same_as_server {
+                    log_action(
+                        "Planned",
+                        "changes to be applied to the staging area and to the environment:",
+                    );
+                } else {
+                    log_action("Planned", "changes to be applied to the environment:");
+                }
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                self.ctx.log_handler().log_view(&deploy_diff.diff)
+            }
+        }
+
+        Ok(Some(deploy_diff))
+    }
+
+    async fn deploy_quick_diff(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<DeployQuickDiff> {
+        let deployable_manifest_components = self
+            .ctx
+            .component_handler()
+            .deployable_manifest_components()
+            .await?;
+
+        let deployable_manifest_http_api_definitions = self
+            .ctx
+            .api_definition_handler()
+            .deployable_manifest_http_api_definitions()
+            .await?;
+
+        let deployable_manifest_http_api_deployments = self
+            .ctx
+            .api_deployment_handler()
+            .deployable_manifest_api_deployments(&environment.environment_name)
+            .await?;
+
+        let diffable_local_components = {
+            let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
+            for (component_name, component_deploy_properties) in &deployable_manifest_components {
+                let diffable_component = self
+                    .ctx
+                    .component_handler()
+                    .diffable_local_component(component_name, component_deploy_properties)
+                    .await?;
+                diffable_components.insert(component_name.0.clone(), diffable_component.into());
+            }
+            diffable_components
+        };
+
+        let diffable_local_http_api_definitions = {
+            let mut diffable_http_api_definitions =
+                BTreeMap::<String, diff::HashOf<diff::HttpApiDefinition>>::new();
+            for (http_api_definition_name, http_api_definition) in
+                &deployable_manifest_http_api_definitions
+            {
+                diffable_http_api_definitions.insert(
+                    http_api_definition_name.0.clone(),
+                    http_api_definition.to_diffable().into(),
+                );
+            }
+            diffable_http_api_definitions
+        };
+
+        let diffable_local_http_api_deployments = {
+            let mut diffable_local_http_api_deployments =
+                BTreeMap::<String, diff::HashOf<diff::HttpApiDeployment>>::new();
+            for (domain, http_api_deployment) in &deployable_manifest_http_api_deployments {
+                diffable_local_http_api_deployments.insert(
+                    domain.0.clone(),
+                    diff::HttpApiDeployment {
+                        apis: http_api_deployment
+                            .iter()
+                            .map(|def| def.0.clone())
+                            .collect(),
+                    }
+                    .into(),
+                );
+            }
+            diffable_local_http_api_deployments
+        };
+
+        let diffable_local_deployment = diff::Deployment {
+            components: diffable_local_components,
+            http_api_definitions: diffable_local_http_api_definitions,
+            http_api_deployments: diffable_local_http_api_deployments,
+        };
+
+        let local_deployment_hash = diffable_local_deployment.hash();
+
+        Ok(DeployQuickDiff {
+            environment,
+            deployable_manifest_components,
+            deployable_manifest_http_api_definitions,
+            deployable_manifest_http_api_deployments,
+            diffable_local_deployment,
+            local_deployment_hash,
+        })
+    }
+
+    async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
+        let clients = self.ctx.golem_clients().await?;
+
+        let server_deployment = match &deploy_quick_diff
+            .environment
+            .remote_environment
+            .current_deployment
+        {
+            Some(current_deployment) => Some(
+                clients
+                    .environment
+                    .get_deployment_summary(
+                        &deploy_quick_diff.environment.environment_id.0,
+                        current_deployment.deployment_revision.0,
+                    )
+                    .await
+                    .map_service_error()?,
+            ),
+            None => None,
+        };
+
+        let diffable_server_deployment = server_deployment
+            .as_ref()
+            .map(|d| d.to_diffable())
+            .unwrap_or_default();
+
+        let server_deployment_hash = diffable_server_deployment.hash();
+
+        let server_staged_deployment = clients
+            .environment
+            .get_environment_deployment_plan(&deploy_quick_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?;
+
+        let diffable_server_staged_deployment = server_staged_deployment.to_diffable();
+
+        let server_staged_deployment_hash = diffable_server_staged_deployment.hash();
+
+        let Some(diff) = diffable_server_deployment
+            .diff_with_local(&deploy_quick_diff.diffable_local_deployment)
+        else {
+            bail!(anyhow!("The environment was changed concurrently while diffing. Retry planning and deploying!"))
+        };
+
+        let diff_stage = diffable_server_staged_deployment
+            .diff_with_local(&deploy_quick_diff.diffable_local_deployment);
+
+        Ok(DeployDiff {
+            environment: deploy_quick_diff.environment,
+            deployable_manifest_components: deploy_quick_diff.deployable_manifest_components,
+            deployable_http_api_definitions: deploy_quick_diff
+                .deployable_manifest_http_api_definitions,
+            deployable_http_api_deployments: deploy_quick_diff
+                .deployable_manifest_http_api_deployments,
+            diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
+            local_deployment_hash: deploy_quick_diff.local_deployment_hash,
+            server_deployment,
+            diffable_server_deployment,
+            server_deployment_hash,
+            server_staged_deployment,
+            server_staged_deployment_hash,
+            diffable_staged_deployment: diffable_server_staged_deployment,
+            diff,
+            diff_stage,
+        })
+    }
+
+    async fn detailed_deploy_diff(
+        &self,
+        mut deploy_diff: DeployDiff,
+    ) -> anyhow::Result<DeployDiff> {
+        enum DiffKind {
+            Server,
+            Stage,
+        }
+
+        let component_handler = self.ctx.component_handler();
+        let http_api_definition_handler = self.ctx.api_definition_handler();
+        let http_api_deployment_handler = self.ctx.api_deployment_handler();
+
+        for (kind, diff) in [
+            (DiffKind::Stage, deploy_diff.diff_stage.as_ref()),
+            (DiffKind::Server, Some(&deploy_diff.diff)),
+        ] {
+            let Some(diff) = diff else {
+                continue;
+            };
+
+            for (component_name, component_diff) in &diff.components {
+                match component_diff {
+                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                        // NOP
+                    }
+                    diff::BTreeMapDiffValue::Update(_) => {
+                        let component_name = ComponentName(component_name.clone());
+
+                        let component_identity =
+                            deploy_diff.staged_component_identity(&component_name);
+
+                        let staged_component = component_handler
+                            .get_component_revision_by_id(
+                                &component_identity.id,
+                                component_identity.revision,
+                            )
+                            .await?;
+
+                        match &kind {
+                            DiffKind::Server => {
+                                deploy_diff.diffable_server_deployment.components.insert(
+                                    component_name.0,
+                                    staged_component.to_diffable().into(),
+                                );
+                            }
+                            DiffKind::Stage => {
+                                deploy_diff.diffable_staged_deployment.components.insert(
+                                    component_name.0,
+                                    staged_component.to_diffable().into(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (http_api_definition_name, http_api_definition_diff) in &diff.http_api_definitions {
+                match http_api_definition_diff {
+                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                        // NOP
+                    }
+                    diff::BTreeMapDiffValue::Update(_) => {
+                        let http_api_definition_name =
+                            HttpApiDefinitionName(http_api_definition_name.clone());
+
+                        let definition_identity = deploy_diff
+                            .staged_http_api_definition_identity(&http_api_definition_name);
+
+                        let staged_definition = http_api_definition_handler
+                            .get_http_api_definition_revision_by_id(
+                                &definition_identity.id,
+                                definition_identity.revision,
+                            )
+                            .await?;
+
+                        match &kind {
+                            DiffKind::Server => {
+                                deploy_diff
+                                    .diffable_server_deployment
+                                    .http_api_definitions
+                                    .insert(
+                                        http_api_definition_name.0,
+                                        staged_definition.to_diffable().into(),
+                                    );
+                            }
+                            DiffKind::Stage => {
+                                deploy_diff
+                                    .diffable_staged_deployment
+                                    .http_api_definitions
+                                    .insert(
+                                        http_api_definition_name.0,
+                                        staged_definition.to_diffable().into(),
+                                    );
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (domain, http_api_deployment_diff) in &diff.http_api_deployments {
+                match http_api_deployment_diff {
+                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                        // NOP
+                    }
+                    diff::BTreeMapDiffValue::Update(_) => {
+                        let domain = Domain(domain.clone());
+
+                        let deployment_identity =
+                            deploy_diff.staged_http_api_deployment_identity(&domain);
+
+                        let staged_deployment = http_api_deployment_handler
+                            .get_http_api_deployment_revision_by_id(
+                                &deployment_identity.id,
+                                deployment_identity.revision,
+                            )
+                            .await?;
+
+                        match &kind {
+                            DiffKind::Server => {
+                                deploy_diff
+                                    .diffable_server_deployment
+                                    .http_api_deployments
+                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                            }
+                            DiffKind::Stage => {
+                                deploy_diff
+                                    .diffable_staged_deployment
+                                    .http_api_deployments
+                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        debug!(
+            "diffable_server_staged_deployment hash: {:#?}",
+            deploy_diff.diffable_staged_deployment.hash()
+        );
+
+        // Update diffs with details
+        deploy_diff.diff_stage = deploy_diff
+            .diffable_staged_deployment
+            .diff_with_local(&deploy_diff.diffable_local_deployment);
+        let Some(diff) = deploy_diff
+            .diffable_server_deployment
+            .diff_with_local(&deploy_diff.diffable_local_deployment)
+        else {
+            bail!("Illegal state: empty diff between server and local deployment while adding details")
+        };
+        deploy_diff.diff = diff;
+
+        Ok(deploy_diff)
+    }
+
+    async fn apply_changes_to_stage(
+        &self,
+        approve_staging_steps: bool,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<()> {
+        let Some(diff_stage) = &deploy_diff.diff_stage else {
+            log_skipping_up_to_date("changing staging area");
+            return Ok(());
+        };
+
+        log_action("Applying", "changes to the staging area");
+        let _indent = LogIndent::new();
+
+        let component_handler = self.ctx.component_handler();
+        let http_api_definition_handler = self.ctx.api_definition_handler();
+        let http_api_deployment_handler = self.ctx.api_deployment_handler();
+        let interactive_handler = self.ctx.interactive_handler();
+
+        let approve = || {
+            if approve_staging_steps && !interactive_handler.confirm_staging_next_step()? {
+                bail!("Aborted staging");
+            }
+            Ok(())
+        };
+
+        for (component_name, component_diff) in &diff_stage.components {
+            approve()?;
+
+            let component_name = ComponentName(component_name.to_string());
+
+            match component_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    component_handler
+                        .create_staged_component(
+                            &deploy_diff.environment,
+                            &component_name,
+                            deploy_diff.deployable_manifest_component(&component_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    component_handler
+                        .delete_staged_component(
+                            deploy_diff.staged_component_identity(&component_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(component_diff) => {
+                    component_handler
+                        .update_staged_component(
+                            deploy_diff.staged_component_identity(&component_name),
+                            deploy_diff.deployable_manifest_component(&component_name),
+                            component_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        for (http_api_definition_name, http_api_definition_diff) in &diff_stage.http_api_definitions
+        {
+            approve()?;
+
+            let http_api_definition_name =
+                HttpApiDefinitionName(http_api_definition_name.to_string());
+
+            match http_api_definition_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    http_api_definition_handler
+                        .create_staged_http_api_definition(
+                            &deploy_diff.environment,
+                            &http_api_definition_name,
+                            deploy_diff
+                                .deployable_manifest_http_api_definition(&http_api_definition_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    http_api_definition_handler
+                        .delete_staged_http_api_definition(
+                            deploy_diff
+                                .staged_http_api_definition_identity(&http_api_definition_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(http_api_definition_diff) => {
+                    http_api_definition_handler
+                        .update_staged_http_api_definition(
+                            deploy_diff
+                                .staged_http_api_definition_identity(&http_api_definition_name),
+                            deploy_diff
+                                .deployable_manifest_http_api_definition(&http_api_definition_name),
+                            http_api_definition_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
+            approve()?;
+
+            let domain = Domain(domain.to_string());
+
+            match http_api_deployment_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    http_api_deployment_handler
+                        .create_staged_http_api_deployment(
+                            &deploy_diff.environment,
+                            &domain,
+                            deploy_diff.deployable_manifest_http_api_deployment(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    http_api_deployment_handler
+                        .delete_staged_http_api_deployment(
+                            deploy_diff.staged_http_api_deployment_identity(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(http_api_definition_diff) => {
+                    http_api_deployment_handler
+                        .update_staged_http_api_deployment(
+                            deploy_diff.staged_http_api_deployment_identity(&domain),
+                            deploy_diff.deployable_manifest_http_api_deployment(&domain),
+                            http_api_definition_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn apply_staged_changes_to_environment(
+        &self,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        log_action("Deploying", "staged changes to the environment");
+
+        let result = clients
+            .environment
+            .deploy_environment(
+                &deploy_diff.environment.environment_id.0,
+                &DeploymentCreation {
+                    current_revision: deploy_diff.current_deployment_revision(),
+                    expected_deployment_hash: deploy_diff.local_deployment_hash,
+                    version: DeploymentVersion("".to_string()), // TODO: atomic
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        log_action("Deployed", "all changes");
+
+        // TODO: atomic: proper view
+        self.ctx.log_handler().log_serializable(&result);
+
+        Ok(())
+    }
+
+    pub async fn get_remote_application(
+        &self,
+        account_id: &AccountId,
+        application_name: &ApplicationName,
+    ) -> anyhow::Result<Option<golem_client::model::Application>> {
+        self.ctx
+            .golem_clients()
+            .await?
+            .application
+            .get_account_application(&account_id.0, &application_name.0)
+            .await
+            .map_service_error_not_found_as_opt()
+    }
+
+    pub async fn get_or_create_remote_application(
+        &self,
+    ) -> anyhow::Result<Option<golem_client::model::Application>> {
+        let Some(application_name) = self.ctx.manifest_environment().map(|e| &e.application_name)
+        else {
+            return Ok(None);
+        };
+
+        let account_id = self.ctx.account_id().await?;
+
+        match self
+            .get_remote_application(&account_id, application_name)
+            .await?
+        {
+            Some(application) => Ok(Some(application)),
+            None => Ok(Some(
+                self.ctx
+                    .golem_clients()
+                    .await?
+                    .application
+                    .create_application(
+                        &account_id.0,
+                        &ApplicationCreation {
+                            name: application_name.clone(),
+                        },
+                    )
+                    .await
+                    .map_service_error()?,
+            )),
+        }
+    }
+
+    pub async fn build(
+        &self,
+        component_names: Vec<ComponentName>,
+        build: Option<BuildArgs>,
+        default_component_select_mode: &ApplicationComponentSelectMode,
+    ) -> anyhow::Result<()> {
+        if let Some(build) = build {
+            self.ctx
+                .set_steps_filter(build.step.into_iter().collect())
+                .await;
+            self.ctx
+                .set_skip_up_to_date_checks(build.force_build.force_build)
+                .await;
+        }
+        self.must_select_components(component_names, default_component_select_mode)
+            .await?;
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        app_ctx.some_or_err_mut()?.build().await
+    }
+
+    pub async fn clean(
+        &self,
+        component_names: Vec<ComponentName>,
+        default_component_select_mode: &ApplicationComponentSelectMode,
+    ) -> anyhow::Result<()> {
+        let any_component_requested = !component_names.is_empty();
+
+        self.must_select_components(component_names, default_component_select_mode)
+            .await?;
+        let app_ctx = self.ctx.app_context_lock().await;
+
+        let clean_mode = {
+            if any_component_requested {
+                CleanMode::SelectedComponentsOnly
+            } else {
+                match &default_component_select_mode {
+                    ApplicationComponentSelectMode::CurrentDir
+                    | ApplicationComponentSelectMode::Explicit(_) => {
+                        CleanMode::SelectedComponentsOnly
+                    }
+                    ApplicationComponentSelectMode::All => CleanMode::All,
+                }
+            }
+        };
+
+        app_ctx.some_or_err()?.clean(clean_mode)
+    }
+
+    async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
+        /*
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let selected_component_names = app_ctx
+            .selected_component_names()
+            .iter()
+            .map(|cn| cn.as_str().parse())
+            .collect::<Result<Vec<ComponentName>, _>>()
+            .map_err(|err| anyhow!(err))?;
+
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        let mut components = Vec::with_capacity(selected_component_names.len());
+        for component_name in &selected_component_names {
+            match self
+                .ctx
+                .component_handler()
+                .component(Some(&environment), component_name.into(), None)
+                .await?
+            {
+                Some(component) => {
+                    components.push(component);
+                }
+                None => {
+                    log_warn(format!(
+                        "Component {} is not deployed!",
+                        component_name.0.log_color_highlight()
+                    ));
+                }
+            }
+        }
+        Ok(components)*/
+        // TODO: atomic
+        todo!()
+    }
+
+    pub async fn must_select_components(
+        &self,
+        component_names: Vec<ComponentName>,
+        default: &ApplicationComponentSelectMode,
+    ) -> anyhow::Result<()> {
+        self.opt_select_components(component_names, default)
+            .await?
+            .then_some(())
+            .ok_or(anyhow!(HintError::NoApplicationManifestFound))
+    }
+
+    pub async fn opt_select_components(
+        &self,
+        component_names: Vec<ComponentName>,
+        default: &ApplicationComponentSelectMode,
+    ) -> anyhow::Result<bool> {
+        self.opt_select_components_internal(component_names, default, false)
+            .await
+    }
+
+    pub async fn opt_select_components_allow_not_found(
+        &self,
+        component_names: Vec<ComponentName>,
+        default: &ApplicationComponentSelectMode,
+    ) -> anyhow::Result<bool> {
+        self.opt_select_components_internal(component_names, default, true)
+            .await
+    }
+
+    // TODO: forbid matching the same component multiple times
+    // Returns false if there is no app
+    async fn opt_select_components_internal(
+        &self,
+        component_names: Vec<ComponentName>,
+        default: &ApplicationComponentSelectMode,
+        allow_not_found: bool,
+    ) -> anyhow::Result<bool> {
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let silent_selection = app_ctx.silent_init;
+        let Some(app_ctx) = app_ctx.opt_mut()? else {
+            return Ok(false);
+        };
+
+        if component_names.is_empty() {
+            let _log_output = silent_selection.then(|| LogOutput::new(Output::TracingDebug));
+            app_ctx.select_components(default)?
+        } else {
+            let fuzzy_search =
+                FuzzySearch::new(app_ctx.application.component_names().map(|cn| cn.as_str()));
+
+            let (found, not_found) =
+                fuzzy_search.find_many(component_names.iter().map(|cn| cn.0.as_str()));
+
+            if !not_found.is_empty() {
+                if allow_not_found {
+                    return Ok(false);
+                }
+
+                logln("");
+                log_error(format!(
+                    "The following requested component names were not found:\n{}",
+                    not_found
+                        .iter()
+                        .map(|error| {
+                            match error {
+                                Error::Ambiguous {
+                                    pattern,
+                                    highlighted_options,
+                                    ..
+                                } => {
+                                    format!(
+                                        "  - {}, did you mean one of {}?",
+                                        pattern.as_str().bold(),
+                                        highlighted_options.iter().map(|cn| cn.bold()).join(", ")
+                                    )
+                                }
+                                Error::NotFound { pattern } => {
+                                    format!("  - {}", pattern.as_str().bold())
+                                }
+                            }
+                        })
+                        .join("\n")
+                ));
+                logln("");
+                log_text_view(&AvailableComponentNamesHelp(
+                    app_ctx.application.component_names().cloned().collect(),
+                ));
+
+                bail!(NonSuccessfulExit);
+            }
+
+            log_fuzzy_matches(&found);
+
+            let _log_output = silent_selection.then(|| LogOutput::new(Output::TracingDebug));
+            app_ctx.select_components(&ApplicationComponentSelectMode::Explicit(
+                found.into_iter().map(|m| ComponentName(m.option)).collect(),
+            ))?
+        }
+        Ok(true)
+    }
+
+    pub fn get_template(
+        &self,
+        requested_template_name: &str,
+        dev_mode: bool,
+    ) -> anyhow::Result<(Option<&Template>, &Template)> {
+        let segments = requested_template_name.split("/").collect::<Vec<_>>();
+        let (language, template_name): (String, Option<String>) = match segments.len() {
+            1 => (segments[0].to_string(), None),
+            2 => (segments[0].to_string(), {
+                let template_name = segments[1].to_string();
+                if template_name.is_empty() {
+                    None
+                } else {
+                    Some(template_name)
+                }
+            }),
+            _ => {
+                log_error("Failed to parse template name");
+                self.log_templates_help(None, None, self.ctx.dev_mode());
+                bail!(NonSuccessfulExit);
+            }
+        };
+
+        let language = match GuestLanguage::from_string(language) {
+            Some(language) => language,
+            None => {
+                log_error("Failed to parse language part of the template!");
+                self.log_templates_help(None, None, self.ctx.dev_mode());
+                bail!(NonSuccessfulExit);
+            }
+        };
+        let template_name = template_name
+            .map(TemplateName::from)
+            .unwrap_or_else(|| TemplateName::from("default"));
+
+        let Some(lang_templates) = self.ctx.templates(dev_mode).get(&language) else {
+            log_error(format!("No templates found for language: {language}").as_str());
+            self.log_templates_help(None, None, self.ctx.dev_mode());
+            bail!(NonSuccessfulExit);
+        };
+
+        let lang_templates = lang_templates
+            .get(self.ctx.template_group())
+            .ok_or_else(|| {
+                anyhow!(
+                    "No templates found for group: {}",
+                    self.ctx.template_group().as_str().log_color_highlight()
+                )
+            })?;
+
+        let Some(component_template) = lang_templates.components.get(&template_name) else {
+            log_error(format!(
+                "Template {} not found!",
+                requested_template_name.log_color_highlight()
+            ));
+            self.log_templates_help(None, None, self.ctx.dev_mode());
+            bail!(NonSuccessfulExit);
+        };
+
+        Ok((lang_templates.common.as_ref(), component_template))
+    }
+
+    pub fn log_languages_help(&self) {
+        logln(format!("\n{}", "Available languages:".underline().bold(),));
+        for language in GuestLanguage::iter() {
+            logln(format!(
+                "- {}: {}",
+                language.name(),
+                language.id().log_color_highlight()
+            ));
+        }
+    }
+
+    pub fn log_templates_help(
+        &self,
+        language_filter: Option<GuestLanguage>,
+        template_filter: Option<&str>,
+        dev_mode: bool,
+    ) {
+        if language_filter.is_none() && template_filter.is_none() {
+            logln(format!(
+                "\n{}",
+                "Available languages and templates:".underline().bold(),
+            ));
+        } else {
+            logln(format!("\n{}", "Matching templates:".underline().bold(),));
+        }
+
+        let templates = self
+            .ctx
+            .templates(dev_mode)
+            .iter()
+            .filter_map(|(language, templates)| {
+                templates
+                    .get(self.ctx.template_group())
+                    .and_then(|templates| {
+                        let matches_lang = language_filter
+                            .map(|language_filter| language_filter == *language)
+                            .unwrap_or(true);
+
+                        if matches_lang {
+                            let templates = templates
+                                .components
+                                .iter()
+                                .filter(|(template_name, template)| {
+                                    template_filter
+                                        .map(|template_filter| {
+                                            template_name
+                                                .as_str()
+                                                .to_lowercase()
+                                                .contains(template_filter)
+                                                || template
+                                                    .description
+                                                    .to_lowercase()
+                                                    .contains(template_filter)
+                                        })
+                                        .unwrap_or(true)
+                                })
+                                .collect::<Vec<_>>();
+
+                            (!templates.is_empty()).then_some(templates)
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|templates| (language, templates))
+            })
+            .collect::<Vec<_>>();
+
+        for (language, templates) in templates {
+            if let Some(language_filter) = language_filter {
+                if language_filter != *language {
+                    continue;
+                }
+            }
+
+            logln(format!("- {}", language.to_string().bold()));
+            for (template_name, template) in templates {
+                if template_name.as_str() == "default" {
+                    logln(format!(
+                        "  - {}: {}",
+                        language.id().bold(),
+                        template.description,
+                    ));
+                } else {
+                    logln(format!(
+                        "  - {}/{}: {}",
+                        language.id().bold(),
+                        template.name.as_str().bold(),
+                        template.description,
+                    ));
+                }
+            }
+        }
+    }
+
+    pub async fn diagnose(
+        &self,
+        component_names: Vec<ComponentName>,
+        default_component_select_mode: &ApplicationComponentSelectMode,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, default_component_select_mode)
+            .await?;
+
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let selected_component_names = app_ctx
+            .selected_component_names()
+            .iter()
+            .collect::<Vec<_>>();
+
+        if selected_component_names.is_empty() {
+            log_warn("The application has no components.");
+        }
+
+        for component_name in selected_component_names {
+            log_action(
+                "Diagnosing",
+                format!(
+                    "component {} for recommended tooling",
+                    component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+
+            diagnose(app_ctx.application.component(component_name).source(), None);
+        }
+
+        Ok(())
+    }
+}

@@ -16,12 +16,11 @@ pub mod wit;
 
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
-
 use crate::services::oplog::OplogServiceOps;
+use crate::services::plugins::PluginsService;
 use async_trait::async_trait;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
@@ -44,8 +43,9 @@ use golem_common::model::oplog::{
     PublicUpdateDescription, PublicWorkerInvocation, SnapshotBasedUpdateParameters,
     UpdateDescription,
 };
-use golem_common::model::{ComponentVersion, Empty, OwnedWorkerId, WorkerId, WorkerInvocation};
+use golem_common::model::{Empty, OwnedWorkerId, WorkerId, WorkerInvocation};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::plugin_registration::PluginRegistration;
 use golem_wasm::analysis::AnalysedFunctionParameter;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use std::collections::BTreeSet;
@@ -54,7 +54,7 @@ use std::sync::Arc;
 pub struct PublicOplogChunk {
     pub entries: Vec<PublicOplogEntry>,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_revision: ComponentRevision,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
 }
@@ -62,10 +62,9 @@ pub struct PublicOplogChunk {
 pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    plugins: Arc<dyn Plugins>,
-    projects: Arc<dyn ProjectService>,
+    plugins: Arc<dyn PluginsService>,
     owned_worker_id: &OwnedWorkerId,
-    initial_component_version: ComponentVersion,
+    initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
@@ -76,7 +75,7 @@ pub async fn get_public_oplog_chunk(
     let last_index = oplog_service.get_last_index(owned_worker_id).await;
 
     let mut entries = Vec::new();
-    let mut current_component_version = initial_component_version;
+    let mut current_component_revision = initial_component_revision;
     let mut next_oplog_index = initial_oplog_index;
     let mut first_index_in_chunk = None;
 
@@ -84,8 +83,8 @@ pub async fn get_public_oplog_chunk(
         if first_index_in_chunk.is_none() {
             first_index_in_chunk = Some(index);
         }
-        if let Some(version) = raw_entry.specifies_component_version() {
-            current_component_version = version;
+        if let Some(revision) = raw_entry.specifies_component_revision() {
+            current_component_revision = revision;
         }
 
         let entry = PublicOplogEntry::from_oplog_entry(
@@ -94,9 +93,8 @@ pub async fn get_public_oplog_chunk(
             oplog_service.clone(),
             components.clone(),
             plugins.clone(),
-            projects.clone(),
             owned_worker_id,
-            current_component_version,
+            current_component_revision,
         )
         .await?;
         entries.push(entry);
@@ -106,7 +104,7 @@ pub async fn get_public_oplog_chunk(
     Ok(PublicOplogChunk {
         entries,
         next_oplog_index,
-        current_component_version,
+        current_component_revision,
         first_index_in_chunk: first_index_in_chunk.unwrap_or(initial_oplog_index),
         last_index,
     })
@@ -115,17 +113,16 @@ pub async fn get_public_oplog_chunk(
 pub struct PublicOplogSearchResult {
     pub entries: Vec<(OplogIndex, PublicOplogEntry)>,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_revision: ComponentRevision,
     pub last_index: OplogIndex,
 }
 
 pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    plugin_service: Arc<dyn Plugins>,
-    project_service: Arc<dyn ProjectService>,
+    plugin_service: Arc<dyn PluginsService>,
     owned_worker_id: &OwnedWorkerId,
-    initial_component_version: ComponentVersion,
+    initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
     query: &str,
@@ -133,7 +130,7 @@ pub async fn search_public_oplog(
     let mut results = Vec::new();
     let mut last_index;
     let mut current_index = initial_oplog_index;
-    let mut current_component_version = initial_component_version;
+    let mut current_component_revision = initial_component_revision;
 
     let query = Query::parse(query)?;
 
@@ -142,9 +139,8 @@ pub async fn search_public_oplog(
             component_service.clone(),
             oplog_service.clone(),
             plugin_service.clone(),
-            project_service.clone(),
             owned_worker_id,
-            current_component_version,
+            current_component_revision,
             current_index,
             count,
         )
@@ -161,7 +157,7 @@ pub async fn search_public_oplog(
 
         last_index = chunk.last_index;
         current_index = chunk.next_oplog_index;
-        current_component_version = chunk.current_component_version;
+        current_component_revision = chunk.current_component_revision;
 
         if current_index >= last_index || results.len() >= count {
             break;
@@ -171,17 +167,17 @@ pub async fn search_public_oplog(
     Ok(PublicOplogSearchResult {
         entries: results,
         next_oplog_index: current_index,
-        current_component_version,
+        current_component_revision,
         last_index,
     })
 }
 
-pub async fn find_component_version_at(
+pub async fn find_component_revision_at(
     oplog_service: Arc<dyn OplogService>,
     owned_worker_id: &OwnedWorkerId,
     start: OplogIndex,
-) -> Result<ComponentVersion, WorkerExecutorError> {
-    let mut initial_component_version = 0;
+) -> Result<ComponentRevision, WorkerExecutorError> {
+    let mut initial_component_revision = ComponentRevision::INITIAL;
     let last_oplog_index = oplog_service.get_last_index(owned_worker_id).await;
     let mut current = OplogIndex::INITIAL;
     while current < start && current <= last_oplog_index {
@@ -193,14 +189,14 @@ pub async fn find_component_version_at(
             .next()
             .map(|(_, v)| v.clone());
 
-        if let Some(version) = entry.and_then(|entry| entry.specifies_component_version()) {
-            initial_component_version = version;
+        if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {
+            initial_component_revision = revision;
         }
 
         current = current.next();
     }
 
-    Ok(initial_component_version)
+    Ok(initial_component_revision)
 }
 
 #[async_trait]
@@ -210,10 +206,9 @@ pub trait PublicOplogEntryOps: Sized {
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
-        projects: Arc<dyn ProjectService>,
+        plugins: Arc<dyn PluginsService>,
         owned_worker_id: &OwnedWorkerId,
-        component_version: ComponentVersion,
+        component_revision: ComponentRevision,
     ) -> Result<Self, String>;
 }
 
@@ -224,60 +219,49 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
-        projects: Arc<dyn ProjectService>,
+        plugins: Arc<dyn PluginsService>,
         owned_worker_id: &OwnedWorkerId,
-        component_version: ComponentVersion,
+        component_revision: ComponentRevision,
     ) -> Result<Self, String> {
         match value {
             OplogEntry::Create {
                 timestamp,
                 worker_id,
-                component_version,
+                component_revision,
                 args,
                 env,
-                project_id,
+                environment_id,
                 created_by,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 wasi_config_vars,
+                original_phantom_id,
             } => {
-                let project_owner = projects
-                    .get_project_owner(&project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
                 let mut initial_plugins = BTreeSet::new();
                 for installation_id in initial_active_plugins {
-                    let (installation, definition) = plugins
-                        .get(
-                            &project_owner,
-                            &worker_id.component_id,
-                            component_version,
-                            &installation_id,
-                        )
+                    let (installation, registration) = plugins
+                        .get(&worker_id.component_id, component_revision, installation_id)
                         .await
                         .map_err(|err| err.to_string())?;
-                    let desc = PluginInstallationDescription::from_definition_and_installation(
-                        definition,
-                        installation,
-                    );
+                    let desc = make_plugin_installation_description(registration, installation);
                     initial_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     worker_id,
-                    component_version,
+                    component_revision,
                     args,
                     env: env.into_iter().collect(),
-                    project_id,
+                    environment_id,
                     created_by,
                     parent,
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
                     wasi_config_vars: wasi_config_vars.into(),
+                    original_phantom_id,
                 }))
             }
             OplogEntry::ImportedFunctionInvoked {
@@ -333,12 +317,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let metadata = components
                     .get_metadata(
                         &owned_worker_id.worker_id.component_id,
-                        Some(component_version),
+                        Some(component_revision),
                     )
                     .await
                     .map_err(|err| err.to_string())?;
                 let function = metadata.metadata.find_function(&function_name)?.ok_or(
-                    format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
+                    format!("Exported function {function_name} not found in component {} version {component_revision}", owned_worker_id.component_id())
                 )?;
 
                 let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
@@ -447,7 +431,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         let metadata = components
                             .get_metadata(
                                 &owned_worker_id.worker_id.component_id,
-                                Some(component_version),
+                                Some(component_revision),
                             )
                             .await
                             .map_err(|err| err.to_string())?;
@@ -487,9 +471,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             invocation_context: encode_span_data(&span_data),
                         })
                     }
-                    WorkerInvocation::ManualUpdate { target_version } => {
+                    WorkerInvocation::ManualUpdate { target_revision } => {
                         PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
-                            target_version,
+                            target_revision,
                         })
                     }
                 };
@@ -504,7 +488,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 description,
             } => {
-                let target_version = *description.target_version();
+                let target_revision = *description.target_revision();
                 let public_description = match description {
                     UpdateDescription::Automatic { .. } => {
                         PublicUpdateDescription::Automatic(Empty {})
@@ -520,52 +504,44 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 };
                 Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParams {
                     timestamp,
-                    target_version,
+                    target_revision,
                     description: public_description,
                 }))
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
-                target_version,
+                target_revision,
                 new_component_size,
                 new_active_plugins,
             } => {
-                let project_owner = projects
-                    .get_project_owner(&owned_worker_id.project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
                 let mut new_plugins = BTreeSet::new();
                 for installation_id in new_active_plugins {
-                    let (installation, definition) = plugins
+                    let (registration, definition) = plugins
                         .get(
-                            &project_owner,
                             &owned_worker_id.worker_id.component_id,
-                            target_version,
-                            &installation_id,
+                            target_revision,
+                            installation_id,
                         )
                         .await
                         .map_err(|err| err.to_string())?;
 
-                    let desc = PluginInstallationDescription::from_definition_and_installation(
-                        definition,
-                        installation,
-                    );
+                    let desc = make_plugin_installation_description(definition, registration);
                     new_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                     timestamp,
-                    target_version,
+                    target_revision,
                     new_component_size,
                     new_active_plugins: new_plugins,
                 }))
             }
             OplogEntry::FailedUpdate {
                 timestamp,
-                target_version,
+                target_revision,
                 details,
             } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
-                target_version,
+                target_revision,
                 details,
             })),
             OplogEntry::GrowMemory { timestamp, delta } => {
@@ -609,47 +585,37 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Restart { timestamp } => {
                 Ok(PublicOplogEntry::Restart(RestartParams { timestamp }))
             }
-            OplogEntry::ActivatePlugin { timestamp, plugin } => {
-                let project_owner = projects
-                    .get_project_owner(&owned_worker_id.project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
-                let (installation, definition) = plugins
+            OplogEntry::ActivatePlugin {
+                timestamp,
+                plugin_priority,
+            } => {
+                let (registration, definition) = plugins
                     .get(
-                        &project_owner,
                         &owned_worker_id.worker_id.component_id,
-                        component_version,
-                        &plugin,
+                        component_revision,
+                        plugin_priority,
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let desc = PluginInstallationDescription::from_definition_and_installation(
-                    definition,
-                    installation,
-                );
+                let desc = make_plugin_installation_description(definition, registration);
                 Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
                     timestamp,
                     plugin: desc,
                 }))
             }
-            OplogEntry::DeactivatePlugin { timestamp, plugin } => {
-                let project_owner = projects
-                    .get_project_owner(&owned_worker_id.project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
-                let (installation, definition) = plugins
+            OplogEntry::DeactivatePlugin {
+                timestamp,
+                plugin_priority,
+            } => {
+                let (registration, definition) = plugins
                     .get(
-                        &project_owner,
                         &owned_worker_id.worker_id.component_id,
-                        component_version,
-                        &plugin,
+                        component_revision,
+                        plugin_priority,
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let desc = PluginInstallationDescription::from_definition_and_installation(
-                    definition,
-                    installation,
-                );
+                let desc = make_plugin_installation_description(definition, registration);
                 Ok(PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
                     timestamp,
                     plugin: desc,
@@ -799,4 +765,17 @@ async fn enrich_golem_rpc_scheduled_invocation(
         .map(|agent_id| agent_id.agent_type.clone());
     payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
     payload
+}
+
+fn make_plugin_installation_description(
+    registration: PluginRegistration,
+    installation: InstalledPlugin,
+) -> PluginInstallationDescription {
+    PluginInstallationDescription {
+        plugin_priority: installation.priority,
+        plugin_name: registration.name,
+        plugin_version: registration.version,
+        registered: !registration.deleted,
+        parameters: installation.parameters,
+    }
 }

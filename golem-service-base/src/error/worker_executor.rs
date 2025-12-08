@@ -14,10 +14,11 @@
 
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::oplog::WorkerError;
-use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_common::SafeDisplay;
+use golem_common::metrics::api::ApiErrorDetails;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::oplog::WorkerError;
+use golem_common::model::{PromiseId, ShardId, Timestamp, WorkerId};
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
@@ -48,12 +49,12 @@ pub enum WorkerExecutorError {
     },
     ComponentDownloadFailed {
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         reason: String,
     },
     ComponentParseFailed {
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         reason: String,
     },
     GetLatestVersionOfComponentFailed {
@@ -142,7 +143,7 @@ impl WorkerExecutorError {
 
     pub fn component_download_failed(
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         reason: impl Into<String>,
     ) -> Self {
         Self::ComponentDownloadFailed {
@@ -344,7 +345,7 @@ impl Error for WorkerExecutorError {
     }
 }
 
-impl TraceErrorKind for WorkerExecutorError {
+impl ApiErrorDetails for WorkerExecutorError {
     fn trace_error_kind(&self) -> &'static str {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
@@ -406,6 +407,10 @@ impl TraceErrorKind for WorkerExecutorError {
             | Self::FileSystemError { .. } => false,
         }
     }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        None
+    }
 }
 
 impl From<InterruptKind> for WorkerExecutorError {
@@ -417,7 +422,7 @@ impl From<InterruptKind> for WorkerExecutorError {
 impl From<anyhow::Error> for WorkerExecutorError {
     fn from(error: anyhow::Error) -> Self {
         match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => Self::Interrupted { kind: kind.clone() },
+            Some(kind) => Self::Interrupted { kind: *kind },
             None => Self::runtime(format!("{error:#?}")),
         }
     }
@@ -517,7 +522,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::ComponentDownloadFailed(
                         golem::worker::v1::ComponentDownloadFailed {
                             component_id: Some(component_id.into()),
-                            component_version,
+                            component_version: component_version.0,
                             reason,
                         },
                     ),
@@ -532,7 +537,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
                         golem::worker::v1::ComponentParseFailed {
                             component_id: Some(component_id.into()),
-                            component_version,
+                            component_version: component_version.0,
                             reason,
                         },
                     ),
@@ -746,7 +751,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_version: component_download_failed.component_version,
+                component_version: ComponentRevision(component_download_failed.component_version),
                 reason: component_download_failed.reason,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
@@ -756,7 +761,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_version: component_parse_failed.component_version,
+                component_version: ComponentRevision(component_parse_failed.component_version),
                 reason: component_parse_failed.reason,
             }),
             Some(
@@ -799,7 +804,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     kind: if interrupted.recover_immediately {
                         InterruptKind::Restart
                     } else {
-                        InterruptKind::Interrupt
+                        InterruptKind::Interrupt(Timestamp::now_utc())
                     },
                 })
             }
@@ -908,6 +913,7 @@ impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
     Debug,
+    Copy,
     Clone,
     PartialOrd,
     PartialEq,
@@ -920,18 +926,18 @@ impl Error for GolemSpecificWasmTrap {}
     FromValue,
 )]
 pub enum InterruptKind {
-    Interrupt,
+    Interrupt(Timestamp),
     Restart,
-    Suspend,
+    Suspend(Timestamp),
     Jump,
 }
 
 impl Display for InterruptKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
+            InterruptKind::Interrupt(_) => write!(f, "Interrupted via the Golem API"),
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
-            InterruptKind::Suspend => write!(f, "Suspended"),
+            InterruptKind::Suspend(_) => write!(f, "Suspended"),
             InterruptKind::Jump => write!(f, "Jumping back in time"),
         }
     }

@@ -15,14 +15,15 @@
 use crate::getter::{get_response_headers_or_default, get_status_code};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::worker::{WorkerService, WorkerServiceError};
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use futures::TryStreamExt;
-use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::{ComponentFilePath, ComponentId, WorkerId};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
-use golem_service_base::model::Component;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
@@ -33,18 +34,144 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[async_trait]
-pub trait FileServerBindingHandler: Send + Sync {
-    async fn handle_file_server_binding_result(
-        &self,
-        namespace: Namespace,
-        worker_name: &str,
-        component_id: &ComponentId,
-        original_result: RibResult,
-    ) -> FileServerBindingResult;
+pub struct FileServerBindingHandler {
+    component_service: Arc<dyn ComponentService>,
+    initial_component_files_service: Arc<InitialComponentFilesService>,
+    worker_service: Arc<WorkerService>,
 }
 
-pub type FileServerBindingResult = Result<FileServerBindingSuccess, FileServerBindingError>;
+impl FileServerBindingHandler {
+    pub fn new(
+        component_service: Arc<dyn ComponentService>,
+        initial_component_files_service: Arc<InitialComponentFilesService>,
+        worker_service: Arc<WorkerService>,
+    ) -> Self {
+        Self {
+            component_service,
+            initial_component_files_service,
+            worker_service,
+        }
+    }
+
+    pub async fn handle_file_server_binding_result(
+        &self,
+        worker_name: &str,
+        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        account_id: &AccountId,
+        original_result: RibResult,
+    ) -> Result<FileServerBindingSuccess, FileServerBindingError> {
+        let binding_details = FileServerBindingDetails::from_rib_result(original_result)
+            .map_err(FileServerBindingError::InvalidRibResult)?;
+
+        let component_metadata = self
+            .get_component_metadata(worker_name, component_id, account_id)
+            .await?;
+
+        // if we are serving a read_only file, we can just go straight to the blob storage.
+        let matching_ro_file = component_metadata
+            .files
+            .iter()
+            .find(|file| file.path == binding_details.file_path && file.is_read_only());
+
+        if let Some(file) = matching_ro_file {
+            let data = self
+                .initial_component_files_service
+                .get(environment_id, &file.content_hash)
+                .await
+                .map_err(|e| {
+                    FileServerBindingError::InternalError(format!(
+                        "Failed looking up file in storage: {e}"
+                    ))
+                })?
+                .ok_or(FileServerBindingError::InternalError(format!(
+                    "File not found in file storage: {}",
+                    file.content_hash
+                )))
+                .map(|stream| {
+                    let mapped = stream.map_err(std::io::Error::other);
+                    Box::pin(mapped)
+                })?;
+
+            Ok(FileServerBindingSuccess {
+                binding_details,
+                data,
+            })
+        } else {
+            // Read write files need to be fetched from a running worker.
+            // Ask the worker service to get the file contents. If no worker is running, one will be started.
+
+            let worker_id = WorkerId::from_component_metadata_and_worker_id(
+                *component_id,
+                &component_metadata.metadata,
+                worker_name,
+            )
+            .map_err(|e| {
+                FileServerBindingError::InternalError(format!("Invalid worker name: {e}"))
+            })?;
+
+            let stream = self
+                .worker_service
+                .get_file_contents(
+                    &worker_id,
+                    binding_details.file_path.clone(),
+                    AuthCtx::impersonated_user(*account_id),
+                )
+                .await?;
+
+            let stream = stream.map_err(|e| std::io::Error::other(e.to_string()));
+
+            Ok(FileServerBindingSuccess {
+                binding_details,
+                data: Box::pin(stream),
+            })
+        }
+    }
+
+    async fn get_component_metadata(
+        &self,
+        worker_name: &str,
+        component_id: &ComponentId,
+        account_id: &AccountId,
+    ) -> Result<ComponentDto, FileServerBindingError> {
+        // Two cases, we either have an existing worker or not (either not configured or not existing).
+        // If there is no worker we need use the lastest component version, if there is none we need to use the exact component version
+        // the worker is using. Not doing that would make the blob_storage optimization for read-only files visible to users.
+
+        let component_revision = {
+            let worker_metadata = self
+                .worker_service
+                .get_metadata(
+                    &WorkerId {
+                        component_id: *component_id,
+                        worker_name: worker_name.to_string(),
+                    },
+                    AuthCtx::impersonated_user(*account_id),
+                )
+                .await;
+
+            match worker_metadata {
+                Ok(metadata) => Some(metadata.component_version),
+                Err(WorkerServiceError::WorkerNotFound(_)) => None,
+                Err(other) => Err(other)?,
+            }
+        };
+
+        let component_metadata = if let Some(component_revision) = component_revision {
+            self.component_service
+                .get_revision(component_id, component_revision)
+                .await
+                .map_err(FileServerBindingError::ComponentServiceError)?
+        } else {
+            self.component_service
+                .get_latest_by_id(component_id)
+                .await
+                .map_err(FileServerBindingError::ComponentServiceError)?
+        };
+
+        Ok(component_metadata)
+    }
+}
 
 pub struct FileServerBindingSuccess {
     pub binding_details: FileServerBindingDetails,
@@ -57,7 +184,6 @@ pub enum FileServerBindingError {
     WorkerServiceError(#[from] WorkerServiceError),
     #[error(transparent)]
     ComponentServiceError(#[from] ComponentServiceError),
-
     #[error("Internal error: {0}")]
     InternalError(String),
     #[error("Invalid rib result: {0}")]
@@ -171,145 +297,5 @@ impl FileServerBindingDetails {
             content_type,
             file_path,
         })
-    }
-}
-
-pub struct DefaultFileServerBindingHandler {
-    component_service: Arc<dyn ComponentService>,
-    initial_component_files_service: Arc<InitialComponentFilesService>,
-    worker_service: Arc<dyn WorkerService>,
-    auth_ctx: AuthCtx,
-}
-
-impl DefaultFileServerBindingHandler {
-    pub fn new(
-        component_service: Arc<dyn ComponentService>,
-        initial_component_files_service: Arc<InitialComponentFilesService>,
-        worker_service: Arc<dyn WorkerService>,
-        auth_ctx: AuthCtx,
-    ) -> Self {
-        Self {
-            component_service,
-            initial_component_files_service,
-            worker_service,
-            auth_ctx,
-        }
-    }
-
-    async fn get_component_metadata(
-        &self,
-        namespace: &Namespace,
-        worker_name: &str,
-        component_id: &ComponentId,
-    ) -> Result<Component, FileServerBindingError> {
-        // Two cases, we either have an existing worker or not (either not configured or not existing).
-        // If there is no worker we need use the lastest component version, if there is none we need to use the exact component version
-        // the worker is using. Not doing that would make the blob_storage optimization for read-only files visible to users.
-
-        let component_version = {
-            let worker_metadata = self
-                .worker_service
-                .get_metadata(
-                    &WorkerId {
-                        component_id: component_id.clone(),
-                        worker_name: worker_name.to_string(),
-                    },
-                    namespace.clone(),
-                )
-                .await;
-
-            match worker_metadata {
-                Ok(metadata) => Some(metadata.component_version),
-                Err(WorkerServiceError::WorkerNotFound(_)) => None,
-                Err(other) => Err(other)?,
-            }
-        };
-
-        let component_metadata = if let Some(component_version) = component_version {
-            self.component_service
-                .get_by_version(component_id, component_version, &self.auth_ctx)
-                .await
-                .map_err(FileServerBindingError::ComponentServiceError)?
-        } else {
-            self.component_service
-                .get_latest_by_id(component_id, &self.auth_ctx)
-                .await
-                .map_err(FileServerBindingError::ComponentServiceError)?
-        };
-
-        Ok(component_metadata)
-    }
-}
-
-#[async_trait]
-impl FileServerBindingHandler for DefaultFileServerBindingHandler {
-    async fn handle_file_server_binding_result(
-        &self,
-        namespace: Namespace,
-        worker_name: &str,
-        component_id: &ComponentId,
-        original_result: RibResult,
-    ) -> FileServerBindingResult {
-        let binding_details = FileServerBindingDetails::from_rib_result(original_result)
-            .map_err(FileServerBindingError::InvalidRibResult)?;
-
-        let component_metadata = self
-            .get_component_metadata(&namespace, worker_name, component_id)
-            .await?;
-
-        // if we are serving a read_only file, we can just go straight to the blob storage.
-        let matching_ro_file = component_metadata
-            .files
-            .iter()
-            .find(|file| file.path == binding_details.file_path && file.is_read_only());
-
-        if let Some(file) = matching_ro_file {
-            let data = self
-                .initial_component_files_service
-                .get(&namespace.project_id, &file.key)
-                .await
-                .map_err(|e| {
-                    FileServerBindingError::InternalError(format!(
-                        "Failed looking up file in storage: {e}"
-                    ))
-                })?
-                .ok_or(FileServerBindingError::InternalError(format!(
-                    "File not found in file storage: {}",
-                    file.key
-                )))
-                .map(|stream| {
-                    let mapped = stream.map_err(std::io::Error::other);
-                    Box::pin(mapped)
-                })?;
-
-            Ok(FileServerBindingSuccess {
-                binding_details,
-                data,
-            })
-        } else {
-            // Read write files need to be fetched from a running worker.
-            // Ask the worker service to get the file contents. If no worker is running, one will be started.
-
-            let worker_id = WorkerId::from_component_metadata_and_worker_id(
-                component_id.clone(),
-                &component_metadata.metadata,
-                worker_name,
-            )
-            .map_err(|e| {
-                FileServerBindingError::InternalError(format!("Invalid worker name: {e}"))
-            })?;
-
-            let stream = self
-                .worker_service
-                .get_file_contents(&worker_id, binding_details.file_path.clone(), namespace)
-                .await?;
-
-            let stream = stream.map_err(|e| std::io::Error::other(e.to_string()));
-
-            Ok(FileServerBindingSuccess {
-                binding_details,
-                data: Box::pin(stream),
-            })
-        }
     }
 }

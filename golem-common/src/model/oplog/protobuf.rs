@@ -16,11 +16,12 @@ use super::{
     ExportedFunctionParameters, LogLevel, ManualUpdateParameters, OplogCursor,
     PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
     PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
-    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
-    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError, WorkerResourceId,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicOplogEntryWithIndex, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
+    PublicWorkerInvocation, SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError,
+    WorkerResourceId, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
+use crate::model::component::{ComponentRevision, PluginPriority};
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
@@ -141,7 +142,7 @@ impl From<PluginInstallationDescription>
 {
     fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
         golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
-            installation_id: Some(plugin_installation_description.installation_id.into()),
+            plugin_priority: plugin_installation_description.plugin_priority.0,
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
             parameters: HashMap::from_iter(plugin_installation_description.parameters),
@@ -159,10 +160,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription
         value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
     ) -> Result<Self, Self::Error> {
         Ok(PluginInstallationDescription {
-            installation_id: value
-                .installation_id
-                .ok_or("Missing installation_id".to_string())?
-                .try_into()?,
+            plugin_priority: PluginPriority(value.plugin_priority),
             plugin_name: value.plugin_name,
             plugin_version: value.plugin_version,
             registered: value.registered,
@@ -211,14 +209,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .worker_id
                     .ok_or("Missing worker_id field")?
                     .try_into()?,
-                component_version: create.component_version,
+                component_revision: ComponentRevision(create.component_version),
                 args: create.args,
                 env: create.env.into_iter().collect(),
-                project_id: create
-                    .project_id
-                    .ok_or("Missing project_id field")?
+                environment_id: create
+                    .environment_id
+                    .ok_or("Missing environment_id field")?
                     .try_into()?,
-                created_by: create.created_by.ok_or("Missing created_by field")?.into(),
+                created_by: create
+                    .created_by
+                    .ok_or("Missing created_by field")?
+                    .try_into()?,
                 wasi_config_vars: create
                     .wasi_config_vars
                     .ok_or("Missing wasi_config_vars field")?
@@ -236,6 +237,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .map(|pr| pr.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
+                original_phantom_id: create.original_phantom_id.map(|id| id.into()),
             })),
             oplog_entry::Entry::ImportedFunctionInvoked(imported_function_invoked) => Ok(
                 PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
@@ -387,7 +389,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: pending_update.target_version,
+                    target_revision: ComponentRevision(pending_update.target_version),
                     description: pending_update
                         .update_description
                         .ok_or("Missing update_description field")?
@@ -400,7 +402,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: successful_update.target_version,
+                    target_revision: ComponentRevision(successful_update.target_version),
                     new_component_size: successful_update.new_component_size,
                     new_active_plugins: BTreeSet::from_iter(
                         successful_update
@@ -417,7 +419,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: failed_update.target_version,
+                    target_revision: ComponentRevision(failed_update.target_version),
                     details: failed_update.details,
                 }))
             }
@@ -594,11 +596,11 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         worker_id: Some(create.worker_id.into()),
-                        component_version: create.component_version,
+                        component_version: create.component_revision.0,
                         args: create.args,
                         env: create.env.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
-                        project_id: Some(create.project_id.into()),
+                        environment_id: Some(create.environment_id.into()),
                         wasi_config_vars: Some(create.wasi_config_vars.into()),
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
@@ -608,6 +610,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             .into_iter()
                             .map(Into::into)
                             .collect(),
+                        original_phantom_id: create.original_phantom_id.map(|id| id.into()),
                     },
                 )),
             },
@@ -774,7 +777,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::PendingUpdate(
                         golem_api_grpc::proto::golem::worker::PendingUpdateParameters {
                             timestamp: Some(pending_update.timestamp.into()),
-                            target_version: pending_update.target_version,
+                            target_version: pending_update.target_revision.0,
                             update_description: Some(pending_update.description.into()),
                         },
                     )),
@@ -785,7 +788,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::SuccessfulUpdate(
                         golem_api_grpc::proto::golem::worker::SuccessfulUpdateParameters {
                             timestamp: Some(successful_update.timestamp.into()),
-                            target_version: successful_update.target_version,
+                            target_version: successful_update.target_revision.0,
                             new_component_size: successful_update.new_component_size,
                             new_active_plugins: successful_update
                                 .new_active_plugins
@@ -801,7 +804,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::FailedUpdate(
                         golem_api_grpc::proto::golem::worker::FailedUpdateParameters {
                             timestamp: Some(failed_update.timestamp.into()),
-                            target_version: failed_update.target_version,
+                            target_version: failed_update.target_revision.0,
                             details: failed_update.details,
                         },
                     )),
@@ -1184,7 +1187,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicW
             ),
             worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
                 PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
-                    target_version: manual_update,
+                    target_revision: ComponentRevision(manual_update),
                 }),
             ),
         }
@@ -1218,7 +1221,7 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
             PublicWorkerInvocation::ManualUpdate(manual_update) => {
                 golem_api_grpc::proto::golem::worker::WorkerInvocation {
                     invocation: Some(worker_invocation::Invocation::ManualUpdate(
-                        manual_update.target_version,
+                        manual_update.target_revision.0,
                     )),
                 }
             }
@@ -1364,5 +1367,33 @@ fn decode_public_span_data(
         }
 
         result
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
+    for PublicOplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: OplogIndex::from_u64(value.oplog_index),
+            entry: value.entry.ok_or("Missing field: entry")?.try_into()?,
+        })
+    }
+}
+
+impl TryFrom<PublicOplogEntryWithIndex>
+    for golem_api_grpc::proto::golem::worker::OplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: value.oplog_index.into(),
+            entry: Some(value.entry.try_into()?),
+        })
     }
 }

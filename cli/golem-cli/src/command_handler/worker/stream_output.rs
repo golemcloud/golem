@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::format::Format;
 use crate::model::text::fmt::{to_colored_json, to_colored_yaml};
-use crate::model::{AgentLogStreamOptions, Format};
+use crate::model::worker::AgentLogStreamOptions;
 use colored::Colorize;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use std::cmp::Ordering;

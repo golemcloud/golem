@@ -1,7 +1,0 @@
-syntax = "proto3";
-
-package golem.token;
-
-message CreateTokenDTO {
-  string expires_at = 1;
-}

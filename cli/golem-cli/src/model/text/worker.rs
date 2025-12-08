@@ -16,20 +16,22 @@ use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
-use crate::model::{
-    ComponentName, WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
+use crate::model::worker::{
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
-use golem_client::model::{PublicOplogEntry, UpdateRecord};
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
+    PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
+use golem_common::model::worker::UpdateRecord;
+use golem_common::model::Timestamp;
 use golem_wasm::{print_value_and_type, ValueAndType};
 use indoc::indoc;
 use itertools::Itertools;
@@ -152,8 +154,8 @@ impl MessageWithFields for WorkerGetView {
         fields
             .fmt_field("Component name", &self.metadata.component_name, format_id)
             .fmt_field(
-                "Component version",
-                &self.metadata.component_version,
+                "Component revision",
+                &self.metadata.component_revision,
                 format_id,
             )
             .fmt_field("Agent name", &self.metadata.worker_name, format_worker_name)
@@ -220,12 +222,12 @@ struct WorkerMetadataTableView {
     pub component_name: ComponentName,
     #[table(title = "Agent name")]
     pub worker_name: String,
-    #[table(title = "Component\nversion", justify = "Justify::Right")]
-    pub component_version: u64,
+    #[table(title = "Component\nrevision", justify = "Justify::Right")]
+    pub component_revision: ComponentRevision,
     #[table(title = "Status", justify = "Justify::Right")]
     pub status: String,
     #[table(title = "Created at")]
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 impl From<&WorkerMetadataView> for WorkerMetadataTableView {
@@ -235,7 +237,7 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
             // TODO: pretty print, once we have "metadata-less" agent-type parsing
             worker_name: textwrap::wrap(&value.worker_name.0, 30).join("\n"),
             status: format_status(&value.status),
-            component_version: value.component_version,
+            component_revision: value.component_revision,
             created_at: value.created_at,
         }
     }
@@ -315,15 +317,15 @@ impl TextView for PublicOplogEntry {
             PublicOplogEntry::Create(params) => {
                 logln(format_message_highlight("CREATE"));
                 logln(format!(
-                    "{pad}at:                {}",
+                    "{pad}at:                 {}",
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}component version: {}",
-                    format_id(&params.component_version),
+                    "{pad}component revision: {}",
+                    format_id(&params.component_revision),
                 ));
                 logln(format!(
-                    "{pad}args:              {}",
+                    "{pad}args:               {}",
                     format_id(&params.args.join(", ")),
                 ));
                 logln(format!("{pad}env:"));
@@ -336,8 +338,8 @@ impl TextView for PublicOplogEntry {
                 logln(format!("{pad}initial active plugins:"));
                 for plugin in &params.initial_active_plugins {
                     logln(format!(
-                        "{pad}  - installation id: {}",
-                        format_id(&plugin.installation_id)
+                        "{pad}  - priority: {}",
+                        format_id(&plugin.plugin_priority.0)
                     ));
                     let inner_pad = format!("{pad}    ");
                     log_plugin_description(&inner_pad, plugin);
@@ -552,8 +554,8 @@ impl TextView for PublicOplogEntry {
                         format_id(&params.timestamp)
                     ));
                     logln(format!(
-                        "{pad}target version: {}",
-                        format_id(&inner_params.target_version),
+                        "{pad}target revision:   {}",
+                        format_id(&inner_params.target_revision),
                     ));
                 }
             },
@@ -564,8 +566,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 match &params.description {
                     PublicUpdateDescription::Automatic(_) => {
@@ -593,14 +595,14 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
-                        "{pad}  - installation id: {}",
-                        format_id(&plugin.installation_id),
+                        "{pad}  - priority: {}",
+                        format_id(&plugin.plugin_priority.0),
                     ));
                     let inner_pad = format!("{pad}    ");
                     log_plugin_description(&inner_pad, plugin);
@@ -613,8 +615,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 if let Some(details) = &params.details {
                     logln(format!("{pad}error:             {}", format_error(details)));
@@ -673,8 +675,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}installation id:   {}",
-                    format_id(&params.plugin.installation_id),
+                    "{pad}priority:   {}",
+                    format_id(&params.plugin.plugin_priority.0),
                 ));
                 log_plugin_description(pad, &params.plugin);
             }
@@ -685,8 +687,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}installation id:   {}",
-                    format_id(&params.plugin.installation_id),
+                    "{pad}priority:   {}",
+                    format_id(&params.plugin.plugin_priority.0),
                 ));
                 log_plugin_description(pad, &params.plugin);
             }

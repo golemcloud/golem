@@ -12,19 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::let_assert;
 use assert2::{assert, check};
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::v1::{
-    worker_execution_error, InvocationFailed, WorkerExecutionError,
-};
-use golem_api_grpc::proto::golem::worker::{UnknownError, WorkerError};
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::WorkerId;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
@@ -39,18 +37,17 @@ async fn agent_self_rpc_is_not_allowed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("golem_it_agent_self_rpc").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_agent_self_rpc")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "self-rpc-agent(\"worker-name\")")
-        .await;
+        .start_worker(&component.id, "self-rpc-agent(\"worker-name\")")
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -58,27 +55,17 @@ async fn agent_self_rpc_is_not_allowed(
             "golem-it:agent-self-rpc/self-rpc-agent.{self-rpc}",
             vec![],
         )
-        .await;
+        .await?;
 
     let_assert!(
-        Err(Error::InternalError(WorkerExecutionError {
-            error: Some(worker_execution_error::Error::InvocationFailed(
-                InvocationFailed {
-                    error: Some(WorkerError {
-                        error: Some(
-                            golem_api_grpc::proto::golem::worker::worker_error::Error::UnknownError(
-                                UnknownError {
-                                    details: error_details
-                                }
-                            )
-                        )
-                    }),
-                    ..
-                }
-            ))
-        })) = result
+        Err(WorkerExecutorError::InvocationFailed {
+            error: WorkerError::Unknown(error_details),
+            ..
+        }) = result
     );
     assert!(error_details.contains("RPC calls to the same agent are not supported"));
+
+    Ok(())
 }
 
 #[test]
@@ -87,23 +74,20 @@ async fn agent_await_parallel_rpc_calls(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("golem_it_agent_rpc")
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_agent_rpc")
         .name("golem-it:agent-rpc")
         .store()
-        .await;
+        .await?;
+
     let unique_id = context.redis_prefix();
     let worker_id = executor
-        .start_worker(&component_id, &format!("test-agent(\"{unique_id}\")"))
-        .await;
+        .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -111,11 +95,12 @@ async fn agent_await_parallel_rpc_calls(
             "golem-it:agent-rpc/test-agent.{run}",
             vec![20f64.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result.is_ok());
+    Ok(())
 }
 
 #[test]
@@ -124,24 +109,19 @@ async fn agent_env_inheritance(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("golem_it_agent_rpc")
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_agent_rpc")
         .name("golem-it:agent-rpc")
         .with_env(vec![
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "2".to_string()),
         ])
-        .unique()
         .store()
-        .await;
+        .await?;
     let unique_id = context.redis_prefix();
 
     let mut env = HashMap::new();
@@ -150,15 +130,15 @@ async fn agent_env_inheritance(
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             &format!("test-agent(\"{unique_id}\")"),
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await(
@@ -166,22 +146,17 @@ async fn agent_env_inheritance(
             "golem-it:agent-rpc/test-agent.{env-var-test}",
             vec![],
         )
-        .await;
+        .await?;
 
     let child_worker_id = WorkerId {
-        component_id: worker_id.component_id.clone(),
+        component_id: worker_id.component_id,
         worker_name: "child-agent(0)".to_string(),
     };
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-    executor.check_oplog_is_queryable(&child_worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    executor.check_oplog_is_queryable(&child_worker_id).await?;
 
-    let (mut child_metadata, _) = executor
-        .get_worker_metadata(&child_worker_id)
-        .await
-        .expect("Could not get child metadata");
-
-    child_metadata.env.sort_by_key(|(k, _)| k.clone());
+    let child_metadata = executor.get_worker_metadata(&child_worker_id).await?;
 
     let mut parent_env_vars = BTreeMap::new();
     let mut child_env_vars = BTreeMap::new();
@@ -232,7 +207,7 @@ async fn agent_env_inheritance(
                 Value::String(worker_id.component_id.to_string())
             ),
             (
-                "GOLEM_COMPONENT_VERSION".to_string(),
+                "GOLEM_COMPONENT_REVISION".to_string(),
                 Value::String("0".to_string())
             ),
             (
@@ -260,7 +235,7 @@ async fn agent_env_inheritance(
                 Value::String(child_worker_id.component_id.to_string())
             ),
             (
-                "GOLEM_COMPONENT_VERSION".to_string(),
+                "GOLEM_COMPONENT_REVISION".to_string(),
                 Value::String("0".to_string())
             ),
             (
@@ -271,26 +246,14 @@ async fn agent_env_inheritance(
     );
     assert_eq!(
         child_metadata.env,
-        vec![
+        HashMap::from_iter(vec![
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "22".to_string()),
             ("ENV3".to_string(), "33".to_string()),
-            (
-                "GOLEM_AGENT_ID".to_string(),
-                child_worker_id.worker_name.to_string()
-            ),
-            ("GOLEM_AGENT_TYPE".to_string(), "ChildAgent".to_string()),
-            (
-                "GOLEM_COMPONENT_ID".to_string(),
-                child_worker_id.component_id.to_string()
-            ),
-            ("GOLEM_COMPONENT_VERSION".to_string(), "0".to_string()),
-            (
-                "GOLEM_WORKER_NAME".to_string(),
-                child_worker_id.worker_name.to_string()
-            ),
-        ]
+        ])
     );
+
+    Ok(())
 }
 
 #[test]
@@ -299,28 +262,28 @@ async fn ephemeral_agent_works(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await.unwrap();
 
-    let component_id = executor
-        .component("golem_it_constructor_parameter_echo")
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_constructor_parameter_echo",
+        )
         .store()
-        .await;
+        .await?;
 
     let worker_id1 = executor
-        .start_worker(&component_id, "ephemeral-echo-agent(\"param1\")")
-        .await;
-    let worker_id2 = executor
-        .start_worker(&component_id, "ephemeral-echo-agent(\"param2\")")
-        .await;
+        .start_worker(&component.id, "ephemeral-echo-agent(\"param1\")")
+        .await?;
 
-    executor.log_output(&worker_id1).await;
-    executor.log_output(&worker_id2).await;
+    let worker_id2 = executor
+        .start_worker(&component.id, "ephemeral-echo-agent(\"param2\")")
+        .await?;
+
+    executor.log_output(&worker_id1).await?;
+    executor.log_output(&worker_id2).await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -328,32 +291,36 @@ async fn ephemeral_agent_works(
             "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
-        .await;
+        .await??;
+
     let result2 = executor
         .invoke_and_await(
             &worker_id1,
             "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
-        .await;
+        .await??;
+
     let result3 = executor
         .invoke_and_await(
             &worker_id2,
             "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
-        .await;
+        .await??;
+
     let result4 = executor
         .invoke_and_await(
             &worker_id2,
             "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
-        .await;
+        .await??;
 
     // As the agent is ephemeral, no matter how many times we call change-and-get it always starts from scratch (no additional '!' suffix)
-    assert_eq!(result1, Ok(vec![Value::String("param1!".to_string())]));
-    assert_eq!(result2, Ok(vec![Value::String("param1!".to_string())]));
-    assert_eq!(result3, Ok(vec![Value::String("param2!".to_string())]));
-    assert_eq!(result4, Ok(vec![Value::String("param2!".to_string())]));
+    assert_eq!(result1, vec![Value::String("param1!".to_string())]);
+    assert_eq!(result2, vec![Value::String("param1!".to_string())]);
+    assert_eq!(result3, vec![Value::String("param2!".to_string())]);
+    assert_eq!(result4, vec![Value::String("param2!".to_string())]);
+    Ok(())
 }

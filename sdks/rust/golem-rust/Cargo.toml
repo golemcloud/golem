@@ -10,6 +10,7 @@ version = "0.0.0"
 [lib]
 crate-type = ["rlib"]
 path = "src/lib.rs"
+harness = false
 
 [[test]]
 name = "agent"
@@ -31,10 +32,11 @@ wit-bindgen = {version = "=0.40.0"}
 [features]
 default = ["durability", "json", "macro"]
 durability = []
-export_golem_agentic = ["dep:ctor", "dep:async-trait"]
+export_golem_agentic = ["export_load_snapshot", "export_save_snapshot", "dep:ctor", "dep:async-trait"]
 export_load_snapshot = []
 export_oplog_processor = []
 export_save_snapshot = []
+golem_ai = []
 json = ["dep:serde", "dep:serde_json"]
 macro = ["dep:golem-rust-macro"]
 

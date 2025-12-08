@@ -14,6 +14,7 @@
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
+use crate::model::WorkerConfig;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
@@ -23,6 +24,9 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
+use futures::future::Either;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::GolemRpcFutureInvokeResultGet;
 use golem_common::model::oplog::host_functions::{
@@ -39,9 +43,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
-};
+use golem_common::model::{IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
@@ -72,7 +74,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
 
         let remote_worker_id: WorkerId = worker_id.into();
@@ -87,7 +91,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm::RpcError>> {
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
@@ -140,21 +146,39 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .state
                 .invocation_context
                 .clone_as_inherited_stack(span.span_id());
-            let result = self
-                .rpc()
-                .invoke_and_await(
+
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+            let rpc = self.rpc();
+            let created_by = *self.created_by();
+            let worker_id = self.worker_id().clone();
+
+            let either_result = futures::future::select(
+                rpc.invoke_and_await(
                     &remote_worker_id,
                     Some(idempotency_key),
                     function_name,
                     function_params,
-                    self.created_by(),
-                    self.worker_id(),
+                    &created_by,
+                    &worker_id,
                     &args,
                     &env,
                     wasi_config_vars,
                     stack,
-                )
-                .await;
+                ),
+                interrupt_signal,
+            )
+            .await;
+            let result = match either_result {
+                Either::Left((result, _)) => result,
+                Either::Right((interrupt_kind, _)) => {
+                    tracing::info!("Interrupted while waiting for RPC result");
+                    return Err(interrupt_kind.into());
+                }
+            };
             durability.try_trigger_retry(self, &result).await?;
 
             durability
@@ -201,7 +225,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm::RpcError>> {
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
@@ -296,7 +322,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
@@ -329,7 +357,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let worker_id = self.worker_id().clone();
-        let created_by = self.created_by().clone();
+        let created_by = *self.created_by();
         let request = HostRequestGolemRpcInvoke {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
@@ -471,7 +499,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .invocation_context
                 .clone_as_inherited_stack(&self.state.current_span_id);
             let action = ScheduledAction::Invoke {
-                account_id: self.created_by().clone(),
+                account_id: *self.created_by(),
                 owned_worker_id: remote_worker_id,
                 idempotency_key,
                 full_function_name: function_name,
@@ -1067,7 +1095,8 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .invocation_context
         .clone_as_inherited_stack(span.span_id());
 
-    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
+    let remote_worker_id =
+        OwnedWorkerId::new(&ctx.owned_worker_id.environment_id, &remote_worker_id);
     let demand = ctx
         .rpc()
         .create_demand(

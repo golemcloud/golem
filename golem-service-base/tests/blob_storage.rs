@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Error;
 use async_trait::async_trait;
-use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::config::Credentials;
+use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::Client;
+use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::stream::BoxStream;
 use futures::TryStreamExt;
-use golem_common::model::{ComponentId, ProjectId};
+use futures::stream::BoxStream;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
 use golem_service_base::config::S3BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -28,18 +30,18 @@ use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::*;
-use golem_service_base::storage::blob::{fs, memory, s3, BlobStorage, BlobStorageNamespace};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, fs, memory, s3};
 use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
-use tempfile::{tempdir, TempDir};
+use tempfile::{TempDir, tempdir};
 use test_r::{define_matrix_dimension, test, test_dep};
-use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
+use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
 
@@ -192,7 +194,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         self.storage
             .get_raw(target_label, op_label, namespace, path)
             .await
@@ -204,7 +206,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.storage
             .get_stream(target_label, op_label, namespace, path)
             .await
@@ -218,7 +220,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         self.storage
             .get_raw_slice(target_label, op_label, namespace, path, start, end)
             .await
@@ -230,7 +232,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String> {
+    ) -> Result<Option<BlobMetadata>, Error> {
         self.storage
             .get_metadata(target_label, op_label, namespace, path)
             .await
@@ -242,8 +244,8 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
+        data: &[u8],
+    ) -> Result<(), Error> {
         self.storage
             .put_raw(target_label, op_label, namespace, path, data)
             .await
@@ -255,8 +257,8 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<(), String> {
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
         self.storage
             .put_stream(target_label, op_label, namespace, path, stream)
             .await
@@ -268,7 +270,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .delete(target_label, op_label, namespace, path)
             .await
@@ -280,7 +282,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .delete_many(target_label, op_label, namespace, paths)
             .await
@@ -292,7 +294,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .create_dir(target_label, op_label, namespace, path)
             .await
@@ -304,7 +306,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Error> {
         self.storage
             .list_dir(target_label, op_label, namespace, path)
             .await
@@ -316,7 +318,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         self.storage
             .delete_dir(target_label, op_label, namespace, path)
             .await
@@ -328,7 +330,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String> {
+    ) -> Result<ExistsResult, Error> {
         self.storage
             .exists(target_label, op_label, namespace, path)
             .await
@@ -341,7 +343,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .copy(target_label, op_label, namespace, from, to)
             .await
@@ -354,7 +356,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .r#move(target_label, op_label, namespace, from, to)
             .await
@@ -405,14 +407,18 @@ async fn sqlite() -> Arc<dyn GetBlobStorage + Send + Sync> {
 #[test_dep(tagged_as = "cc")]
 fn compilation_cache() -> BlobStorageNamespace {
     BlobStorageNamespace::CompilationCache {
-        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
+        environment_id: EnvironmentId(
+            Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
+        ),
     }
 }
 
 #[test_dep(tagged_as = "co")]
 fn compressed_oplog() -> BlobStorageNamespace {
     BlobStorageNamespace::CompressedOplog {
-        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
+        environment_id: EnvironmentId(
+            Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
+        ),
         component_id: ComponentId(Uuid::new_v4()),
         level: 0,
     }
@@ -443,7 +449,7 @@ async fn get_put_get_root(
             "put-raw",
             namespace.clone(),
             path,
-            data.clone(),
+            &data,
         )
         .await
         .unwrap();
@@ -479,7 +485,7 @@ async fn get_put_get_new_dir(
             "put-raw",
             namespace.clone(),
             path,
-            data.clone(),
+            &data,
         )
         .await
         .unwrap();
@@ -512,7 +518,7 @@ async fn get_put_get_new_dir_streaming(
     for n in 1..(10 * 1024 * 1024) {
         data.put_u8((n % 100) as u8);
     }
-    let data = data.freeze();
+    let data = data.freeze().to_vec();
 
     let stream = (&data)
         .map_item(|i| i.map_err(widen_infallible))
@@ -650,7 +656,7 @@ async fn create_delete_exists_dir_and_file(
             "put-raw",
             namespace.clone(),
             &path.join("test-file"),
-            Bytes::from("test-data").to_vec(),
+            &Bytes::from("test-data"),
         )
         .await
         .unwrap();
@@ -716,7 +722,7 @@ async fn list_dir(
             "put-raw",
             namespace.clone(),
             &path.join("test-file1"),
-            Bytes::from("test-data1").to_vec(),
+            &Bytes::from("test-data1"),
         )
         .await
         .unwrap();
@@ -726,7 +732,7 @@ async fn list_dir(
             "put-raw",
             namespace.clone(),
             &path.join("test-file2"),
-            Bytes::from("test-data2").to_vec(),
+            &Bytes::from("test-data2"),
         )
         .await
         .unwrap();
@@ -775,7 +781,7 @@ async fn delete_many(
             "put-raw",
             namespace.clone(),
             &path.join("test-file1"),
-            Bytes::from("test-data1").to_vec(),
+            &Bytes::from("test-data1"),
         )
         .await
         .unwrap();
@@ -785,7 +791,7 @@ async fn delete_many(
             "put-raw",
             namespace.clone(),
             &path.join("test-file2"),
-            Bytes::from("test-data2").to_vec(),
+            &Bytes::from("test-data2"),
         )
         .await
         .unwrap();
@@ -795,7 +801,7 @@ async fn delete_many(
             "put-raw",
             namespace.clone(),
             &path.join("test-file3"),
-            Bytes::from("test-data3").to_vec(),
+            &Bytes::from("test-data3"),
         )
         .await
         .unwrap();
@@ -848,7 +854,7 @@ async fn list_dir_root(
             "put-raw",
             namespace.clone(),
             Path::new("test-file1"),
-            Bytes::from("test-data1").to_vec(),
+            &Bytes::from("test-data1"),
         )
         .await
         .unwrap();
@@ -858,7 +864,7 @@ async fn list_dir_root(
             "put-raw-2",
             namespace.clone(),
             Path::new("test-file2"),
-            Bytes::from("test-data2").to_vec(),
+            &Bytes::from("test-data2"),
         )
         .await
         .unwrap();
@@ -926,7 +932,7 @@ async fn list_dir_root_only_subdirs(
             "put-raw",
             namespace.clone(),
             Path::new("inner-dir1/test-file1"),
-            Bytes::from("test-data1").to_vec(),
+            &Bytes::from("test-data1"),
         )
         .await
         .unwrap();
@@ -936,7 +942,7 @@ async fn list_dir_root_only_subdirs(
             "put-raw-2",
             namespace.clone(),
             Path::new("inner-dir2/test-file2"),
-            Bytes::from("test-data2").to_vec(),
+            &Bytes::from("test-data2"),
         )
         .await
         .unwrap();
@@ -990,7 +996,7 @@ async fn list_dir_same_prefix(
             "put-raw",
             namespace.clone(),
             &path1.join("test-file1"),
-            Bytes::from("test-data1").to_vec(),
+            &Bytes::from("test-data1"),
         )
         .await
         .unwrap();
@@ -1000,7 +1006,7 @@ async fn list_dir_same_prefix(
             "put-raw",
             namespace.clone(),
             &path1.join("test-file2"),
-            Bytes::from("test-data2").to_vec(),
+            &Bytes::from("test-data2"),
         )
         .await
         .unwrap();

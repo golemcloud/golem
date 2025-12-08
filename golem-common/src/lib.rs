@@ -25,17 +25,17 @@ pub mod grpc;
 pub mod json_yaml;
 pub mod metrics;
 pub mod model;
-pub mod newtype;
 pub mod one_shot;
 pub mod poem;
 pub mod read_only_lock;
 pub mod redis;
-pub mod repo;
 pub mod retriable_error;
 pub mod retries;
 pub mod serialization;
 pub mod tracing;
 pub mod virtual_exports;
+
+mod macros;
 
 #[cfg(test)]
 test_r::enable!();
@@ -92,4 +92,11 @@ impl SafeDisplay for () {
     fn to_safe_string(&self) -> String {
         "".to_string()
     }
+}
+
+pub trait IntoAnyhow {
+    /// Direct conversion to anyhow::Error. This is preferred over going through the blanket Into<anyhow::Error> impl for std::err::Error,
+    /// as it can preserve more information depending on the implementor.
+    /// Can be removed when specialization is stable or std::err::Error has backtraces.
+    fn into_anyhow(self) -> anyhow::Error;
 }

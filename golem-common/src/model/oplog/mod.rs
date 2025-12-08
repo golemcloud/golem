@@ -27,21 +27,23 @@ pub use payload::*;
 pub use public_types::*;
 pub use raw_types::*;
 
+use crate::model::component::{ComponentRevision, PluginPriority};
+use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::regions::OplogRegion;
 use crate::model::worker::WasiConfigVars;
+use crate::model::RetryConfig;
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId,
-    WorkerId, WorkerInvocation,
+    AccountId, IdempotencyKey, Timestamp, TransactionId, WorkerId, WorkerInvocation,
 };
-use crate::model::{ProjectId, RetryConfig};
-use crate::oplog_entry;
+use crate::{declare_structs, oplog_entry};
 use desert_rust::BinaryCodec;
 use golem_wasm::wasmtime::ResourceTypeId;
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use uuid::Uuid;
 
 // Generates two primary types:
 // - OplogEntry
@@ -64,29 +66,31 @@ oplog_entry! {
         hint: false
         raw {
             worker_id: WorkerId,
-            component_version: ComponentVersion,
+            component_revision: ComponentRevision,
             args: Vec<String>,
             env: Vec<(String, String)>,
-            project_id: ProjectId,
+            environment_id: EnvironmentId,
             created_by: AccountId,
             parent: Option<WorkerId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
-            initial_active_plugins: HashSet<PluginInstallationId>,
+            initial_active_plugins: HashSet<PluginPriority>,
             wasi_config_vars: BTreeMap<String, String>,
+            original_phantom_id: Option<Uuid>
         }
         public {
             worker_id: WorkerId,
-            component_version: ComponentVersion,
+            component_revision: ComponentRevision,
             args: Vec<String>,
             env: BTreeMap<String, String>,
             created_by: AccountId,
-            project_id: ProjectId,
+            environment_id: EnvironmentId,
             parent: Option<WorkerId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            wasi_config_vars: WasiConfigVars
+            wasi_config_vars: WasiConfigVars,
+            original_phantom_id: Option<Uuid>
         }
     },
     /// The worker invoked a host function
@@ -259,7 +263,7 @@ oplog_entry! {
             description: UpdateDescription,
         }
         public {
-            target_version: ComponentVersion,
+            target_revision: ComponentRevision,
             description: PublicUpdateDescription,
         }
     },
@@ -267,12 +271,12 @@ oplog_entry! {
     SuccessfulUpdate {
         hint: true
         raw {
-            target_version: ComponentVersion,
+            target_revision: ComponentRevision,
             new_component_size: u64,
-            new_active_plugins: HashSet<PluginInstallationId>,
+            new_active_plugins: HashSet<PluginPriority>,
         }
         public {
-            target_version: ComponentVersion,
+            target_revision: ComponentRevision,
             new_component_size: u64,
             new_active_plugins: BTreeSet<PluginInstallationDescription>,
         }
@@ -281,11 +285,11 @@ oplog_entry! {
     FailedUpdate {
         hint: true
         raw {
-            target_version: ComponentVersion,
+            target_revision: ComponentRevision,
             details: Option<String>,
         }
         public {
-            target_version: ComponentVersion,
+            target_revision: ComponentRevision,
             details: Option<String>,
         }
     },
@@ -349,7 +353,7 @@ oplog_entry! {
     ActivatePlugin {
         hint: true
         raw {
-            plugin: PluginInstallationId,
+            plugin_priority: PluginPriority,
         }
         public {
             plugin: PluginInstallationDescription
@@ -359,7 +363,7 @@ oplog_entry! {
     DeactivatePlugin {
         hint: true
         raw {
-            plugin: PluginInstallationId,
+            plugin_priority: PluginPriority,
         }
         public {
             plugin: PluginInstallationDescription
@@ -592,46 +596,22 @@ impl OplogEntry {
         }
     }
 
-    pub fn specifies_component_version(&self) -> Option<ComponentVersion> {
+    pub fn specifies_component_revision(&self) -> Option<ComponentRevision> {
         match self {
             OplogEntry::Create {
-                component_version, ..
-            } => Some(*component_version),
-            OplogEntry::SuccessfulUpdate { target_version, .. } => Some(*target_version),
+                component_revision, ..
+            } => Some(*component_revision),
+            OplogEntry::SuccessfulUpdate {
+                target_revision, ..
+            } => Some(*target_revision),
             _ => None,
         }
     }
+}
 
-    pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
-        match self {
-            OplogEntry::Create {
-                timestamp,
-                component_version,
-                args,
-                env,
-                project_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                wasi_config_vars,
-                worker_id: _,
-            } => Some(OplogEntry::Create {
-                timestamp: *timestamp,
-                worker_id: worker_id.clone(),
-                component_version: *component_version,
-                args: args.clone(),
-                env: env.clone(),
-                project_id: project_id.clone(),
-                created_by: created_by.clone(),
-                parent: parent.clone(),
-                component_size: *component_size,
-                initial_total_linear_memory_size: *initial_total_linear_memory_size,
-                initial_active_plugins: initial_active_plugins.clone(),
-                wasi_config_vars: wasi_config_vars.clone(),
-            }),
-            _ => None,
-        }
+declare_structs! {
+    pub struct PublicOplogEntryWithIndex {
+        pub oplog_index: OplogIndex,
+        pub entry: PublicOplogEntry,
     }
 }

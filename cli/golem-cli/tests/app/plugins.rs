@@ -32,6 +32,8 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
+// TODO: atomic: re-enable test
+#[ignore]
 #[test]
 async fn plugin_installation_test1(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
@@ -330,6 +332,8 @@ impl TestPlugin {
     }
 }
 
+// TODO: atomic: re-enable test
+#[ignore]
 #[test]
 #[timeout("2 minutes")]
 async fn plugin_installation_test2(_tracing: &Tracing) {

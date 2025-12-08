@@ -18,6 +18,7 @@ pub mod types;
 mod tests;
 
 use crate::model::agent::{DataValue, RegisteredAgentType};
+use crate::model::component::ComponentRevision;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
@@ -31,10 +32,8 @@ use crate::model::oplog::types::{
     SerializableStreamError,
 };
 use crate::model::oplog::PayloadId;
-use crate::model::{
-    ComponentId, ComponentVersion, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
-    RevertWorkerTarget, WorkerId,
-};
+use crate::model::worker::RevertWorkerTarget;
+use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId, WorkerId};
 use crate::oplog_payload;
 use crate::serialization::serialize;
 use desert_rust::{
@@ -109,7 +108,7 @@ oplog_payload! {
         },
         GolemApiUpdateAgent {
             agent_id: WorkerId,
-            target_version: ComponentVersion,
+            target_revision: ComponentRevision,
             mode: UpdateMode
         },
         GolemAgentGetAgentType {

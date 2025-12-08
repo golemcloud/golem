@@ -24,8 +24,10 @@ use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, OwnedWorkerId, WorkerId};
+use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 /// Holds the metadata and wasmtime structures of currently active Golem workers
@@ -60,7 +62,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
@@ -70,7 +72,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let worker_id = owned_worker_id.worker_id();
 
         let owned_worker_id = owned_worker_id.clone();
-        let account_id = account_id.clone();
+        let account_id = *account_id;
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
         self.workers

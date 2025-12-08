@@ -99,6 +99,7 @@ synoptic = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -129,6 +130,10 @@ rmcp-actix-web = "0.8.17"
 rmcp = { version = "0.9.1", features = ["server", "transport-streamable-http-server-session"] }
 
 
+
+[target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
+openssl = { workspace = true }
+openssl-sys = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }

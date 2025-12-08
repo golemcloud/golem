@@ -15,7 +15,7 @@
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
-    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
+    find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
@@ -26,12 +26,13 @@ use crate::preview2::golem_api_1_x::oplog::{
 use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
-use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
+use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::host_functions::{
     GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
     GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
@@ -50,8 +51,8 @@ use golem_common::model::oplog::{
     HostResponseGolemApiUnit, OplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,7 +86,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
             .get::<GetAgentsEntry>(&self_)
             .map(|e| {
                 (
-                    e.component_id.clone(),
+                    e.component_id,
                     e.filter.clone(),
                     e.count,
                     e.precise,
@@ -155,15 +156,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<Resource<GetPromiseResultEntry>> {
-        // only the agent that originally created the promise is woken up when it is completed.
-        if golem_common::base_model::WorkerId::from(promise_id.agent_id.clone())
-            != *self.worker_id()
-        {
-            return Err(anyhow!(
-                "Tried awaiting a promise not created by the current agent"
-            ));
-        }
-
         let entry =
             GetPromiseResultEntry::new(promise_id.into(), self.state.promise_service.clone());
         Ok(self.table().push(entry)?)
@@ -192,13 +184,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let promise_completion_result = if is_local_worker {
                 self.public_state
                     .promise_service
-                    .complete(promise_id.clone(), data)
+                    .complete(promise_id.clone(), data, self.created_by())
                     .await?
             } else {
                 // talk to the executor that actually owns the promise
                 self.state
                     .worker_proxy
-                    .complete_promise(promise_id.clone(), data)
+                    .complete_promise(promise_id.clone(), data, self.created_by())
                     .await?
             };
 
@@ -414,13 +406,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.persistence_level != new_persistence_level {
             // commit all pending entries and change persistence level
             if self.state.is_live() {
-                self.state
-                    .oplog
-                    .add(OplogEntry::change_persistence_level(new_persistence_level))
-                    .await;
                 self.public_state
                     .worker()
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .add_and_commit_oplog(OplogEntry::change_persistence_level(
+                        new_persistence_level,
+                    ))
                     .await;
             } else {
                 let oplog_index_before = self.state.current_oplog_index().await;
@@ -507,14 +497,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn update_agent(
         &mut self,
         worker_id: golem_api_1_x::host::AgentId,
-        target_version: ComponentVersion,
+        target_version: u64,
         mode: golem_api_1_x::host::UpdateMode,
     ) -> anyhow::Result<()> {
         let durability =
             Durability::<GolemApiUpdateWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let agent_id: WorkerId = worker_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &agent_id);
+        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.environment_id, &agent_id);
 
         let mode = match mode {
             golem_api_1_x::host::UpdateMode::Automatic => {
@@ -529,7 +519,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .worker_proxy
-                .update(&owned_worker_id, target_version, mode)
+                .update(
+                    &owned_worker_id,
+                    ComponentRevision(target_version),
+                    mode,
+                    self.created_by(),
+                )
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -538,7 +533,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self,
                     HostRequestGolemApiUpdateAgent {
                         agent_id,
-                        target_version,
+                        target_revision: ComponentRevision(target_version),
                         mode,
                     },
                     HostResponseGolemApiUnit { result },
@@ -589,7 +584,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let agent_id: WorkerId = agent_id.into();
 
         let result = if durability.is_live() {
-            let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &agent_id);
+            let owned_worker_id =
+                OwnedWorkerId::new(&self.owned_worker_id.environment_id, &agent_id);
             let result = self.state.worker_service.get(&owned_worker_id).await;
             let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
                 let mut metadata = result.initial_worker_metadata;
@@ -642,7 +638,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .worker_proxy
-                .fork_worker(&source_worker_id, &target_worker_id, &oplog_index_cut_off)
+                .fork_worker(
+                    &source_worker_id,
+                    &target_worker_id,
+                    &oplog_index_cut_off,
+                    self.created_by(),
+                )
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -674,11 +675,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = if durability.is_live() {
             let agent_id: WorkerId = agent_id.into();
-            let target: golem_common::model::RevertWorkerTarget = revert_target.into();
+            let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
             let result = self
                 .worker_proxy()
-                .revert(&agent_id, target.clone())
+                .revert(&agent_id, target.clone(), self.created_by())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -710,7 +711,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .component_service
                 .resolve_component(
                     component_slug.clone(),
-                    self.state.component_metadata.owner.clone(),
+                    self.state.component_metadata.environment_id,
+                    self.state.component_metadata.application_id,
+                    self.state.component_metadata.account_id,
                 )
                 .await
                 .map_err(|err| err.to_string());
@@ -865,13 +868,13 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
         self.observe_function_call("golem::api::get-oplog", "new");
 
-        let account_id = self.owned_worker_id.project_id();
+        let account_id = self.owned_worker_id.environment_id();
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
         let start = OplogIndex::from_u64(start);
         let initial_component_version =
-            find_component_version_at(self.state.oplog_service(), &owned_worker_id, start).await?;
+            find_component_revision_at(self.state.oplog_service(), &owned_worker_id, start).await?;
 
         let entry = GetOplogEntry::new(owned_worker_id, start, initial_component_version, 100);
         let resource = self.as_wasi_view().table().push(entry)?;
@@ -887,7 +890,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let plugins = self.state.plugins();
-        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
@@ -895,7 +897,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             plugins,
-            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -908,7 +909,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             self.as_wasi_view()
                 .table()
                 .get_mut(&self_)?
-                .update(chunk.next_oplog_index, chunk.current_component_version);
+                .update(chunk.next_oplog_index, chunk.current_component_revision);
             Ok(Some(
                 chunk
                     .entries
@@ -963,7 +964,16 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let result = if durability.is_live() {
+            let self_worker_id = self.worker_id().clone();
             let entry = self.table().get(&resource)?;
+
+            // only the agent that originally created the promise is woken up when it is completed.
+            if entry.promise_id.worker_id != self_worker_id {
+                return Err(anyhow!(
+                    "Tried awaiting a promise not created by the current agent"
+                ));
+            }
+
             let result = entry.get_handle().await.get().await;
             durability
                 .persist(
@@ -1013,7 +1023,7 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
 pub struct GetOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub page_size: usize,
 }
 
@@ -1021,7 +1031,7 @@ impl GetOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentVersion,
+        initial_component_version: ComponentRevision,
         page_size: usize,
     ) -> Self {
         Self {
@@ -1035,7 +1045,7 @@ impl GetOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentVersion,
+        current_component_version: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_version = current_component_version;
@@ -1050,13 +1060,13 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<SearchOplog>> {
         self.observe_function_call("golem::api::search-oplog", "new");
 
-        let account_id = self.owned_worker_id.project_id();
+        let account_id = self.owned_worker_id.environment_id();
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
         let start = OplogIndex::INITIAL;
         let initial_component_version =
-            find_component_version_at(self.state.oplog_service(), &owned_worker_id, start).await?;
+            find_component_revision_at(self.state.oplog_service(), &owned_worker_id, start).await?;
 
         let entry =
             SearchOplogEntry::new(owned_worker_id, start, initial_component_version, 100, text);
@@ -1080,7 +1090,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let plugins = self.state.plugins();
-        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
@@ -1088,7 +1097,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             plugins,
-            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -1102,7 +1110,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             self.as_wasi_view()
                 .table()
                 .get_mut(&self_)?
-                .update(chunk.next_oplog_index, chunk.current_component_version);
+                .update(chunk.next_oplog_index, chunk.current_component_revision);
             Ok(Some(
                 chunk
                     .entries
@@ -1137,7 +1145,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .component_service
             .resolve_component(
                 component_slug.clone(),
-                self.state.component_metadata.owner.clone(),
+                self.state.component_metadata.environment_id,
+                self.state.component_metadata.application_id,
+                self.state.component_metadata.account_id,
             )
             .await?;
 
@@ -1148,7 +1158,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         if let Some(worker_id) = worker_id.clone() {
             let owned_id = OwnedWorkerId {
-                project_id: self.state.owned_worker_id.project_id(),
+                environment_id: self.state.owned_worker_id.environment_id(),
                 worker_id,
             };
 
@@ -1166,7 +1176,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 pub struct SearchOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub page_size: usize,
     pub query: String,
 }
@@ -1175,7 +1185,7 @@ impl SearchOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentVersion,
+        initial_component_version: ComponentRevision,
         page_size: usize,
         query: String,
     ) -> Self {
@@ -1191,7 +1201,7 @@ impl SearchOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentVersion,
+        current_component_version: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_version = current_component_version;
@@ -1200,19 +1210,21 @@ impl SearchOplogEntry {
 
 impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {}
 
-impl From<golem_api_1_x::host::RevertAgentTarget> for golem_common::model::RevertWorkerTarget {
+impl From<golem_api_1_x::host::RevertAgentTarget>
+    for golem_common::model::worker::RevertWorkerTarget
+{
     fn from(value: golem_api_1_x::host::RevertAgentTarget) -> Self {
         match value {
             golem_api_1_x::host::RevertAgentTarget::RevertToOplogIndex(index) => {
-                golem_common::model::RevertWorkerTarget::RevertToOplogIndex(
-                    golem_common::model::RevertToOplogIndex {
+                golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
+                    golem_common::model::worker::RevertToOplogIndex {
                         last_oplog_index: OplogIndex::from_u64(index),
                     },
                 )
             }
             golem_api_1_x::host::RevertAgentTarget::RevertLastInvocations(n) => {
-                golem_common::model::RevertWorkerTarget::RevertLastInvocations(
-                    golem_common::model::RevertLastInvocations {
+                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(
+                    golem_common::model::worker::RevertLastInvocations {
                         number_of_invocations: n,
                     },
                 )
@@ -1361,7 +1373,7 @@ impl From<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::Wor
             golem_api_1_x::host::AgentPropertyFilter::Version(filter) => {
                 golem_common::model::WorkerFilter::new_version(
                     filter.comparator.into(),
-                    filter.value,
+                    ComponentRevision(filter.value),
                 )
             }
             golem_api_1_x::host::AgentPropertyFilter::Status(filter) => {
@@ -1416,7 +1428,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
             env: value.env,
             config_vars: value.config_vars.into_iter().collect(),
             status: value.status.into(),
-            component_version: value.component_version,
+            component_revision: value.component_revision.0,
             retry_count: 0,
         }
     }

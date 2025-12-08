@@ -12,452 +12,616 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
-use assert2::{assert, check};
-use golem_api_grpc::proto::golem::component::v1::{
-    GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
+use anyhow::anyhow;
+use assert2::assert;
+use golem_client::api::{
+    RegistryServiceClient, RegistryServiceGetComponentError,
+    RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
-use golem_api_grpc::proto::golem::component::Component;
-use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+use golem_common::model::agent::{
+    AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema,
+    ElementSchema, NamedElementSchema, NamedElementSchemas, RegisteredAgentType,
 };
-use golem_common::model::{ComponentFilePermissions, ComponentId, InitialComponentFile};
+use golem_common::model::base64::Base64;
+use golem_common::model::component::{
+    ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
+    ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+};
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+use golem_common::model::plugin_registration::{
+    ComponentTransformerPluginSpec, PluginRegistrationCreation, PluginSpecDto,
+};
+use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDslUnsafe;
-use std::collections::HashMap;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
+use serde_json::json;
+use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
-use tokio::join;
-use uuid::Uuid;
+use tokio::fs::File;
+use tracing::{debug, info};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
-    let user = deps.user().await;
+async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
 
-    // Create some components
-    let (counter_1_id, counter_2_id, caller_id) = join!(
-        user.component("counters").unique().store(),
-        user.component("counters").unique().store(),
-        user.component("caller")
-            .unique()
-            .with_dynamic_linking(&[
-                (
-                    "rpc:counters-client/counters-client",
-                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        targets: HashMap::from_iter(vec![
-                            (
-                                "api".to_string(),
-                                WasmRpcTarget {
-                                    interface_name: "rpc:counters-exports/api".to_string(),
-                                    component_name: "rpc:counters".to_string(),
-                                },
-                            ),
-                            (
-                                "counter".to_string(),
-                                WasmRpcTarget {
-                                    interface_name: "rpc:counters-exports/api".to_string(),
-                                    component_name: "rpc:counters".to_string(),
-                                },
-                            ),
-                        ]),
-                    }),
-                ),
-                (
-                    "rpc:ephemeral-client/ephemeral-client",
-                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        targets: HashMap::from_iter(vec![(
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:ephemeral-exports/api".to_string(),
-                                component_name: "rpc:ephemeral".to_string(),
-                            }
-                        )]),
-                    }),
-                ),
-            ])
-            .store(),
-    );
+    let component = user.component(&env.id, "shopping-cart").store().await?;
 
-    let counter_1_id = common_component_id_to_str(&counter_1_id);
-    let counter_2_id = common_component_id_to_str(&counter_2_id);
-    let caller_id = common_component_id_to_str(&caller_id);
-
-    // Get components
-    let components = deps
-        .component_service()
-        .get_components(
-            &user.token,
-            GetComponentsRequest {
-                project_id: None,
-                component_name: None,
-            },
-        )
-        .await
-        .unwrap();
-
-    let components = components
-        .into_iter()
-        .map(|component| {
-            (
-                grpc_component_id_to_str(
-                    component
-                        .versioned_component_id
-                        .as_ref()
-                        .unwrap()
-                        .component_id
-                        .as_ref()
-                        .unwrap(),
-                ),
-                component,
-            )
-        })
-        .collect::<HashMap<_, _>>();
-
-    assert_eq!(components.len(), 3);
-
-    let counter_1 = components.get(&counter_1_id).unwrap();
-    let counter_2 = components.get(&counter_2_id).unwrap();
-    let caller = components.get(&caller_id).unwrap();
-
-    check!(counter_1.versioned_component_id.unwrap().version == 0);
-    check!(counter_2.versioned_component_id.unwrap().version == 0);
-    check!(caller.versioned_component_id.unwrap().version == 0);
-
-    check!(counter_1.component_size > 0);
-    check!(counter_1.component_size == counter_2.component_size);
-    check!(caller.component_size > 0);
-
-    let counter_1_meta = &counter_1.metadata.as_ref().unwrap();
-    let counter_2_meta = &counter_2.metadata.as_ref().unwrap();
-    let caller_meta = &caller.metadata.as_ref().unwrap();
-
-    check!(counter_1_meta.exports.len() > 0);
-    check!(counter_2_meta.exports.len() == counter_2_meta.exports.len());
-    check!(caller_meta.exports.len() > 0);
-
-    check!(counter_1_meta.dynamic_linking.len() == 0);
-    check!(counter_2_meta.dynamic_linking.len() == 0);
-    check!(caller_meta.dynamic_linking.len() == 2);
-
-    check!(
-        DynamicLinkedInstance::try_from(
-            caller_meta
-                .dynamic_linking
-                .get("rpc:counters-client/counters-client")
-                .unwrap()
-                .clone()
-        )
-        .unwrap()
-            == DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                targets: HashMap::from_iter(vec![
-                    (
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:counters-exports/api".to_string(),
-                            component_name: "rpc:counters".to_string(),
-                        },
-                    ),
-                    (
-                        "counter".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:counters-exports/api".to_string(),
-                            component_name: "rpc:counters".to_string(),
-                        },
-                    ),
-                ]),
-            }),
-    );
-    check!(
-        DynamicLinkedInstance::try_from(
-            caller_meta
-                .dynamic_linking
-                .get("rpc:ephemeral-client/ephemeral-client")
-                .unwrap()
-                .clone(),
-        )
-        .unwrap()
-            == DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                targets: HashMap::from_iter(vec![(
-                    "api".to_string(),
-                    WasmRpcTarget {
-                        interface_name: "rpc:ephemeral-exports/api".to_string(),
-                        component_name: "rpc:ephemeral".to_string(),
-                    }
-                )]),
-            }),
-    );
-}
-
-#[test]
-#[tracing::instrument]
-async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
-    let user = deps.user().await;
-
-    // Create component
-    let (component_id, component_name) = user
-        .component("counters")
-        .unique()
-        .store_and_get_name()
-        .await;
-
-    // Search for the component by name
-    let components = deps
-        .component_service()
-        .get_components(
-            &user.token,
-            GetComponentsRequest {
-                project_id: None,
-                component_name: Some(component_name.0.clone()),
-            },
-        )
-        .await
-        .unwrap();
-
-    // Check that we only have 1 version of the component
-    assert!(components.len() == 1);
-    check_versioned_id(&components[0], &component_id, 0);
-
-    // Update component two times
-    user.update_component(&component_id, "counters").await;
-    user.update_component(&component_id, "counters").await;
-
-    // Search for the component by name again
-    let components = deps
-        .component_service()
-        .get_components(
-            &user.token,
-            GetComponentsRequest {
-                project_id: None,
-                component_name: Some(component_name.0.clone()),
-            },
-        )
-        .await
-        .unwrap();
-
-    // Check that we have all versions of the component
-    assert!(components.len() == 3);
-    check_versioned_id(&components[0], &component_id, 0);
-    check_versioned_id(&components[1], &component_id, 1);
-    check_versioned_id(&components[2], &component_id, 2);
-}
-
-#[test]
-#[tracing::instrument]
-async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin().await;
-
-    // Create component
-    let (component_id, _) = admin
-        .component("counters")
-        .unique()
-        .store_and_get_name()
-        .await;
-
-    // Update component three times
-    admin.update_component(&component_id, "counters").await;
-    admin.update_component(&component_id, "counters").await;
-    admin.update_component(&component_id, "counters").await;
-
-    // Get all versions
-    let result = deps
-        .component_service()
-        .get_latest_component_metadata(
-            &admin.token,
-            GetLatestComponentRequest {
-                component_id: Some(component_id.clone().into()),
-            },
-        )
-        .await
-        .unwrap();
-
-    // Check metadata version
-    check!(result.versioned_component_id.unwrap().version == 3);
-}
-
-#[test]
-#[tracing::instrument]
-async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin().await;
-
-    // Create component
-    let (component_id, component_name) = admin
-        .component("counters")
-        .unique()
-        .store_and_get_name()
-        .await;
-
-    // Update component a few times while changing type, ifs, dynamic link
-    let files = admin
-        .add_initial_component_files(&[
-            (
-                "initial-file-read-write/files/foo.txt",
-                "/test-file-readonly",
-                ComponentFilePermissions::ReadOnly,
-            ),
-            (
-                "initial-file-read-write/files/baz.txt",
-                "/test-file-readwrite",
-                ComponentFilePermissions::ReadOnly,
-            ),
-        ])
-        .await;
-
-    let link = (
-        "dummy:dummy/dummy".to_string(),
-        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-            targets: HashMap::from_iter(vec![(
-                "dummy".to_string(),
-                WasmRpcTarget {
-                    interface_name: "dummy:dummy/dummy-x".to_string(),
-                    component_name: "dummy:dummy".to_string(),
-                },
-            )]),
-        }),
-    );
-    deps.component_service()
-        .update_component(
-            &admin.token,
-            &component_id,
-            &deps.component_directory().join("counters.wasm"),
-            Some(&files),
-            None,
-            &HashMap::new(),
-        )
-        .await
-        .unwrap();
-
-    deps.component_service()
-        .update_component(
-            &admin.token,
-            &component_id,
-            &deps.component_directory().join("counters.wasm"),
-            None,
-            None,
-            &HashMap::new(),
-        )
-        .await
-        .unwrap();
-
-    deps.component_service()
-        .update_component(
-            &admin.token,
-            &component_id,
-            &deps.component_directory().join("counters.wasm"),
-            None,
-            Some(&HashMap::from([link.clone()])),
-            &HashMap::new(),
-        )
-        .await
-        .unwrap();
-
-    // Get all versions
-    let result = deps
-        .component_service()
-        .get_component_metadata_all_versions(
-            &admin.token,
-            GetComponentRequest {
-                component_id: Some(component_id.clone().into()),
-            },
-        )
-        .await
-        .unwrap();
-
-    // Check metadata
-    check!(result.len() == 4);
-
-    let component_id_str = common_component_id_to_str(&component_id);
-    for (idx, component) in result.iter().enumerate() {
-        check!(
-            component.versioned_component_id.unwrap().version == idx as u64,
-            "{idx}"
-        );
-
-        check!(
-            grpc_component_id_to_str(
-                &component
-                    .versioned_component_id
-                    .unwrap()
-                    .component_id
-                    .unwrap()
-            ) == component_id_str,
-            "{idx}"
-        );
-
-        check!(component.component_name == component_name.0, "{idx}");
-
-        match idx {
-            idx if idx >= 1 => {
-                assert!(component.files.len() == 2, "{idx}");
-
-                check!(
-                    InitialComponentFile::try_from(component.files[0].clone()).unwrap()
-                        == files[0].1,
-                    "{idx}"
-                );
-                check!(
-                    InitialComponentFile::try_from(component.files[1].clone()).unwrap()
-                        == files[1].1,
-                    "{idx}"
-                );
-            }
-            _ => {
-                check!(component.files.is_empty(), "{idx}");
-            }
-        }
-
-        match idx {
-            3 => {
-                let dynamic_linking = component
-                    .metadata
-                    .as_ref()
-                    .unwrap()
-                    .dynamic_linking
-                    .get(&link.0)
-                    .unwrap();
-
-                check!(link.1 == DynamicLinkedInstance::try_from(dynamic_linking.clone()).unwrap());
-            }
-            _ => {
-                check!(
-                    component
-                        .metadata
-                        .as_ref()
-                        .unwrap()
-                        .dynamic_linking
-                        .is_empty(),
-                    "{idx}"
-                );
-            }
-        }
+    {
+        let fetched_component = client.get_component(&component.id.0).await?;
+        assert!(fetched_component == component);
     }
+
+    {
+        let fetched_component = client
+            .get_environment_component(&env.id.0, &component.component_name.0)
+            .await?;
+        assert!(fetched_component == component);
+    }
+
+    {
+        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        assert!(fetched_components.values == vec![component]);
+    }
+
+    Ok(())
 }
 
-fn common_component_id_to_str(component_id: &ComponentId) -> String {
-    component_id.to_string()
+#[test]
+#[tracing::instrument]
+async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let updated_component = user
+        .update_component_with(
+            &component.id,
+            component.revision,
+            Some("update-test-v2"),
+            vec![],
+            vec![],
+            None,
+            None,
+        )
+        .await?;
+
+    assert!(updated_component.id == component.id);
+    assert!(updated_component.wasm_hash != component.wasm_hash);
+
+    {
+        let fetched_component = client.get_component(&component.id.0).await?;
+        assert!(fetched_component == updated_component);
+    }
+
+    {
+        let fetched_component = client
+            .get_environment_component(&env.id.0, &component.component_name.0)
+            .await?;
+        assert!(fetched_component == updated_component);
+    }
+
+    {
+        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        assert!(fetched_components.values == vec![updated_component]);
+    }
+    Ok(())
 }
 
-fn grpc_component_id_to_str(
-    component_id: &golem_api_grpc::proto::golem::component::ComponentId,
-) -> String {
-    Uuid::from(component_id.value.unwrap()).to_string()
-}
+#[test]
+#[tracing::instrument]
+async fn component_update_with_wrong_revision_is_rejected(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
 
-fn check_versioned_id(
-    component: &Component,
-    expected_component_id: &ComponentId,
-    expected_version: u64,
-) {
-    check!(component.versioned_component_id.unwrap().version == expected_version);
-    let returned_component_id = grpc_component_id_to_str(
-        &component
-            .versioned_component_id
-            .unwrap()
-            .component_id
-            .unwrap(),
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let result = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision.next()?,
+                removed_files: Vec::new(),
+                new_file_options: BTreeMap::new(),
+                dynamic_linking: None,
+                env: None,
+                agent_types: None,
+                plugin_updates: Vec::new(),
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await;
+
+    assert!(
+        let Err(golem_client::Error::Item(RegistryServiceUpdateComponentError::Error409(_))) = result
     );
-    let expected_component_id = common_component_id_to_str(expected_component_id);
-    check!(returned_component_id == expected_component_id);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    client
+        .delete_component(&component.id.0, component.revision.0)
+        .await?;
+
+    {
+        let result = client.get_component(&component.id.0).await;
+        assert!(
+            let Err(golem_client::Error::Item(
+                RegistryServiceGetComponentError::Error404(_)
+            )) = result
+        );
+    }
+
+    {
+        let result = client
+            .get_environment_component(&env.id.0, &component.component_name.0)
+            .await;
+        assert!(
+            let Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentComponentError::Error404(_)
+            )) = result
+        );
+    }
+
+    {
+        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        assert!(fetched_components.values == vec![]);
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_component_with_plugins_and_update_installations(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let library_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "test-library-plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: "description".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "https://golem.cloud".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::File::open(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let library_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: library_plugin.id,
+            },
+        )
+        .await?;
+
+    let plugin_parameters = BTreeMap::from_iter(vec![("foo".to_string(), "bar".to_string())]);
+
+    let component = user
+        .component(&env.id, "app_and_library_app")
+        .with_parametrized_plugin(&library_plugin_grant.id, 0, plugin_parameters.clone())
+        .store()
+        .await?;
+
+    assert!(component.installed_plugins.len() == 1);
+
+    let installed_plugin = &component.installed_plugins[0];
+    assert!(installed_plugin.priority.0 == 0);
+    assert!(installed_plugin.parameters == plugin_parameters);
+
+    // update priority of plugin
+    let component_v2 = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                removed_files: Vec::new(),
+                new_file_options: BTreeMap::new(),
+                dynamic_linking: None,
+                env: None,
+                agent_types: None,
+                plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
+                    plugin_priority: installed_plugin.priority,
+                    new_priority: Some(PluginPriority(1)),
+                    new_parameters: None,
+                })],
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+
+    assert!(component_v2.installed_plugins.len() == 1);
+
+    let installed_plugin = &component_v2.installed_plugins[0];
+    assert!(installed_plugin.priority.0 == 1);
+    assert!(installed_plugin.parameters == plugin_parameters);
+
+    // update priority of plugin
+    let component_v3 = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component_v2.revision,
+                removed_files: Vec::new(),
+                new_file_options: BTreeMap::new(),
+                dynamic_linking: None,
+                env: None,
+                agent_types: None,
+                plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
+                    plugin_priority: installed_plugin.priority,
+                })],
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+
+    assert!(component_v3.installed_plugins.len() == 0);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let library_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "test-library-plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: "description".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "https://golem.cloud".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::File::open(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let library_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: library_plugin.id,
+            },
+        )
+        .await?;
+
+    let plugin_parameters = BTreeMap::from_iter(vec![("foo".to_string(), "bar".to_string())]);
+
+    let component = user
+        .component(&env.id, "app_and_library_app")
+        .store()
+        .await?;
+
+    let updated_component = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                removed_files: Vec::new(),
+                new_file_options: BTreeMap::new(),
+                dynamic_linking: None,
+                env: None,
+                agent_types: None,
+                plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
+                    environment_plugin_grant_id: library_plugin_grant.id,
+                    priority: PluginPriority(0),
+                    parameters: plugin_parameters.clone(),
+                })],
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+
+    assert!(updated_component.installed_plugins.len() == 1);
+
+    {
+        let installed_plugin = &updated_component.installed_plugins[0];
+        assert!(installed_plugin.priority.0 == 0);
+        assert!(installed_plugin.parameters == plugin_parameters);
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn install_component_transformer_plugin(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use axum::extract::Multipart;
+    use axum::routing::post;
+    use axum::Router;
+
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
+        while let Some(field) = multipart.next_field().await.unwrap() {
+            let name = field.name().unwrap().to_string();
+            let data = field.bytes().await.unwrap();
+            debug!("Length of `{}` is {} bytes", name, data.len());
+
+            match name.as_str() {
+                "component" => {
+                    info!("Received component data");
+                }
+                "metadata" => {
+                    let json =
+                        std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
+                    info!("Metadata: {}", json);
+                }
+                _ => {
+                    let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
+                    info!("Configuration field: {} = {}", name, value);
+                }
+            }
+        }
+
+        let response = json!({
+            "env": {
+                "TEST_ENV_VAR_2": "value_2"
+            }
+        });
+
+        axum::Json(response)
+    }
+
+    let app = Router::new().route("/transform", post(transform));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component_transformer_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "test-library-plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: "description".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "https://golem.cloud".to_string(),
+                spec: PluginSpecDto::ComponentTransformer(ComponentTransformerPluginSpec {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                }),
+            },
+            None::<Vec<u8>>,
+        )
+        .await?;
+
+    let component_transformer_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: component_transformer_plugin.id,
+            },
+        )
+        .await?;
+
+    let component = user
+        .component(&env.id, "environment-service")
+        .with_env(vec![("TEST_ENV_VAR_1".to_string(), "value_1".to_string())])
+        .with_plugin(&component_transformer_plugin_grant.id, 0)
+        .store()
+        .await?;
+
+    server_handle.abort();
+
+    assert!(component.installed_plugins.len() == 1);
+    let installed_plugin = &component.installed_plugins[0];
+    assert!(installed_plugin.priority.0 == 0);
+
+    assert!(
+        component.env
+            == BTreeMap::from_iter(vec![
+                ("TEST_ENV_VAR_1".to_string(), "value_1".to_string()),
+                ("TEST_ENV_VAR_2".to_string(), "value_2".to_string())
+            ])
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = client
+        .create_component(
+            &env.id.0,
+            &ComponentCreation {
+                component_name: ComponentName("ifs-test".to_string()),
+                file_options: BTreeMap::from_iter(vec![(
+                    ComponentFilePath::from_abs_str("/bar/baz.txt").map_err(|e| anyhow!(e))?,
+                    ComponentFileOptions {
+                        permissions: ComponentFilePermissions::ReadWrite,
+                    },
+                )]),
+                dynamic_linking: HashMap::new(),
+                env: BTreeMap::new(),
+                agent_types: Vec::new(),
+                plugins: Vec::new(),
+            },
+            tokio::fs::File::open(
+                deps.component_directory()
+                    .join("initial-file-read-write.wasm"),
+            )
+            .await?,
+            Some(
+                tokio::fs::File::open(
+                    deps.component_directory()
+                        .join("initial-file-read-write/files/archive.zip"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    assert!(component.files.len() == 2);
+    assert!(
+        component
+            .files
+            .iter()
+            .filter(|cf| cf.permissions == ComponentFilePermissions::ReadWrite)
+            .count()
+            == 1
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    client
+        .delete_component(&component.id.0, component.revision.0)
+        .await?;
+
+    let recreated_component = user.component(&env.id, "update-test-v1").store().await?;
+    assert!(recreated_component.id == component.id);
+    assert!(recreated_component.revision == component.revision.next()?.next()?);
+
+    client
+        .delete_component(&component.id.0, recreated_component.revision.0)
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let agent_type = AgentType {
+        type_name: "CounterAgent".to_string(),
+        description: "".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "name".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: AnalysedType::Str(TypeStr),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "increment".to_string(),
+            description: "".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return-value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: AnalysedType::U32(TypeU32),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+    };
+
+    let component = client
+        .create_component(
+            &env.id.0,
+            &ComponentCreation {
+                component_name: ComponentName("golem:it".to_string()),
+                file_options: BTreeMap::new(),
+                dynamic_linking: HashMap::new(),
+                env: BTreeMap::new(),
+                agent_types: vec![agent_type.clone()],
+                plugins: Vec::new(),
+            },
+            tokio::fs::File::open(
+                deps.component_directory()
+                    .join("it_agent_counters_release.wasm"),
+            )
+            .await?,
+            None::<Vec<u8>>,
+        )
+        .await?;
+
+    assert!(component.metadata.agent_types() == std::slice::from_ref(&agent_type));
+
+    let deployment = user.deploy_environment(&env.id).await?;
+
+    let agent_types = client
+        .list_deployment_agent_types(&env.id.0, deployment.revision.0)
+        .await?;
+
+    assert!(
+        agent_types.values
+            == vec![RegisteredAgentType {
+                agent_type,
+                implemented_by: component.id
+            }]
+    );
+
+    Ok(())
 }

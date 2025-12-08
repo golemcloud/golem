@@ -17,11 +17,13 @@ use crate::{
     FunctionType, FunctionTypeRegistry, InstanceCreationType, InterfaceName, PackageName,
     TypeParameter,
 };
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::TypeEnum;
 use golem_wasm::analysis::{AnalysedExport, TypeVariant};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Default, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Default, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub struct ComponentDependencies {
     pub dependencies: BTreeMap<ComponentDependencyKey, FunctionDictionary>,
 }

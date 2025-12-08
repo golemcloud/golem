@@ -57,7 +57,7 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
     /// ```
     pub fn from_inline(text: String, language_code: T) -> UnstructuredText<T> {
         UnstructuredText::Text {
-            text: text.into(),
+            text,
             language_code: Some(language_code),
         }
     }
@@ -147,7 +147,7 @@ impl UnstructuredText<AnyLanguage> {
     ///
     /// ```
     pub fn from_url_any(url: String) -> UnstructuredText<AnyLanguage> {
-        UnstructuredText::Url(url.into())
+        UnstructuredText::Url(url)
     }
 
     /// Create an `UnstructuredText` instance from inline text without specifying a language code.
@@ -161,7 +161,7 @@ impl UnstructuredText<AnyLanguage> {
     ///
     pub fn from_inline_any(text: String) -> UnstructuredText<AnyLanguage> {
         UnstructuredText::Text {
-            text: text.into(),
+            text,
             language_code: None,
         }
     }

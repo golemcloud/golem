@@ -439,9 +439,9 @@ mod tests {
 #[cfg(test)]
 #[cfg(feature = "macro")]
 mod macro_tests {
-    use golem_rust_macro::golem_operation;
-
     use crate::{fallible_transaction, infallible_transaction};
+    use golem_rust_macro::golem_operation;
+    use test_r::test;
 
     mod golem_rust {
         pub use crate::*;

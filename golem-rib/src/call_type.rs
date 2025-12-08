@@ -14,9 +14,11 @@
 
 use crate::{ComponentDependencyKey, DynamicParsedFunctionName, Expr};
 use crate::{FullyQualifiedResourceConstructor, VariableId};
+use desert_rust::BinaryCodec;
 use std::fmt::Display;
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub enum CallType {
     Function {
         component_info: Option<ComponentDependencyKey>,
@@ -34,7 +36,8 @@ pub enum CallType {
 
 // InstanceIdentifier holds the variables that are used to identify a worker or resource instance.
 // Unlike InstanceCreationType, this type can be formed only after the instance is inferred
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub enum InstanceIdentifier {
     WitWorker {
         variable_id: Option<VariableId>,
@@ -63,7 +66,7 @@ impl InstanceIdentifier {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd, BinaryCodec)]
 pub enum InstanceCreationType {
     // A wit worker instance can be created without another module
     WitWorker {
@@ -191,7 +194,7 @@ mod protobuf {
             Ok(ComponentDependencyKey {
                 component_name,
                 component_id: component_id.into(),
-                component_version,
+                component_revision: component_version,
                 root_package_name,
                 root_package_version,
             })
@@ -202,7 +205,7 @@ mod protobuf {
         fn from(value: ComponentDependencyKey) -> Self {
             crate::proto::golem::rib::ComponentDependencyKey {
                 component_name: value.component_name,
-                component_version: value.component_version,
+                component_version: value.component_revision,
                 value: Some(value.component_id.into()),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,

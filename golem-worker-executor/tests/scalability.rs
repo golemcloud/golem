@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_customized, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor_test_utils::{
+    start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use std::future::Future;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -37,7 +38,7 @@ async fn spawning_many_workers_that_sleep(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
         format!("sleeping-worker-{n}")
@@ -53,14 +54,15 @@ async fn spawning_many_workers_that_sleep(
         (result, duration)
     }
 
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("clocks").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "clocks")
+        .store()
+        .await?;
 
-    let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
+    let warmup_worker = executor
+        .start_worker(&component.id, &worker_name(0))
+        .await?;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
@@ -78,7 +80,7 @@ async fn spawning_many_workers_that_sleep(
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, _, _)> = (1..N)
-        .map(|i| (i, component_id.clone(), executor.clone()))
+        .map(|i| (i, component.id, executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
@@ -87,14 +89,16 @@ async fn spawning_many_workers_that_sleep(
                 spawn(async move {
                     let worker = executor_clone
                         .start_worker(&component_id, &worker_name(n))
-                        .await;
-                    timed(async move {
+                        .await?;
+
+                    let (result, duration) = timed(async move {
                         executor_clone
                             .invoke_and_await(&worker, "run", vec![])
                             .await
-                            .unwrap()
                     })
-                    .await
+                    .await;
+
+                    Ok::<_, anyhow::Error>((result??, duration))
                 })
             }
             .in_current_span()
@@ -113,18 +117,18 @@ async fn spawning_many_workers_that_sleep(
     let mut sorted = results
         .into_iter()
         .map(|r| match r {
-            Ok((_, duration)) => duration.as_millis(),
-            Err(err) => panic!("Error: {err:?}"),
+            Ok(Ok((_, duration))) => duration.as_millis(),
+            other => panic!("Error: {other:?}"),
         })
         .collect::<Vec<_>>();
     sorted.sort();
     let idx = (sorted.len() as f64 * 0.95) as usize;
     let p95 = sorted[idx];
 
-    drop(executor);
-
     check!(p95 < 6000);
     check!(total_duration.as_secs() < 10);
+
+    Ok(())
 }
 
 #[test]
@@ -133,7 +137,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
         format!("sleeping-suspending-worker-{n}")
@@ -149,14 +153,15 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         (result, duration)
     }
 
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("clocks").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "clocks")
+        .store()
+        .await?;
 
-    let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
+    let warmup_worker = executor
+        .start_worker(&component.id, &worker_name(0))
+        .await?;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
@@ -167,7 +172,6 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
                 vec![15.0f64.into_value_and_type()],
             )
             .await
-            .unwrap()
     })
     .await;
 
@@ -178,7 +182,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, _, _)> = (1..N)
-        .map(|i| (i, component_id.clone(), executor.clone()))
+        .map(|i| (i, component.id, executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
@@ -187,8 +191,9 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
                 async move {
                     let worker = executor_clone
                         .start_worker(&component_id, &worker_name(n))
-                        .await;
-                    timed(async move {
+                        .await?;
+
+                    let (result, duration) = timed(async move {
                         executor_clone
                             .invoke_and_await(
                                 &worker,
@@ -196,9 +201,9 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
                                 vec![15.0f64.into_value_and_type()],
                             )
                             .await
-                            .unwrap()
                     })
-                    .await
+                    .await;
+                    Ok::<_, anyhow::Error>((result??, duration))
                 }
                 .in_current_span(),
             )
@@ -217,13 +222,13 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     let mut sorted1 = results
         .iter()
         .map(|r| match r {
-            Ok((r, _)) => {
+            Ok(Ok((r, _))) => {
                 let Value::F64(seconds) = r[0] else {
                     panic!("Unexpected result")
                 };
                 (seconds * 1000.0) as u64
             }
-            Err(err) => panic!("Error: {err:?}"),
+            other => panic!("Error: {other:?}"),
         })
         .collect::<Vec<_>>();
     sorted1.sort();
@@ -233,8 +238,8 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     let mut sorted2 = results
         .into_iter()
         .map(|r| match r {
-            Ok((_, duration)) => duration.as_millis(),
-            Err(err) => panic!("Error: {err:?}"),
+            Ok(Ok((_, duration))) => duration.as_millis(),
+            other => panic!("Error: {other:?}"),
         })
         .collect::<Vec<_>>();
     sorted2.sort();
@@ -245,6 +250,8 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 
     check!(p951 < 25000);
     check!(p952 < 25000);
+
+    Ok(())
 }
 
 #[test]
@@ -254,14 +261,13 @@ async fn initial_large_memory_allocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
-    let component_id = executor.component("large-initial-memory").store().await;
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
+    let component = executor
+        .component(&context.default_environment_id, "large-initial-memory")
+        .store()
+        .await?;
 
     let mut handles = JoinSet::new();
     let mut results: Vec<Vec<Value>> = Vec::new();
@@ -269,28 +275,32 @@ async fn initial_large_memory_allocation(
     const N: usize = 10;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id_clone = component_id.clone();
+        let component_id_clone = component.id;
         handles.spawn(
             async move {
                 let worker = executor_clone
                     .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
-                    .await;
-                executor_clone
+                    .await?;
+
+                let result = executor_clone
                     .invoke_and_await(&worker, "run", vec![])
-                    .await
-                    .unwrap()
+                    .await??;
+
+                Ok::<_, anyhow::Error>(result)
             }
             .in_current_span(),
         );
     }
 
     while let Some(result) = handles.join_next().await {
-        results.push(result.unwrap());
+        results.push(result??);
     }
 
     for i in 0..N {
         check!(results[i][0] == Value::U64(536870912));
     }
+
+    Ok(())
 }
 
 #[test]
@@ -301,14 +311,13 @@ async fn dynamic_large_memory_allocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
-    let component_id = executor.component("large-dynamic-memory").store().await;
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
+    let component = executor
+        .component(&context.default_environment_id, "large-dynamic-memory")
+        .store()
+        .await?;
 
     let mut handles = JoinSet::new();
     let mut results: Vec<Vec<Value>> = Vec::new();
@@ -316,26 +325,30 @@ async fn dynamic_large_memory_allocation(
     const N: usize = 3;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id_clone = component_id.clone();
+        let component_id_clone = component.id;
         handles.spawn(
             async move {
                 let worker = executor_clone
                     .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
-                    .await;
-                executor_clone
+                    .await?;
+
+                let result = executor_clone
                     .invoke_and_await(&worker, "run", vec![])
-                    .await
-                    .unwrap()
+                    .await??;
+
+                Ok::<_, anyhow::Error>(result)
             }
             .in_current_span(),
         );
     }
 
     while let Some(result) = handles.join_next().await {
-        results.push(result.unwrap());
+        results.push(result??);
     }
 
     for i in 0..N {
         check!(results[i][0] == Value::U64(0));
     }
+
+    Ok(())
 }

@@ -170,7 +170,7 @@ pub mod wasm {
     use prometheus::*;
     use tracing::debug;
 
-    use golem_common::metrics::api::TraceErrorKind;
+    use golem_common::metrics::api::ApiErrorDetails;
 
     use golem_service_base::error::worker_executor::WorkerExecutorError;
 
