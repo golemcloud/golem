@@ -52,33 +52,33 @@ pub struct PrimitiveNode {
 
 #[derive(Debug, Clone, Schema)]
 pub struct StructNode {
-    pub fields: Vec<(String, usize)>, // name + index of child node
+    pub fields: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Clone, Schema)]
 pub struct EnumNode {
     pub variant: String,
-    pub payload: Option<usize>, // Some(index of child) or None
+    pub payload: Option<usize>,
 }
 
 #[derive(Debug, Clone, Schema)]
 pub struct SeqNode {
-    pub elements: Vec<usize>, // indexes of child nodes
+    pub elements: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Schema)]
 pub struct OptionNode {
-    pub some: Option<usize>, // None => None, Some(index) => Some(value)
+    pub some: Option<usize>,
 }
 
 #[derive(Debug, Clone, Schema)]
 pub struct MapNode {
-    pub entries: Vec<(usize, usize)>, // Vec of (key_index, value_index)
+    pub entries: Vec<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, Schema)]
 pub struct SetNode {
-    pub elements: Vec<usize>, // indexes of values
+    pub elements: Vec<usize>,
 }
 
 pub trait ToGraph {
