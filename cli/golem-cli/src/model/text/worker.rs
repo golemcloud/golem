@@ -14,9 +14,12 @@
 
 use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
+use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
-use crate::model::worker::{WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView};
+use crate::model::worker::{
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView,
+};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::DateTime;
@@ -35,7 +38,6 @@ use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use crate::model::environment::EnvironmentReference;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerCreateView {

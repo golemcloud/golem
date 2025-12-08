@@ -34,14 +34,15 @@ use crate::model::component::{
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{
-    format_export, log_error, log_fuzzy_match, log_text_view, log_warn,
-};
+use crate::model::text::fmt::{format_export, log_error, log_fuzzy_match, log_text_view, log_warn};
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
     AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
 };
-use crate::model::text::worker::{format_timestamp, format_worker_name_match, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView};
+use crate::model::text::worker::{
+    format_timestamp, format_worker_name_match, FileNodeView, WorkerCreateView, WorkerFilesView,
+    WorkerGetView,
+};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 
