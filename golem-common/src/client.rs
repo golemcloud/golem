@@ -25,7 +25,7 @@ use tonic::transport::{Channel, Endpoint};
 use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::{OtelGrpcLayer, OtelGrpcService};
 use tower::ServiceBuilder;
-use tracing::{debug, debug_span, warn, Instrument};
+use tracing::{debug, debug_span, info, warn, Instrument};
 
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
@@ -63,6 +63,7 @@ impl<T: Clone> GrpcClient<T> {
             target_name = self.target_name,
             description = description.as_ref()
         );
+        info!("rpc call started");
         loop {
             retries.start_attempt();
             let mut entry = self
@@ -70,7 +71,10 @@ impl<T: Clone> GrpcClient<T> {
                 .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
             match f(&mut entry.client).instrument(span.clone()).await {
-                Ok(result) => break Ok(result),
+                Ok(result) => {
+                    info!("rpc call succeeded");
+                    break Ok(result)
+                },
                 Err(e) => {
                     if requires_reconnect(&e) {
                         let _ = self.client.lock().await.take();
@@ -81,7 +85,7 @@ impl<T: Clone> GrpcClient<T> {
                             break Err(e);
                         } else {
                             span.in_scope(|| {
-                                debug!("gRPC call failed with {:?}, retrying", e);
+                                warn!("gRPC call failed with {:?}, retrying", e);
                             });
                             continue; // retry
                         }
