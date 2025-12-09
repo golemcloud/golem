@@ -138,7 +138,7 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(result)
     }
@@ -182,7 +182,7 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(result)
     }
@@ -239,7 +239,7 @@ impl EnvironmentService {
             )
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(*environment_id))?
-            .into();
+            .try_into()?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -267,7 +267,7 @@ impl EnvironmentService {
             )
             .await?
             .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
-            .into();
+            .try_into()?;
 
         auth.authorize_environment_action(
             &result.owner_account_id,
@@ -299,7 +299,10 @@ impl EnvironmentService {
             let owner_account_id = record.owner_account_id();
             let environment_roles_from_shares = record.environment_roles_from_shares();
 
-            let environment: Option<Environment> = record.into_revision_record().map(|r| r.into());
+            let environment: Option<Environment> = record
+                .into_revision_record()
+                .map(|r| r.try_into())
+                .transpose()?;
 
             application_owner_id.get_or_insert(owner_account_id);
 
@@ -346,7 +349,9 @@ impl EnvironmentService {
             .list_visible_to_account(&auth.account_id().0)
             .await?
             .into_iter()
-            .map(EnvironmentWithDetails::from)
+            .map(EnvironmentWithDetails::try_from)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
             // Should not be necessary due to the repo already filtering, but check auth here to be on the safe side
             .filter(|e| {
                 auth.authorize_environment_action(

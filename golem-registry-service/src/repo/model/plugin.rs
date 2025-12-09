@@ -213,7 +213,7 @@ impl TryFrom<PluginRecord> for PluginRegistration {
                     component_revision: value
                         .component_revision_id
                         .ok_or(anyhow!("no component_revision field"))?
-                        .into(),
+                        .try_into()?,
                 }),
             }),
             other => Err(anyhow!("Unknown plugin type {other}"))?,

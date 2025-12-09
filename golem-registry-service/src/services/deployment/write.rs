@@ -315,7 +315,7 @@ impl DeploymentWriteService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(deployment)
     }
@@ -363,7 +363,7 @@ impl DeploymentWriteService {
             .ok_or(DeploymentWriteError::DeploymentNotFound(
                 payload.deployment_revision,
             ))?
-            .into();
+            .try_into()?;
 
         let current_deployment: CurrentDeployment = self
             .deployment_repo
@@ -379,7 +379,7 @@ impl DeploymentWriteService {
                 }
                 other => other.into(),
             })?
-            .into_model(target_deployment.version, target_deployment.deployment_hash);
+            .into_model(target_deployment.version, target_deployment.deployment_hash)?;
 
         Ok(current_deployment)
     }
@@ -399,7 +399,8 @@ impl DeploymentWriteService {
             .deployment_repo
             .get_latest_revision(&environment.id.0)
             .await?
-            .map(|r| r.into());
+            .map(|r| r.try_into())
+            .transpose()?;
 
         Ok(deployment)
     }
@@ -625,7 +626,7 @@ impl DeploymentContext {
         let response_compiled = {
             let component_dependency_key = ComponentDependencyKey {
                 component_id: component.id.0,
-                component_revision: component.revision.0,
+                component_revision: component.revision.into(),
                 component_name: component.component_name.0.clone(),
                 root_package_name: component.metadata.root_package_name().clone(),
                 root_package_version: component.metadata.root_package_version().clone(),
@@ -667,7 +668,7 @@ impl DeploymentContext {
         let response_compiled = {
             let component_dependency_key = ComponentDependencyKey {
                 component_id: component.id.0,
-                component_revision: component.revision.0,
+                component_revision: component.revision.into(),
                 component_name: component.component_name.0.clone(),
                 root_package_name: component.metadata.root_package_name().clone(),
                 root_package_version: component.metadata.root_package_version().clone(),

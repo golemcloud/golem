@@ -179,7 +179,7 @@ impl ComponentView {
             component_name: value.component_name,
             component_id: value.id,
             component_version: value.metadata.root_package_version().clone(),
-            component_revision: value.revision.0,
+            component_revision: value.revision.into(),
             component_size: value.component_size,
             created_at: value.created_at,
             environment_id: value.environment_id,

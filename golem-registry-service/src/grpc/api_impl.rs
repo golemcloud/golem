@@ -248,7 +248,7 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing component_id field")?
             .try_into()?;
 
-        let version = ComponentRevision(request.version);
+        let version: ComponentRevision = request.version.try_into()?;
 
         let result = self
             .component_service
@@ -271,7 +271,7 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing component_id field")?
             .try_into()?;
 
-        let version: ComponentRevision = ComponentRevision(request.version);
+        let version: ComponentRevision = request.version.try_into()?;
 
         let component = self
             .component_service

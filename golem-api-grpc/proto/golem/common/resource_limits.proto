@@ -5,7 +5,7 @@ package golem.common;
 import "golem/common/account_id.proto";
 
 message ResourceLimits {
-  int64 available_fuel = 1;
+  uint64 available_fuel = 1;
   uint64 max_memory_per_worker = 2;
 }
 

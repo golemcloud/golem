@@ -332,7 +332,7 @@ async fn failing_auto_update_on_idle(
     // f2's original version is executed which returns random u64.
     check!(result[0] != Value::U64(150));
     check!(result[0] != Value::U64(300));
-    check!(metadata.component_version == ComponentRevision(0));
+    check!(metadata.component_version == ComponentRevision::INITIAL);
     check!(update_counts(&metadata) == (0, 0, 1));
     Ok(())
 }
@@ -483,7 +483,7 @@ async fn failing_auto_update_on_running(
     // diverging from the new version. The update is marked as a failure and the invocation continues
     // with the original version, resulting in 300.
     check!(result[0] == Value::U64(300));
-    check!(metadata.component_version == ComponentRevision(0));
+    check!(metadata.component_version == ComponentRevision::INITIAL);
     check!(update_counts(&metadata) == (0, 0, 1));
     Ok(())
 }
@@ -622,7 +622,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     // export a save function, so the update attempt fails and the worker continues running
     // the original version which we can invoke.
     check!(result == vec![Value::U64(5)]);
-    check!(metadata.component_version == ComponentRevision(0));
+    check!(metadata.component_version == ComponentRevision::INITIAL);
     check!(update_counts(&metadata) == (0, 0, 1));
 
     Ok(())
@@ -795,7 +795,7 @@ async fn manual_update_on_idle_with_failing_load(
     // Explanation: We try to update v2 to v4, but v4's load function always fails. So
     // the component must stay on v2, on which we can invoke f3.
     check!(result == vec![Value::U64(5)]);
-    check!(metadata.component_version == ComponentRevision(0));
+    check!(metadata.component_version == ComponentRevision::INITIAL);
     check!(update_counts(&metadata) == (0, 0, 1));
 
     Ok(())

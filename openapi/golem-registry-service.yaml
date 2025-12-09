@@ -6650,13 +6650,13 @@ components:
       properties:
         totalAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalActiveAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalDeletedAccounts:
           type: integer
-          format: int64
+          format: uint64
     AccountCreation:
       type: object
       title: AccountCreation
@@ -6735,10 +6735,10 @@ components:
           type: string
         componentsCount:
           type: integer
-          format: int64
+          format: uint64
         workersCount:
           type: integer
-          format: int64
+          format: uint64
         createdAt:
           type: string
           format: date-time
@@ -8704,28 +8704,28 @@ components:
           type: string
         appLimit:
           type: integer
-          format: int64
+          format: uint64
         envLimit:
           type: integer
-          format: int64
+          format: uint64
         componentLimit:
           type: integer
-          format: int64
+          format: uint64
         workerLimit:
           type: integer
-          format: int64
+          format: uint64
         workerConnectionLimit:
           type: integer
-          format: int64
+          format: uint64
         storageLimit:
           type: integer
-          format: int64
+          format: uint64
         monthlyGasLimit:
           type: integer
-          format: int64
+          format: uint64
         monthlyUploadLimit:
           type: integer
-          format: int64
+          format: uint64
         maxMemoryPerWorker:
           type: integer
           format: uint64

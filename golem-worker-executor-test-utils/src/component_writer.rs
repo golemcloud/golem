@@ -233,7 +233,7 @@ impl FileSystemComponentWriter {
             local_path,
             name,
             &ComponentId(Uuid::new_v4()),
-            ComponentRevision(0),
+            ComponentRevision::INITIAL,
             files,
             unverified,
             dynamic_linking,
@@ -260,7 +260,7 @@ impl FileSystemComponentWriter {
             local_path,
             component_name,
             component_id,
-            ComponentRevision(0),
+            ComponentRevision::INITIAL,
             Vec::new(),
             false,
             HashMap::new(),
@@ -351,7 +351,7 @@ impl FileSystemComponentWriter {
             })
             .collect::<Vec<u64>>();
         versions.sort();
-        ComponentRevision(*versions.last().unwrap_or(&0))
+        ComponentRevision::new(*versions.last().unwrap_or(&0)).unwrap()
     }
 
     pub async fn get_latest_component_metadata(

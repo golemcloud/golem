@@ -157,7 +157,7 @@ async fn env_vars(
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_GAS_LIMIT",
-            "10000000000000000".to_string(),
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",

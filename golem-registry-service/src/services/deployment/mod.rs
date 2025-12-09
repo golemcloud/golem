@@ -115,8 +115,8 @@ impl DeploymentService {
             .list_deployment_revisions(&environment_id.0, version.as_ref().map(|v| v.0.as_str()))
             .await?
             .into_iter()
-            .map(Deployment::from)
-            .collect();
+            .map(Deployment::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(deployments)
     }
@@ -162,7 +162,7 @@ impl DeploymentService {
             .get_deployment_revision(&environment_id.0, deployment_revision.into())
             .await?
             .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
-            .into();
+            .try_into()?;
 
         Ok((deployment, environment))
     }
@@ -193,7 +193,7 @@ impl DeploymentService {
             .deployment_repo
             .get_staged_identity(&environment_id.0)
             .await?
-            .into_plan(environment.current_deployment.as_ref().map(|e| e.revision));
+            .into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
 
         Ok(summary)
     }
@@ -226,7 +226,7 @@ impl DeploymentService {
             .get_deployment_identity(&environment_id.0, deployment_revision.into())
             .await?
             .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
-            .into();
+            .try_into()?;
 
         Ok(summary)
     }

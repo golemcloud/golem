@@ -70,14 +70,14 @@ impl CurrentDeploymentRevisionRecord {
         self,
         version: DeploymentVersion,
         deployment_hash: Hash,
-    ) -> CurrentDeployment {
-        CurrentDeployment {
+    ) -> Result<CurrentDeployment, DeployRepoError> {
+        Ok(CurrentDeployment {
             environment_id: EnvironmentId(self.environment_id),
-            revision: self.deployment_revision_id.into(),
+            revision: self.deployment_revision_id.try_into()?,
             version,
             deployment_hash,
-            current_revision: self.revision_id.into(),
-        }
+            current_revision: self.revision_id.try_into()?,
+        })
     }
 }
 
@@ -90,8 +90,9 @@ pub struct CurrentDeploymentExtRevisionRecord {
     pub deployment_hash: SqlBlake3Hash,
 }
 
-impl From<CurrentDeploymentExtRevisionRecord> for CurrentDeployment {
-    fn from(value: CurrentDeploymentExtRevisionRecord) -> Self {
+impl TryFrom<CurrentDeploymentExtRevisionRecord> for CurrentDeployment {
+    type Error = DeployRepoError;
+    fn try_from(value: CurrentDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {
         value.revision.into_model(
             DeploymentVersion(value.deployment_version),
             Hash::new(value.deployment_hash.into_blake3_hash()),
@@ -115,14 +116,15 @@ pub struct DeploymentRevisionRecord {
     pub audit: RevisionAuditFields,
 }
 
-impl From<DeploymentRevisionRecord> for Deployment {
-    fn from(value: DeploymentRevisionRecord) -> Self {
-        Self {
+impl TryFrom<DeploymentRevisionRecord> for Deployment {
+    type Error = DeployRepoError;
+    fn try_from(value: DeploymentRevisionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             environment_id: EnvironmentId(value.environment_id),
-            revision: value.revision_id.into(),
+            revision: value.revision_id.try_into()?,
             version: DeploymentVersion(value.version),
             deployment_hash: Hash::new(value.hash.into_blake3_hash()),
-        }
+        })
     }
 }
 
@@ -207,22 +209,29 @@ pub struct DeploymentIdentity {
 }
 
 impl DeploymentIdentity {
-    pub fn into_plan(self, current_revision: Option<CurrentDeploymentRevision>) -> DeploymentPlan {
-        DeploymentPlan {
+    pub fn into_plan(
+        self,
+        current_revision: Option<CurrentDeploymentRevision>,
+    ) -> Result<DeploymentPlan, DeployRepoError> {
+        Ok(DeploymentPlan {
             current_revision,
             deployment_hash: self.to_diffable().hash(),
-            components: self.components.into_iter().map(|c| c.into()).collect(),
+            components: self
+                .components
+                .into_iter()
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_definitions: self
                 .http_api_definitions
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_deployments: self
                 .http_api_deployments
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
-        }
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -268,30 +277,31 @@ pub struct DeployedDeploymentIdentity {
     pub identity: DeploymentIdentity,
 }
 
-impl From<DeployedDeploymentIdentity> for DeploymentSummary {
-    fn from(value: DeployedDeploymentIdentity) -> Self {
-        Self {
-            deployment_revision: value.deployment_revision.revision_id.into(),
+impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
+    type Error = DeployRepoError;
+    fn try_from(value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+        Ok(Self {
+            deployment_revision: value.deployment_revision.revision_id.try_into()?,
             deployment_hash: value.deployment_revision.hash.into(),
             components: value
                 .identity
                 .components
                 .into_iter()
-                .map(|c| c.into())
-                .collect(),
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_definitions: value
                 .identity
                 .http_api_definitions
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_deployments: value
                 .identity
                 .http_api_deployments
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
-        }
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -558,7 +568,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
         Ok(Self {
             account_id: AccountId(value.account_id),
             environment_id: EnvironmentId(value.environment_id),
-            deployment_revision: value.deployment_revision_id.into(),
+            deployment_revision: value.deployment_revision_id.try_into()?,
             http_api_definition_id: HttpApiDefinitionId(value.http_api_definition_id),
             security_scheme_missing: value.security_scheme_missing,
             security_scheme,

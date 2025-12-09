@@ -183,7 +183,7 @@ impl ComponentService {
 
         let record = self
             .component_repo
-            .get_by_id_and_revision(&component_id.0, revision.0 as i64, include_deleted)
+            .get_by_id_and_revision(&component_id.0, revision.into(), include_deleted)
             .await?
             .ok_or(ComponentError::ComponentNotFound(*component_id))?;
 
@@ -345,7 +345,7 @@ impl ComponentService {
     ) -> Result<Vec<Component>, ComponentError> {
         info!(
             environment_id = %environment_id,
-            deployment_revision = %deployment_revision.0.to_string(),
+            deployment_revision = %deployment_revision.to_string(),
             "Get deployment components"
         );
 
@@ -371,7 +371,7 @@ impl ComponentService {
 
         let result = self
             .component_repo
-            .list_by_deployment(&environment_id.0, deployment_revision.0 as i64)
+            .list_by_deployment(&environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
             .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
@@ -419,7 +419,7 @@ impl ComponentService {
             .component_repo
             .get_by_deployment_and_name(
                 &environment_id.0,
-                deployment_revision.0 as i64,
+                deployment_revision.into(),
                 &component_name.0,
             )
             .await?

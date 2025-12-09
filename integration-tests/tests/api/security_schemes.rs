@@ -84,7 +84,7 @@ async fn delete_security_scheme(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         .await?;
 
     client
-        .delete_security_scheme(&security_scheme.id.0, security_scheme.revision.0)
+        .delete_security_scheme(&security_scheme.id.0, security_scheme.revision.into())
         .await?;
 
     {
@@ -244,7 +244,7 @@ async fn security_scheme_name_can_be_reused_after_deletion(
         .await?;
 
     client
-        .delete_security_scheme(&security_scheme.id.0, security_scheme.revision.0)
+        .delete_security_scheme(&security_scheme.id.0, security_scheme.revision.into())
         .await?;
 
     let recreated_security_scheme = client

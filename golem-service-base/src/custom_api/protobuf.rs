@@ -20,8 +20,7 @@ use super::{
     HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
     ResponseMappingCompiled, SwaggerUiBindingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
 };
-use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::component::ComponentName;
 use golem_common::model::http_api_definition::{HttpApiDefinitionName, HttpApiDefinitionVersion};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
@@ -307,7 +306,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             .ok_or_else(|| "component_id field missing".to_string())?
             .try_into()?;
 
-        let component_revision = ComponentRevision(value.component_revision);
+        let component_revision = value.component_revision.try_into()?;
 
         let component_name = ComponentName(value.component_name);
 
@@ -345,7 +344,7 @@ impl TryFrom<WorkerBindingCompiled>
     fn try_from(value: WorkerBindingCompiled) -> Result<Self, Self::Error> {
         Ok(Self {
             component_id: Some(value.component_id.into()),
-            component_revision: value.component_revision.0,
+            component_revision: value.component_revision.into(),
             component_name: value.component_name.0,
             idempotency_key: value
                 .idempotency_key_compiled
@@ -373,7 +372,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpHandlerBin
             .ok_or_else(|| "component_id field missing".to_string())?
             .try_into()?;
 
-        let component_revision = ComponentRevision(value.component_revision);
+        let component_revision = value.component_revision.try_into()?;
 
         let component_name = ComponentName(value.component_name);
 
@@ -411,7 +410,7 @@ impl TryFrom<HttpHandlerBindingCompiled>
     fn try_from(value: HttpHandlerBindingCompiled) -> Result<Self, Self::Error> {
         Ok(Self {
             component_id: Some(value.component_id.into()),
-            component_revision: value.component_revision.0,
+            component_revision: value.component_revision.into(),
             component_name: value.component_name.0,
             worker_name_compiled: Some(value.worker_name_compiled.try_into()?),
             idempotency_key_compiled: value
@@ -439,7 +438,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledFileServerBind
             .ok_or_else(|| "component_id field missing".to_string())?
             .try_into()?;
 
-        let component_revision = ComponentRevision(value.component_revision);
+        let component_revision = value.component_revision.try_into()?;
 
         let component_name = ComponentName(value.component_name);
 
@@ -471,7 +470,7 @@ impl TryFrom<FileServerBindingCompiled>
     fn try_from(value: FileServerBindingCompiled) -> Result<Self, Self::Error> {
         Ok(Self {
             component_id: Some(value.component_id.into()),
-            component_revision: value.component_revision.0,
+            component_revision: value.component_revision.into(),
             component_name: value.component_name.0,
             worker_name_compiled: Some(value.worker_name_compiled.try_into()?),
             response_compiled: Some(value.response_compiled.try_into()?),
@@ -677,7 +676,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for Co
             .ok_or_else(|| "environment_id field missing".to_string())?
             .try_into()?;
 
-        let deployment_revision = DeploymentRevision(value.deployment_revision);
+        let deployment_revision = value.deployment_revision.try_into()?;
 
         let security_schemes = value
             .security_schemes
@@ -711,7 +710,7 @@ impl TryFrom<CompiledRoutes> for golem_api_grpc::proto::golem::apidefinition::Co
         Ok(Self {
             account_id: Some(value.account_id.into()),
             environment_id: Some(value.environment_id.into()),
-            deployment_revision: value.deployment_revision.0,
+            deployment_revision: value.deployment_revision.into(),
             security_schemes: value
                 .security_schemes
                 .into_values()

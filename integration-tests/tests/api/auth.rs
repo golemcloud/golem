@@ -45,7 +45,7 @@ async fn deleting_account_revokes_tokens(deps: &EnvBasedTestDependencies) -> any
 
     let account = client.get_account(&user.account_id.0).await?;
     client
-        .delete_account(&account.id.0, account.revision.0)
+        .delete_account(&account.id.0, account.revision.into())
         .await?;
 
     {

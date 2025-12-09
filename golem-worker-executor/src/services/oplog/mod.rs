@@ -318,8 +318,15 @@ pub trait OplogOps: Oplog {
     async fn add_exported_function_completed(
         &self,
         response: &Option<ValueAndType>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
     ) -> Result<OplogEntry, String> {
+        // TODO: align types
+        let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            consumed_fuel as i64
+        };
+
         let payload = self.upload_payload(response).await?;
         let entry = OplogEntry::ExportedFunctionCompleted {
             timestamp: Timestamp::now_utc(),

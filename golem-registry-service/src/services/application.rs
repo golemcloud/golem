@@ -137,7 +137,7 @@ impl ApplicationService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(result)
     }
@@ -177,7 +177,7 @@ impl ApplicationService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(result)
     }
@@ -224,7 +224,7 @@ impl ApplicationService {
             .get_by_id(&application_id.0)
             .await?
             .ok_or(ApplicationError::ApplicationNotFound(*application_id))?
-            .into();
+            .try_into()?;
 
         auth.authorize_account_action(&application.account_id, AccountAction::ViewApplications)
             .map_err(|_| ApplicationError::ApplicationNotFound(*application_id))?;
@@ -246,7 +246,7 @@ impl ApplicationService {
             .get_by_name(&account_id.0, &name.0)
             .await?
             .ok_or(ApplicationError::ApplicationByNameNotFound(name.clone()))?
-            .into();
+            .try_into()?;
 
         Ok(result)
     }
@@ -272,8 +272,8 @@ impl ApplicationService {
             .list_by_owner(&account_id.0)
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(result)
     }

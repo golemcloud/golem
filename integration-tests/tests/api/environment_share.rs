@@ -78,7 +78,7 @@ async fn delete_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
         .await?;
 
     client_1
-        .delete_environment_share(&share.id.0, share.revision.0)
+        .delete_environment_share(&share.id.0, share.revision.into())
         .await?;
 
     {
