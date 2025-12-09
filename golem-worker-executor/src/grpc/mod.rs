@@ -758,6 +758,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(request).await?;
 
+        info!("begin invocation for worker: {}", worker.worker_id());
+
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
@@ -770,16 +772,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| WorkerExecutorError::ValueMismatch { details: msg })?;
 
-        let value = worker
+        let result = worker
             .invoke_and_await(
                 idempotency_key,
                 full_function_name,
                 function_input,
                 request.invocation_context(),
             )
-            .await?;
+            .await;
 
-        Ok(value)
+        info!("finished invocation for worker: {} ({})", worker.worker_id(), result.is_ok());
+
+        Ok(result?)
     }
 
     async fn get_or_create<Req: CanStartWorker>(
