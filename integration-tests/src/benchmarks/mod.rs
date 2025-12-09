@@ -137,7 +137,6 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
 
     let mut accumulated_time = Duration::from_secs(0);
     let mut retries = 0;
-    let mut timeouts = 0;
 
     loop {
         let start = SystemTime::now();
@@ -178,11 +177,12 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                 accumulated_time += duration;
                 tokio::time::sleep(RETRY_DELAY).await;
             }
-            Err(e) => {
+            Err(_) => {
                 // timeout
                 // not counting timeouts into the accumulated time
-                timeouts += 1;
-                println!("Invocation timed out, retrying: {e:?}");
+                // timeouts += 1;
+                // println!("Invocation timed out, retrying: {e:?}");
+                panic!("timeout")
             }
         }
     }
