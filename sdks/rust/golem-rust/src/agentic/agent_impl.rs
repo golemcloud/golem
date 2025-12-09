@@ -28,6 +28,9 @@ pub struct Component;
 
 impl Guest for Component {
     fn initialize(agent_type: String, input: DataValue) -> Result<(), AgentError> {
+        wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
+        log::set_max_level(log::LevelFilter::Trace);
+
         let agent_types = agent_registry::get_all_agent_types();
 
         let agent_type = agent_types
@@ -81,6 +84,9 @@ impl LoadSnapshotGuest for Component {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn load(bytes: Vec<u8>) -> Result<(), String> {
+        wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
+        log::set_max_level(log::LevelFilter::Trace);
+
         let agent_id = get_resolved_agent();
 
         if agent_id.is_some() {

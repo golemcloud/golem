@@ -22,11 +22,13 @@ golem-wasm = {version = "1.3.2-dev.2", default-features = false, features = ["st
 
 async-trait = {version = "0.1.89", optional = true}
 ctor = {version = "0.4.3", optional = true}
+log = { version = "0.4.29", features = ["kv"] }
 serde = {version = "1", optional = true}
 serde_json = {version = "1", optional = true}
 uuid = {version = "1", features = ["v4"]}
 wasi = {version = "=0.14.1+wasi-0.2.3"}
 wstd = {version = "=0.5.4"}
+wasi-logger = { version = "0.1.2", features = ["kv"] }
 wit-bindgen = {version = "=0.40.0"}
 
 [features]
