@@ -547,5 +547,23 @@ impl BarAgent for BarAgentImpl {
     fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
         input
     }
+}
 
+#[agent_definition]
+trait SingletonAgent {
+    fn new() -> Self;
+    fn get_value(&self) -> u32;
+}
+
+struct SingletonImpl{}
+
+#[agent_implementation]
+impl SingletonAgent for SingletonImpl {
+    fn new() -> Self {
+        SingletonImpl{}
+    }
+
+    fn get_value(&self) -> u32 {
+        42
+    }
 }
