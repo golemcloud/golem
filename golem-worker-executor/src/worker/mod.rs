@@ -2055,7 +2055,7 @@ impl RunningWorker {
             }
             // If we are still out of fuel after borrowing it means we exceeded the limits for the account
             // and cannot borrow more. Only thing to do is suspend and try later.
-            if store.data().is_out_of_fuel(store.get_fuel().unwrap_or(0)) {
+            if store.data().is_out_of_fuel(current_level) {
                 warn!("{worker_id_clone} could not borrow more fuel, suspending");
 
                 // TODO: The following edge case should be improved. If there are no other workers for the account
