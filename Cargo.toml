@@ -359,4 +359,4 @@ panic = "abort"
 
 [profile.benchmarks]
 inherits = "release"
-panic = "unwind"
+panic = "abort"

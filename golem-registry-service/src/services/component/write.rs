@@ -202,6 +202,8 @@ impl ComponentWriteService {
             })?
             .try_into_model(environment.application_id, environment.owner_account_id)?;
 
+        tracing::info!("Created component {component_id} in environment {environment_id}");
+
         self.component_compilation
             .enqueue_compilation(environment_id, &component_id, stored_component.revision)
             .await;
