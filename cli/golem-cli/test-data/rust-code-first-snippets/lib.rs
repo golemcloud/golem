@@ -383,8 +383,6 @@ struct BarAgentImpl {
 #[agent_implementation]
 impl BarAgent for BarAgentImpl {
     fn new(opt_string: Option<String>) -> Self {
-        let _ = SingletonAgentClient::get();
-
         BarAgentImpl {
             _id: opt_string.unwrap_or_else(|| "default_id".to_string()),
         }
