@@ -90,7 +90,7 @@ pub async fn invoke_and_await(
 
     let mut accumulated_time = Duration::from_secs(0);
     let mut retries = 0;
-    let mut timeouts = 0;
+    let timeouts = 0;
 
     loop {
         let start = SystemTime::now();
@@ -121,9 +121,8 @@ pub async fn invoke_and_await(
             Err(_) => {
                 // timeout
                 // not counting timeouts into the accumulated time
-                timeouts += 1;
-                println!("Invocation for worker {worker_id} timed out, retrying");
-                user.deps.ensure_all_deps_running().await;
+                panic!("timeout")
+                // user.deps.ensure_all_deps_running().await;
             }
         }
     }

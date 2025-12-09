@@ -2054,6 +2054,7 @@ impl RunningWorker {
             if store.data().is_out_of_fuel(current_level) {
                 debug!("{worker_id_clone} ran out of fuel, borrowing more");
                 store.data_mut().borrow_fuel_sync(current_level);
+                debug!("{worker_id_clone} finished borrowing more fuel");
             }
             // If we are still out of fuel after borrowing it means we exceeded the limits for the account
             // and cannot borrow more. Only thing to do is suspend and try later.
