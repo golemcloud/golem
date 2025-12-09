@@ -805,7 +805,7 @@ script = { file = "./local-run/start.sh" }
 ## ** GENERATE CONFIGS **
 
 [tasks.generate-configs]
-description = "Generates default and exmaple config files"
+description = "Generates default and example config files"
 dependencies = ["build-bins-non-ci"]
 
 script = '''
@@ -839,7 +839,7 @@ dependencies = ["generate-configs"]
 script = '''
 git diff --exit-code \
     golem-registry-service/config/registry-service.toml \
-    golem-registry-service/config/registry-service.sample.env
+    golem-registry-service/config/registry-service.sample.env \
     golem-shard-manager/config/shard-manager.toml \
     golem-shard-manager/config/shard-manager.sample.env \
     golem-component-compilation-service/config/component-compilation-service.toml \
