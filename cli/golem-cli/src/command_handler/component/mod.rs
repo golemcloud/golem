@@ -451,7 +451,7 @@ impl ComponentCommandHandler {
                 .component
                 .get_deployment_component(
                     &environment.environment_id.0,
-                    current_deployment.revision.0,
+                    current_deployment.revision.into(),
                     &component_name.0,
                 )
                 .await
