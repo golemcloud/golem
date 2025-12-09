@@ -69,7 +69,7 @@ pub fn configured(
 #[derive(Debug, Clone)]
 pub struct CurrentResourceLimitsEntry {
     limits: CurrentResourceLimits,
-    delta: i128, // switched from i64 to i128
+    delta: i128,
 }
 
 /// The default ResourceLimits implementation
@@ -222,9 +222,16 @@ impl ResourceLimitsGrpc {
             .entry_async(*account_id)
             .await
             .and_modify(|entry| {
-                entry.limits.fuel = last_known_limits
-                    .fuel
-                    .saturating_sub(entry.delta.max(0) as u64);
+                if entry.delta > 0 {
+                    entry.limits.fuel = last_known_limits
+                        .fuel
+                        .saturating_sub(entry.delta as u64);
+                } else {
+                    entry.limits.fuel = last_known_limits
+                        .fuel
+                        .saturating_add((-entry.delta) as u64);
+                }
+
                 entry.limits.max_memory = last_known_limits.max_memory;
             })
             .or_insert(CurrentResourceLimitsEntry {
