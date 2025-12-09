@@ -105,7 +105,7 @@ impl BenchmarkCliParameters {
         if self.quiet {
             "warn"
         } else if self.verbose {
-            "debug"
+            "info"
         } else {
             "info"
         }
