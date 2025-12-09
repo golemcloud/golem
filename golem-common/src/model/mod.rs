@@ -1819,7 +1819,7 @@ fn validate_lower_kebab_case_identifier(field_name: &str, identifier: &str) -> R
     }
 
     let first = identifier.chars().next().unwrap();
-    if !matches!(first, 'a'..='z') {
+    if !first.is_ascii_lowercase() {
         return Err(format!(
             "{} must start with a lowercase ASCII letter (a-z), but got '{}'",
             field_name, first
