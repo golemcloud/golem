@@ -34,6 +34,31 @@ pub fn get_remote_client(
         agent_type_parameter_names,
     );
 
+    let constructor_params_data_value = quote! {
+        let data_value = if structured_values.is_empty() {
+            golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![])
+        } else {
+            match &structured_values[0] {
+                golem_rust::agentic::StructuredValue::Default(_) => {
+                    let element_values = structured_values.into_iter().map(|vt| {
+                        if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
+                            ev
+                        } else {
+                            panic!("constructor parameter type mismatch. expected default, found multimodal");
+                        }
+                    }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
+
+                    golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
+                }
+
+                golem_rust::agentic::StructuredValue::Multimodal(_) => {
+                    let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
+                    golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
+                }
+            }
+        };
+    };
+
     quote! {
         pub struct #remote_client_type_name {
             agent_id: golem_rust::wasm_rpc::AgentId,
@@ -47,25 +72,7 @@ pub fn get_remote_client(
 
                  let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
 
-                 let data_value = match &structured_values[0] {
-                    golem_rust::agentic::StructuredValue::Default(_) => {
-                        let element_values = structured_values.into_iter().map(|vt| {
-                            if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
-                                ev
-                            } else {
-                                panic!("Constructor parameter type mismatch");
-                            }
-                        }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
-
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
-
-                    }
-
-                    golem_rust::agentic::StructuredValue::Multimodal(_) => {
-                        let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
-                    }
-                 };
+                 #constructor_params_data_value
 
                  let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
@@ -86,29 +93,11 @@ pub fn get_remote_client(
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
-                 let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+                let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
 
-                 let data_value = match &structured_values[0] {
-                    golem_rust::agentic::StructuredValue::Default(_) => {
-                        let element_values = structured_values.into_iter().map(|vt| {
-                            if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
-                                ev
-                            } else {
-                                panic!("Constructor parameter type mismatch");
-                            }
-                        }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
+                #constructor_params_data_value
 
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
-
-                    }
-
-                    golem_rust::agentic::StructuredValue::Multimodal(_) => {
-                        let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
-                    }
-                 };
-
-                 let agent_id_string =
+                let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                         #type_name,
                         &data_value,
@@ -127,40 +116,22 @@ pub fn get_remote_client(
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
-                 let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+                let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
 
-                 let data_value = match &structured_values[0] {
-                    golem_rust::agentic::StructuredValue::Default(_) => {
-                        let element_values = structured_values.into_iter().map(|vt| {
-                            if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
-                                ev
-                            } else {
-                                panic!("Constructor parameter type mismatch");
-                            }
-                        }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
+                #constructor_params_data_value
 
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
-
-                    }
-
-                    golem_rust::agentic::StructuredValue::Multimodal(_) => {
-                        let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
-                    }
-                 };
-
-                 let agent_id_string =
+                let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                         #type_name,
                         &data_value,
                         Some(phantom_id.into())
                    ).expect("Internal Error: Failed to make agent id");
 
-                 let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+                let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+                let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
 
-                 #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+                #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
             }
 
 
