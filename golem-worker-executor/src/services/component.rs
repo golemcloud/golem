@@ -229,6 +229,7 @@ impl ComponentService for ComponentServiceDefault {
         component_id: &ComponentId,
         forced_version: Option<ComponentRevision>,
     ) -> Result<ComponentDto, WorkerExecutorError> {
+        debug!("beginning get_metadata {component_id} ({forced_version:?})");
         match forced_version {
             Some(version) => {
                 let client = self.registry_client.clone();

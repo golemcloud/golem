@@ -197,6 +197,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await?;
 
+        debug!("fetched component metadata");
+
         let files = prepare_filesystem(
             &file_loader,
             &owned_worker_id.environment_id,
@@ -204,6 +206,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &component_metadata.files,
         )
         .await?;
+
+        debug!("prepared filesystem");
 
         // TODO: pass config vars from component metadata
         let wasi_config_vars = effective_wasi_config_vars(

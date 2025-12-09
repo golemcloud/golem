@@ -294,6 +294,14 @@ impl AuthCtx {
         AuthCtx::ImpersonatedUser(ImpersonatedUserAuthCtx { account_id })
     }
 
+    pub fn impersonated(&self) -> Self {
+        match self {
+            Self::User(inner) => Self::ImpersonatedUser(ImpersonatedUserAuthCtx { account_id: inner.account_id }),
+            Self::ImpersonatedUser(inner) => Self::ImpersonatedUser(ImpersonatedUserAuthCtx { account_id: inner.account_id }),
+            Self::System => Self::System,
+        }
+    }
+
     pub fn is_system(&self) -> bool {
         matches!(self, AuthCtx::System)
     }

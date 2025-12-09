@@ -51,6 +51,8 @@ CREATE UNIQUE INDEX accounts_email_uk
     ON accounts (email)
     WHERE deleted_at IS NULL;
 
+CREATE INDEX accounts_deleted_at_idx ON accounts (deleted_at);
+
 CREATE TABLE account_revisions
 (
     account_id  UUID      NOT NULL,
@@ -163,6 +165,8 @@ CREATE UNIQUE INDEX applications_name_uk
     ON applications (account_id, name)
     WHERE deleted_at IS NULL;
 
+CREATE INDEX applications_account_id_idx ON applications (account_id);
+
 CREATE TABLE application_revisions
 (
     application_id UUID      NOT NULL,
@@ -203,6 +207,8 @@ CREATE TABLE environments
 CREATE UNIQUE INDEX environments_app_name_uk
     ON environments (application_id, name)
     WHERE deleted_at IS NULL;
+
+CREATE INDEX environments_application_id_idx ON environments (application_id);
 
 CREATE TABLE environment_revisions
 (

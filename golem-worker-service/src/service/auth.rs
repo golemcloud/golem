@@ -121,11 +121,14 @@ impl RemoteAuthService {
         environment_id: &EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Option<AuthDetailsForEnvironment>, AuthServiceError> {
+        // environment level auth does not care about impersonation, so downgrade here to avoid cache
+        // misses during rpc
+        let impersonated_auth = auth_ctx.impersonated();
         let result = self
             .environment_auth_details_cache
-            .get_or_insert_simple(&(*environment_id, auth_ctx.clone()), async move || {
+            .get_or_insert_simple(&(*environment_id, impersonated_auth.clone()), async move || {
                 self.client
-                    .get_auth_details_for_environment(environment_id, false, auth_ctx)
+                    .get_auth_details_for_environment(environment_id, false, &impersonated_auth)
                     .await
                     .map_err(|e| match e {
                         RegistryServiceError::NotFound(_) => {
