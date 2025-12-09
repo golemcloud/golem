@@ -363,6 +363,8 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                 .call_on_worker_executor(description.as_ref(), self, remote_call.clone())
                 .await;
 
+            tracing::info!("received internal rpc result");
+
             let result = async {
                 match worker_result {
                     Ok((result, pod)) => match result {

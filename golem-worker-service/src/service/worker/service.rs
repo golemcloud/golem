@@ -219,6 +219,8 @@ impl WorkerService {
             )
             .await?;
 
+        tracing::info!("worker request authed");
+
         let result = self
             .worker_client
             .invoke_and_await_typed(

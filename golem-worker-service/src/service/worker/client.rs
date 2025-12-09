@@ -594,6 +594,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
 
+        tracing::info!("begin rpc invoke_and_await_type");
+
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             "invoke_and_await_worker_typed",
@@ -613,6 +615,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 )
             },
             move |response| {
+                tracing::info!("receive rpc invoke_and_await_type domain response");
                 match response.into_inner() {
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
@@ -640,6 +643,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             WorkerServiceError::InternalCallError,
         ).await?;
+
+        tracing::info!("finish rpc invoke_and_await_type");
 
         Ok(invoke_response)
     }

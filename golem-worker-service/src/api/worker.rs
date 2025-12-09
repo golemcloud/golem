@@ -233,6 +233,8 @@ impl WorkerApi {
         params: InvokeParameters,
         auth: AuthCtx,
     ) -> Result<Json<InvokeResult>> {
+        tracing::info!("begin invoke_and_await_function_internal for {target_worker_id}");
+
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| {
@@ -268,6 +270,8 @@ impl WorkerApi {
                     .await
             }
         }?;
+
+        tracing::info!("finish invoke_and_await_function_internal for {target_worker_id}");
 
         Ok(Json(InvokeResult { result }))
     }
