@@ -44,7 +44,7 @@ pub fn get_remote_client(
                         if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
                             ev
                         } else {
-                            panic!("constructor parameter type mismatch. expected default, found multimodal");
+                            panic!("constructor parameter type mismatch. Expected default, found multimodal");
                         }
                     }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
 
@@ -52,7 +52,7 @@ pub fn get_remote_client(
                 }
 
                 golem_rust::agentic::StructuredValue::Multimodal(_) => {
-                    let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
+                    let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch. Expected multimodal, found default");
                     golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
                 }
             }
