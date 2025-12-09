@@ -28,7 +28,7 @@ use golem_common::model::{
     OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
 pub struct GetWorkerMetadataResult {
