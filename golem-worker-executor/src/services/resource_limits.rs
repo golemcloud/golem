@@ -56,7 +56,7 @@ pub trait ResourceLimits: Send + Sync {
 
 pub fn configured(
     config: &ResourceLimitsConfig,
-    registry_service: Arc<dyn RegistryService>,
+    _registry_service: Arc<dyn RegistryService>,
 ) -> Arc<dyn ResourceLimits> {
     match config {
         ResourceLimitsConfig::Grpc(_) => {
