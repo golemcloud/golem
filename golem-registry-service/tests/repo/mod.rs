@@ -66,15 +66,15 @@ impl Deps {
             .create_or_update(PlanRecord {
                 plan_id: self.test_plan_id(),
                 name: "MAIN_TEST_PLAN".to_string(),
-                total_app_count: 3,
-                total_env_count: 10,
-                total_component_count: 15,
-                total_worker_count: 20,
-                total_worker_connection_count: 25,
-                total_component_storage_bytes: 1000,
-                monthly_gas_limit: 2000,
-                monthly_component_upload_limit_bytes: 3000,
-                max_memory_per_worker: 4000,
+                total_app_count: 3.into(),
+                total_env_count: 10.into(),
+                total_component_count: 15.into(),
+                total_worker_count: 20.into(),
+                total_worker_connection_count: 25.into(),
+                total_component_storage_bytes: 1000.into(),
+                monthly_gas_limit: 2000.into(),
+                monthly_component_upload_limit_bytes: 3000.into(),
+                max_memory_per_worker: 4000.into(),
             })
             .await
             .unwrap();

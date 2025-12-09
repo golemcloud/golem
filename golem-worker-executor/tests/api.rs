@@ -1316,7 +1316,7 @@ async fn get_workers(
                 )
                 .and(WorkerFilter::new_version(
                     FilterComparator::Equal,
-                    ComponentRevision(0),
+                    ComponentRevision::INITIAL,
                 )),
         ),
         workers_count,
@@ -1493,7 +1493,7 @@ async fn get_worker_metadata(
         metadata1.status == WorkerStatus::Running
     );
     check!(metadata2.status == WorkerStatus::Idle);
-    check!(metadata1.component_version == ComponentRevision(0));
+    check!(metadata1.component_version == ComponentRevision::INITIAL);
     check!(metadata1.worker_id == worker_id);
     check!(metadata1.created_by == context.account_id);
 
@@ -1751,7 +1751,7 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision(0));
+        assert!(component_version == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
 
@@ -1808,7 +1808,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision(0));
+        assert!(component_version == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
     Ok(())
@@ -1879,7 +1879,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision(0));
+        assert!(component_version == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
 

@@ -744,7 +744,7 @@ command = "tar"
 args = [
     "-cvf",
     "${PLATFORM_TARGET}.tar",
-    "${PLATFORM_TARGET}/release/cloud-service",
+    "${PLATFORM_TARGET}/release/golem-registry-service",
     "${PLATFORM_TARGET}/release/golem-shard-manager",
     "${PLATFORM_TARGET}/release/worker-executor",
     "${PLATFORM_TARGET}/release/golem-debugging-service",
@@ -805,7 +805,7 @@ script = { file = "./local-run/start.sh" }
 ## ** GENERATE CONFIGS **
 
 [tasks.generate-configs]
-description = "Generates default and exmaple config files"
+description = "Generates default and example config files"
 dependencies = ["build-bins-non-ci"]
 
 script = '''
@@ -839,21 +839,18 @@ dependencies = ["generate-configs"]
 script = '''
 git diff --exit-code \
     golem-registry-service/config/registry-service.toml \
-    golem-registry-service/config/registry-service.sample.env
-    # golem-shard-manager/config/shard-manager.toml \
-    # golem-shard-manager/config/shard-manager.sample.env \
-    # golem-component-compilation-service/config/component-compilation-service.toml \
-    # golem-component-compilation-service/config/component-compilation-service.sample.env \
-    # golem-component-service/config/component-service.toml \
-    # golem-component-service/config/component-service.sample.env \
-    # golem-worker-service/config/worker-service.toml \
-    # golem-worker-service/config/worker-service.sample.env \
-    # golem-worker-executor/config/worker-executor.toml \
-    # golem-worker-executor/config/worker-executor.sample.env \
-    # golem-debugging-service/config/debug-worker-executor.toml \
-    # golem-debugging-service/config/debug-worker-executor.sample.env \
-    # cloud-service/config/cloud-service.toml \
-    # cloud-service/config/cloud-service.sample.env
+    golem-registry-service/config/registry-service.sample.env \
+    golem-shard-manager/config/shard-manager.toml \
+    golem-shard-manager/config/shard-manager.sample.env \
+    golem-component-compilation-service/config/component-compilation-service.toml \
+    golem-component-compilation-service/config/component-compilation-service.sample.env \
+    golem-worker-service/config/worker-service.toml \
+    golem-worker-service/config/worker-service.sample.env \
+    golem-worker-executor/config/worker-executor.toml \
+    golem-worker-executor/config/worker-executor.sample.env \
+    golem-debugging-service/config/debug-worker-executor.toml \
+    golem-debugging-service/config/debug-worker-executor.sample.env \
+
 '''
 
 ## ** Elastic tasks **

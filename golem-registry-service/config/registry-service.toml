@@ -1,8 +1,8 @@
 ## Generated from default config
 cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
-grpc_port = 8081
-http_port = 8080
+grpc_port = 9091
+http_port = 8081
 workspace = "release"
 
 [blob_storage]
@@ -67,7 +67,7 @@ app_limit = 10
 component_limit = 100
 env_limit = 40
 max_memory_per_worker = 1073741824
-monthly_gas_limit = 1000000000000
+monthly_gas_limit = 1000000000000000000
 monthly_upload_limit = 1000000000
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 plan_name = "default"

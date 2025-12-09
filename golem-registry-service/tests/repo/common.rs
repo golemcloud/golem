@@ -590,7 +590,7 @@ pub async fn test_component_stage(deps: &Deps) {
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        size: 10,
+        size: 10.into(),
         metadata: Blob::new(ComponentMetadata::from_parts(
             vec![],
             vec![],
@@ -682,7 +682,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let revision_1 = ComponentRevisionRecord {
         revision_id: 1,
-        size: 12345,
+        size: 12345.into(),
         env: Default::default(),
         binary_hash: SqlBlake3Hash::empty(),
         transformed_object_store_key: "xys-transformed".to_string(),
@@ -1187,7 +1187,7 @@ pub async fn test_account_usage(deps: &Deps) {
         .unwrap();
 
     for usage_type in UsageType::iter() {
-        let limit: i64 = match usage_type {
+        let limit: u64 = match usage_type {
             UsageType::TotalAppCount => 3,
             UsageType::TotalEnvCount => 10,
             UsageType::TotalComponentCount => 15,
@@ -1301,7 +1301,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     version: "".to_string(),
                     hash: SqlBlake3Hash::empty(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                    size: 0,
+                    size: 0.into(),
                     metadata: Blob::new(ComponentMetadata::from_parts(
                         vec![],
                         vec![],

@@ -120,18 +120,9 @@ impl WorkerConfig {
 #[derive(Debug, Clone)]
 pub struct CurrentResourceLimits {
     /// The available fuel to borrow
-    pub fuel: i64,
+    pub fuel: u64,
     /// The maximum amount of memory that can be used by the worker
     pub max_memory: usize,
-}
-
-impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResourceLimits {
-    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
-        Self {
-            fuel: value.available_fuel,
-            max_memory: value.max_memory_per_worker as usize,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

@@ -770,7 +770,7 @@ impl AppCommandHandler {
                     .environment
                     .get_deployment_summary(
                         &deploy_quick_diff.environment.environment_id.0,
-                        current_deployment.deployment_revision.0,
+                        current_deployment.deployment_revision.into(),
                     )
                     .await
                     .map_service_error()?,

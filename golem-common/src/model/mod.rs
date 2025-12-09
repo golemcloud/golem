@@ -688,14 +688,14 @@ impl Default for WorkerStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
-            component_revision: ComponentRevision(0),
+            component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
-            component_revision_for_replay: ComponentRevision(0),
+            component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_count: HashMap::new(),
         }
     }

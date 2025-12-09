@@ -158,7 +158,7 @@ async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
 
     let component = user.component(&env.id, "update-test-v1").store().await?;
     client
-        .delete_component(&component.id.0, component.revision.0)
+        .delete_component(&component.id.0, component.revision.into())
         .await?;
 
     {
@@ -532,7 +532,7 @@ async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result
 
     let component = user.component(&env.id, "update-test-v1").store().await?;
     client
-        .delete_component(&component.id.0, component.revision.0)
+        .delete_component(&component.id.0, component.revision.into())
         .await?;
 
     let recreated_component = user.component(&env.id, "update-test-v1").store().await?;
@@ -540,7 +540,7 @@ async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result
     assert!(recreated_component.revision == component.revision.next()?.next()?);
 
     client
-        .delete_component(&component.id.0, recreated_component.revision.0)
+        .delete_component(&component.id.0, recreated_component.revision.into())
         .await?;
 
     Ok(())
@@ -612,7 +612,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let deployment = user.deploy_environment(&env.id).await?;
 
     let agent_types = client
-        .list_deployment_agent_types(&env.id.0, deployment.revision.0)
+        .list_deployment_agent_types(&env.id.0, deployment.revision.into())
         .await?;
 
     assert!(

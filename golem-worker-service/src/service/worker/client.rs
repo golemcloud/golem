@@ -481,7 +481,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 let worker_id = worker_id_clone.clone();
                 Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    component_version: component_version.0,
+                    component_version: component_version.into(),
                     env: environment_variables.clone(),
                     component_owner_account_id: Some(account_id_clone.into()),
                     environment_id: Some(environment_id.into()),
@@ -1083,7 +1083,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     worker_id: Some(worker_id.into()),
                     mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode)
                         as i32,
-                    target_version: target_version.0,
+                    target_version: target_version.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))

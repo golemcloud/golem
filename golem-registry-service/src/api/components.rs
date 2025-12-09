@@ -219,7 +219,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_deployment_components",
             environment_id = environment_id.0.to_string(),
-            deployment_revision = deployment_revision.0.0,
+            deployment_revision = deployment_revision.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -267,7 +267,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_deployment_component",
             environment_id = environment_id.0.to_string(),
-            deployment_revision = deployment_revision.0.0,
+            deployment_revision = deployment_revision.0.to_string(),
             component_name = component_name.0.to_string()
         );
 
@@ -359,7 +359,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_component_revision",
             component_id = component_id.0.to_string(),
-            revision = revision.0.0
+            revision = revision.0.to_string()
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -402,7 +402,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_component_wasm",
             component_id = component_id.0.to_string(),
-            revision = revision.0.0
+            revision = revision.0.to_string()
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;

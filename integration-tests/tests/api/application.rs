@@ -55,7 +55,7 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
     }
 
     client
-        .delete_application(&app_2.id.0, app_2.revision.0)
+        .delete_application(&app_2.id.0, app_2.revision.into())
         .await?;
 
     {
@@ -125,7 +125,7 @@ async fn deleting_account_hides_applications(
 
     let account = user_client.get_account(&user.account_id.0).await?;
     user_client
-        .delete_account(&account.id.0, account.revision.0)
+        .delete_account(&account.id.0, account.revision.into())
         .await?;
 
     {
@@ -197,7 +197,7 @@ async fn cannot_create_two_applications_with_same_name(
 
     // delete the environment, now creating a new one will succeed
     client
-        .delete_application(&app_1.id.0, app_1.revision.0)
+        .delete_application(&app_1.id.0, app_1.revision.into())
         .await?;
 
     // create environment with reused name
@@ -212,7 +212,7 @@ async fn cannot_create_two_applications_with_same_name(
             .await?;
 
         client
-            .delete_application(&app_3.id.0, app_3.revision.0)
+            .delete_application(&app_3.id.0, app_3.revision.into())
             .await?;
     }
 

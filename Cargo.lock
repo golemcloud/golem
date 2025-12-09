@@ -4548,6 +4548,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "axum 0.7.9",
+ "bigdecimal",
  "bitflags 2.10.0",
  "blake3",
  "bytes 1.11.0",

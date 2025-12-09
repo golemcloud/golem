@@ -541,7 +541,7 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
         .await?;
 
     client_shared
-        .delete_environment_share(&environment_share.id.0, environment_share.revision.0)
+        .delete_environment_share(&environment_share.id.0, environment_share.revision.into())
         .await?;
 
     let result_shared = client_shared
@@ -759,7 +759,7 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
         .await?;
 
     client_owner
-        .delete_environment_share(&share.id.0, share.revision.0)
+        .delete_environment_share(&share.id.0, share.revision.into())
         .await?;
 
     {

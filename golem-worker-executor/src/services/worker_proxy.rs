@@ -422,7 +422,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("update_worker", move |client| {
                 Box::pin(client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(owned_worker_id.worker_id().into()),
-                    target_version: target_version.0,
+                    target_version: target_version.into(),
                     mode: mode as i32,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))

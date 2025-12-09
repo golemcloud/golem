@@ -101,7 +101,7 @@ impl TryFrom<EnvironmentShareExtRevisionRecord> for EnvironmentShare {
         Ok(Self {
             environment_id: EnvironmentId(value.environment_id),
             id: EnvironmentShareId(value.revision.environment_share_id),
-            revision: value.revision.revision_id.into(),
+            revision: value.revision.revision_id.try_into()?,
             grantee_account_id: AccountId(value.grantee_account_id),
             roles: environment_roles_from_bit_vector(value.revision.roles),
         })

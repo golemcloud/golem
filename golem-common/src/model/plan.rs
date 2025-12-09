@@ -24,14 +24,14 @@ declare_structs! {
     pub struct Plan {
         pub plan_id: PlanId,
         pub name: PlanName,
-        pub app_limit: i64,
-        pub env_limit: i64,
-        pub component_limit: i64,
-        pub worker_limit: i64,
-        pub worker_connection_limit: i64,
-        pub storage_limit: i64,
-        pub monthly_gas_limit: i64,
-        pub monthly_upload_limit: i64,
+        pub app_limit: u64,
+        pub env_limit: u64,
+        pub component_limit: u64,
+        pub worker_limit: u64,
+        pub worker_connection_limit: u64,
+        pub storage_limit: u64,
+        pub monthly_gas_limit: u64,
+        pub monthly_upload_limit: u64,
         pub max_memory_per_worker: u64,
     }
 }

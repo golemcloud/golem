@@ -351,7 +351,10 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .rounded();
 
     let desc = oplog
-        .create_snapshot_based_update_description(ComponentRevision(11), vec![1, 2, 3])
+        .create_snapshot_based_update_description(
+            ComponentRevision::new(11).unwrap(),
+            vec![1, 2, 3],
+        )
         .await
         .unwrap();
     let entry4 = OplogEntry::PendingUpdate {
@@ -502,7 +505,10 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .rounded();
 
     let desc = oplog
-        .create_snapshot_based_update_description(ComponentRevision(11), large_payload4.clone())
+        .create_snapshot_based_update_description(
+            ComponentRevision::new(11).unwrap(),
+            large_payload4.clone(),
+        )
         .await
         .unwrap();
     let entry4 = OplogEntry::PendingUpdate {
@@ -936,7 +942,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             component_id: ComponentId(Uuid::new_v4()),
             worker_name: "test".to_string(),
         },
-        component_revision: ComponentRevision(1),
+        component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![],
         wasi_config_vars: BTreeMap::new(),
         environment_id,
@@ -1614,7 +1620,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         };
         let create_entry = OplogEntry::create(
             worker_id.clone(),
-            ComponentRevision(1),
+            ComponentRevision::new(1).unwrap(),
             Vec::new(),
             environment_id,
             account_id,
