@@ -59,8 +59,9 @@ pub fn configured(
     registry_service: Arc<dyn RegistryService>,
 ) -> Arc<dyn ResourceLimits> {
     match config {
-        ResourceLimitsConfig::Grpc(config) => {
-            ResourceLimitsGrpc::new(registry_service, config.batch_update_interval)
+        ResourceLimitsConfig::Grpc(_) => {
+            Arc::new(ResourceLimitsDisabled)
+            // ResourceLimitsGrpc::new(registry_service, config.batch_update_interval)
         }
         ResourceLimitsConfig::Disabled(_) => Arc::new(ResourceLimitsDisabled),
     }
@@ -243,6 +244,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
     ) -> Result<u64, WorkerExecutorError> {
         loop {
             let mut borrowed = None;
+            tracing::info!("borrow fuel loop");
 
             self.current_limits
                 .update_async(account_id, |_, entry| {
