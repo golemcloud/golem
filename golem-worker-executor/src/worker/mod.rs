@@ -2043,6 +2043,8 @@ impl RunningWorker {
         )
         .await?;
 
+        debug!("worker context created");
+
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
         store.set_epoch_deadline(parent.config().limits.epoch_ticks);
@@ -2072,8 +2074,11 @@ impl RunningWorker {
         });
 
         let initial_fuel_level = u64::MAX;
+        debug!("setting initial fuel");
         store.set_fuel(initial_fuel_level)?;
+        debug!("borrowing initial fuel");
         store.data_mut().borrow_fuel(initial_fuel_level).await?; // Borrowing fuel for initialization and also to make sure account is in cache
+        debug!("borrowed initial fuel");
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 
@@ -2092,6 +2097,8 @@ impl RunningWorker {
             )
         })?;
 
+        debug!("instantiating instance");
+
         let instance = instance_pre
             .instantiate_async(&mut store)
             .await
@@ -2105,6 +2112,7 @@ impl RunningWorker {
                 )
             })?;
         let store = async_lock::Mutex::new(store);
+        debug!("instantiated instance");
         Ok((instance, store))
     }
 

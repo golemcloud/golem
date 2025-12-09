@@ -229,6 +229,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             config.suspend.suspend_after,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
+
+        debug!("created wasi context");
+
         let wasi_http = WasiHttpCtx::new();
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
