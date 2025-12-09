@@ -230,7 +230,7 @@ impl ComponentService for ComponentServiceDefault {
         forced_version: Option<ComponentRevision>,
     ) -> Result<ComponentDto, WorkerExecutorError> {
         debug!("beginning get_metadata {component_id} ({forced_version:?})");
-        match forced_version {
+        let result = match forced_version {
             Some(version) => {
                 let client = self.registry_client.clone();
                 let component_id = *component_id;
@@ -286,7 +286,9 @@ impl ComponentService for ComponentServiceDefault {
 
                 Ok(metadata)
             }
-        }
+        };
+        debug!("finished get_metadata");
+        result
     }
 
     async fn resolve_component(
