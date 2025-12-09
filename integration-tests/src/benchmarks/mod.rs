@@ -157,7 +157,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                     break InvokeResult {
                         value: vec![Value::String(body)],
                         retries,
-                        timeouts,
+                        timeouts: 0,
                         accumulated_time,
                     };
                 } else {
