@@ -555,7 +555,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &worker_id.worker_name,
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Automatic,
-                    target_revision: target_revision.0,
+                    target_revision: target_revision.into(),
                 },
             )
             .await?;
@@ -578,7 +578,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &worker_id.worker_name,
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Manual,
-                    target_revision: target_revision.0,
+                    target_revision: target_revision.into(),
                 },
             )
             .await?;

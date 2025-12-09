@@ -113,7 +113,7 @@ message ExportedFunctionInvokedParameters {
 message ExportedFunctionCompletedParameters {
   google.protobuf.Timestamp timestamp = 1;
   wasm.rpc.ValueAndType response = 2;
-  int64 consumed_fuel = 3;
+  uint64 consumed_fuel = 3;
 }
 
 message ErrorParameters {

@@ -70,7 +70,14 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
         precise: bool,
     ) -> anyhow::Result<Resource<GetAgents>> {
         self.observe_function_call("golem::api::get-workers", "new");
-        let entry = GetAgentsEntry::new(component_id.into(), filter.map(|f| f.into()), precise);
+        let entry = GetAgentsEntry::new(
+            component_id.into(),
+            filter
+                .map(|f| f.try_into())
+                .transpose()
+                .map_err(|e: String| anyhow!(e))?,
+            precise,
+        );
         let resource = self.as_wasi_view().table().push(entry)?;
         Ok(resource)
     }
@@ -515,16 +522,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
 
+        let target_revision: ComponentRevision =
+            target_version.try_into().map_err(|e: String| anyhow!(e))?;
+
         let result = if durability.is_live() {
             let result = self
                 .state
                 .worker_proxy
-                .update(
-                    &owned_worker_id,
-                    ComponentRevision(target_version),
-                    mode,
-                    self.created_by(),
-                )
+                .update(&owned_worker_id, target_revision, mode, self.created_by())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -533,7 +538,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self,
                     HostRequestGolemApiUpdateAgent {
                         agent_id,
-                        target_revision: ComponentRevision(target_version),
+                        target_revision,
                         mode,
                     },
                     HostResponseGolemApiUnit { result },
@@ -1360,16 +1365,18 @@ impl From<golem_common::model::WorkerStatus> for golem_api_1_x::host::AgentStatu
     }
 }
 
-impl From<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::WorkerFilter {
-    fn from(filter: golem_api_1_x::host::AgentPropertyFilter) -> Self {
-        match filter {
+impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::WorkerFilter {
+    type Error = String;
+
+    fn try_from(filter: golem_api_1_x::host::AgentPropertyFilter) -> Result<Self, Self::Error> {
+        let converted = match filter {
             golem_api_1_x::host::AgentPropertyFilter::Name(filter) => {
                 golem_common::model::WorkerFilter::new_name(filter.comparator.into(), filter.value)
             }
             golem_api_1_x::host::AgentPropertyFilter::Version(filter) => {
                 golem_common::model::WorkerFilter::new_version(
                     filter.comparator.into(),
-                    ComponentRevision(filter.value),
+                    filter.value.try_into()?,
                 )
             }
             golem_api_1_x::host::AgentPropertyFilter::Status(filter) => {
@@ -1398,21 +1405,32 @@ impl From<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::Wor
                     filter.value,
                 )
             }
-        }
+        };
+        Ok(converted)
     }
 }
 
-impl From<golem_api_1_x::host::AgentAllFilter> for golem_common::model::WorkerFilter {
-    fn from(filter: golem_api_1_x::host::AgentAllFilter) -> Self {
-        let filters = filter.filters.into_iter().map(|f| f.into()).collect();
-        golem_common::model::WorkerFilter::new_and(filters)
+impl TryFrom<golem_api_1_x::host::AgentAllFilter> for golem_common::model::WorkerFilter {
+    type Error = String;
+    fn try_from(filter: golem_api_1_x::host::AgentAllFilter) -> Result<Self, Self::Error> {
+        let filters = filter
+            .filters
+            .into_iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(golem_common::model::WorkerFilter::new_and(filters))
     }
 }
 
-impl From<AgentAnyFilter> for golem_common::model::WorkerFilter {
-    fn from(filter: AgentAnyFilter) -> Self {
-        let filters = filter.filters.into_iter().map(|f| f.into()).collect();
-        golem_common::model::WorkerFilter::new_or(filters)
+impl TryFrom<AgentAnyFilter> for golem_common::model::WorkerFilter {
+    type Error = String;
+    fn try_from(filter: AgentAnyFilter) -> Result<Self, Self::Error> {
+        let filters = filter
+            .filters
+            .into_iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(golem_common::model::WorkerFilter::new_or(filters))
     }
 }
 
@@ -1424,7 +1442,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
             env: value.env,
             config_vars: value.config_vars.into_iter().collect(),
             status: value.status.into(),
-            component_revision: value.component_revision.0,
+            component_revision: value.component_revision.into(),
             retry_count: 0,
         }
     }

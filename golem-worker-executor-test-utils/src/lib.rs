@@ -457,17 +457,17 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
-    fn is_out_of_fuel(&self, _current_level: i64) -> bool {
+    fn is_out_of_fuel(&self, _current_level: u64) -> bool {
         false
     }
 
-    async fn borrow_fuel(&mut self, _current_level: i64) -> Result<(), WorkerExecutorError> {
+    async fn borrow_fuel(&mut self, _current_level: u64) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
-    fn borrow_fuel_sync(&mut self, _current_level: i64) {}
+    fn borrow_fuel_sync(&mut self, _current_level: u64) {}
 
-    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
+    async fn return_fuel(&mut self, _current_level: u64) -> Result<u64, WorkerExecutorError> {
         Ok(0)
     }
 }
@@ -586,7 +586,7 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx

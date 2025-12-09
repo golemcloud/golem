@@ -1310,7 +1310,7 @@ impl WorkerCommandHandler {
                         }
                         AgentUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
                     },
-                    target_revision: target_revision.0,
+                    target_revision: target_revision.into(),
                 },
             )
             .await

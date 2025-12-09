@@ -115,7 +115,7 @@ impl ApiDeploymentCommandHandler {
 
         clients
             .api_deployment
-            .get_http_api_deployment_revision(&deployment.id.0, revision.0)
+            .get_http_api_deployment_revision(&deployment.id.0, (*revision).into())
             .await
             .map_service_error_not_found_as_opt()
     }
@@ -161,7 +161,10 @@ impl ApiDeploymentCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .api_deployment
-                        .get_http_api_deployment_revision(&http_api_deployment_id.0, revision.0)
+                        .get_http_api_deployment_revision(
+                            &http_api_deployment_id.0,
+                            revision.into(),
+                        )
                         .await
                         .map_service_error()
                         .map_err(Arc::new)
@@ -216,7 +219,7 @@ impl ApiDeploymentCommandHandler {
             format!(
                 "HTTP API deployment revision: {} {}",
                 deployment.domain.0.log_color_highlight(),
-                deployment.revision.0.to_string().log_color_highlight()
+                deployment.revision.to_string().log_color_highlight()
             ),
         );
 
@@ -240,7 +243,10 @@ impl ApiDeploymentCommandHandler {
             .golem_clients()
             .await?
             .api_deployment
-            .delete_http_api_deployment(&http_api_deployment.id.0, http_api_deployment.revision.0)
+            .delete_http_api_deployment(
+                &http_api_deployment.id.0,
+                http_api_deployment.revision.into(),
+            )
             .await
             .map_service_error()?;
 
@@ -251,7 +257,6 @@ impl ApiDeploymentCommandHandler {
                 http_api_deployment.domain.0.log_color_highlight(),
                 http_api_deployment
                     .revision
-                    .0
                     .to_string()
                     .log_color_highlight()
             ),
@@ -295,7 +300,7 @@ impl ApiDeploymentCommandHandler {
             format!(
                 "HTTP API deployment revision: {} {}",
                 deployment.domain.0.log_color_highlight(),
-                deployment.revision.0.to_string().log_color_highlight()
+                deployment.revision.to_string().log_color_highlight()
             ),
         );
 

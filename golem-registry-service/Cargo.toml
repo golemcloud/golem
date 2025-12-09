@@ -32,7 +32,7 @@ async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
-bigdecimal = "0.4.2"
+bigdecimal = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -48,9 +48,9 @@ humantime-serde = { workspace = true }
 include_dir = { workspace = true }
 hyper = { workspace = true }
 indoc = { workspace = true }
-jsonwebtoken = "9.2.0"
+jsonwebtoken = { workspace = true }
 lazy_static = { workspace = true }
-mappable-rc = "0.1.1"
+mappable-rc = { workspace = true }
 num-traits = { workspace = true }
 openidconnect.workspace = true
 opentelemetry = { workspace = true }
@@ -80,12 +80,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 serde_with = { workspace = true }
-sqlx = { version = "0.8", features = [
+sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",
     "postgres",
     "uuid",
     "migrate",
+    "bigdecimal",
     "chrono",
 ] }
 strum = { workspace = true }

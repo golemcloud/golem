@@ -113,7 +113,7 @@ impl BenchmarkCliParameters {
 
     pub fn service_verbosity(&self) -> Level {
         if self.verbose {
-            Level::DEBUG
+            Level::INFO
         } else {
             Level::WARN
         }

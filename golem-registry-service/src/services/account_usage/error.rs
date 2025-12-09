@@ -21,8 +21,8 @@ use golem_service_base::repo::RepoError;
 #[error("Limit {limit_name} exceeded, limit: {limit_value}, current: {current_value}")]
 pub struct LimitExceededError {
     pub limit_name: String,
-    pub limit_value: i64,
-    pub current_value: i64,
+    pub limit_value: u64,
+    pub current_value: u64,
 }
 
 impl SafeDisplay for LimitExceededError {
@@ -35,6 +35,8 @@ impl SafeDisplay for LimitExceededError {
 pub enum AccountUsageError {
     #[error(transparent)]
     LimitExceeded(LimitExceededError),
+    #[error("Component size exceeds global limits {0}")]
+    ComponentTooLarge(u64),
     #[error("Account {0} not found")]
     AccountNotfound(AccountId),
     #[error(transparent)]
@@ -47,6 +49,7 @@ impl SafeDisplay for AccountUsageError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::LimitExceeded { .. } => self.to_string(),
+            Self::ComponentTooLarge(_) => self.to_string(),
             Self::AccountNotfound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),

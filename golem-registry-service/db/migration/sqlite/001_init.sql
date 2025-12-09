@@ -3,15 +3,15 @@ CREATE TABLE plans
     plan_id                              UUID   NOT NULL,
     name                                 TEXT   NOT NULL,
 
-    max_memory_per_worker                BIGINT NOT NULL,
-    total_app_count                      BIGINT NOT NULL,
-    total_env_count                      BIGINT NOT NULL,
-    total_component_count                BIGINT NOT NULL,
-    total_worker_count                   BIGINT NOT NULL,
-    total_worker_connection_count        BIGINT NOT NULL,
-    total_component_storage_bytes        BIGINT NOT NULL,
-    monthly_gas_limit                    BIGINT NOT NULL,
-    monthly_component_upload_limit_bytes BIGINT NOT NULL,
+    max_memory_per_worker                NUMERIC NOT NULL,
+    total_app_count                      NUMERIC NOT NULL,
+    total_env_count                      NUMERIC NOT NULL,
+    total_component_count                NUMERIC NOT NULL,
+    total_worker_count                   NUMERIC NOT NULL,
+    total_worker_connection_count        NUMERIC NOT NULL,
+    total_component_storage_bytes        NUMERIC NOT NULL,
+    monthly_gas_limit                    NUMERIC NOT NULL,
+    monthly_component_upload_limit_bytes NUMERIC NOT NULL,
 
     CONSTRAINT plans_pk
         PRIMARY KEY (plan_id)
@@ -128,7 +128,7 @@ CREATE TABLE account_usage_stats
     account_id UUID      NOT NULL,
     usage_type INT       NOT NULL,
     usage_key  TEXT      NOT NULL,
-    value      BIGINT    NOT NULL,
+    value      NUMERIC    NOT NULL,
     updated_at TIMESTAMP NOT NULL,
     CONSTRAINT account_usage_stats_pk
         PRIMARY KEY (account_id, usage_type, usage_key),
@@ -263,7 +263,7 @@ CREATE TABLE component_revisions
     created_by                   UUID      NOT NULL,
     deleted                      BOOLEAN   NOT NULL,
 
-    size                         INTEGER   NOT NULL,
+    size                         NUMERIC   NOT NULL,
     metadata                     BYTEA     NOT NULL,
     original_env                 JSONB     NOT NULL,
     env                          JSONB     NOT NULL,

@@ -134,7 +134,10 @@ impl ComponentWriteService {
             })?;
 
         self.account_usage_service
-            .ensure_new_component_within_limits(&environment.owner_account_id, wasm.len() as i64)
+            .ensure_new_component_within_limits(
+                &environment.owner_account_id,
+                u64::try_from(wasm.len()).unwrap(),
+            )
             .await?;
 
         let initial_component_files: Vec<InitialComponentFile> = self
@@ -262,7 +265,7 @@ impl ComponentWriteService {
             self.account_usage_service
                 .ensure_updated_component_within_limits(
                     &environment.owner_account_id,
-                    new_data.len() as i64,
+                    u64::try_from(new_data.len()).unwrap(),
                 )
                 .await?;
 

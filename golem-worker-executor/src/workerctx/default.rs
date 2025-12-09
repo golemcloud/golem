@@ -81,8 +81,8 @@ pub struct Context {
     // AccountId owning the environment/component/etc. of the worker
     account_id: AccountId,
     resource_limits: Arc<dyn ResourceLimits>,
-    last_fuel_level: i64,
-    min_fuel_level: i64,
+    last_fuel_level: u64,
+    min_fuel_level: u64,
 }
 
 impl Context {
@@ -97,8 +97,8 @@ impl Context {
             config,
             account_id,
             resource_limits,
-            last_fuel_level: i64::MAX,
-            min_fuel_level: i64::MAX,
+            last_fuel_level: u64::MAX,
+            min_fuel_level: u64::MAX,
         }
     }
 
@@ -119,11 +119,11 @@ impl DurableWorkerCtxView<Context> for Context {
 
 #[async_trait]
 impl FuelManagement for Context {
-    fn is_out_of_fuel(&self, current_level: i64) -> bool {
+    fn is_out_of_fuel(&self, current_level: u64) -> bool {
         current_level < self.min_fuel_level
     }
 
-    async fn borrow_fuel(&mut self, current_level: i64) -> Result<(), WorkerExecutorError> {
+    async fn borrow_fuel(&mut self, current_level: u64) -> Result<(), WorkerExecutorError> {
         let amount = self
             .resource_limits
             .borrow_fuel(
@@ -139,7 +139,7 @@ impl FuelManagement for Context {
         Ok(())
     }
 
-    fn borrow_fuel_sync(&mut self, current_level: i64) {
+    fn borrow_fuel_sync(&mut self, current_level: u64) {
         let amount = self.resource_limits.borrow_fuel_sync(
             &self.account_id,
             Ord::max(
@@ -156,7 +156,7 @@ impl FuelManagement for Context {
         }
     }
 
-    async fn return_fuel(&mut self, current_level: i64) -> Result<i64, WorkerExecutorError> {
+    async fn return_fuel(&mut self, current_level: u64) -> Result<u64, WorkerExecutorError> {
         let unused = current_level.saturating_sub(self.min_fuel_level);
         if unused > 0 {
             self.resource_limits
@@ -247,7 +247,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx

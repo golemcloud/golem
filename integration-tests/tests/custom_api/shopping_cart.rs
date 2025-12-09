@@ -262,7 +262,7 @@ async fn open_api_spec(cart: &ShoppingCart) -> anyhow::Result<()> {
     let spec = client
         .get_openapi_of_http_api_definition_in_deployment(
             &cart.env_id.0,
-            cart.deployment_revision.0,
+            cart.deployment_revision.into(),
             "test-api",
         )
         .await?;

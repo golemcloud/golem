@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::deployment::DeployRepoError;
 use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
@@ -33,6 +34,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
+use golem_service_base::repo::numeric::NumericU64;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -155,7 +157,7 @@ pub struct ComponentRevisionRecord {
     pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
-    pub size: i32,
+    pub size: NumericU64,
     pub metadata: Blob<ComponentMetadata>,
     pub original_env: Json<BTreeMap<String, String>>,
     pub env: Json<BTreeMap<String, String>>,
@@ -178,7 +180,7 @@ impl ComponentRevisionRecord {
         component_id: Uuid,
         revision_id: i64,
     ) -> Result<Self, ComponentRepoError> {
-        let revision: ComponentRevision = revision_id.into();
+        let revision: ComponentRevision = revision_id.try_into()?;
         let next_revision_id = revision.next()?.into();
 
         for file in &mut self.original_files {
@@ -207,7 +209,7 @@ impl ComponentRevisionRecord {
             version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
-            size: 0,
+            size: 0.into(),
             metadata: Blob::new(ComponentMetadata::default()),
             env: Default::default(),
             original_env: Default::default(),
@@ -310,7 +312,7 @@ impl ComponentRevisionRecord {
                 .root_package_version()
                 .clone()
                 .unwrap_or_default(),
-            size: value.component_size as i32,
+            size: value.component_size.into(),
             metadata: Blob::new(value.metadata),
             hash: SqlBlake3Hash::empty(),
             original_env: Json(value.original_env),
@@ -339,12 +341,12 @@ impl ComponentExtRevisionRecord {
     ) -> Result<Component, RepoError> {
         Ok(Component {
             id: ComponentId(self.revision.component_id),
-            revision: ComponentRevision(self.revision.revision_id as u64),
+            revision: self.revision.revision_id.try_into()?,
             environment_id: EnvironmentId(self.environment_id),
             application_id,
             account_id,
             component_name: ComponentName(self.name),
-            component_size: self.revision.size as u64,
+            component_size: self.revision.size.into(),
             metadata: self.revision.metadata.into_value(),
             created_at: self.revision.audit.created_at.into(),
             files: self
@@ -479,7 +481,8 @@ impl TryFrom<ComponentPluginInstallationRecord> for InstalledPlugin {
             oplog_processor_component_id: value.oplog_processor_component_id.map(ComponentId),
             oplog_processor_component_revision: value
                 .oplog_processor_component_revision_id
-                .map(ComponentRevision::from),
+                .map(ComponentRevision::try_from)
+                .transpose()?,
         })
     }
 }
@@ -493,13 +496,14 @@ pub struct ComponentRevisionIdentityRecord {
     pub hash: SqlBlake3Hash,
 }
 
-impl From<ComponentRevisionIdentityRecord> for DeploymentPlanComponentEntry {
-    fn from(value: ComponentRevisionIdentityRecord) -> Self {
-        Self {
+impl TryFrom<ComponentRevisionIdentityRecord> for DeploymentPlanComponentEntry {
+    type Error = DeployRepoError;
+    fn try_from(value: ComponentRevisionIdentityRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: ComponentId(value.component_id),
-            revision: value.revision_id.into(),
+            revision: value.revision_id.try_into()?,
             name: ComponentName(value.name),
             hash: value.hash.into(),
-        }
+        })
     }
 }

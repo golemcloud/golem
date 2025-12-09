@@ -82,7 +82,7 @@ impl SecuritySchemeRevisionRecord {
 
         Self {
             security_scheme_id: security_scheme_id.0,
-            revision_id: SecuritySchemeRevision::INITIAL.0 as i64,
+            revision_id: SecuritySchemeRevision::INITIAL.into(),
             provider_type: provider_type.to_string(),
             client_id,
             client_secret,
@@ -98,7 +98,7 @@ impl SecuritySchemeRevisionRecord {
 
         Self {
             security_scheme_id: value.id.0,
-            revision_id: value.revision.0 as i64,
+            revision_id: value.revision.into(),
             provider_type: value.provider_type.to_string(),
             client_id: value.client_id.into(),
             client_secret: value.client_secret.secret().clone(),
@@ -134,7 +134,7 @@ impl TryFrom<SecuritySchemeExtRevisionRecord> for SecurityScheme {
 
         Ok(Self {
             id: SecuritySchemeId(value.revision.security_scheme_id),
-            revision: value.revision.revision_id.into(),
+            revision: value.revision.revision_id.try_into()?,
             environment_id: EnvironmentId(value.environment_id),
             name: SecuritySchemeName(value.name),
             provider_type,

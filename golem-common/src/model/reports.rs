@@ -23,14 +23,14 @@ declare_structs! {
         pub id: AccountId,
         pub name: String,
         pub email: String,
-        pub components_count: i64,
-        pub workers_count: i64,
+        pub components_count: u64,
+        pub workers_count: u64,
         pub created_at: DateTime<Utc>,
     }
 
     pub struct AccountCountsReport {
-        pub total_accounts: i64,
-        pub total_active_accounts: i64,
-        pub total_deleted_accounts: i64
+        pub total_accounts: u64,
+        pub total_active_accounts: u64,
+        pub total_deleted_accounts: u64
     }
 }

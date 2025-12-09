@@ -164,7 +164,7 @@ impl HttpApiDefinitionService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(stored_http_api_definition)
     }
@@ -182,7 +182,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 *http_api_definition_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -245,7 +245,7 @@ impl HttpApiDefinitionService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(stored_http_api_definition)
     }
@@ -263,7 +263,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 *http_api_definition_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -323,7 +323,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 *http_api_definition_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -381,8 +381,8 @@ impl HttpApiDefinitionService {
             .list_staged(&environment.id.0)
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(http_api_definitions)
     }
@@ -418,8 +418,8 @@ impl HttpApiDefinitionService {
             .list_by_deployment(&environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(http_api_definitions)
     }
@@ -436,7 +436,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 *http_api_definition_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -483,7 +483,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
                 http_api_definition_name.clone(),
             ))?
-            .into();
+            .try_into()?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -542,7 +542,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
                 http_api_definition_name.clone(),
             ))?
-            .into();
+            .try_into()?;
 
         Ok(http_api_definition)
     }

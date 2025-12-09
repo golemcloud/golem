@@ -51,7 +51,7 @@ fn create_serialization_poem_serde_equivalence() {
             ),
             worker_name: "test1".to_string(),
         },
-        component_revision: ComponentRevision(1),
+        component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
             .collect(),
@@ -321,7 +321,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
 
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_revision: ComponentRevision(1),
+        target_revision: ComponentRevision::new(1).unwrap(),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
         }),
@@ -337,7 +337,7 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
 
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_revision: ComponentRevision(1),
+        target_revision: ComponentRevision::new(1).unwrap(),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -351,7 +351,7 @@ fn successful_update_serialization_poem_serde_equivalence() {
 
     let entry = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_revision: ComponentRevision(1),
+        target_revision: ComponentRevision::new(1).unwrap(),
         new_component_size: 100_000_000,
         new_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
             plugin_priority: PluginPriority(0),
@@ -371,7 +371,7 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
 
     let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_revision: ComponentRevision(1),
+        target_revision: ComponentRevision::new(1).unwrap(),
         details: Some("test".to_string()),
     });
     let serialized = entry.to_json_string();
@@ -385,7 +385,7 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
 
     let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_revision: ComponentRevision(1),
+        target_revision: ComponentRevision::new(1).unwrap(),
         details: None,
     });
     let serialized = entry.to_json_string();
