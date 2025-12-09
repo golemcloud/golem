@@ -272,7 +272,7 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("update_status");
 
         if agent_mode != AgentMode::Ephemeral {
-            info!("Updating cached worker status for {owned_worker_id}");
+            info!("Updating cached worker status for {owned_worker_id}: {}", status_value.status);
             debug!("Updating cached worker status for {owned_worker_id} to {status_value:?}");
 
             self.key_value_storage

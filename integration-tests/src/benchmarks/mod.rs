@@ -118,11 +118,11 @@ pub async fn invoke_and_await(
                 tokio::time::sleep(RETRY_DELAY).await;
                 user.deps.ensure_all_deps_running().await;
             }
-            Err(e) => {
+            Err(_) => {
                 // timeout
                 // not counting timeouts into the accumulated time
                 timeouts += 1;
-                println!("Invocation timed out, retrying: {e:?}");
+                println!("Invocation for worker {worker_id} timed out, retrying");
                 user.deps.ensure_all_deps_running().await;
             }
         }
