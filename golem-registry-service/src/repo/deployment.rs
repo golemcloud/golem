@@ -1248,15 +1248,15 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                      agent_type)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#})
-                .bind(registered_agent_type.environment_id)
-                .bind(registered_agent_type.deployment_revision_id)
-                .bind(&registered_agent_type.agent_type_name)
-                .bind(&registered_agent_type.agent_wrapper_type_name)
-                .bind(registered_agent_type.component_id)
-                .bind(registered_agent_type.component_revision_id)
-                .bind(&registered_agent_type.agent_type)
+            .bind(registered_agent_type.environment_id)
+            .bind(registered_agent_type.deployment_revision_id)
+            .bind(&registered_agent_type.agent_type_name)
+            .bind(&registered_agent_type.agent_wrapper_type_name)
+            .bind(registered_agent_type.component_id)
+            .bind(registered_agent_type.component_revision_id)
+            .bind(&registered_agent_type.agent_type),
         )
-            .await?;
+        .await?;
 
         Ok(())
     }
