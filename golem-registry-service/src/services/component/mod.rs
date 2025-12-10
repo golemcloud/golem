@@ -27,7 +27,7 @@ use crate::repo::component::ComponentRepo;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::{RegisteredAgentType, RegisteredAgentTypeImplementer};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -443,13 +443,15 @@ impl ComponentService {
         let agent_types = deployed_components
             .into_iter()
             .flat_map(|c| {
-                let component_id = c.id;
                 c.metadata
                     .agent_types()
                     .iter()
                     .map(|at| RegisteredAgentType {
                         agent_type: at.clone(),
-                        implemented_by: component_id,
+                        implemented_by: RegisteredAgentTypeImplementer {
+                            component_id: c.id,
+                            component_revision: c.revision,
+                        },
                     })
                     .collect::<Vec<_>>()
             })

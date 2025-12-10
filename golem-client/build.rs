@@ -58,6 +58,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "RegisteredAgentType",
                 "golem_common::model::agent::RegisteredAgentType",
             ),
+            (
+                "RegisteredAgentTypeImplementer",
+                "golem_common::model::agent::RegisteredAgentTypeImplementer",
+            ),
             // application
             (
                 "Application",

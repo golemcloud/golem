@@ -440,7 +440,7 @@ impl AppCommandHandler {
             .environment
             .list_deployment_agent_types(
                 &environment.environment_id.0,
-                current_deployment.deployment_revision.0,
+                current_deployment.deployment_revision.into(),
             )
             .await
             .map_service_error()?
@@ -540,7 +540,7 @@ impl AppCommandHandler {
                 .environment
                 .get_deployment_components(
                     &current_deployment.environment_id.0,
-                    current_deployment.revision.0,
+                    current_deployment.revision.into(),
                 )
                 .await?
                 .values;

@@ -24,8 +24,7 @@ use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRe
 use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentType, RegisteredAgentType};
-use golem_common::model::component::ComponentId;
+use golem_common::model::agent::{AgentType, RegisteredAgentType, RegisteredAgentTypeImplementer};
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -365,6 +364,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub agent_type_name: String,
 
     pub component_id: Uuid,
+    pub component_revision: i64,
     pub agent_type: Blob<AgentType>,
 }
 
@@ -378,18 +378,26 @@ impl DeploymentRegisteredAgentTypeRecord {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
             agent_type_name: registered_agent_type.agent_type.type_name.clone(),
-            component_id: registered_agent_type.implemented_by.0,
+            component_id: registered_agent_type.implemented_by.component_id.0,
+            component_revision: registered_agent_type
+                .implemented_by
+                .component_revision
+                .into(),
             agent_type: Blob::new(registered_agent_type.agent_type),
         }
     }
 }
 
-impl From<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
-    fn from(value: DeploymentRegisteredAgentTypeRecord) -> Self {
-        Self {
-            implemented_by: ComponentId(value.component_id),
+impl TryFrom<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
+    type Error = DeployRepoError;
+    fn try_from(value: DeploymentRegisteredAgentTypeRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: value.component_id.into(),
+                component_revision: value.component_revision.try_into()?,
+            },
             agent_type: value.agent_type.into_value(),
-        }
+        })
     }
 }
 
