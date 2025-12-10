@@ -1,7 +1,7 @@
 CREATE TABLE plans
 (
-    plan_id                              UUID   NOT NULL,
-    name                                 TEXT   NOT NULL,
+    plan_id                              UUID    NOT NULL,
+    name                                 TEXT    NOT NULL,
 
     max_memory_per_worker                NUMERIC NOT NULL,
     total_app_count                      NUMERIC NOT NULL,
@@ -130,7 +130,7 @@ CREATE TABLE account_usage_stats
     account_id UUID      NOT NULL,
     usage_type INT       NOT NULL,
     usage_key  TEXT      NOT NULL,
-    value      NUMERIC    NOT NULL,
+    value      NUMERIC   NOT NULL,
     updated_at TIMESTAMP NOT NULL,
     CONSTRAINT account_usage_stats_pk
         PRIMARY KEY (account_id, usage_type, usage_key),
@@ -640,15 +640,15 @@ CREATE INDEX environment_plugin_grants_plugin_id_idx ON environment_plugin_grant
 
 CREATE TABLE component_plugin_installations
 (
-    component_id UUID      NOT NULL,
-    revision_id  BIGINT    NOT NULL,
-    priority     INT       NOT NULL,
+    component_id                UUID      NOT NULL,
+    revision_id                 BIGINT    NOT NULL,
+    priority                    INT       NOT NULL,
 
-    created_at   TIMESTAMP NOT NULL,
-    created_by   UUID      NOT NULL,
+    created_at                  TIMESTAMP NOT NULL,
+    created_by                  UUID      NOT NULL,
 
-    environment_plugin_grant_id UUID NOT NULL,
-    parameters   JSONB     NOT NULL,
+    environment_plugin_grant_id UUID      NOT NULL,
+    parameters                  JSONB     NOT NULL,
 
     CONSTRAINT component_plugin_installations_pk
         PRIMARY KEY (component_id, revision_id, priority),
@@ -790,13 +790,14 @@ CREATE INDEX deployment_routes_routes_def_idx
 
 CREATE TABLE deployment_registered_agent_types
 (
-    environment_id         UUID   NOT NULL,
-    deployment_revision_id BIGINT NOT NULL,
-    agent_type_name        TEXT   NOT NULL,
+    environment_id          UUID   NOT NULL,
+    deployment_revision_id  BIGINT NOT NULL,
+    agent_type_name         TEXT   NOT NULL,
+    agent_wrapper_type_name TEXT   NOT NULL,
 
-    component_id           UUID   NOT NULL, -- component id implementing agent-type in this deployment
-    component_revision_id  BIGINT NOT NULL, -- component revision id implementing agent-type in this deployment
-    agent_type             BYTEA  NOT NULL, -- full agent type as blob
+    component_id            UUID   NOT NULL, -- component id implementing agent-type in this deployment
+    component_revision_id   BIGINT NOT NULL, -- component revision id implementing agent-type in this deployment
+    agent_type              BYTEA  NOT NULL, -- full agent type as blob
 
     CONSTRAINT deployment_registered_agent_types_pk
         PRIMARY KEY (environment_id, deployment_revision_id, agent_type_name),
@@ -814,5 +815,5 @@ CREATE TABLE deployment_registered_agent_types
             REFERENCES deployment_revisions (environment_id, revision_id)
 );
 
-CREATE INDEX deployment_registered_agent_types_agent_type_idx
-    ON deployment_registered_agent_types (environment_id, deployment_revision_id, agent_type_name);
+CREATE UNIQUE INDEX deployment_registered_agent_types_agent_type_wrapper_idx
+    ON deployment_registered_agent_types (environment_id, deployment_revision_id, agent_wrapper_type_name);
