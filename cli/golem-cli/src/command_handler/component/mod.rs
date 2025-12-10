@@ -152,7 +152,7 @@ impl ComponentCommandHandler {
     async fn cmd_new(
         &self,
         template: Option<ComponentTemplateName>,
-        component_package_name: Option<PackageName>,
+        component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -173,8 +173,8 @@ impl ComponentCommandHandler {
             )
         };
 
-        let Some((template, component_package_name)) = ({
-            match (template, component_package_name) {
+        let Some((template, component_name)) = ({
+            match (template, component_name) {
                 (Some(template), Some(component_package_name)) => {
                     Some((template, component_package_name))
                 }
@@ -186,9 +186,7 @@ impl ComponentCommandHandler {
                     )?,
             }
         }) else {
-            log_error(
-                "Both TEMPLATE and COMPONENT_PACKAGE_NAME are required in non-interactive mode",
-            );
+            log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
             logln("");
             self.ctx
                 .app_handler()
@@ -196,8 +194,6 @@ impl ComponentCommandHandler {
             logln("");
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
-
-        let component_name = ComponentName(component_package_name.to_string_with_colon());
 
         if existing_component_names.contains(component_name.as_str()) {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -220,7 +216,8 @@ impl ComponentCommandHandler {
             Some(component_template),
             &PathBuf::from("."),
             &application_name,
-            &component_package_name,
+            &PackageName::from_string(component_name.0.clone())
+                .expect("Failed to parse component name"),
             Some(self.ctx.template_sdk_overrides()),
         ) {
             Ok(()) => {
@@ -228,9 +225,7 @@ impl ComponentCommandHandler {
                     "Added",
                     format!(
                         "new app component {}",
-                        component_package_name
-                            .to_string_with_colon()
-                            .log_color_highlight()
+                        component_name.0.log_color_highlight()
                     ),
                 );
             }
@@ -412,33 +407,69 @@ impl ComponentCommandHandler {
 
     async fn cmd_update_workers(
         &self,
-        _component_name: Option<ComponentName>,
-        _update_mode: AgentUpdateMode,
-        _await_update: bool,
+        component_name: Option<ComponentName>,
+        update_mode: AgentUpdateMode,
+        await_update: bool,
     ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.update_workers_by_components(&components, update_mode, await_update)
             .await?;
 
         Ok(())
-        */
-        todo!()
     }
 
     async fn cmd_redeploy_workers(
         &self,
-        _component_name: Option<ComponentName>,
+        component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.redeploy_workers_by_components(&components).await?;
 
         Ok(())
-        */
-        todo!()
+    }
+
+    async fn components_for_deploy_args(
+        &self,
+        component_name: Option<ComponentName>,
+    ) -> anyhow::Result<Vec<ComponentDto>> {
+        let clients = self.ctx.golem_clients().await?;
+        let environment_handler = self.ctx.environment_handler();
+
+        let selected_component_names = self
+            .opt_select_components_by_app_dir_or_name(component_name.as_ref())
+            .await?;
+
+        let environment = environment_handler
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+
+        let mut components = Vec::with_capacity(selected_component_names.component_names.len());
+        for component_name in &selected_component_names.component_names {
+            match clients
+                .component
+                .get_deployment_component(
+                    &environment.environment_id.0,
+                    current_deployment.revision.into(),
+                    &component_name.0,
+                )
+                .await
+                .map_service_error_not_found_as_opt()?
+            {
+                Some(component) => {
+                    components.push(component);
+                }
+                None => {
+                    log_error(format!(
+                        "Component {} is not deployed!",
+                        component_name.0.log_color_highlight()
+                    ));
+                    bail!(NonSuccessfulExit);
+                }
+            }
+        }
+        Ok(components)
     }
 
     async fn cmd_diagnose(
@@ -943,6 +974,17 @@ impl ComponentCommandHandler {
 
         let component = app_ctx.application.component(component_name);
         let linked_wasm_path = component.final_linked_wasm();
+        let agent_types = {
+            if app_ctx.wit.is_agent(component_name) {
+                app_ctx
+                    .wit
+                    .get_extracted_agent_types(component_name, &linked_wasm_path)
+                    .await?
+            } else {
+                vec![]
+            }
+        };
+
         if !component.component_type().is_deployable() {
             bail!("Component {component_name} is not deployable");
         }
@@ -952,6 +994,7 @@ impl ComponentCommandHandler {
 
         Ok(ComponentDeployProperties {
             linked_wasm_path,
+            agent_types,
             files,
             dynamic_linking,
             env,
@@ -1001,7 +1044,7 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             metadata: diff::ComponentMetadata {
-                version: Some("TODO".to_string()), // TODO: atomic
+                version: Some("".to_string()), // TODO: atomic
                 env: properties
                     .env
                     .iter()
@@ -1028,15 +1071,11 @@ impl ComponentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let component_stager = ComponentStager::new(
-            self.ctx.clone(),
-            component_name,
-            component_deploy_properties,
-            None,
-        );
+        let component_stager =
+            ComponentStager::new(self.ctx.clone(), component_deploy_properties, None);
 
         let linked_wasm = component_stager.open_linked_wasm().await?;
-        let agent_types: Vec<AgentType> = component_stager.agent_types().await?;
+        let agent_types: Vec<AgentType> = component_stager.agent_types().clone();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let files = component_stager.all_files().await?;
@@ -1121,15 +1160,11 @@ impl ComponentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let component_stager = ComponentStager::new(
-            self.ctx.clone(),
-            &component.name,
-            component_deploy_properties,
-            Some(diff),
-        );
+        let component_stager =
+            ComponentStager::new(self.ctx.clone(), component_deploy_properties, Some(diff));
 
         let linked_wasm = component_stager.open_linked_wasm_if_changed().await?;
-        let agent_types = component_stager.agent_types_if_changed().await?;
+        let agent_types = component_stager.agent_types_if_changed().cloned();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let changed_files = component_stager.changed_files().await?;

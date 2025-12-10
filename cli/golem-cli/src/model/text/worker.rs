@@ -14,10 +14,11 @@
 
 use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
+use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -975,4 +976,44 @@ pub fn format_timestamp(timestamp: u64) -> String {
     } else {
         format!("{timestamp}") // Fallback to raw timestamp if conversion fails
     }
+}
+
+pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
+    format!(
+        "{}{}/{}",
+        match &worker_name_match.environment_reference() {
+            Some(environment_reference) => {
+                match environment_reference {
+                    EnvironmentReference::Environment { environment_name } => {
+                        format!("{}/", environment_name.0.blue().bold())
+                    }
+                    EnvironmentReference::ApplicationEnvironment {
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/",
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                    EnvironmentReference::AccountApplicationEnvironment {
+                        account_email,
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/{}/",
+                            account_email.blue().bold(),
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                }
+            }
+            None => "".to_string(),
+        },
+        worker_name_match.component_name.0.blue().bold(),
+        worker_name_match.worker_name.0.green().bold(),
+    )
 }

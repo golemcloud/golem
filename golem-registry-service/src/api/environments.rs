@@ -587,4 +587,53 @@ impl EnvironmentsApi {
             values: agent_types,
         }))
     }
+
+    /// Get a registered agent type in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/agent-types/:agent_type_name",
+        method = "get",
+        operation_id = "get_deployment_agent_type"
+    )]
+    async fn get_deployment_agent_type(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        agent_type_name: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<RegisteredAgentType>> {
+        let record = recorded_http_api_request!(
+            "get_deployment_agent_type",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+            agent_type_name = agent_type_name.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_deployment_agent_type_internal(
+                environment_id.0,
+                deployment_id.0,
+                agent_type_name.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_deployment_agent_type_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_id: DeploymentRevision,
+        agent_type_name: String,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<RegisteredAgentType>> {
+        let agent_type = self
+            .deployment_service
+            .get_deployment_agent_type(&environment_id, deployment_id, &agent_type_name, &auth)
+            .await?;
+        Ok(Json(agent_type))
+    }
 }

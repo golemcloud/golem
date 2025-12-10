@@ -176,7 +176,7 @@ mod local {
     use crate::services::agent_types::AgentTypesService;
     use crate::services::component::ComponentService;
     use async_trait::async_trait;
-    use golem_common::model::agent::RegisteredAgentType;
+    use golem_common::model::agent::{RegisteredAgentType, RegisteredAgentTypeImplementer};
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::Arc;
@@ -210,7 +210,10 @@ mod local {
                         .iter()
                         .map(|agent_type| RegisteredAgentType {
                             agent_type: agent_type.clone(),
-                            implemented_by: component.id,
+                            implemented_by: RegisteredAgentTypeImplementer {
+                                component_id: component.id,
+                                component_revision: component.revision,
+                            },
                         })
                         .collect::<Vec<_>>()
                 })

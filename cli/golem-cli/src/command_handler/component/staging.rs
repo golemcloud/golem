@@ -19,7 +19,7 @@ use crate::model::app::InitialComponentFile;
 use crate::model::component::ComponentDeployProperties;
 use anyhow::{anyhow, Context as AnyhowContext};
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentFileOptions, ComponentFilePath, ComponentName};
+use golem_common::model::component::{ComponentFileOptions, ComponentFilePath};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::diff;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -85,7 +85,6 @@ impl ChangedComponentFiles {
 
 pub struct ComponentStager<'a> {
     ctx: Arc<Context>,
-    component_name: &'a ComponentName,
     component_deploy_properties: &'a ComponentDeployProperties,
     diff: ComponentDiff,
 }
@@ -93,14 +92,12 @@ pub struct ComponentStager<'a> {
 impl<'a> ComponentStager<'a> {
     pub fn new(
         ctx: Arc<Context>,
-        component_name: &'a ComponentName,
         component_deploy_properties: &'a ComponentDeployProperties,
         // NOTE: none means ALL changed (e.g. new)
         diff: Option<&diff::DiffForHashOf<diff::Component>>,
     ) -> Self {
         Self {
             ctx,
-            component_name,
             component_deploy_properties,
             diff: match diff {
                 Some(diff::DiffForHashOf::HashDiff { .. }) | None => ComponentDiff::All,
@@ -227,29 +224,15 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
-    pub async fn agent_types(&self) -> anyhow::Result<Vec<AgentType>> {
-        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        let app_ctx = app_ctx.some_or_err_mut()?;
-        if app_ctx.wit.is_agent(self.component_name) {
-            let agent_types = app_ctx
-                .wit
-                .get_extracted_agent_types(
-                    self.component_name,
-                    &self.component_deploy_properties.linked_wasm_path,
-                )
-                .await?;
-
-            Ok(agent_types)
-        } else {
-            Ok(Vec::new())
-        }
+    pub fn agent_types(&self) -> &Vec<AgentType> {
+        &self.component_deploy_properties.agent_types
     }
 
-    pub async fn agent_types_if_changed(&self) -> anyhow::Result<Option<Vec<AgentType>>> {
+    pub fn agent_types_if_changed(&self) -> Option<&Vec<AgentType>> {
         if self.diff.agent_types_changed() {
-            Ok(Some(self.agent_types().await?))
+            Some(self.agent_types())
         } else {
-            Ok(None)
+            None
         }
     }
 

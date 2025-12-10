@@ -16,13 +16,16 @@ use crate::command::environment::EnvironmentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
+use crate::error::NonSuccessfulExit;
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
+use crate::model::text::fmt::log_error;
+use anyhow::bail;
 use golem_client::api::EnvironmentClient;
 use golem_client::model::EnvironmentCreation;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment::{EnvironmentCurrentDeploymentView, EnvironmentName};
 use std::sync::Arc;
 
 pub struct EnvironmentCommandHandler {
@@ -240,6 +243,22 @@ impl EnvironmentCommandHandler {
                 )
                 .await
                 .map_service_error(),
+        }
+    }
+
+    pub fn resolved_current_deployment<'a>(
+        &self,
+        environment: &'a ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<&'a EnvironmentCurrentDeploymentView> {
+        match environment.remote_environment.current_deployment.as_ref() {
+            Some(deployment) => Ok(deployment),
+            None => {
+                log_error(format!(
+                    "No deployment found for {}",
+                    environment.text_format()
+                ));
+                bail!(NonSuccessfulExit);
+            }
         }
     }
 }

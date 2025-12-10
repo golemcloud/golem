@@ -12,6 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::log::LogColorize;
+use crate::model::environment::{
+    EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
+};
+
+pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {
+    match &environment.source {
+        ResolvedEnvironmentIdentitySource::Reference(environment_reference) => {
+            match environment_reference {
+                EnvironmentReference::Environment { environment_name } => {
+                    format!(
+                        "{}/{}",
+                        environment.application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                EnvironmentReference::ApplicationEnvironment {
+                    application_name,
+                    environment_name,
+                } => {
+                    format!(
+                        "{}/{}",
+                        application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                EnvironmentReference::AccountApplicationEnvironment {
+                    account_email,
+                    application_name,
+                    environment_name,
+                } => {
+                    format!(
+                        "{}/{}/{}",
+                        account_email.log_color_highlight(),
+                        application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+            }
+        }
+        ResolvedEnvironmentIdentitySource::DefaultFromManifest => format!(
+            "{}/{}",
+            environment.application_name.0.log_color_highlight(),
+            environment.environment_name.0.log_color_highlight(),
+        ),
+    }
+}
+
 // TODO: atomic: port to env
 
 /*

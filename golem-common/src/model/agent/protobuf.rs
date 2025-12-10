@@ -2,8 +2,8 @@ use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
     ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
-    NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference,
-    TextSource, TextType, Url,
+    NamedElementValue, NamedElementValues, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    TextDescriptor, TextReference, TextSource, TextType, Url,
 };
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
@@ -656,6 +656,35 @@ impl From<DataValue> for golem_api_grpc::proto::golem::component::DataValue {
                     },
                 )),
             },
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplementer>
+    for RegisteredAgentTypeImplementer
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplementer,
+    ) -> Result<Self, Self::Error> {
+        Ok(RegisteredAgentTypeImplementer {
+            component_id: value
+                .component_id
+                .ok_or_else(|| "Missing component_id field".to_string())?
+                .try_into()?,
+            component_revision: value.component_revision.try_into()?,
+        })
+    }
+}
+
+impl From<RegisteredAgentTypeImplementer>
+    for golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplementer
+{
+    fn from(value: RegisteredAgentTypeImplementer) -> Self {
+        Self {
+            component_id: Some(value.component_id.into()),
+            component_revision: value.component_revision.into(),
         }
     }
 }
