@@ -202,24 +202,11 @@ pub trait WorkerCtx:
 ///passed to these functions.
 #[async_trait]
 pub trait FuelManagement {
-    /// Check if the worker is out of fuel
-    /// Arguments:
-    /// - `current_level`: The current fuel level, it can be compared with a pre-calculated minimum level
-    fn is_out_of_fuel(&self, current_level: u64) -> bool;
+    /// Borrows some fuel to continue execution. Returns false if not enough fuel is available to continue execution and true otherwise.
+    fn borrow_fuel(&mut self, current_level: u64) -> bool;
 
-    /// Borrows some fuel for the execution. The amount borrowed is not used by the execution engine,
-    /// but the worker context can store it and use it in `is_out_of_fuel` to check if the worker is
-    /// within the limits.
-    async fn borrow_fuel(&mut self, current_level: u64) -> Result<(), WorkerExecutorError>;
-
-    /// Same as `borrow_fuel` but synchronous as it is called from the epoch_deadline_callback.
-    /// This assumes that there is a cached available resource limits that can be used to calculate
-    /// borrow fuel without reaching out to external services.
-    fn borrow_fuel_sync(&mut self, current_level: u64);
-
-    /// Returns the remaining fuel that was previously borrowed. The remaining amount can be calculated
-    /// by the current fuel level and some internal state of the worker context.
-    async fn return_fuel(&mut self, current_level: u64) -> Result<u64, WorkerExecutorError>;
+    /// Returns the amount of fuel consumed since the last call to return_fuel.
+    fn return_fuel(&mut self, current_level: u64) -> u64;
 }
 
 /// The invocation management interface of a worker context is responsible for connecting
