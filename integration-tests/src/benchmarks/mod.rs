@@ -121,6 +121,7 @@ pub async fn invoke_and_await(
             Err(_) => {
                 // timeout
                 // not counting timeouts into the accumulated time
+                warn!("invocation for {worker_id} timed out");
                 panic!("timeout")
                 // user.deps.ensure_all_deps_running().await;
             }
