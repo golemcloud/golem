@@ -383,6 +383,8 @@ struct BarAgentImpl {
 #[agent_implementation]
 impl BarAgent for BarAgentImpl {
     fn new(opt_string: Option<String>) -> Self {
+        let _ = SingletonAgentClient::get();
+
         BarAgentImpl {
             _id: opt_string.unwrap_or_else(|| "default_id".to_string()),
         }
@@ -547,5 +549,23 @@ impl BarAgent for BarAgentImpl {
     fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
         input
     }
+}
 
+#[agent_definition]
+trait SingletonAgent {
+    fn new() -> Self;
+    fn get_value(&self) -> u32;
+}
+
+struct SingletonImpl{}
+
+#[agent_implementation]
+impl SingletonAgent for SingletonImpl {
+    fn new() -> Self {
+        SingletonImpl{}
+    }
+
+    fn get_value(&self) -> u32 {
+        42
+    }
 }
