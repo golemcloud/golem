@@ -1139,7 +1139,7 @@ pub mod worker {
             agent_type_name: Option<String>,
 
             /// Optional filter for a specific component
-            #[arg(long, conflicts_with = "component_name")]
+            #[arg(long, conflicts_with = "agent_type_name")]
             component_name: Option<ComponentName>,
 
             /// Filter for agent metadata in form of `property op value`.
