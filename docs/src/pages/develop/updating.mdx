@@ -13,7 +13,7 @@ The **automatic update** mode works as it is described in the general [Agents](/
 It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working. Future versions of Golem may also use the same snapshotting functions for optimizing recovery time of agents.
 
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         In TypeScript, all agents are inheriting the `BaseAgent` class. There are two methods in `BaseAgent` that can
         be overridden to implement snapshot saving and loading for an agent.

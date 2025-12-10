@@ -8,7 +8,7 @@ Golem agents are single threaded. To achieve parallel execution, it is possible 
 
 A simpler way is to use the **fork API**. The fork API consists of a single host function, defined as the following:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
 <Tabs.Tab>
 ```typescript
 declare module 'golem:api/host@1.1.7' {
@@ -61,7 +61,7 @@ Using this `fork` function from a component that was created from Golem's built-
 
 The following code snippet demonstrates calling `fork` and continuing on two different parallel branches based on its result value:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
   <Tabs.Tab>
   ```typescript
   import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
@@ -150,7 +150,7 @@ The high level idea is the following:
 The following code snippet demonstrates this pattern:
 
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
   <Tabs.Tab>
   ```typescript
   import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';

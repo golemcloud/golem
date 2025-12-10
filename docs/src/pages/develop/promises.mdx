@@ -10,7 +10,7 @@ When a promise is completed, an arbitrary byte array can be attached to it as a 
 
 ### Creating a promise
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         To create a promise simply call the `createPromise` function:
 
@@ -33,7 +33,7 @@ When a promise is completed, an arbitrary byte array can be attached to it as a 
 
 The returned value has the type `PromiseId`, and defined as the following (including the nested types):
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         ```typescript
         export type OplogIndex = bigint
@@ -98,7 +98,7 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
 To await a promise, use the async `awaitPromise` function, which returns the promise result as a byte array payload.
 Here's an example that awaits a promise, then decodes the payload from JSON format:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
     import { awaitPromise, PromiseId } from "@golemcloud/golem-ts-sdk"
@@ -126,7 +126,7 @@ Note that if an agent is only **awaiting** Golem promises (one or more), the age
 
 ### Completing a promise from within an agent
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     To complete a promise from within an agent, use the `completePromise` function.
     The following example completes a promise with a value encoded as JSON:

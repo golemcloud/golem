@@ -14,7 +14,7 @@ The simplest way to achieve this is to keep all the agent types that need to cal
 
 The first step of calling a remote agent is creating a _client_ for it by specifying which agent type it is and identifying the agent by providing values for its constructor parameters. If the agent identified by the parameters has not been existing yet, it is going to be created and its constructor is executed remotely. If it has been already created, the client just points to it and no action is taken until an _agent method_ is called using it.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
 
@@ -113,7 +113,7 @@ When using **agent ID*s (for example in APIs or the CLI), phantom IDs are append
 
 Phantom agents are created through Agent-to-Agent communication or [forking](forking.mdx). To create a new phantom agent via RPC, use the alternative client constructor method:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
   <Tabs.Tab>
   ```typescript
   const phantomAgent = WeatherAgent.newPhantom("London")
@@ -128,7 +128,7 @@ Phantom agents are created through Agent-to-Agent communication or [forking](for
 
 If we know the **phantom ID** of an agent, we can create a client targeting an existing phantom agent:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
   <Tabs.Tab>
   ```typescript
   const phantomAgent = WeatherAgent.newPhantom("London")
@@ -149,7 +149,7 @@ If we know the **phantom ID** of an agent, we can create a client targeting an e
 
 Once we have a _client_ for a remote agent, it is possible to call its methods just as if it would be a local instance.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
     const currentWeather = await weatherInLondon.currentWeather();
@@ -166,7 +166,7 @@ Once we have a _client_ for a remote agent, it is possible to call its methods j
 ## Triggering execution of an agent method
 It is possible to trigger the remote execution of an agent method without awaiting it. This is useful for spawning background tasks, for example.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the client:
 
@@ -190,7 +190,7 @@ It is possible to trigger the remote execution of an agent method without awaiti
 ### Scheduling an agent method
 An advanced case of triggering the execution of an agent method is to **schedule it** to be executed at a later time.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     Similar to `.trigger`, there is a `.schedule` method as well on each remote agent method in the client:
 

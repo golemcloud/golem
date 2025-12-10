@@ -6,7 +6,7 @@ import { Callout, Tabs } from "nextra/components"
 
 Golem's **command line interface** provides a set of predefined, Golem-specific **templates** to choose from as a starting point.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 To get started from scratch, first create a new application using the `TS` template:
 
@@ -35,7 +35,7 @@ golem component new
 
 Then create a new component using the chosen template:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 ```shell copy
 golem component new ts my:component
@@ -53,7 +53,7 @@ golem component new rust my:component
 
 Defining Golem agents is done using the Golem SDK, which is included in all the templates provided by `golem`.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 An agent is a TypeScript class that extends `BaseAgent` and has the `@agent` decorator:
 
@@ -104,7 +104,7 @@ Every agent must define a **constructor** with an arbitrary number of parameters
 
 For example, an agent working on a particular user's particular request could be defined as:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 ```typescript
 @agent()
@@ -148,7 +148,7 @@ This metadata is stored in the Golem component and can be used when exposing the
 
 The following example shows the use of how to attach these metadata to simple agent methods in different languages
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 ```typescript
 type TaskDetails = // ...;
@@ -201,7 +201,7 @@ Agent methods can be both sync or async.
 ### Supported data types
 The SDK supports a large variety of data types to be used in agent constructors and agent methods, both in parameter and return type position. When a type is not supported, it will report an error at compile time.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     In TypeScript most user-defined data type will work as expected. See the [page about data type mapping](/type-mapping) for more details.
     </Tabs.Tab>
@@ -216,7 +216,7 @@ Check the [page about data type mapping](/type-mapping) to learn how each type i
 ### Agent mode - durable or ephemeral
 By default every agent is **durable**. To define an **ephemeral agent**, override the agent mode in the agent definition:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
     @agent({ mode: 'ephemeral' })
@@ -248,7 +248,7 @@ In general Golem supports three different ways of doing this:
 
 ### Command line arguments and environment variables
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
 <Tabs.Tab>
 Command line arguments and environment variables are accessible through the `node:process` module:
 

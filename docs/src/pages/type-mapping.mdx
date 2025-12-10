@@ -8,7 +8,7 @@ The types used in the component's code are mapped to the types of Rib (WebAssemb
 
 This section describes how various types of the used programming language are mapping to types used by the Rib scripting language and the CLI invoke functions. These are WebAssembly component-model types, and their values are described using the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         The following TypeScript types are supported:
 
@@ -72,7 +72,7 @@ There are some special, Golem agent specific types that can be used in the agent
 ### Unstructured text
 Unstructured text is an arbitrary string, optionally annotated with a language code, that is either passed directly to/from the agent, or as an URL reference. The agent can optionally specify the set of supported language codes.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
     import {
@@ -170,7 +170,7 @@ Unstructured text is an arbitrary string, optionally annotated with a language c
 Unstructured binary data is similar to unstructured text, but it is annotated (and restricted by) MIME types.
 
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
     import {
@@ -263,7 +263,7 @@ There are three variants of multimodal values supported:
 * `MultimodalCustom<T>`, allowing to pass an arbitrary number of values which is either an unstructured text or binary or a user defined structured type `T`.
 * `MultimodalAdvanced<T>` , allowing to pass an arbitrary number of values of the user defined structured type `T`.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 
     ```typescript

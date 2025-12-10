@@ -10,7 +10,7 @@ It is guaranteed that this idempotency key will always be the same (per occurren
 
 To generate an idempotency key:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 ```typescript
 import { generateIdempotencyKey, Uuid } from "golem:api/host@1.1.7";
@@ -30,7 +30,7 @@ let key: Uuid = generate_idempotency_key();
 
 It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
     /**
@@ -102,7 +102,7 @@ Agent enumeration is a feature of Golem available both through the public HTTP A
 
 The following example demonstrates how to use the agent enumeration API:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 ```typescript
 import {
@@ -180,7 +180,7 @@ The third parameter of the `GetAgents` constructor enables `precise` mode. In th
 
 ### Update an agent
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
 
@@ -229,7 +229,7 @@ The `golem:durability` package contains an API that libraries can leverage to pr
 
 #### Types
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     The durability API can be imported from the `golem:durability/durability@1.2.1` module.
 
@@ -386,7 +386,7 @@ The logic to be implemented is the following, in pseudocode:
 
 
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 
 ```typescript
@@ -448,7 +448,7 @@ Golem associates an **invocation context** with each invocation, which contains 
 
 The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
 To get the current invocation context, use the `currentContext` host function, imported from `golem:api/context@1.1.7`:
 
@@ -556,7 +556,7 @@ Although Golem agents can store their state completely in their own memory, it i
 
 This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. The keys are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         There are two primary modules for using the key-value store:
         - `wasi:keyvalue/eventual@0.1.0` defines an API for an eventually consistent key-value store
@@ -759,7 +759,7 @@ This can be useful if state needs to be shared between different agents or if th
 
 The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. The blobs are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         The Blob Store API organizes blobs identified by _object names_ into **containers**. The `wasi:blobstore/blobstore` module exports functions to create, get and delete these containers by name:
 

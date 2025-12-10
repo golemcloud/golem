@@ -17,7 +17,7 @@ Many times external operations (such as HTTP calls to remote hosts) need to be e
 
 A **fallible transaction** only deals with domain errors. Within the transaction every operation that succeeds gets recorded. If an operation fails, all the recorded operations get compensated in reverse order before the transaction block returns with a failure.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         A fallible transaction can be executed using the `fallibleTransaction` function, by passing a closure that can
         execute operations on the open transaction (see below).
@@ -32,7 +32,7 @@ A **fallible transaction** only deals with domain errors. Within the transaction
 
 An infallible transaction must always succeed; in case of a failure or interruption, it gets retried. If there is a domain error, the compensation actions are executed before the retry.
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         An infallible transaction can be executed using the `infallibleTransaction` function, by passing a closure that
         can execute **operations** on the open transaction (see below).
@@ -49,7 +49,7 @@ Both transaction types require the definition of **operations**.
 
 It is defined with the following interface:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
         ```typescript
         /**
@@ -143,7 +143,7 @@ It is defined with the following interface:
 
 The defined operations can be executed in _fallible_ or _infallible_ mode:
 
-<Tabs items={["TypeScript", "Rust"]}>
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
     import { fallibleTransaction, infallibleTransaction, operation, Result } from "@golemcloud/golem-ts-sdk"
