@@ -15,6 +15,7 @@
 pub mod memory;
 pub mod redis;
 pub mod sqlite;
+pub mod multi_sqlite;
 
 use async_trait::async_trait;
 use bytes::Bytes;

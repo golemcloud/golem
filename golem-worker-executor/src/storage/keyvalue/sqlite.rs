@@ -20,7 +20,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::DBValue;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SqliteKeyValueStorage {
     pool: SqlitePool,
 }

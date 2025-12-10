@@ -22,12 +22,14 @@ use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_worker_executor::storage::keyvalue::memory::InMemoryKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use uuid::{uuid, Uuid};
 
@@ -124,11 +126,48 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
     }
 }
 
+struct MultiSqliteKeyValueStorageWrapper {
+    tempdirs: Arc<Mutex<Vec<TempDir>>>,
+}
+
+impl MultiSqliteKeyValueStorageWrapper {
+    fn new() -> Self {
+        Self {
+            tempdirs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl Debug for MultiSqliteKeyValueStorageWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MultiSqliteKeyValueStorageWrapper")
+    }
+}
+
+#[async_trait]
+impl GetKeyValueStorage for MultiSqliteKeyValueStorageWrapper {
+    async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().to_path_buf();
+        self.tempdirs.lock().unwrap().push(tempdir);
+
+        let kvs = MultiSqliteKeyValueStorage::new(&path, 10, true);
+        Arc::new(kvs)
+    }
+}
+
 #[test_dep(tagged_as = "sqlite")]
 async fn sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(SqliteKeyValueStorageWrapper)
+}
+
+#[test_dep(tagged_as = "multi_sqlite")]
+async fn multi_sqlite_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
+    Arc::new(MultiSqliteKeyValueStorageWrapper::new())
 }
 
 #[derive(Debug)]
@@ -171,7 +210,7 @@ fn ns2() -> Namespaces {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite");
+define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite");
 define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
 
 #[test]
