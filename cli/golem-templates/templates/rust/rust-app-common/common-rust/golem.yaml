@@ -11,6 +11,7 @@ componentTemplates:
           - src
           - ../../common-rust
           - Cargo.toml
+          - ../../Cargo.toml
           targets:
           - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
         - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
@@ -31,6 +32,7 @@ componentTemplates:
           - src
           - ../../common-rust
           - Cargo.toml
+          - ../../Cargo.toml
           targets:
           - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
         - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm

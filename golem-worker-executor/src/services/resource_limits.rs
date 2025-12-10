@@ -69,7 +69,7 @@ pub fn configured(
 #[derive(Debug, Clone)]
 pub struct CurrentResourceLimitsEntry {
     limits: CurrentResourceLimits,
-    delta: i128, // switched from i64 to i128
+    delta: i128,
 }
 
 /// The default ResourceLimits implementation
@@ -222,9 +222,13 @@ impl ResourceLimitsGrpc {
             .entry_async(*account_id)
             .await
             .and_modify(|entry| {
-                entry.limits.fuel = last_known_limits
-                    .fuel
-                    .saturating_sub(entry.delta.max(0) as u64);
+                if entry.delta > 0 {
+                    entry.limits.fuel = last_known_limits.fuel.saturating_sub(entry.delta as u64);
+                } else {
+                    entry.limits.fuel =
+                        last_known_limits.fuel.saturating_add((-entry.delta) as u64);
+                }
+
                 entry.limits.max_memory = last_known_limits.max_memory;
             })
             .or_insert(CurrentResourceLimitsEntry {
@@ -267,19 +271,21 @@ impl ResourceLimits for ResourceLimitsGrpc {
     }
 
     fn borrow_fuel_sync(&self, account_id: &AccountId, amount: u64) -> Option<u64> {
-        let mut borrowed = None;
+        tokio::task::block_in_place(|| {
+            let mut borrowed = None;
 
-        self.current_limits.update_sync(account_id, |_, entry| {
-            let available = entry.limits.fuel.min(amount);
-            if available > 0 {
-                entry.limits.fuel -= available;
-                entry.delta = entry.delta.saturating_add(available as i128);
-                record_fuel_borrow(available);
-            }
-            borrowed = Some(available);
-        });
+            self.current_limits.update_sync(account_id, |_, entry| {
+                let available = entry.limits.fuel.min(amount);
+                if available > 0 {
+                    entry.limits.fuel -= available;
+                    entry.delta = entry.delta.saturating_add(available as i128);
+                    record_fuel_borrow(available);
+                }
+                borrowed = Some(available);
+            });
 
-        borrowed
+            borrowed
+        })
     }
 
     async fn return_fuel(
