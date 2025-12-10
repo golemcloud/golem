@@ -146,28 +146,12 @@ async fn execute_agent_wrapper(
             ),
         );
 
-        let redirect = (!enabled!(Level::WARN))
-            .then(|| BufferRedirect::stderr().ok())
-            .flatten();
-
-        let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
-            wrapper_context,
-            wrapper_wasm_path.as_std_path(),
-        );
-
-        if result.is_err() {
-            if let Some(mut redirect) = redirect {
-                let mut output = Vec::new();
-                let read_result = redirect.read_to_end(&mut output);
-                drop(redirect);
-                read_result.expect("Failed to read stderr from moonbit redirect");
-                std::io::stderr()
-                    .write_all(output.as_slice())
-                    .expect("Failed to write captured moonbit stderr");
-            }
-        }
-
-        result
+        with_hidden_output_unless_error(|| {
+            crate::model::agent::moonbit::generate_moonbit_wrapper(
+                wrapper_context,
+                wrapper_wasm_path.as_std_path(),
+            )
+        })
     })())
 }
 
@@ -252,10 +236,12 @@ async fn execute_inject_to_prebuilt_quick_js(
                 );
                 let _indent = LogIndent::new();
 
-                moonbit_component_generator::get_script::generate_get_script_component(
-                    &js_module_contents,
-                    &js_module_wasm,
-                )?;
+                with_hidden_output_unless_error(|| {
+                    moonbit_component_generator::get_script::generate_get_script_component(
+                        &js_module_contents,
+                        &js_module_wasm,
+                    )
+                })?;
 
                 commands::composition::compose(
                     base_wasm.as_std_path(),
@@ -660,4 +646,29 @@ impl CommandExt for Command {
             .await
             .with_context(|| format!("Failed to execute {command_name}"))
     }
+}
+
+fn with_hidden_output_unless_error<F, R>(f: F) -> anyhow::Result<R>
+where
+    F: FnOnce() -> anyhow::Result<R>,
+{
+    let redirect = (!enabled!(Level::WARN))
+        .then(|| BufferRedirect::stderr().ok())
+        .flatten();
+
+    let result = f();
+
+    if result.is_err() {
+        if let Some(mut redirect) = redirect {
+            let mut output = Vec::new();
+            let read_result = redirect.read_to_end(&mut output);
+            drop(redirect);
+            read_result.expect("Failed to read stderr from moonbit redirect");
+            std::io::stderr()
+                .write_all(output.as_slice())
+                .expect("Failed to write captured moonbit stderr");
+        }
+    }
+
+    result
 }

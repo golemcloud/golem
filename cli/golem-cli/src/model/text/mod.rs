@@ -17,6 +17,7 @@ pub mod agent;
 pub mod http_api_security;
 // TODO: atomic: pub mod certificate;
 pub mod component;
+pub mod deployment;
 pub mod diff;
 pub mod environment;
 pub mod fmt;
