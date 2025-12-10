@@ -856,7 +856,7 @@ impl WorkerCommandHandler {
                     .ctx
                     .component_handler()
                     .get_latest_deployed_server_component_by_name(
-                        &environment,
+                        environment,
                         &component.component_name,
                     )
                     .await?
@@ -1349,7 +1349,7 @@ impl WorkerCommandHandler {
                 log_action("Triggered update", "");
 
                 if await_update {
-                    self.await_update_result(&component_id, worker_name, target_revision)
+                    self.await_update_result(component_id, worker_name, target_revision)
                         .await?;
                 }
 
