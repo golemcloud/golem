@@ -243,7 +243,7 @@ async fn postgres_print_stats(info: &PostgresInfo) {
     let connection_options = info.to_connect_options();
 
     if let Ok(mut conn) = connection_options.connect().await {
-        let r = sqlx::query("SELECT calls, mean_exec_time, query FROM pg_stat_statements ORDER BY calls DESC LIMIT 10;")
+        let r = sqlx::query("SELECT calls, mean_exec_time, query FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;")
             .fetch_all(&mut conn)
             .await;
         match r {
