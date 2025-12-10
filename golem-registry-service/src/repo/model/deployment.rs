@@ -364,7 +364,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub agent_type_name: String,
 
     pub component_id: Uuid,
-    pub component_revision: i64,
+    pub component_revision_id: i64,
     pub agent_type: Blob<AgentType>,
 }
 
@@ -379,7 +379,7 @@ impl DeploymentRegisteredAgentTypeRecord {
             deployment_revision_id: deployment_revision.into(),
             agent_type_name: registered_agent_type.agent_type.type_name.clone(),
             component_id: registered_agent_type.implemented_by.component_id.0,
-            component_revision: registered_agent_type
+            component_revision_id: registered_agent_type
                 .implemented_by
                 .component_revision
                 .into(),
@@ -394,7 +394,7 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
         Ok(Self {
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
-                component_revision: value.component_revision.try_into()?,
+                component_revision: value.component_revision_id.try_into()?,
             },
             agent_type: value.agent_type.into_value(),
         })

@@ -814,6 +814,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.agent_type_name,
                         r.component_id,
+                        r.component_revision_id,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
@@ -839,6 +840,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.agent_type_name,
                         r.component_id,
+                        r.component_revision_id,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
@@ -863,6 +865,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.agent_type_name,
                         r.component_id,
+                        r.component_revision_id,
                         r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -889,6 +892,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.agent_type_name,
                         r.component_id,
+                        r.component_revision_id,
                         r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -1234,13 +1238,14 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO deployment_registered_agent_types
-                    (environment_id, deployment_revision_id, agent_type_name, component_id, agent_type)
-                VALUES ($1, $2, $3, $4, $5)
+                    (environment_id, deployment_revision_id, agent_type_name, component_id, component_revision_id, agent_type)
+                VALUES ($1, $2, $3, $4, $5, $6)
             "#})
                 .bind(registered_agent_type.environment_id)
                 .bind(registered_agent_type.deployment_revision_id)
                 .bind(&registered_agent_type.agent_type_name)
                 .bind(registered_agent_type.component_id)
+                .bind(registered_agent_type.component_revision_id)
                 .bind(&registered_agent_type.agent_type)
         )
             .await?;
