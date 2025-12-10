@@ -875,7 +875,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_registered_agent_types r
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
-                    WHERE cd.environment_id = $1 AND (r.agent_type_name = $2 OR r.wrapper_agent_wrapper_type_name = $2)
+                    WHERE cd.environment_id = $1 AND (r.agent_type_name = $2 OR r.agent_wrapper_type_name = $2)
                 "#})
                 .bind(environment_id)
                 .bind(agent_type_name)
