@@ -174,25 +174,35 @@ impl AccountUsageService {
         let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
             auth.authorize_account_action(&account_id, AccountAction::UpdateUsage)?;
-
-            let mut account_usage = match self
+            match self
                 .get_account_usage(&account_id, Some(UsageType::MonthlyGasLimit))
                 .await
             {
-                Ok(value) => value,
-                Err(AccountUsageError::AccountNotfound(_)) => continue,
+                Ok(mut account_usage) => {
+                    // fuel usage is allowed to exceeded the montly limit slightly.
+                    // The worker executor will stop the worker at the next opportunity.
+                    account_usage.add_change(UsageType::MonthlyGasLimit, update);
+
+                    tracing::debug!(
+                        "Updating monthly fuel consumption for account {account_id}: {update}"
+                    );
+
+                    self.account_usage_repo.add(&account_usage).await?;
+                    limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
+                }
+                Err(AccountUsageError::AccountNotfound(_)) => {
+                    // we received an update for a deleted account
+                    // return an empty set of limits to fence the executor more quickly
+                    limits_of_updates_accounts.insert(
+                        account_id,
+                        ResourceLimits {
+                            available_fuel: 0,
+                            max_memory_per_worker: 0,
+                        },
+                    );
+                }
                 Err(other) => return Err(other),
             };
-
-            // fuel usage is allowed to exceeded the montly limit slightly.
-            // The worker executor will stop the worker at the next opportunity.
-            account_usage.add_change(UsageType::MonthlyGasLimit, update);
-
-            tracing::debug!("Updating monthly fuel consumption for account {account_id}: {update}");
-
-            self.account_usage_repo.add(&account_usage).await?;
-
-            limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
         }
         Ok(AccountResourceLimits(limits_of_updates_accounts))
     }
