@@ -152,7 +152,10 @@ impl FuelManagement for Context {
                 self.min_fuel_level = self.min_fuel_level.saturating_sub(amount);
                 debug!("borrowed {} fuel from {}", amount, self.account_id);
             }
-            None => panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
+            None => {
+                tracing::warn!("here");
+                panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
+            }
         }
     }
 

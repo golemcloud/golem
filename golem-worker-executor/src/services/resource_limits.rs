@@ -274,19 +274,21 @@ impl ResourceLimits for ResourceLimitsGrpc {
     }
 
     fn borrow_fuel_sync(&self, account_id: &AccountId, amount: u64) -> Option<u64> {
-        let mut borrowed = None;
+        tokio::task::block_in_place(|| {
+            let mut borrowed = None;
 
-        self.current_limits.update_sync(account_id, |_, entry| {
-            let available = entry.limits.fuel.min(amount);
-            if available > 0 {
-                entry.limits.fuel -= available;
-                entry.delta = entry.delta.saturating_add(available as i128);
-                record_fuel_borrow(available);
-            }
-            borrowed = Some(available);
-        });
+            self.current_limits.update_sync(account_id, |_, entry| {
+                let available = entry.limits.fuel.min(amount);
+                if available > 0 {
+                    entry.limits.fuel -= available;
+                    entry.delta = entry.delta.saturating_add(available as i128);
+                    record_fuel_borrow(available);
+                }
+                borrowed = Some(available);
+            });
 
-        borrowed
+            borrowed
+        })
     }
 
     async fn return_fuel(
