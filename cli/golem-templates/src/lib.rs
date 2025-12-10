@@ -427,7 +427,7 @@ fn transform(
             .replace("    # golem-app-manifest-dep-env-vars-doc", dep_env_vars_doc())
             .replace("    # golem-app-manifest-deps-doc", deps_doc())
             .replace("    # golem-app-manifest-env-presets",
-                     "    # TODO: atomic\n"
+                     "", // "    # TODO: atomic\n"
             )
     };
 

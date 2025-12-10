@@ -17,10 +17,12 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
+use crate::log::logln;
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::fmt::log_error;
+use crate::model::text::fmt::{log_error, log_text_view};
+use crate::model::text::help::EnvironmentNameHelp;
 use anyhow::bail;
 use golem_client::api::EnvironmentClient;
 use golem_client::model::EnvironmentCreation;
@@ -42,7 +44,6 @@ impl EnvironmentCommandHandler {
         todo!()
     }
 
-    // TODO: atomic: recheck if and when we need to cache this
     pub async fn resolve_environment(
         &self,
         mode: EnvironmentResolveMode,
@@ -52,47 +53,33 @@ impl EnvironmentCommandHandler {
                 self.resolve_environment_reference(mode, environment_reference)
                     .await
             }
-            None => {
-                match self.ctx.manifest_environment() {
-                    Some(env) => {
-                        let application = self
-                            .ctx
-                            .app_handler()
-                            .get_or_create_remote_application()
-                            .await?;
+            None => match self.ctx.manifest_environment() {
+                Some(env) => {
+                    let application = self
+                        .ctx
+                        .app_handler()
+                        .get_or_create_remote_application()
+                        .await?;
 
-                        match application {
-                            Some(application) => {
-                                let environment = self
-                                    .get_or_create_remote_environment(
-                                        &application.id,
-                                        &env.environment_name,
-                                    )
-                                    .await?;
-                                Ok(ResolvedEnvironmentIdentity::new(
-                                    None,
-                                    application,
-                                    environment,
-                                ))
-                            }
-                            None => {
-                                // TODO: atomic: show error about
-                                //       - using an app manifest
-                                //       - using flags
-                                //       - using ENV VARS
-                                todo!()
-                            }
+                    match application {
+                        Some(application) => {
+                            let environment = self
+                                .get_or_create_remote_environment(
+                                    &application.id,
+                                    &env.environment_name,
+                                )
+                                .await?;
+                            Ok(ResolvedEnvironmentIdentity::new(
+                                None,
+                                application,
+                                environment,
+                            ))
                         }
-                    }
-                    None => {
-                        // TODO: atomic: show error about
-                        //       - using an app manifest
-                        //       - using flags
-                        //       - using ENV VARS
-                        todo!()
+                        None => self.manifest_is_required_error(mode)?,
                     }
                 }
-            }
+                None => self.manifest_is_required_error(mode)?,
+            },
         }
     }
 
@@ -102,8 +89,10 @@ impl EnvironmentCommandHandler {
         environment_reference: &EnvironmentReference,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
         if !mode.allowed(environment_reference) {
-            // TODO: atomic: message about manifest etc.
-            todo!()
+            log_error("The requested command requires using an application manifest environment.");
+            logln("");
+            log_text_view(&EnvironmentNameHelp);
+            bail!(NonSuccessfulExit);
         }
 
         match environment_reference {
@@ -127,13 +116,7 @@ impl EnvironmentCommandHandler {
                             environment,
                         ))
                     }
-                    None => {
-                        // TODO: atomic: show error about
-                        //       - using an app manifest
-                        //       - using flags
-                        //       - using ENV VARS
-                        todo!()
-                    }
+                    None => self.manifest_is_required_error(mode)?,
                 }
             }
             // NOTE: with app-env references we DO NOT create anything, these are used for
@@ -163,13 +146,7 @@ impl EnvironmentCommandHandler {
                             environment,
                         ))
                     }
-                    None => {
-                        // TODO: atomic: show error about
-                        //       - using an app manifest
-                        //       - using flags
-                        //       - using ENV VARS
-                        todo!()
-                    }
+                    None => self.manifest_is_required_error(mode)?,
                 }
             }
             EnvironmentReference::AccountApplicationEnvironment { .. } => {
@@ -260,5 +237,21 @@ impl EnvironmentCommandHandler {
                 bail!(NonSuccessfulExit);
             }
         }
+    }
+
+    fn manifest_is_required_error<T>(&self, mode: EnvironmentResolveMode) -> anyhow::Result<T> {
+        match mode {
+            EnvironmentResolveMode::ManifestOnly => {
+                log_error(
+                    "The requested command requires using an application manifest environment.",
+                );
+            }
+            EnvironmentResolveMode::Any => {
+                log_error("The requested command requires using an application manifest or selection of an environment via flags or environment variables.");
+            }
+        }
+        logln("");
+        log_text_view(&EnvironmentNameHelp);
+        bail!(NonSuccessfulExit);
     }
 }
