@@ -362,6 +362,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub agent_type_name: String,
+    pub agent_wrapper_type_name: String,
 
     pub component_id: Uuid,
     pub component_revision_id: i64,
@@ -378,6 +379,7 @@ impl DeploymentRegisteredAgentTypeRecord {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
             agent_type_name: registered_agent_type.agent_type.type_name.clone(),
+            agent_wrapper_type_name: registered_agent_type.agent_type.wrapper_type_name(),
             component_id: registered_agent_type.implemented_by.component_id.0,
             component_revision_id: registered_agent_type
                 .implemented_by

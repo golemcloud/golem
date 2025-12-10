@@ -689,7 +689,13 @@ impl WorkerCommandHandler {
                 };
 
                 let mut filters = filters;
-                filters.insert(0, format!("name startswith {agent_type_name}("));
+                filters.insert(
+                    0,
+                    format!(
+                        "name startswith {}(",
+                        agent_type.agent_type.wrapper_type_name()
+                    ),
+                );
 
                 (
                     vec![
