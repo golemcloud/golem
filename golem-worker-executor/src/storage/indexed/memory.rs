@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
+};
 use async_trait::async_trait;
+use golem_common::model::WorkerId;
+use regex::Regex;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
 use std::time::Duration;
@@ -37,7 +41,55 @@ impl InMemoryIndexedStorage {
     }
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
-        format!("{namespace:?}/{key}")
+        match namespace {
+            IndexedStorageNamespace::OpLog {
+                worker_id:
+                    WorkerId {
+                        component_id,
+                        worker_name,
+                    },
+            } => format!("oplog/{component_id}/{worker_name}/{key}"),
+            IndexedStorageNamespace::CompressedOpLog {
+                worker_id:
+                    WorkerId {
+                        component_id,
+                        worker_name,
+                    },
+                level,
+            } => format!("compressed-oplog/{level}/{component_id}/{worker_name}/{key}"),
+        }
+    }
+
+    fn match_key(
+        namespace: IndexedStorageMetaNamespace,
+        prefix: &str,
+    ) -> Box<dyn Fn(&str) -> Option<String> + Send + Sync> {
+        match namespace {
+            IndexedStorageMetaNamespace::Oplog => {
+                let pattern: String =
+                    format!(r"^oplog/([^/]+)/([^/]+)/({}.+)$", regex::escape(prefix));
+                let regex = Regex::new(&pattern).unwrap();
+
+                Box::new(move |key| {
+                    regex
+                        .captures(key)
+                        .map(|caps| caps.get(3).unwrap().as_str().to_string())
+                })
+            }
+            IndexedStorageMetaNamespace::CompressedOplog { level } => {
+                let pattern: String = format!(
+                    r"^compressed-oplog/{level}/([^/]+)/([^/]+)/({}.+)$",
+                    regex::escape(prefix)
+                );
+                let regex = Regex::new(&pattern).unwrap();
+
+                Box::new(move |key| {
+                    regex
+                        .captures(key)
+                        .map(|caps| caps.get(3).unwrap().as_str().to_string())
+                })
+            }
+        }
     }
 }
 
@@ -76,31 +128,32 @@ impl IndexedStorage for InMemoryIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: IndexedStorageMetaNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
         let mut result = Vec::new();
-        let composite_pattern = Self::composite_key(namespace.clone(), pattern);
-        let composite_prefix = Self::composite_key(namespace, "");
 
-        if composite_pattern.ends_with('*')
-            && !composite_pattern[0..composite_pattern.len() - 1].contains('*')
-        {
-            let prefix = &composite_pattern[0..composite_pattern.len() - 1];
+        if pattern.ends_with('*') && !pattern[0..pattern.len() - 1].contains('*') {
+            let key_prefix = &pattern[0..pattern.len() - 1];
+            let matcher = Self::match_key(namespace, key_prefix);
             let mut idx = 0;
             let mut has_more = false;
 
             self.data
                 .iter_async(|key, _| {
                     idx += 1;
-                    if idx > cursor && key.starts_with(prefix) {
-                        result.push(key[composite_prefix.len()..].to_string());
+                    if idx > cursor {
+                        if let Some(matched) = matcher(key) {
+                            result.push(matched);
 
-                        if (result.len() as u64) == count {
-                            has_more = true;
-                            false
+                            if (result.len() as u64) == count {
+                                has_more = true;
+                                false
+                            } else {
+                                true
+                            }
                         } else {
                             true
                         }
@@ -279,6 +332,15 @@ mod tests {
 
     use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
     use assert2::check;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::WorkerId;
+
+    fn test_worker_id() -> WorkerId {
+        WorkerId {
+            component_id: ComponentId::new(),
+            worker_name: "worker".to_string(),
+        }
+    }
 
     #[test]
     async fn closest_exact_match() {
@@ -286,21 +348,55 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 1, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 2, &200)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 3, &300)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 4, &400)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            1,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            2,
+            &200,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            3,
+            &300,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            4,
+            &400,
+        )
+        .await
+        .unwrap();
 
         let result = api
-            .closest(IndexedStorageNamespace::OpLog, key, 3)
+            .closest(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+                3,
+            )
             .await
             .unwrap();
 
@@ -313,21 +409,55 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 1, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 2, &200)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 3, &300)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 4, &400)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            1,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            2,
+            &200,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            3,
+            &300,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            4,
+            &400,
+        )
+        .await
+        .unwrap();
 
         let result: Option<(u64, i32)> = api
-            .closest(IndexedStorageNamespace::OpLog, key, 5)
+            .closest(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+                5,
+            )
             .await
             .unwrap();
 
@@ -340,21 +470,55 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 30, &300)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 40, &400)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            10,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            20,
+            &200,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            30,
+            &300,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            40,
+            &400,
+        )
+        .await
+        .unwrap();
 
         let result = api
-            .closest(IndexedStorageNamespace::OpLog, key, 33) // 40 is the closest that is <= 33
+            .closest(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+                33,
+            ) // 40 is the closest that is <= 33
             .await
             .unwrap();
 
@@ -367,21 +531,56 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 30, &300)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 40, &400)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            10,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            20,
+            &200,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            30,
+            &300,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            40,
+            &400,
+        )
+        .await
+        .unwrap();
 
         let result = api
-            .read(IndexedStorageNamespace::OpLog, key, 20, 40)
+            .read(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+                20,
+                40,
+            )
             .await
             .unwrap();
 
@@ -394,21 +593,56 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 30, &300)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 40, &400)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            10,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            20,
+            &200,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            30,
+            &300,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            40,
+            &400,
+        )
+        .await
+        .unwrap();
 
         let result = api
-            .read(IndexedStorageNamespace::OpLog, key, 1, 100)
+            .read(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+                1,
+                100,
+            )
             .await
             .unwrap();
 
@@ -421,15 +655,34 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            10,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            20,
+            &200,
+        )
+        .await
+        .unwrap();
 
         let result = api
-            .first(IndexedStorageNamespace::OpLog, key)
+            .first(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+            )
             .await
             .unwrap();
 
@@ -442,14 +695,36 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            10,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            20,
+            &200,
+        )
+        .await
+        .unwrap();
 
-        let result = api.last(IndexedStorageNamespace::OpLog, key).await.unwrap();
+        let result = api
+            .last(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+            )
+            .await
+            .unwrap();
 
         check!(result == Some((20, 200)));
     }
@@ -460,27 +735,68 @@ mod tests {
         let api = storage.with_entity("test", "test", "test");
         let key = "key";
 
-        api.append(IndexedStorageNamespace::OpLog, key, 1, &100)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 2, &200)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 3, &300)
-            .await
-            .unwrap();
-        api.append(IndexedStorageNamespace::OpLog, key, 4, &400)
-            .await
-            .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            1,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            2,
+            &200,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            3,
+            &300,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                worker_id: test_worker_id(),
+            },
+            key,
+            4,
+            &400,
+        )
+        .await
+        .unwrap();
 
         storage
             .with("test", "test")
-            .drop_prefix(IndexedStorageNamespace::OpLog, key, 2)
+            .drop_prefix(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+                2,
+            )
             .await
             .unwrap();
 
         let result = api
-            .read(IndexedStorageNamespace::OpLog, key, 1, 4)
+            .read(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: test_worker_id(),
+                },
+                key,
+                1,
+                4,
+            )
             .await
             .unwrap();
 

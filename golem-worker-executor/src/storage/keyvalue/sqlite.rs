@@ -93,8 +93,8 @@ impl SqliteKeyValueStorage {
 
     fn namespace(ns: KeyValueStorageNamespace) -> String {
         match ns {
-            KeyValueStorageNamespace::Worker => "worker".to_string(),
-            KeyValueStorageNamespace::Promise => "promise".to_string(),
+            KeyValueStorageNamespace::Worker { .. } => "worker".to_string(),
+            KeyValueStorageNamespace::Promise { .. } => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {
                 environment_id,
@@ -102,6 +102,7 @@ impl SqliteKeyValueStorage {
             } => {
                 format!("user-defined:{environment_id}:{bucket}")
             }
+            KeyValueStorageNamespace::RunningWorkers => "running-workers".to_string(),
         }
     }
 }

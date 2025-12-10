@@ -15,7 +15,7 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
+use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace};
 use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentId;
@@ -170,7 +170,7 @@ impl OplogService for PrimaryOplogService {
         let already_exists: bool = self
             .indexed_storage
             .with("oplog", "create")
-            .exists(IndexedStorageNamespace::OpLog, &key)
+            .exists(IndexedStorageNamespace::OpLog { worker_id: owned_worker_id.worker_id() }, &key)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to check if oplog exists for worker {owned_worker_id} in indexed storage: {err}")
@@ -182,7 +182,7 @@ impl OplogService for PrimaryOplogService {
 
         self.indexed_storage
             .with_entity("oplog", "create", "entry")
-            .append(IndexedStorageNamespace::OpLog, &key, 1, &initial_entry)
+            .append(IndexedStorageNamespace::OpLog { worker_id: owned_worker_id.worker_id() }, &key, 1, &initial_entry)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -236,7 +236,7 @@ impl OplogService for PrimaryOplogService {
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("oplog", "get_last_index", "entry")
-                .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
+                .last_id(IndexedStorageNamespace::OpLog { worker_id: owned_worker_id.worker_id.clone() }, &Self::oplog_key(&owned_worker_id.worker_id))
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -253,7 +253,9 @@ impl OplogService for PrimaryOplogService {
         self.indexed_storage
             .with("oplog", "delete")
             .delete(
-                IndexedStorageNamespace::OpLog,
+                IndexedStorageNamespace::OpLog {
+                    worker_id: owned_worker_id.worker_id(),
+                },
                 &Self::oplog_key(&owned_worker_id.worker_id),
             )
             .await
@@ -275,7 +277,9 @@ impl OplogService for PrimaryOplogService {
         self.indexed_storage
             .with_entity("oplog", "read", "entry")
             .read(
-                IndexedStorageNamespace::OpLog,
+                IndexedStorageNamespace::OpLog {
+                    worker_id: owned_worker_id.worker_id(),
+                },
                 &Self::oplog_key(&owned_worker_id.worker_id),
                 idx.into(),
                 idx.range_end(n).into(),
@@ -296,7 +300,7 @@ impl OplogService for PrimaryOplogService {
 
         self.indexed_storage
             .with("oplog", "exists")
-            .exists(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
+            .exists(IndexedStorageNamespace::OpLog { worker_id: owned_worker_id.worker_id.clone() }, &Self::oplog_key(&owned_worker_id.worker_id))
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to check if oplog exists for worker {owned_worker_id} in indexed storage: {err}")
@@ -316,7 +320,7 @@ impl OplogService for PrimaryOplogService {
             .indexed_storage
             .with("oplog", "scan")
             .scan(
-                IndexedStorageNamespace::OpLog,
+                IndexedStorageMetaNamespace::Oplog,
                 &Self::key_pattern(component_id),
                 cursor.cursor,
                 count,
@@ -503,7 +507,13 @@ impl PrimaryOplogState {
         let pairs_ref: Vec<(u64, &OplogEntry)> = pairs.iter().map(|(id, e)| (*id, e)).collect();
         self.indexed_storage
             .with_entity("oplog", "append", "entry")
-            .append_many(IndexedStorageNamespace::OpLog, &self.key, &pairs_ref)
+            .append_many(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: self.owned_worker_id.worker_id(),
+                },
+                &self.key,
+                &pairs_ref,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -582,7 +592,9 @@ impl PrimaryOplogState {
             .indexed_storage
             .with_entity("oplog", "read", "entry")
             .read(
-                IndexedStorageNamespace::OpLog,
+                IndexedStorageNamespace::OpLog {
+                    worker_id: self.owned_worker_id.worker_id(),
+                },
                 &self.key,
                 oplog_index.into(),
                 oplog_index.into(),
@@ -615,7 +627,7 @@ impl PrimaryOplogState {
             .indexed_storage
             .with_entity("oplog", "read", "entry")
             .read(
-                IndexedStorageNamespace::OpLog,
+                IndexedStorageNamespace::OpLog { worker_id: self.owned_worker_id.worker_id() },
                 &self.key,
                 oplog_index.into(),
                 last_idx.into(),
@@ -654,7 +666,9 @@ impl PrimaryOplogState {
         self.indexed_storage
             .with("oplog", "drop_prefix")
             .drop_prefix(
-                IndexedStorageNamespace::OpLog,
+                IndexedStorageNamespace::OpLog {
+                    worker_id: self.owned_worker_id.worker_id(),
+                },
                 &self.key,
                 last_dropped_id.into(),
             )
@@ -672,7 +686,12 @@ impl PrimaryOplogState {
 
         self.indexed_storage
             .with("oplog", "length")
-            .length(IndexedStorageNamespace::OpLog, &self.key)
+            .length(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: self.owned_worker_id.worker_id(),
+                },
+                &self.key,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -687,7 +706,12 @@ impl PrimaryOplogState {
 
         self.indexed_storage
             .with("oplog", "delete")
-            .delete(IndexedStorageNamespace::OpLog, &self.key)
+            .delete(
+                IndexedStorageNamespace::OpLog {
+                    worker_id: self.owned_worker_id.worker_id(),
+                },
+                &self.key,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!(

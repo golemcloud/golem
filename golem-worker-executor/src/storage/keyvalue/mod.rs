@@ -22,6 +22,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
+use golem_common::model::WorkerId;
 
 #[async_trait]
 pub trait KeyValueStorage: Debug {
@@ -619,10 +620,16 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
     }
 }
 
+/// Various namespaces for key-value storage
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum KeyValueStorageNamespace {
-    Worker,
-    Promise,
+    RunningWorkers,
+    Worker {
+        worker_id: WorkerId
+    },
+    Promise {
+        worker_id: WorkerId
+    },
     Schedule,
     UserDefined {
         environment_id: EnvironmentId,
