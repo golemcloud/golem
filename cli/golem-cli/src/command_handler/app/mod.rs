@@ -39,12 +39,12 @@ use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::{ApplicationClient, EnvironmentClient};
+use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
-use golem_common::model::deployment::DeploymentVersion;
+use golem_common::model::deployment::{CurrentDeployment, DeploymentVersion};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -54,7 +54,7 @@ use golem_templates::model::{
     ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
 };
 use itertools::Itertools;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -122,7 +122,7 @@ impl AppCommandHandler {
 
     async fn cmd_new(
         &self,
-        application_name: Option<String>,
+        application_name: Option<ApplicationName>,
         languages: Vec<GuestLanguage>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -171,7 +171,7 @@ impl AppCommandHandler {
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
         }
 
-        let app_dir = PathBuf::from(&application_name);
+        let app_dir = PathBuf::from(&application_name.0);
         if app_dir.exists() {
             bail!(
                 "Application directory already exists: {}",
@@ -188,7 +188,7 @@ impl AppCommandHandler {
             ),
         );
 
-        let application_name = TemplateApplicationName::from(application_name);
+        let application_name = TemplateApplicationName::from(application_name.0);
 
         if components.is_empty() {
             let common_templates = languages
@@ -228,15 +228,10 @@ impl AppCommandHandler {
                 }
             }
         } else {
-            for (template, component_package_name) in &components {
+            for (template, component_name) in &components {
                 log_action(
                     "Adding",
-                    format!(
-                        "component {}",
-                        component_package_name
-                            .to_string_with_colon()
-                            .log_color_highlight()
-                    ),
+                    format!("component {}", component_name.0.log_color_highlight()),
                 );
                 let (common_template, component_template) =
                     self.get_template(template, self.ctx.dev_mode())?;
@@ -245,7 +240,8 @@ impl AppCommandHandler {
                     Some(component_template),
                     &app_dir,
                     &application_name,
-                    component_package_name,
+                    &PackageName::from_string(component_name.0.clone())
+                        .expect("Failed to parse component name."),
                     Some(self.ctx.template_sdk_overrides()),
                 ) {
                     Ok(()) => {
@@ -253,9 +249,7 @@ impl AppCommandHandler {
                             "Added",
                             format!(
                                 "new app component {}",
-                                component_package_name
-                                    .to_string_with_colon()
-                                    .log_color_highlight()
+                                component_name.0.log_color_highlight()
                             ),
                         );
                     }
@@ -431,26 +425,30 @@ impl AppCommandHandler {
     }
 
     async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
-        // TODO: atomic: missing client method
-        /*
-        let project = self
+        let environment_handler = self.ctx.environment_handler();
+
+        let environment = environment_handler
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+
+        let agent_types = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(None)
-            .await?;
+            .golem_clients()
+            .await?
+            .environment
+            .list_deployment_agent_types(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.into(),
+            )
+            .await
+            .map_service_error()?
+            .values;
 
-        let clients = self.ctx.golem_clients().await?;
-        let result = clients
-            .agent_types
-            .get_all_agent_types(project.as_ref().map(|p| &p.project_id.0))
-            .todo: map svc err
-            .await?;
-
-        self.ctx.log_handler().log_view(&result);
+        self.ctx.log_handler().log_view(&agent_types);
 
         Ok(())
-        */
-        todo!()
     }
 
     async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
@@ -528,7 +526,8 @@ impl AppCommandHandler {
             return Ok(());
         }
 
-        self.apply_staged_changes_to_environment(&deploy_diff)
+        let current_deployment = self
+            .apply_staged_changes_to_environment(&deploy_diff)
             .await?;
 
         if config.deploy_args.is_any_set() {
@@ -539,7 +538,10 @@ impl AppCommandHandler {
                 .golem_clients()
                 .await?
                 .environment
-                .get_environment_components(&deploy_diff.environment.environment_id.0)
+                .get_deployment_components(
+                    &current_deployment.environment_id.0,
+                    current_deployment.revision.into(),
+                )
                 .await?
                 .values;
 
@@ -587,7 +589,7 @@ impl AppCommandHandler {
         let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
         debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-        let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
+        let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
         let stage_is_same_as_server = deploy_diff.is_stage_same_as_server();
 
         {
@@ -606,11 +608,15 @@ impl AppCommandHandler {
             );
 
             if !stage_is_same_as_server {
-                match &unified_diffs.diff_stage {
+                match &unified_diffs.deployment_diff_stage {
                     Some(diff) => {
                         log_action("Diffing", "with staging area");
                         let _indent = self.ctx.log_handler().nested_text_view_indent();
                         log_unified_diff(diff);
+                        if let Some(diff) = unified_diffs.agent_diff_stage {
+                            logln("");
+                            log_unified_diff(&diff);
+                        }
                     }
                     None => {
                         log_skipping_up_to_date("diffing with staging area");
@@ -626,7 +632,11 @@ impl AppCommandHandler {
                 }
 
                 let _indent = self.ctx.log_handler().nested_text_view_indent();
-                log_unified_diff(&unified_diffs.diff);
+                log_unified_diff(&unified_diffs.deployment_diff);
+                if let Some(diff) = unified_diffs.agent_diff {
+                    logln("");
+                    log_unified_diff(&diff);
+                }
             }
         }
 
@@ -796,7 +806,7 @@ impl AppCommandHandler {
 
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
-            deployable_manifest_components: deploy_quick_diff.deployable_manifest_components,
+            deployable_components: deploy_quick_diff.deployable_manifest_components,
             deployable_http_api_definitions: deploy_quick_diff
                 .deployable_manifest_http_api_definitions,
             deployable_http_api_deployments: deploy_quick_diff
@@ -806,8 +816,10 @@ impl AppCommandHandler {
             server_deployment,
             diffable_server_deployment,
             server_deployment_hash,
-            server_staged_deployment,
-            server_staged_deployment_hash,
+            server_agent_types: HashMap::new(),
+            staged_deployment: server_staged_deployment,
+            staged_deployment_hash: server_staged_deployment_hash,
+            staged_agent_types: HashMap::new(),
             diffable_staged_deployment: diffable_server_staged_deployment,
             diff,
             diff_stage,
@@ -837,16 +849,16 @@ impl AppCommandHandler {
 
             for (component_name, component_diff) in &diff.components {
                 match component_diff {
-                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                    diff::BTreeMapDiffValue::Create => {
                         // NOP
                     }
-                    diff::BTreeMapDiffValue::Update(_) => {
+                    diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
                         let component_name = ComponentName(component_name.clone());
 
                         let component_identity =
                             deploy_diff.staged_component_identity(&component_name);
 
-                        let staged_component = component_handler
+                        let component = component_handler
                             .get_component_revision_by_id(
                                 &component_identity.id,
                                 component_identity.revision,
@@ -856,14 +868,22 @@ impl AppCommandHandler {
                         match &kind {
                             DiffKind::Server => {
                                 deploy_diff.diffable_server_deployment.components.insert(
+                                    component_name.0.clone(),
+                                    component.to_diffable().into(),
+                                );
+                                deploy_diff.server_agent_types.insert(
                                     component_name.0,
-                                    staged_component.to_diffable().into(),
+                                    component.metadata.agent_types().to_vec(),
                                 );
                             }
                             DiffKind::Stage => {
                                 deploy_diff.diffable_staged_deployment.components.insert(
+                                    component_name.0.clone(),
+                                    component.to_diffable().into(),
+                                );
+                                deploy_diff.staged_agent_types.insert(
                                     component_name.0,
-                                    staged_component.to_diffable().into(),
+                                    component.metadata.agent_types().to_vec(),
                                 );
                             }
                         }
@@ -883,7 +903,7 @@ impl AppCommandHandler {
                         let definition_identity = deploy_diff
                             .staged_http_api_definition_identity(&http_api_definition_name);
 
-                        let staged_definition = http_api_definition_handler
+                        let definition = http_api_definition_handler
                             .get_http_api_definition_revision_by_id(
                                 &definition_identity.id,
                                 definition_identity.revision,
@@ -897,7 +917,7 @@ impl AppCommandHandler {
                                     .http_api_definitions
                                     .insert(
                                         http_api_definition_name.0,
-                                        staged_definition.to_diffable().into(),
+                                        definition.to_diffable().into(),
                                     );
                             }
                             DiffKind::Stage => {
@@ -906,7 +926,7 @@ impl AppCommandHandler {
                                     .http_api_definitions
                                     .insert(
                                         http_api_definition_name.0,
-                                        staged_definition.to_diffable().into(),
+                                        definition.to_diffable().into(),
                                     );
                             }
                         }
@@ -925,7 +945,7 @@ impl AppCommandHandler {
                         let deployment_identity =
                             deploy_diff.staged_http_api_deployment_identity(&domain);
 
-                        let staged_deployment = http_api_deployment_handler
+                        let deployment = http_api_deployment_handler
                             .get_http_api_deployment_revision_by_id(
                                 &deployment_identity.id,
                                 deployment_identity.revision,
@@ -937,13 +957,13 @@ impl AppCommandHandler {
                                 deploy_diff
                                     .diffable_server_deployment
                                     .http_api_deployments
-                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                                    .insert(domain.0, deployment.to_diffable().into());
                             }
                             DiffKind::Stage => {
                                 deploy_diff
                                     .diffable_staged_deployment
                                     .http_api_deployments
-                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                                    .insert(domain.0, deployment.to_diffable().into());
                             }
                         }
                     }
@@ -1110,7 +1130,7 @@ impl AppCommandHandler {
     async fn apply_staged_changes_to_environment(
         &self,
         deploy_diff: &DeployDiff,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<CurrentDeployment> {
         let clients = self.ctx.golem_clients().await?;
 
         log_action("Deploying", "staged changes to the environment");
@@ -1133,7 +1153,7 @@ impl AppCommandHandler {
         // TODO: atomic: proper view
         self.ctx.log_handler().log_serializable(&result);
 
-        Ok(())
+        Ok(result)
     }
 
     pub async fn get_remote_application(
@@ -1231,7 +1251,9 @@ impl AppCommandHandler {
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
-        /*
+        let clients = self.ctx.golem_clients().await?;
+        let environment_handler = self.ctx.environment_handler();
+
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -1242,34 +1264,37 @@ impl AppCommandHandler {
             .collect::<Result<Vec<ComponentName>, _>>()
             .map_err(|err| anyhow!(err))?;
 
-        let environment = self
-            .ctx
-            .environment_handler()
+        let environment = environment_handler
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
+        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+
         let mut components = Vec::with_capacity(selected_component_names.len());
         for component_name in &selected_component_names {
-            match self
-                .ctx
-                .component_handler()
-                .component(Some(&environment), component_name.into(), None)
-                .await?
+            match clients
+                .component
+                .get_deployment_component(
+                    &environment.environment_id.0,
+                    current_deployment.revision.into(),
+                    &component_name.0,
+                )
+                .await
+                .map_service_error_not_found_as_opt()?
             {
                 Some(component) => {
                     components.push(component);
                 }
                 None => {
-                    log_warn(format!(
+                    log_error(format!(
                         "Component {} is not deployed!",
                         component_name.0.log_color_highlight()
                     ));
+                    bail!(NonSuccessfulExit)
                 }
             }
         }
-        Ok(components)*/
-        // TODO: atomic
-        todo!()
+        Ok(components)
     }
 
     pub async fn must_select_components(

@@ -1812,3 +1812,43 @@ impl Display for RdbmsPoolKey {
         write!(f, "{}", self.masked_address())
     }
 }
+
+fn validate_lower_kebab_case_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
+    if identifier.is_empty() {
+        return Err(format!("{} cannot be empty", field_name));
+    }
+
+    let first = identifier.chars().next().unwrap();
+    if !first.is_ascii_lowercase() {
+        return Err(format!(
+            "{} must start with a lowercase ASCII letter (a-z), but got '{}'",
+            field_name, first
+        ));
+    }
+
+    if !identifier
+        .chars()
+        .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+    {
+        return Err(format!(
+            "{} may contain only lowercase ASCII letters (a-z), digits (0-9), and hyphens (-)",
+            field_name
+        ));
+    }
+
+    if identifier.starts_with('-') || identifier.ends_with('-') {
+        return Err(format!(
+            "{} must not start or end with a hyphen",
+            field_name
+        ));
+    }
+
+    if identifier.contains("--") {
+        return Err(format!(
+            "{} must not contain consecutive hyphens",
+            field_name
+        ));
+    }
+
+    Ok(())
+}

@@ -65,15 +65,19 @@ pub trait Diffable {
     where
         Self: Serialize,
     {
-        TextDiff::from_lines(
-            &to_yaml_with_mode(&server, mode).expect("failed to serialize server"),
-            &to_yaml_with_mode(&local, mode).expect("failed to serialize server"),
+        unified_diff(
+            to_yaml_with_mode(&server, mode).expect("failed to serialize server"),
+            to_yaml_with_mode(&local, mode).expect("failed to serialize server"),
         )
+    }
+}
+
+pub fn unified_diff(server: impl AsRef<str>, local: impl AsRef<str>) -> String {
+    TextDiff::from_lines(server.as_ref(), local.as_ref())
         .unified_diff()
         .context_radius(4)
         .header("server", "local")
         .to_string()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

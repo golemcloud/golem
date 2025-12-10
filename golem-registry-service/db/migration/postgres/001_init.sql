@@ -794,7 +794,8 @@ CREATE TABLE deployment_registered_agent_types
     deployment_revision_id BIGINT NOT NULL,
     agent_type_name        TEXT   NOT NULL,
 
-    component_id           UUID   NOT NULL, -- compoenent implementing agent type in this deployment
+    component_id           UUID   NOT NULL, -- component id implementing agent-type in this deployment
+    component_revision_id  BIGINT NOT NULL, -- component revision id implementing agent-type in this deployment
     agent_type             BYTEA  NOT NULL, -- full agent type as blob
 
     CONSTRAINT deployment_registered_agent_types_pk
@@ -805,8 +806,8 @@ CREATE TABLE deployment_registered_agent_types
             REFERENCES environments (environment_id),
 
     CONSTRAINT deployment_registered_agent_types_components_fk
-        FOREIGN KEY (component_id)
-            REFERENCES components (component_id),
+        FOREIGN KEY (component_id, component_revision_id)
+            REFERENCES component_revisions (component_id, revision_id),
 
     CONSTRAINT deployment_registered_agent_types_deployment_revisions_fk
         FOREIGN KEY (environment_id, deployment_revision_id)

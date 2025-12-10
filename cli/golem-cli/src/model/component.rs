@@ -153,7 +153,7 @@ impl ComponentView {
                         .map(|a| a.to_wit_naming())
                         .collect::<Vec<_>>();
 
-                    show_exported_agents(&agent_types)
+                    show_exported_agents(&agent_types, true, true)
                 } else {
                     value
                         .metadata
@@ -213,6 +213,7 @@ impl ComponentView {
 #[derive(Clone, Debug)]
 pub struct ComponentDeployProperties {
     pub linked_wasm_path: PathBuf,
+    pub agent_types: Vec<AgentType>,
     pub files: Vec<crate::model::app::InitialComponentFile>,
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub env: BTreeMap<String, String>,
@@ -296,33 +297,53 @@ pub fn render_type(typ: &AnalysedType) -> String {
     }
 }
 
-pub fn show_exported_agents(agents: &[AgentType]) -> Vec<String> {
-    agents.iter().flat_map(render_exported_agent).collect()
-}
-
-pub fn show_exported_agent_constructors(agents: &[AgentType]) -> Vec<String> {
+pub fn show_exported_agents(
+    agents: &[AgentType],
+    wrapper_naming: bool,
+    show_dummy_return_type: bool,
+) -> Vec<String> {
     agents
         .iter()
-        .map(|c| render_agent_constructor(c, true))
+        .flat_map(|agent| render_exported_agent(agent, wrapper_naming, show_dummy_return_type))
         .collect()
 }
 
-fn render_exported_agent(agent: &AgentType) -> Vec<String> {
+pub fn show_exported_agent_constructors(agents: &[AgentType], wrapper_naming: bool) -> Vec<String> {
+    agents
+        .iter()
+        .map(|c| render_agent_constructor(c, wrapper_naming, true))
+        .collect()
+}
+
+fn render_exported_agent(
+    agent: &AgentType,
+    wrapper_naming: bool,
+    show_dummy_return_type: bool,
+) -> Vec<String> {
     let mut result = Vec::new();
-    result.push(render_agent_constructor(agent, true));
+    result.push(render_agent_constructor(
+        agent,
+        wrapper_naming,
+        show_dummy_return_type,
+    ));
+    let agent_name = if wrapper_naming {
+        format!("{}.", agent.wrapper_type_name())
+    } else {
+        "  ".to_string()
+    };
     for method in &agent.methods {
         let output = render_data_schema(&method.output_schema);
         if output.is_empty() {
             result.push(format!(
-                "{}.{}({})",
-                agent.wrapper_type_name(),
+                "{}{}({})",
+                agent_name,
                 method.name,
                 render_data_schema(&method.input_schema),
             ));
         } else {
             result.push(format!(
-                "{}.{}({}) -> {}",
-                agent.wrapper_type_name(),
+                "{}{}({}) -> {}",
+                agent_name,
                 method.name,
                 render_data_schema(&method.input_schema),
                 output
@@ -333,18 +354,31 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     result
 }
 
-pub fn render_agent_constructor(agent: &AgentType, show_dummy_return_type: bool) -> String {
+pub fn render_agent_constructor(
+    agent: &AgentType,
+    wrapper_naming: bool,
+    show_dummy_return_type: bool,
+) -> String {
     let dummy_return_type = if show_dummy_return_type {
         " agent constructor"
     } else {
         ""
     };
-    format!(
-        "{}({}){}",
-        agent.wrapper_type_name(),
-        render_data_schema(&agent.constructor.input_schema.to_wit_naming()),
-        dummy_return_type
-    )
+    if wrapper_naming {
+        format!(
+            "{}({}){}",
+            agent.wrapper_type_name(),
+            render_data_schema(&agent.constructor.input_schema.to_wit_naming()),
+            dummy_return_type
+        )
+    } else {
+        format!(
+            "{}({}){}",
+            agent.type_name,
+            render_data_schema(&agent.constructor.input_schema),
+            dummy_return_type
+        )
+    }
 }
 
 fn render_data_schema(schema: &DataSchema) -> String {

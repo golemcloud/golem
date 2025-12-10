@@ -17,10 +17,10 @@ use crate::model::agent::AgentType;
 use crate::model::application::ApplicationId;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
-use crate::model::diff;
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::plugin_registration::PluginRegistrationId;
+use crate::model::{diff, validate_lower_kebab_case_identifier};
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -72,8 +72,23 @@ impl TryFrom<String> for ComponentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: atomic: Add validations (non-empty, no "/", no " ", ...)
-        Ok(ComponentName(value.to_string()))
+        if value.is_empty() {
+            return Err("Component name cannot be empty".to_string());
+        }
+
+        if value.contains('@') {
+            return Err("Component name cannot contain version suffix (@version)".to_string());
+        }
+
+        let parts: Vec<&str> = value.split(':').collect();
+        if parts.len() != 2 {
+            return Err("Component name must follow the format 'namespace:name'".to_string());
+        }
+
+        validate_lower_kebab_case_identifier("Namespace", parts[0])?;
+        validate_lower_kebab_case_identifier("Name", parts[1])?;
+
+        Ok(ComponentName(value))
     }
 }
 
@@ -88,6 +103,12 @@ impl FromStr for ComponentName {
 impl ComponentName {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl AsRef<str> for ComponentName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -196,7 +217,7 @@ impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
         diff::Component {
             metadata: diff::ComponentMetadata {
-                version: Some("TODO".to_string()), // TODO: atomic
+                version: Some("".to_string()), // TODO: atomic
                 env: self
                     .env
                     .iter()
