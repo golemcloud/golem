@@ -32,6 +32,7 @@ use crate::log::{
 use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
 use crate::model::deploy::DeployConfig;
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::text::deployment::DeploymentNewView;
 use crate::model::text::diff::log_unified_diff;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
@@ -1150,8 +1151,11 @@ impl AppCommandHandler {
 
         log_action("Deployed", "all changes");
 
-        // TODO: atomic: proper view
-        self.ctx.log_handler().log_serializable(&result);
+        self.ctx.log_handler().log_view(&DeploymentNewView {
+            application_name: deploy_diff.environment.application_name.clone(),
+            environment_name: deploy_diff.environment.environment_name.clone(),
+            deployment: result.clone(),
+        });
 
         Ok(result)
     }
