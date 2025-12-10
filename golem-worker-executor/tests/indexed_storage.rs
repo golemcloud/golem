@@ -21,6 +21,7 @@ use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
+use golem_worker_executor::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
@@ -28,8 +29,9 @@ use golem_worker_executor::storage::indexed::{
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use sqlx::sqlite::SqlitePoolOptions;
-use std::fmt::Debug;
-use std::sync::Arc;
+use std::fmt::{Debug, Formatter};
+use std::sync::{Arc, Mutex};
+use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use uuid::Uuid;
 
@@ -134,6 +136,43 @@ async fn sqlite_storage(
     Arc::new(SqliteIndexedStorageWrapper)
 }
 
+struct MultiSqliteIndexedStorageWrapper {
+    tempdirs: Arc<Mutex<Vec<TempDir>>>,
+}
+
+impl MultiSqliteIndexedStorageWrapper {
+    fn new() -> Self {
+        Self {
+            tempdirs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl Debug for MultiSqliteIndexedStorageWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MultiSqliteIndexedStorageWrapper")
+    }
+}
+
+#[async_trait]
+impl GetIndexedStorage for MultiSqliteIndexedStorageWrapper {
+    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().to_path_buf();
+        self.tempdirs.lock().unwrap().push(tempdir);
+
+        let storage = MultiSqliteIndexedStorage::new(&path, 10, true);
+        Arc::new(storage)
+    }
+}
+
+#[test_dep(tagged_as = "multi_sqlite")]
+async fn multi_sqlite_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> Arc<dyn GetIndexedStorage + Send + Sync> {
+    Arc::new(MultiSqliteIndexedStorageWrapper::new())
+}
+
 #[derive(Debug, Clone)]
 struct IndexedStorageNamespacePair {
     ns: IndexedStorageNamespace,
@@ -169,7 +208,7 @@ fn ns2() -> IndexedStorageNamespacePair {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite");
+define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite");
 
 #[test]
 #[tracing::instrument]

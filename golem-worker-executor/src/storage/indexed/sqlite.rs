@@ -18,7 +18,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::time::Duration;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
     pool: SqlitePool,
 }
