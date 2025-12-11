@@ -16,7 +16,6 @@ pub mod auth;
 pub mod component;
 pub mod limit;
 pub mod worker;
-// pub mod user_auth_resolver;
 
 use self::auth::{AuthService, RemoteAuthService};
 use self::component::RemoteComponentService;

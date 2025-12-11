@@ -151,6 +151,7 @@ impl CompileWorker {
             }
         };
 
+        // TODO: we should download directly from blob store here.
         if let Some(client) = &*self.client.lock().await {
             let bytes = client
                 .download_component(
