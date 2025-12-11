@@ -21,24 +21,14 @@ test = false
 path = "src/lib.rs"
 harness = false
 
-# [[test]]
-# name = "services_tests"
-# path = "tests/services_tests.rs"
-# harness = false
+[[test]]
+name = "session-store"
+path = "tests/session_store.rs"
+harness = false
 
-# [[test]]
-# name = "api_oas_convert_tests"
-# path = "tests/api_oas_convert_tests.rs"
-# harness = false
-
-# [[test]]
-# name = "api_gateway_end_to_end_tests"
-# path = "tests/api_gateway_end_to_end_tests.rs"
-# harness = false
-
-# [[bench]]
-# name = "tree"
-# harness = false
+[[bench]]
+name = "tree"
+harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
@@ -113,12 +103,13 @@ uuid = { workspace = true }
 x509-certificate = { workspace = true }
 
 [dev-dependencies]
+golem-test-framework.workspace = true
+
 assert2 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
+tempfile.workspace = true
 test-r = { workspace = true }
 tryhard = { workspace = true }
