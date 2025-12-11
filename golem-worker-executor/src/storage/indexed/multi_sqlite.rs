@@ -84,6 +84,10 @@ impl MultiSqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
     ) -> Result<SqliteIndexedStorage, String> {
         let db = self.namespace_to_db(namespace).await;
+        self.storage_by_db_name(db).await
+    }
+
+    async fn storage_by_db_name(&self, db: String) -> Result<SqliteIndexedStorage, String> {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
@@ -97,11 +101,11 @@ impl MultiSqliteIndexedStorage {
     async fn namespace_to_db(&self, namespace: &IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog { worker_id } => {
-                format!("indexed-worker-{}", self.worker_id_hash(worker_id).await)
+                format!("oplog-{}", self.worker_id_hash(worker_id).await)
             }
             IndexedStorageNamespace::CompressedOpLog { worker_id, level } => {
                 format!(
-                    "indexed-worker-c{}-{}",
+                    "compressed-oplog-l{}-{}",
                     level,
                     self.worker_id_hash(worker_id).await
                 )
@@ -114,10 +118,7 @@ impl MultiSqliteIndexedStorage {
         match hash_cache.hash_per_worker_id.get(worker_id) {
             Some(hash) => hash.clone(),
             None => {
-                let hash = format!(
-                    "{:x}",
-                    blake3::hash(worker_id.to_string().as_bytes()).as_bytes()
-                );
+                let hash = format!("{}", blake3::hash(worker_id.to_string().as_bytes()));
                 hash_cache
                     .hash_per_worker_id
                     .insert(worker_id.clone(), hash.clone());
@@ -178,8 +179,68 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
-        // TODO: scan files in the root dir by pattern, and scan each one by one
-        todo!()
+        use std::fs;
+
+        let prefix = match namespace {
+            IndexedStorageMetaNamespace::Oplog => "oplog-".to_string(),
+            IndexedStorageMetaNamespace::CompressedOplog { level } => {
+                format!("compressed-oplog-l{}-", level)
+            }
+        };
+
+        // List all .db files matching the namespace prefix, sorted consistently
+        let mut matching_files: Vec<_> = fs::read_dir(&self.root_dir)
+            .map_err(|e| format!("Failed to read root directory: {:?}", e))?
+            .filter_map(|entry| {
+                entry.ok().and_then(|e| {
+                    let path = e.path();
+                    let file_name = path.file_name()?.to_string_lossy().to_string();
+                    if file_name.starts_with(&prefix) && file_name.ends_with(".db") {
+                        Some(file_name)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        matching_files.sort();
+
+        // Decode cursor: upper 32 bits = file index, lower 32 bits = scan cursor within file
+        let file_index = (cursor >> 32) as usize;
+        let file_cursor = (cursor & 0xFFFFFFFF) as u64;
+
+        let mut results = Vec::new();
+        let mut current_file_cursor = file_cursor;
+
+        for (idx, file_name) in matching_files.iter().enumerate().skip(file_index) {
+            let storage = self.storage_by_db_name(file_name.clone()).await?;
+
+            let (next_cursor, mut file_results) = storage
+                .scan(
+                    svc_name,
+                    api_name,
+                    namespace.clone(),
+                    pattern,
+                    current_file_cursor,
+                    count - results.len() as u64,
+                )
+                .await?;
+
+            results.append(&mut file_results);
+
+            if results.len() as u64 >= count {
+                // Encode next cursor: file index in upper 32 bits, file cursor in lower 32 bits
+                let next_combined_cursor = ((idx as u64) << 32) | (next_cursor & 0xFFFFFFFF);
+                return Ok((
+                    next_combined_cursor,
+                    results.into_iter().take(count as usize).collect(),
+                ));
+            }
+
+            current_file_cursor = 0;
+        }
+
+        Ok((0, results))
     }
 
     async fn append(

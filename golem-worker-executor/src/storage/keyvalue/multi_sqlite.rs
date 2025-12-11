@@ -114,10 +114,7 @@ impl MultiSqliteKeyValueStorage {
         match hash_cache.hash_per_worker_id.get(worker_id) {
             Some(hash) => hash.clone(),
             None => {
-                let hash = format!(
-                    "{:x}",
-                    blake3::hash(worker_id.to_string().as_bytes()).as_bytes()
-                );
+                let hash = format!("{}", blake3::hash(worker_id.to_string().as_bytes()));
                 hash_cache
                     .hash_per_worker_id
                     .insert(worker_id.clone(), hash.clone());
