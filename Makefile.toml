@@ -748,7 +748,6 @@ args = [
     "${PLATFORM_TARGET}/release/golem-shard-manager",
     "${PLATFORM_TARGET}/release/worker-executor",
     "${PLATFORM_TARGET}/release/golem-debugging-service",
-    "${PLATFORM_TARGET}/release/golem-component-service",
     "${PLATFORM_TARGET}/release/golem-worker-service",
     "${PLATFORM_TARGET}/release/golem-component-compilation-service",
 ]
