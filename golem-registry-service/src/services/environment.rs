@@ -31,7 +31,6 @@ use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tap::Pipe;
-use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentError {

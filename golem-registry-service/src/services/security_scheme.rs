@@ -28,7 +28,6 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecuritySchemeError {
