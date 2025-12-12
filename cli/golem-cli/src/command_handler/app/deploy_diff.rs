@@ -29,6 +29,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct DeployQuickDiff {
@@ -42,16 +43,24 @@ pub struct DeployQuickDiff {
 }
 
 impl DeployQuickDiff {
-    pub fn remote_deployment_hash(&self) -> Option<&diff::Hash> {
+    pub fn server_deployment_hash(&self) -> Option<&diff::Hash> {
         self.environment
-            .remote_environment
+            .server_environment
             .current_deployment
             .as_ref()
             .map(|d| &d.deployment_hash)
     }
 
     pub fn is_up_to_date(&self) -> bool {
-        self.remote_deployment_hash() == Some(&self.local_deployment_hash)
+        let server_deployment_hash = self.server_deployment_hash();
+        debug!(
+            server_deployment_hash = server_deployment_hash
+                .map(|s| s.to_string())
+                .unwrap_or("-".to_string()),
+            local_deployment_hash = self.local_deployment_hash.to_string(),
+            "is_up_to_date"
+        );
+        server_deployment_hash == Some(&self.local_deployment_hash)
     }
 }
 
@@ -274,7 +283,7 @@ impl DeployDiff {
 
     pub fn current_deployment_revision(&self) -> Option<CurrentDeploymentRevision> {
         self.environment
-            .remote_environment
+            .server_environment
             .current_deployment
             .as_ref()
             .map(|deployment| deployment.revision)

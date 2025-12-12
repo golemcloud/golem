@@ -763,7 +763,7 @@ impl AppCommandHandler {
 
         let server_deployment = match &deploy_quick_diff
             .environment
-            .remote_environment
+            .server_environment
             .current_deployment
         {
             Some(current_deployment) => Some(
@@ -981,6 +981,17 @@ impl AppCommandHandler {
         deploy_diff.diff_stage = deploy_diff
             .diffable_staged_deployment
             .diff_with_local(&deploy_diff.diffable_local_deployment);
+
+        debug!(">>> deploy_diff.diff: {:#?}", deploy_diff.diff);
+        debug!(
+            ">>> deploy_diff.diffable_server_deployment.hash: {}",
+            deploy_diff.diffable_server_deployment.hash()
+        );
+        debug!(
+            ">>> deploy_diff.diffable_local_deployment.hash: {}",
+            deploy_diff.diffable_local_deployment.hash()
+        );
+
         let Some(diff) = deploy_diff
             .diffable_server_deployment
             .diff_with_local(&deploy_diff.diffable_local_deployment)
