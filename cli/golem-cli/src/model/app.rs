@@ -2855,7 +2855,7 @@ mod test {
         let component_name = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
-        assert!(component.source_wit() == PathBuf::from("a.wit"),);
+        assert!(component.source_wit() == PathBuf::from("./a.wit"),);
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {
