@@ -113,21 +113,24 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
 
         match routing_table.lookup(self) {
             None => Ok((None, None)),
-            Some(pod) => Ok((
-                Some(
-                    context
-                        .worker_executor_clients()
-                        .call(description, pod.uri(), f)
-                        .await
-                        .map_err(|err| {
-                            CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                err,
-                                pod.clone(),
-                            )
-                        })?,
-                ),
-                Some(pod.clone()),
-            )),
+            Some(pod) => {
+                let clients = context.worker_executor_clients();
+
+                Ok((
+                    Some(
+                        clients
+                            .call(description, pod.uri(clients.uses_tls()), f)
+                            .await
+                            .map_err(|err| {
+                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
+                                    err,
+                                    pod.clone(),
+                                )
+                            })?,
+                    ),
+                    Some(pod.clone()),
+                ))
+            }
         }
     }
 
@@ -166,21 +169,24 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
 
         match routing_table.random() {
             None => Ok((None, None)),
-            Some(pod) => Ok((
-                Some(
-                    context
-                        .worker_executor_clients()
-                        .call(description, pod.uri(), f)
-                        .await
-                        .map_err(|status| {
-                            CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                status,
-                                pod.clone(),
-                            )
-                        })?,
-                ),
-                Some(pod.clone()),
-            )),
+            Some(pod) => {
+                let clients = context.worker_executor_clients();
+
+                Ok((
+                    Some(
+                        clients
+                            .call(description, pod.uri(clients.uses_tls()), f)
+                            .await
+                            .map_err(|status| {
+                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
+                                    status,
+                                    pod.clone(),
+                                )
+                            })?,
+                    ),
+                    Some(pod.clone()),
+                ))
+            }
         }
     }
 
@@ -232,7 +238,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
                         let description = description.clone();
                         async move {
                             worker_executor_clients
-                                .call(description, pod.uri(), f)
+                                .call(description, pod.uri(worker_executor_clients.uses_tls()), f)
                                 .await
                                 .map_err(|err| (err, pod))
                         }
@@ -574,7 +580,7 @@ impl<'a> RetryState<'a> {
 }
 
 fn format_pod(pod: &Option<Pod>) -> String {
-    format!("{:?}", pod.as_ref().map(|p| p.uri()))
+    format!("{:?}", pod.as_ref())
 }
 
 struct RetrySpan {

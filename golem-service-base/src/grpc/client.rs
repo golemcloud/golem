@@ -196,6 +196,10 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         }
     }
 
+    pub fn uses_tls(&self) -> bool {
+        self.config.tls_enabled()
+    }
+
     async fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
         let connect_timeout = self.config.connect_timeout;
         let entry = self.clients.entry_async(endpoint.clone()).await;

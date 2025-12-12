@@ -42,7 +42,7 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::{IntoAnyhow, SafeDisplay};
+use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -167,18 +167,7 @@ pub struct GrpcRegistryServiceConfig {
 
 impl GrpcRegistryServiceConfig {
     pub fn uri(&self) -> Uri {
-        let scheme = if self.client_config.tls_enabled() {
-            "https"
-        } else {
-            "http"
-        };
-
-        Uri::builder()
-            .scheme(scheme)
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build service URI")
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
 }
 

@@ -20,7 +20,7 @@ use golem_common::config::{
 };
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
-use golem_common::SafeDisplay;
+use golem_common::{grpc_uri, SafeDisplay};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
@@ -322,12 +322,7 @@ pub struct ShardManagerServiceGrpcConfig {
 
 impl ShardManagerServiceGrpcConfig {
     pub fn uri(&self) -> Uri {
-        build_uri(
-            "shard manager",
-            self.client_config.tls_enabled(),
-            &self.host,
-            self.port,
-        )
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
 }
 
@@ -369,12 +364,7 @@ pub struct WorkerServiceGrpcConfig {
 
 impl WorkerServiceGrpcConfig {
     pub fn uri(&self) -> Uri {
-        build_uri(
-            "worker service",
-            self.client_config.tls_enabled(),
-            &self.host,
-            self.port,
-        )
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
 }
 
@@ -1045,17 +1035,6 @@ impl Default for AgentTypesServiceGrpcConfig {
             cache_time_to_idle: Duration::from_secs(60),
         }
     }
-}
-
-fn build_uri(name: &str, use_https: bool, host: &str, port: u16) -> Uri {
-    let scheme = if use_https { "https" } else { "http" };
-
-    Uri::builder()
-        .scheme(scheme)
-        .authority(format!("{host}:{port}").as_str())
-        .path_and_query("/")
-        .build()
-        .unwrap_or_else(|_| panic!("Failed to build {name} service URI"))
 }
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {

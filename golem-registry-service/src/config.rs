@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
-use golem_common::SafeDisplay;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
 use golem_common::model::account::AccountId;
@@ -21,6 +20,7 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
+use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -377,18 +377,7 @@ impl Default for ComponentCompilationEnabledConfig {
 
 impl ComponentCompilationEnabledConfig {
     pub fn uri(&self) -> Uri {
-        let scheme = if self.client_config.tls_enabled() {
-            "https"
-        } else {
-            "http"
-        };
-
-        Uri::builder()
-            .scheme(scheme)
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build ComponentCompilationService URI")
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
 }
 

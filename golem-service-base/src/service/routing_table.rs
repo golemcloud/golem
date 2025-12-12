@@ -18,10 +18,10 @@ use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
-use golem_common::SafeDisplay;
 use golem_common::cache::*;
 use golem_common::model::RoutingTable;
 use golem_common::retriable_error::IsRetriableError;
+use golem_common::{SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -104,18 +104,7 @@ pub struct RoutingTableConfig {
 
 impl RoutingTableConfig {
     pub fn uri(&self) -> Uri {
-        let scheme = if self.client_config.tls_enabled() {
-            "https"
-        } else {
-            "http"
-        };
-
-        Uri::builder()
-            .scheme(scheme)
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build service URI")
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
 }
 

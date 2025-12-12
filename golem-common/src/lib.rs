@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use http::Uri;
 use shadow_rs::shadow;
 use std::convert::Infallible;
 use std::fmt;
@@ -97,4 +98,15 @@ pub trait IntoAnyhow {
     /// as it can preserve more information depending on the implementor.
     /// Can be removed when specialization is stable or std::err::Error has backtraces.
     fn into_anyhow(self) -> anyhow::Error;
+}
+
+pub fn grpc_uri(host: &String, port: u16, tls: bool) -> Uri {
+    let scheme = if tls { "https" } else { "http" };
+
+    Uri::builder()
+        .scheme(scheme)
+        .authority(format!("{}:{}", host, port).as_str())
+        .path_and_query("/")
+        .build()
+        .expect("Failed to build URI")
 }

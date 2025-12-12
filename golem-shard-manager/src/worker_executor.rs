@@ -132,7 +132,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
 
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
         // NOTE: retries are handled in healthcheck.rs
-        let endpoint = pod.endpoint();
+        let endpoint = pod.endpoint(self.config.client_config.tls_enabled());
         let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
         match conn {
             Ok(conn) => match conn {
@@ -207,10 +207,14 @@ impl WorkerExecutorServiceDefault {
 
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,
-            self.client.call("assign_shards", pod.uri(), move |client| {
-                let assign_shards_request = assign_shards_request.clone();
-                Box::pin(client.assign_shards(assign_shards_request))
-            }),
+            self.client.call(
+                "assign_shards",
+                pod.uri(self.config.client_config.tls_enabled()),
+                move |client| {
+                    let assign_shards_request = assign_shards_request.clone();
+                    Box::pin(client.assign_shards(assign_shards_request))
+                },
+            ),
         )
         .await
         .map_err(|_: Elapsed| ShardManagerError::Timeout)?
@@ -249,10 +253,14 @@ impl WorkerExecutorServiceDefault {
 
         let revoke_shards_response = timeout(
             self.config.revoke_shards_timeout,
-            self.client.call("revoke_shards", pod.uri(), move |client| {
-                let revoke_shards_request = revoke_shards_request.clone();
-                Box::pin(client.revoke_shards(revoke_shards_request))
-            }),
+            self.client.call(
+                "revoke_shards",
+                pod.uri(self.config.client_config.tls_enabled()),
+                move |client| {
+                    let revoke_shards_request = revoke_shards_request.clone();
+                    Box::pin(client.revoke_shards(revoke_shards_request))
+                },
+            ),
         )
         .await
         .map_err(|_: Elapsed| ShardManagerError::Timeout)?
