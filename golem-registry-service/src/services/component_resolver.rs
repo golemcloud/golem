@@ -25,7 +25,6 @@ use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AuthCtx;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentResolverError {

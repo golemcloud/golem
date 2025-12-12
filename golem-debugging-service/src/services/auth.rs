@@ -20,7 +20,6 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
 use std::sync::Arc;
-use tracing::error;
 
 #[async_trait]
 pub trait AuthService: Send + Sync {
