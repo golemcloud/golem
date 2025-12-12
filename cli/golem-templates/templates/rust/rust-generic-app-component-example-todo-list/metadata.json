@@ -1,5 +1,5 @@
 {
-  "description": "Example: a stateful Golem worker representing a todo list, implemented in Rust",
+  "description": "Example: a stateful Golem agent representing a todo list, implemented in Rust",
   "appComponentGroup": "generic",
   "devOnly": true
 }

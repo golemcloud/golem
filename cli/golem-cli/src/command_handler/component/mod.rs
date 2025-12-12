@@ -582,7 +582,7 @@ impl ComponentCommandHandler {
             return Ok(());
         }
 
-        log_action("Updating", format!("existing workers using {update} mode"));
+        log_action("Updating", format!("existing agents using {update} mode"));
         let _indent = LogIndent::new();
 
         let mut update_results = TryUpdateAllWorkersResult::default();
@@ -613,7 +613,7 @@ impl ComponentCommandHandler {
             return Ok(());
         }
 
-        log_action("Redeploying", "existing workers");
+        log_action("Redeploying", "existing agents");
         let _indent = LogIndent::new();
 
         for component in components {
