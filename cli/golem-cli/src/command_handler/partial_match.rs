@@ -227,7 +227,7 @@ impl ErrorHandler {
                 log_error("The requested operation requires using cloud profile!");
                 logln("");
                 logln("Switch to cloud profile with one of the following options");
-                logln(" - use the '--cloud' or '-c' flag");
+                logln(" - use the '--cloud' or '-C' flag");
                 logln(" - use 'profile switch cloud' ");
                 logln(" - set the GOLEM_PROFILE environment variable to 'cloud'");
                 logln("");

@@ -2845,7 +2845,7 @@ mod test {
         "# };
 
         let app = load_app(
-            &source,
+            source,
             &ComponentPresetSelector {
                 environment: "local".parse().unwrap(),
                 presets: vec!["debug".parse().unwrap()],
