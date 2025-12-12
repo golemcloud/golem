@@ -956,7 +956,7 @@ impl WorkerCommandHandler {
         log_action(
             "Listing files",
             format!(
-                "for worker {} at path {}",
+                "for agent {} at path {}",
                 format_worker_name_match(&worker_name_match),
                 path.log_color_highlight()
             ),
@@ -974,7 +974,7 @@ impl WorkerCommandHandler {
                 log_warn_action(
                     "Failed to list files",
                     format!(
-                        "for worker {} at path {}: {e}",
+                        "for agent {} at path {}: {e}",
                         format_worker_name_match(&worker_name_match),
                         path.log_color_error_highlight()
                     ),
@@ -1007,7 +1007,7 @@ impl WorkerCommandHandler {
         log_action(
             "Listed files",
             format!(
-                "for worker {} at path {}",
+                "for agent {} at path {}",
                 format_worker_name_match(&worker_name_match),
                 path.log_color_highlight()
             ),
@@ -1031,7 +1031,7 @@ impl WorkerCommandHandler {
         log_action(
             "Downloading file",
             format!(
-                "from worker {} at path {}",
+                "from agent {} at path {}",
                 format_worker_name_match(&worker_name_match),
                 path.log_color_highlight()
             ),
@@ -1049,7 +1049,7 @@ impl WorkerCommandHandler {
                 log_warn_action(
                     "Failed to download file",
                     format!(
-                        "from worker {} at path {}: {e}",
+                        "from agent {} at path {}: {e}",
                         format_worker_name_match(&worker_name_match),
                         path.log_color_error_highlight()
                     ),
@@ -1471,7 +1471,7 @@ impl WorkerCommandHandler {
         if workers.is_empty() {
             log_warn_action(
                 "Skipping",
-                format!("redeploying agents for component {component_name}, no workers found"),
+                format!("redeploying agents for component {component_name}, no agent found"),
             );
             return Ok(());
         }
@@ -1515,7 +1515,7 @@ impl WorkerCommandHandler {
             if show_skip {
                 log_warn_action(
                     "Skipping",
-                    format!("deleting agents for component {component_name}, no workers found"),
+                    format!("deleting agents for component {component_name}, no agent found"),
                 );
             }
             return Ok(0);

@@ -925,13 +925,11 @@ impl Layer for ComponentLayer {
                 presets,
                 default_preset,
             } => {
-                if self.id.is_environment_preset() {
-                    (
-                        presets.get(&selector.environment.0).into_iter().collect(),
-                        Some(format!("app-env:{}", selector.environment.0)),
-                    )
-                } else if selector.presets.is_empty() {
-                    (
+                let select_default_preset = || -> Result<(
+                    Vec<&ComponentLayerProperties>,
+                    Option<Self::AppliedSelection>,
+                ), String>{
+                    Ok((
                         vec![presets.get(default_preset).ok_or_else(|| {
                             format!(
                                 "Default preset '{}' for component layer '{}' not found!",
@@ -940,7 +938,16 @@ impl Layer for ComponentLayer {
                             )
                         })?],
                         Some(default_preset.clone()),
+                    ))
+                };
+
+                if self.id.is_environment_preset() {
+                    (
+                        presets.get(&selector.environment.0).into_iter().collect(),
+                        Some(format!("app-env:{}", selector.environment.0)),
                     )
+                } else if selector.presets.is_empty() {
+                    select_default_preset()?
                 } else {
                     let mut selected_presets = Vec::new();
                     let mut selected_properties = Vec::new();
@@ -951,10 +958,14 @@ impl Layer for ComponentLayer {
                         }
                     }
 
-                    (
-                        selected_properties,
-                        Some(selected_presets.iter().map(|p| &p.0).join(", ")),
-                    )
+                    if selected_presets.is_empty() {
+                        select_default_preset()?
+                    } else {
+                        (
+                            selected_properties,
+                            Some(selected_presets.iter().map(|p| &p.0).join(", ")),
+                        )
+                    }
                 }
             }
         };
@@ -2790,5 +2801,85 @@ mod app_builder {
             ));
         }
         !is_empty
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::model::app::{Application, ApplicationNameAndEnvironments, ComponentPresetSelector};
+    use crate::model::app_raw;
+    use assert2::assert;
+    use assert2::let_assert;
+    use indoc::indoc;
+    use std::path::PathBuf;
+    use test_r::test;
+
+    #[test]
+    fn test_layer_non_matching_defaults() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
+            componentTemplates:
+              malbogle:
+                sourceWit: dummy-source.wit
+                generatedWit: dummy-generated.wit
+                componentWasm: dummy-component.wasm
+
+            components:
+              app:main:
+                templates: malbogle
+                presets:
+                  a:
+                    sourceWit: a.wit
+                  b:
+                    sourceWit: b.wit
+
+        "# };
+
+        let app = load_app(
+            source,
+            &ComponentPresetSelector {
+                environment: "local".parse().unwrap(),
+                presets: vec!["debug".parse().unwrap()],
+            },
+        );
+
+        let component_name = "app:main".parse().unwrap();
+        let component = app.component(&component_name);
+
+        assert!(component.source_wit() == PathBuf::from("./a.wit"),);
+    }
+
+    fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {
+        let raw_app =
+            app_raw::ApplicationWithSource::from_yaml_string(PathBuf::from("golem.yaml"), source)
+                .unwrap();
+        let raw_apps = vec![raw_app];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::environments_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let_assert!(
+            Some(ApplicationNameAndEnvironments {
+                application_name,
+                environments
+            }) = app_name_and_envs
+        );
+
+        let (app, warns, errors) =
+            Application::from_raw_apps(application_name, environments, selector.clone(), raw_apps)
+                .into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        app.unwrap()
     }
 }

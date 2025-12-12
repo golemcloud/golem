@@ -576,11 +576,11 @@ impl AppCommandHandler {
 
         let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
 
+        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
+
         if deploy_quick_diff.is_up_to_date() {
             return Ok(None);
         }
-
-        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
         log_action("Diffing", "");
 
@@ -1160,7 +1160,7 @@ impl AppCommandHandler {
         Ok(result)
     }
 
-    pub async fn get_remote_application(
+    pub async fn get_server_application(
         &self,
         account_id: &AccountId,
         application_name: &ApplicationName,
@@ -1174,7 +1174,27 @@ impl AppCommandHandler {
             .map_service_error_not_found_as_opt()
     }
 
-    pub async fn get_or_create_remote_application(
+    pub async fn get_server_application_or_err(
+        &self,
+        account_id: &AccountId,
+        application_name: &ApplicationName,
+    ) -> anyhow::Result<golem_client::model::Application> {
+        match self
+            .get_server_application(account_id, application_name)
+            .await?
+        {
+            Some(application) => Ok(application),
+            None => {
+                log_error(format!(
+                    "Application {} not found",
+                    application_name.0.log_color_highlight()
+                ));
+                bail!(NonSuccessfulExit)
+            }
+        }
+    }
+
+    pub async fn get_or_create_server_application_by_manifest(
         &self,
     ) -> anyhow::Result<Option<golem_client::model::Application>> {
         let Some(application_name) = self.ctx.manifest_environment().map(|e| &e.application_name)
@@ -1185,7 +1205,7 @@ impl AppCommandHandler {
         let account_id = self.ctx.account_id().await?;
 
         match self
-            .get_remote_application(&account_id, application_name)
+            .get_server_application(&account_id, application_name)
             .await?
         {
             Some(application) => Ok(Some(application)),
