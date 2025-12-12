@@ -222,6 +222,7 @@ opentelemetry-prometheus-text-exporter = "=0.2.0"
 opentelemetry_sdk = "0.30.0"
 phf = { version = "0.11.3", features = ["macros"] }
 pin-project = "1.1.10"
+pgvector = { version = "0.4", features = ["sqlx"] }
 poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry", "prometheus", "requestid", "test", ] }
 poem-derive = { version = "=3.1.12" }
 poem-openapi = { version = "=5.1.16", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }

@@ -70,6 +70,7 @@ mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
 metrohash = { workspace = true }
 nonempty-collections = { workspace = true }
+pgvector = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
