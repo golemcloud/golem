@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::{generate_from_generic, generate_to_generic, is_recursive};
 use crate::value;
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
@@ -20,16 +21,56 @@ use syn::{parse_macro_input, DeriveInput};
 
 pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
+    let self_ident = &ast.ident;
 
-    let into_value_tokens: proc_macro2::TokenStream =
-        value::derive_into_value(&ast, golem_rust_crate_ident).into();
+    if is_recursive(&ast) {
+        let to_generic_impl = generate_to_generic(&ast, self_ident, golem_rust_crate_ident);
+        let from_generic_impl = generate_from_generic(&ast, self_ident, golem_rust_crate_ident);
 
-    let from_value_tokens: proc_macro2::TokenStream =
-        value::derive_from_value_and_type(&ast, golem_rust_crate_ident).into();
+        let value_impl = quote! {
+            impl #golem_rust_crate_ident::value_and_type::IntoValue for #self_ident {
+                fn add_to_builder<B: #golem_rust_crate_ident::value_and_type::NodeBuilder>(self, builder: B) -> B::Result {
+                    use #golem_rust_crate_ident::agentic::ToGenericData;
 
-    quote! {
-        #into_value_tokens
-        #from_value_tokens
+                    let mut graph = #golem_rust_crate_ident::agentic::GenericData { nodes: vec![], root: 0 };
+                    let result_index = self.to_generic(&mut graph);
+                    graph.root = result_index;
+                    graph.add_to_builder(builder)
+                }
+
+                fn add_to_type_builder<B: #golem_rust_crate_ident::value_and_type::TypeNodeBuilder>(builder: B) -> B::Result {
+                    #golem_rust_crate_ident::agentic::GenericData::add_to_type_builder(builder)
+                }
+            }
+
+            impl #golem_rust_crate_ident::value_and_type::FromValueAndType for #self_ident {
+                fn from_extractor<'a, 'b>(
+                    extractor: &'a impl #golem_rust_crate_ident::value_and_type::WitValueExtractor<'a, 'b>,
+                ) -> Result<Self, String> {
+                    use #golem_rust_crate_ident::agentic::FromGenericData;
+
+                    let graph = #golem_rust_crate_ident::agentic::GenericData::from_extractor(extractor)?;
+                    Self::from_generic(&graph, graph.root)
+                }
+            }
+        };
+
+        quote! {
+            #to_generic_impl
+            #from_generic_impl
+            #value_impl
+        }
+        .into()
+    } else {
+        let into_value_tokens: proc_macro2::TokenStream =
+            value::derive_into_value(&ast, golem_rust_crate_ident).into();
+        let from_value_tokens: proc_macro2::TokenStream =
+            value::derive_from_value_and_type(&ast, golem_rust_crate_ident).into();
+
+        quote! {
+            #into_value_tokens
+            #from_value_tokens
+        }
+        .into()
     }
-    .into()
 }
