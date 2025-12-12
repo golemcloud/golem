@@ -148,9 +148,18 @@ export class BaseAgent {
     );
   }
 
-  static phantom<
+  static getPhantom<
     T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent,
   >(
+    this: T,
+    ...args: ConstructorParameters<T>
+  ): WithRemoteMethods<InstanceType<T>> {
+    throw new Error(
+      `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
+    );
+  }
+
+  static newPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
   ): WithRemoteMethods<InstanceType<T>> {

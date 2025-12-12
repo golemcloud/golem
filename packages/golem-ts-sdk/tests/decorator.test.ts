@@ -801,9 +801,11 @@ describe('Annotated FooAgent class', () => {
     expect(FooAgent.get).toBeDefined();
     expect(FooAgent.get).toBeTypeOf('function');
   });
-  it('has phantom method', () => {
-    expect(FooAgent.phantom).toBeDefined();
-    expect(FooAgent.phantom).toBeTypeOf('function');
+  it('has phantom methods', () => {
+    expect(FooAgent.getPhantom).toBeDefined();
+    expect(FooAgent.getPhantom).toBeTypeOf('function');
+    expect(FooAgent.newPhantom).toBeDefined();
+    expect(FooAgent.newPhantom).toBeTypeOf('function');
   });
   it("can return it's phantomId", () => {
     const initiator = Option.getOrThrowWith(
