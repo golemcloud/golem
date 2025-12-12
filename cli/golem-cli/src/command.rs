@@ -51,7 +51,7 @@ pub struct GolemCliCommand {
     pub global_flags: GolemCliGlobalFlags,
 
     #[clap(subcommand)]
-    pub subcommand: GolemCliSubcommand,
+    pub subcommand: Option<GolemCliSubcommand>,
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,
@@ -155,6 +155,12 @@ pub struct GolemCliGlobalFlags {
     /// Switch to experimental or development-only template groups
     #[arg(long, global = true, display_order = 113)]
     pub template_group: Option<String>,
+
+    #[arg(long, global = true, display_order = 113)]
+    pub serve: bool,
+
+    #[arg(long, global = true, requires = "serve", display_order = 114)]
+    pub serve_port: Option<u16>,
 
     #[command(flatten)]
     pub verbosity: Verbosity,
