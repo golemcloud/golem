@@ -515,7 +515,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
         let result = resource.resource_drop_async(&mut store).await;
 
         let current_fuel_level = store.get_fuel().unwrap_or(0);
-        let consumed_fuel = store.data_mut().return_fuel(current_fuel_level).await?;
+        let consumed_fuel = store.data_mut().return_fuel(current_fuel_level);
 
         match result {
             Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, None)),
@@ -577,7 +577,7 @@ async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     raw_function_name: &str,
 ) -> Result<u64, WorkerExecutorError> {
     let current_fuel_level = store.get_fuel().unwrap_or(0);
-    let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level).await?;
+    let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level);
 
     if consumed_fuel_for_call > 0 {
         debug!(

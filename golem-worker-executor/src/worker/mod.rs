@@ -2045,35 +2045,22 @@ impl RunningWorker {
 
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
+
         store.set_epoch_deadline(parent.config().limits.epoch_ticks);
-        let worker_id_clone = worker_metadata.worker_id.clone();
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
-            if store.data().is_out_of_fuel(current_level) {
-                debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                store.data_mut().borrow_fuel_sync(current_level);
-            }
-            // If we are still out of fuel after borrowing it means we exceeded the limits for the account
-            // and cannot borrow more. Only thing to do is suspend and try later.
-            if store.data().is_out_of_fuel(current_level) {
-                warn!("{worker_id_clone} could not borrow more fuel, suspending");
-
-                // TODO: The following edge case should be improved. If there are no other workers for the account
-                // of the worker and the resource limits are updated in the cloud service (end of month, plan change)
-                // the current resource limits logic will not pick that up. It will still be picked up after a few attempts
-                // at resuming the worker (after the first usage update is sent) or an instance restart, but we should have better ux here.
+            let data_mut = store.data_mut();
+            if !data_mut.borrow_fuel(current_level) {
+                warn!("Could not borrow more fuel, suspending");
                 return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
 
-            match store.data_mut().check_interrupt() {
+            match data_mut.check_interrupt() {
                 Some(kind) => Err(kind.into()),
                 None => Ok(UpdateDeadline::Yield(1)),
             }
         });
-
-        let initial_fuel_level = u64::MAX;
-        store.set_fuel(initial_fuel_level)?;
-        store.data_mut().borrow_fuel(initial_fuel_level).await?; // Borrowing fuel for initialization and also to make sure account is in cache
+        store.set_fuel(u64::MAX)?;
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 

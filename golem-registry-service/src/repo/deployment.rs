@@ -103,6 +103,13 @@ pub trait DeploymentRepo: Send + Sync {
         http_api_definition_name: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
 
+    async fn get_deployment_agent_type(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
+
     async fn list_deployment_agent_types(
         &self,
         environment_id: &Uuid,
@@ -293,6 +300,23 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
                 environment_id = %environment_id,
                 deployment_revision_id,
                 http_api_definition_name
+            ))
+            .await
+    }
+
+    async fn get_deployment_agent_type(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .get_deployment_agent_type(environment_id, deployment_revision_id, agent_type_name)
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                deployment_revision_id,
+                agent_type_name
             ))
             .await
     }
@@ -776,6 +800,34 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .await
     }
 
+    async fn get_deployment_agent_type(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("get_deployment_agent_type")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.agent_wrapper_type_name,
+                        r.component_id,
+                        r.component_revision_id,
+                        r.agent_type
+                    FROM deployment_registered_agent_types r
+                    WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
+                        AND (r.agent_type_name = $3 OR r.agent_wrapper_type_name = $3)
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(agent_type_name),
+            )
+            .await
+    }
+
     async fn list_deployment_agent_types(
         &self,
         environment_id: &Uuid,
@@ -788,7 +840,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
+                        r.agent_wrapper_type_name,
                         r.component_id,
+                        r.component_revision_id,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
@@ -812,14 +866,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
+                        r.agent_wrapper_type_name,
                         r.component_id,
+                        r.component_revision_id,
                         r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_registered_agent_types r
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
-                    WHERE cd.environment_id = $1 AND r.agent_type_name = $2
+                    WHERE cd.environment_id = $1 AND (r.agent_type_name = $2 OR r.agent_wrapper_type_name = $2)
                 "#})
                 .bind(environment_id)
                 .bind(agent_type_name)
@@ -838,7 +894,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
+                        r.agent_wrapper_type_name,
                         r.component_id,
+                        r.component_revision_id,
                         r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -1184,16 +1242,21 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO deployment_registered_agent_types
-                    (environment_id, deployment_revision_id, agent_type_name, component_id, agent_type)
-                VALUES ($1, $2, $3, $4, $5)
+                    (environment_id, deployment_revision_id,
+                     agent_type_name, agent_wrapper_type_name,
+                     component_id, component_revision_id,
+                     agent_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#})
-                .bind(registered_agent_type.environment_id)
-                .bind(registered_agent_type.deployment_revision_id)
-                .bind(&registered_agent_type.agent_type_name)
-                .bind(registered_agent_type.component_id)
-                .bind(&registered_agent_type.agent_type)
+            .bind(registered_agent_type.environment_id)
+            .bind(registered_agent_type.deployment_revision_id)
+            .bind(&registered_agent_type.agent_type_name)
+            .bind(&registered_agent_type.agent_wrapper_type_name)
+            .bind(registered_agent_type.component_id)
+            .bind(registered_agent_type.component_revision_id)
+            .bind(&registered_agent_type.agent_type),
         )
-            .await?;
+        .await?;
 
         Ok(())
     }

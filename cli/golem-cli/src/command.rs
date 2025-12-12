@@ -682,14 +682,6 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct OptionalAgentTypeName {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Optional agent type name. If not specified, the component name must be specified.
-        #[clap(long, verbatim_doc_comment)]
-        pub agent_type_name: Option<String>,
-    }
-
-    #[derive(Debug, Args)]
     pub struct ComponentOptionalComponentNames {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Optional component names, if not specified components are selected based on the current directory
@@ -844,6 +836,7 @@ pub mod app {
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
+    use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_templates::model::GuestLanguage;
 
@@ -852,7 +845,7 @@ pub mod app {
         /// Create a new application
         New {
             /// Application folder name where the new application should be created
-            application_name: Option<String>,
+            application_name: Option<ApplicationName>,
             /// Languages that the application should support
             language: Vec<GuestLanguage>,
         },
@@ -936,7 +929,6 @@ pub mod component {
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use golem_templates::model::PackageName;
     use std::path::PathBuf;
     use url::Url;
 
@@ -946,8 +938,8 @@ pub mod component {
         New {
             /// Template to be used for the new component
             component_template: Option<ComponentTemplateName>,
-            /// Name of the new component package in 'package:name' form
-            component_name: Option<PackageName>,
+            /// Name of the new component in 'namespace:name' form
+            component_name: Option<ComponentName>,
         },
         /// List or search component templates
         Templates {
@@ -1089,13 +1081,12 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        AgentIdArgs, ComponentOptionalComponentName, DeployArgs, OptionalAgentTypeName, StreamArgs,
-        WorkerFunctionArgument, WorkerFunctionName,
+        AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
-    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::IdempotencyKey;
 
     #[derive(Debug, Subcommand)]
@@ -1143,11 +1134,13 @@ pub mod worker {
         },
         /// List agents
         List {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentName,
+            /// Optional filter for a specific agent type
+            #[arg(conflicts_with = "component_name")]
+            agent_type_name: Option<String>,
 
-            #[command(flatten)]
-            agent_type_name: OptionalAgentTypeName,
+            /// Optional filter for a specific component
+            #[arg(long, conflicts_with = "agent_type_name")]
+            component_name: Option<ComponentName>,
 
             /// Filter for agent metadata in form of `property op value`.
             ///

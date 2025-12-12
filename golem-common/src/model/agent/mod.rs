@@ -38,7 +38,7 @@ pub mod bindings {
 
 use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
-use crate::model::component::ComponentId;
+use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::component_metadata::ComponentMetadata;
 use async_trait::async_trait;
 use base64::Engine;
@@ -950,9 +950,28 @@ pub struct AgentTypes {
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+pub struct RegisteredAgentTypeImplementer {
+    pub component_id: ComponentId,
+    pub component_revision: ComponentRevision,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RegisteredAgentType {
     pub agent_type: AgentType,
-    pub implemented_by: ComponentId,
+    pub implemented_by: RegisteredAgentTypeImplementer,
 }
 
 /// Identifies a deployed, instantiated agent.

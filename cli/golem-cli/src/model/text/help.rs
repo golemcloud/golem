@@ -358,3 +358,66 @@ impl TextView for ParameterErrorTableView {
         log_table::<_, ParameterErrorTable>(self.0.as_slice());
     }
 }
+
+pub struct EnvironmentNameHelp;
+
+impl MessageWithFields for EnvironmentNameHelp {
+    fn message(&self) -> String {
+        "Accepted environment name flags, environment variables and formats:"
+            .log_color_help_group()
+            .to_string()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
+        fields.field(
+            "--environment <ENVIRONMENT_NAME>, -E <ENVIRONMENT_NAME>",
+            &indoc! { "
+                Selects an environment from the current application manifest.
+                The application is searched based on the current directory.
+
+                If no explicit flags or environment variables are used then the default environment
+                is selected from the manifest.
+
+                If there is no available application, then a more specific from has to be used.
+
+            "},
+        );
+        fields.field(
+            "--environment <APPLICATION_NAME>/<ENVIRONMENT_NAME>, -E <APPLICATION_NAME>/<ENVIRONMENT_NAME>",
+            &indoc! { "
+                #TODO: atomic
+            "},
+        );
+        fields.field(
+            "--environment <ACCOUNT_EMAIL>/<APPLICATION_NAME>/<ENVIRONMENT_NAME>, -E <ACCOUNT_EMAIL>/<APPLICATION_NAME>/<ENVIRONMENT_NAME>",
+            &indoc! { "
+                #TODO: atomic
+            "},
+        );
+        fields.field(
+            "--local",
+            &indoc! { "
+                #TODO: atomic
+            "},
+        );
+        fields.field(
+            "--cloud",
+            &indoc! { "
+                #TODO: atomic
+            "},
+        );
+
+        fields.build()
+    }
+
+    fn indent_mode() -> MessageWithFieldsIndentMode {
+        MessageWithFieldsIndentMode::IdentFields
+    }
+
+    fn format_field_name(name: String) -> String {
+        name.log_color_highlight().to_string()
+    }
+}

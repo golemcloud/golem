@@ -243,7 +243,7 @@ impl DeploymentService {
             .ok_or(DeploymentError::AgentTypeNotFound(
                 agent_type_name.to_string(),
             ))?
-            .into();
+            .try_into()?;
 
         Ok(agent_type)
     }
@@ -257,8 +257,41 @@ impl DeploymentService {
             .list_deployed_agent_types(&environment_id.0)
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<_, _>>()?;
+
+        Ok(agent_types)
+    }
+
+    pub async fn get_deployment_agent_type(
+        &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        agent_type_name: &str,
+        auth: &AuthCtx,
+    ) -> Result<RegisteredAgentType, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewAgentTypes,
+        )?;
+
+        let agent_types = self
+            .deployment_repo
+            .get_deployment_agent_type(
+                &environment_id.0,
+                deployment_revision.into(),
+                agent_type_name,
+            )
+            .await?
+            .ok_or(DeploymentError::AgentTypeNotFound(
+                agent_type_name.to_string(),
+            ))?
+            .try_into()?;
 
         Ok(agent_types)
     }
@@ -284,8 +317,8 @@ impl DeploymentService {
             .list_deployment_agent_types(&environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<_, _>>()?;
 
         Ok(agent_types)
     }

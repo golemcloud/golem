@@ -21,6 +21,7 @@ use golem_client::api::{
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema,
     ElementSchema, NamedElementSchema, NamedElementSchemas, RegisteredAgentType,
+    RegisteredAgentTypeImplementer,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
@@ -619,7 +620,10 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         agent_types.values
             == vec![RegisteredAgentType {
                 agent_type,
-                implemented_by: component.id
+                implemented_by: RegisteredAgentTypeImplementer {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                }
             }]
     );
 

@@ -27,7 +27,6 @@ use crate::repo::component::ComponentRepo;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
-use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -99,6 +98,9 @@ impl ComponentService {
         auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(component_id = %component_id, "Get deployed component");
+
+        // Note: This is in the hot path of worker-service and worker-executor, so it might make sense to offer
+        // them a specialized version that bypasses auth / fetching the environ
 
         let record = self
             .component_repo
@@ -302,7 +304,7 @@ impl ComponentService {
         info!(
             environment_id = %environment_id,
             component_name = %component_name,
-            "Get staged component"
+            "Get deployed component"
         );
 
         let environment = self
@@ -428,34 +430,6 @@ impl ComponentService {
             ))?;
 
         Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
-    }
-
-    pub async fn get_deployment_agent_types(
-        &self,
-        environment_id: &EnvironmentId,
-        deployment_revision_id: DeploymentRevision,
-        auth: &AuthCtx,
-    ) -> Result<Vec<RegisteredAgentType>, ComponentError> {
-        let deployed_components = self
-            .list_deployment_components(environment_id, deployment_revision_id, auth)
-            .await?;
-
-        let agent_types = deployed_components
-            .into_iter()
-            .flat_map(|c| {
-                let component_id = c.id;
-                c.metadata
-                    .agent_types()
-                    .iter()
-                    .map(|at| RegisteredAgentType {
-                        agent_type: at.clone(),
-                        implemented_by: component_id,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        Ok(agent_types)
     }
 
     pub async fn download_component_wasm(

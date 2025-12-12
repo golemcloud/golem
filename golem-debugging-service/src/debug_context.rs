@@ -89,18 +89,12 @@ impl DurableWorkerCtxView<DebugContext> for DebugContext {
 
 #[async_trait]
 impl FuelManagement for DebugContext {
-    fn is_out_of_fuel(&self, _current_level: u64) -> bool {
-        false
+    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+        true
     }
 
-    async fn borrow_fuel(&mut self, _current_level: u64) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
-    fn borrow_fuel_sync(&mut self, _current_level: u64) {}
-
-    async fn return_fuel(&mut self, _current_level: u64) -> Result<u64, WorkerExecutorError> {
-        Ok(0)
+    fn return_fuel(&mut self, _current_level: u64) -> u64 {
+        0
     }
 }
 

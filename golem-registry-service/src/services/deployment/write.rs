@@ -23,8 +23,8 @@ use crate::services::http_api_definition::{HttpApiDefinitionError, HttpApiDefini
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::run_cpu_bound_work;
 use futures::TryFutureExt;
-use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{RegisteredAgentType, RegisteredAgentTypeImplementer};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff::{self, HashOf, Hashable};
@@ -471,7 +471,10 @@ impl DeploymentContext {
                 }
                 agent_types.push(RegisteredAgentType {
                     agent_type: agent_type.clone(),
-                    implemented_by: component.id,
+                    implemented_by: RegisteredAgentTypeImplementer {
+                        component_id: component.id,
+                        component_revision: component.revision,
+                    },
                 });
             }
         }

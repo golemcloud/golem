@@ -563,16 +563,7 @@ impl From<RegisteredAgentType> for host::RegisteredAgentType {
     fn from(value: RegisteredAgentType) -> Self {
         host::RegisteredAgentType {
             agent_type: value.agent_type.into(),
-            implemented_by: value.implemented_by.into(),
-        }
-    }
-}
-
-impl From<host::RegisteredAgentType> for RegisteredAgentType {
-    fn from(value: host::RegisteredAgentType) -> Self {
-        RegisteredAgentType {
-            agent_type: value.agent_type.into(),
-            implemented_by: value.implemented_by.into(),
+            implemented_by: value.implemented_by.component_id.into(),
         }
     }
 }
