@@ -28,15 +28,15 @@ use golem_api_grpc::proto::golem::worker::v1::{
     WorkerError as GrpcWorkerError,
 };
 use golem_api_grpc::proto::golem::worker::InvokeResultTyped;
-use golem_common::grpc::{
-    proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
-};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::WorkerId;
 use golem_common::recorded_grpc_api_request;
+use golem_service_base::grpc::{
+    proto_component_id_string, proto_idempotency_key_string,
+    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
+};
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::sync::Arc;

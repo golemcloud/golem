@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod client;
+pub mod server;
+
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
+use golem_common::model::{IdempotencyKey, PromiseId, WorkerId};
 use std::fmt::{Debug, Display, Formatter};
 
 pub enum GrpcError<E> {
@@ -127,4 +131,36 @@ pub fn proto_component_id_string(
     (*component_id)
         .and_then(|v| TryInto::<ComponentId>::try_into(v).ok())
         .map(|v| v.to_string())
+}
+
+pub fn proto_worker_id_string(
+    worker_id: &Option<golem_api_grpc::proto::golem::worker::WorkerId>,
+) -> Option<String> {
+    worker_id
+        .clone()
+        .and_then(|v| TryInto::<WorkerId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
+
+pub fn proto_idempotency_key_string(
+    idempotency_key: &Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+) -> Option<String> {
+    idempotency_key
+        .clone()
+        .map(|v| Into::<IdempotencyKey>::into(v).to_string())
+}
+
+pub fn proto_promise_id_string(
+    promise_id: &Option<golem_api_grpc::proto::golem::worker::PromiseId>,
+) -> Option<String> {
+    promise_id
+        .clone()
+        .and_then(|v| TryInto::<PromiseId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
+
+pub fn proto_invocation_context_parent_worker_id_string(
+    invocation_context: &Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+) -> Option<String> {
+    proto_worker_id_string(&invocation_context.as_ref().and_then(|c| c.parent.clone()))
 }

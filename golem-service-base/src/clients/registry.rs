@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RegistryServiceConfig;
 use crate::custom_api::CompiledRoutes;
+use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
@@ -32,7 +32,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_resource_limits_response, resolve_component_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
-use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::RegisteredAgentType;
@@ -42,8 +42,11 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::{IntoAnyhow, SafeDisplay};
+use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
+use http::Uri;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Write;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -153,13 +156,56 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<CompiledRoutes, RegistryServiceError>;
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GrpcRegistryServiceConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_message_size: usize,
+    #[serde(flatten)]
+    pub client_config: GrpcClientConfig,
+}
+
+impl GrpcRegistryServiceConfig {
+    pub fn uri(&self) -> Uri {
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
+    }
+}
+
+impl SafeDisplay for GrpcRegistryServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
+        let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
+        result
+    }
+}
+
+impl Default for GrpcRegistryServiceConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 8080,
+            max_message_size: 50 * 1024 * 1024,
+            client_config: GrpcClientConfig::default(),
+        }
+    }
+}
+
+impl HasConfigExamples<GrpcRegistryServiceConfig> for GrpcRegistryServiceConfig {
+    fn examples() -> Vec<ConfigExample<GrpcRegistryServiceConfig>> {
+        vec![]
+    }
+}
+
 #[derive(Clone)]
 pub struct GrpcRegistryService {
     client: GrpcClient<RegistryServiceClient<OtelGrpcService<Channel>>>,
 }
 
 impl GrpcRegistryService {
-    pub fn new(config: &RegistryServiceConfig) -> Self {
+    pub fn new(config: &GrpcRegistryServiceConfig) -> Self {
         let max_message_size = config.max_message_size;
         let client = GrpcClient::new(
             "registry",
@@ -170,10 +216,7 @@ impl GrpcRegistryService {
                     .max_decoding_message_size(max_message_size)
             },
             config.uri(),
-            GrpcClientConfig {
-                retries_on_unavailable: config.retries.clone(),
-                connect_timeout: config.connect_timeout,
-            },
+            config.client_config.clone(),
         );
         Self { client }
     }
@@ -637,8 +680,8 @@ pub enum RegistryServiceError {
     NotFound(String),
     #[error("AlreadyExists: {0}")]
     AlreadyExists(String),
-    #[error("Internal error: {0}")]
-    InternalError(String),
+    #[error("Internal server error: {0}")]
+    InternalServerError(String),
     #[error("Cound not authenticate: {0}")]
     CouldNotAuthenticate(String),
     #[error("Internal client error: {0}")]
@@ -665,7 +708,7 @@ impl SafeDisplay for RegistryServiceError {
             Self::NotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalClientError(_) => "Internal error".to_string(),
-            Self::InternalError(_) => "Internal error".to_string(),
+            Self::InternalServerError(_) => "Internal error".to_string(),
         }
     }
 }
@@ -686,7 +729,7 @@ impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
             Some(Error::NotFound(error)) => Self::NotFound(error.error),
             Some(Error::AlreadyExists(error)) => Self::AlreadyExists(error.error),
             Some(Error::BadRequest(errors)) => Self::BadRequest(errors.errors),
-            Some(Error::InternalError(error)) => Self::InternalError(error.error),
+            Some(Error::InternalError(error)) => Self::InternalServerError(error.error),
             Some(Error::Unauthorized(error)) => Self::Unauthorized(error.error),
             Some(Error::CouldNotAuthenticate(error)) => Self::CouldNotAuthenticate(error.error),
             None => Self::internal_client_error("Missing error field"),

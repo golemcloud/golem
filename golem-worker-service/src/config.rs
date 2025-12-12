@@ -19,8 +19,10 @@ use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::RegistryServiceConfig;
+use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::grpc::client::GrpcClientConfig;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
@@ -34,12 +36,12 @@ pub struct WorkerServiceConfig {
     pub gateway_session_storage: GatewaySessionStorageConfig,
     pub port: u16,
     pub custom_request_port: u16,
-    pub worker_grpc_port: u16,
+    pub grpc: GrpcApiConfig,
     pub routing_table: RoutingTableConfig,
-    pub worker_executor_retries: RetryConfig,
+    pub worker_executor: WorkerExecutorClientConfig,
     pub blob_storage: BlobStorageConfig,
     pub workspace: String,
-    pub registry_service: RegistryServiceConfig,
+    pub registry_service: GrpcRegistryServiceConfig,
     pub cors_origin_regex: String,
     pub route_resolver: RouteResolverConfig,
     pub component_service: ComponentServiceConfig,
@@ -70,19 +72,18 @@ impl SafeDisplay for WorkerServiceConfig {
             "Custom request port: {}",
             self.custom_request_port
         );
-        let _ = writeln!(&mut result, "gRPC port: {}", self.worker_grpc_port);
+
+        let _ = writeln!(&mut result, "grpc:");
+        let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
+
         let _ = writeln!(&mut result, "routing table:");
         let _ = writeln!(
             &mut result,
             "{}",
             self.routing_table.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "worker executor retries:");
-        let _ = writeln!(
-            result,
-            "{}",
-            self.worker_executor_retries.to_safe_string_indented()
-        );
+        let _ = writeln!(&mut result, "worker executor:");
+        let _ = writeln!(result, "{}", self.worker_executor.to_safe_string_indented());
         let _ = writeln!(&mut result, "blob storage:");
         let _ = writeln!(
             &mut result,
@@ -132,19 +133,12 @@ impl Default for WorkerServiceConfig {
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,
-            worker_grpc_port: 9007,
+            grpc: GrpcApiConfig::default(),
             routing_table: RoutingTableConfig::default(),
-            worker_executor_retries: RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(10),
-                max_delay: Duration::from_secs(3),
-                multiplier: 10.0,
-                max_jitter_factor: Some(0.15),
-            },
+            worker_executor: WorkerExecutorClientConfig::default(),
             blob_storage: BlobStorageConfig::default(),
-            // api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
-            registry_service: RegistryServiceConfig::default(),
+            registry_service: GrpcRegistryServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             route_resolver: RouteResolverConfig::default(),
             component_service: ComponentServiceConfig::default(),
@@ -156,6 +150,34 @@ impl Default for WorkerServiceConfig {
 impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
     fn examples() -> Vec<ConfigExample<WorkerServiceConfig>> {
         vec![]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GrpcApiConfig {
+    pub port: u16,
+    pub tls: GrpcServerTlsConfig,
+}
+
+impl SafeDisplay for GrpcApiConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "port: {}", self.port);
+
+        let _ = writeln!(&mut result, "tls:");
+        let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
+
+        result
+    }
+}
+
+impl Default for GrpcApiConfig {
+    fn default() -> Self {
+        Self {
+            port: 9094,
+            tls: GrpcServerTlsConfig::disabled(),
+        }
     }
 }
 
@@ -323,6 +345,51 @@ impl Default for AuthServiceConfig {
             environment_auth_details_cache_ttl: Duration::from_mins(10),
             environment_auth_details_cache_eviction_period: Duration::from_mins(1),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerExecutorClientConfig {
+    pub retries: RetryConfig,
+    #[serde(flatten)]
+    pub client: GrpcClientConfig,
+}
+
+impl Default for WorkerExecutorClientConfig {
+    fn default() -> Self {
+        Self {
+            retries: RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_secs(3),
+                multiplier: 10.0,
+                max_jitter_factor: Some(0.15),
+            },
+            client: GrpcClientConfig {
+                retries_on_unavailable: RetryConfig {
+                    max_attempts: 0, // we want to invalidate the routing table asap
+                    min_delay: Duration::from_millis(100),
+                    max_delay: Duration::from_secs(2),
+                    multiplier: 2.0,
+                    max_jitter_factor: Some(0.15),
+                },
+                connect_timeout: Duration::from_secs(10),
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl SafeDisplay for WorkerExecutorClientConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(result, "{}", self.retries.to_safe_string_indented());
+
+        let _ = writeln!(&mut result, "{}", self.client.to_safe_string());
+
+        result
     }
 }
 

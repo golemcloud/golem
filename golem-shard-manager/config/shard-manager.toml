@@ -1,8 +1,15 @@
 ## Generated from default config
-grpc_port = 9002
 http_port = 8081
 number_of_shards = 1024
 rebalance_threshold = 0.1
+
+[grpc]
+port = 9092
+
+[grpc.tls]
+type = "Disabled"
+
+[grpc.tls.config]
 
 [health_check]
 delay = "10s"
@@ -92,12 +99,31 @@ max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
+[worker_executors.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_executors.tls]
+type = "Disabled"
+
+[worker_executors.tls.config]
+
 
 ## Generated from example config: with k8s healthcheck
-# grpc_port = 9002
 # http_port = 8081
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
+# 
+# [grpc]
+# port = 9092
+# 
+# [grpc.tls]
+# type = "Disabled"
+# 
+# [grpc.tls.config]
 # 
 # [health_check]
 # delay = "1s"
@@ -187,3 +213,15 @@ multiplier = 2.0
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [worker_executors.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [worker_executors.tls]
+# type = "Disabled"
+# 
+# [worker_executors.tls.config]

@@ -48,10 +48,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvokeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
-use golem_common::grpc::{
-    proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string,
-    proto_worker_id_string,
-};
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
@@ -67,6 +63,10 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
+use golem_service_base::grpc::{
+    proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string,
+    proto_worker_id_string,
+};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::protobuf::Val;

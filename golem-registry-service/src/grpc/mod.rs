@@ -17,10 +17,12 @@ mod error;
 
 use self::api_impl::RegistryServiceGrpcApi;
 use crate::bootstrap::Services;
+use crate::config::GrpcApiConfig;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_server::RegistryServiceServer;
-use std::net::SocketAddr;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -30,13 +32,15 @@ use tonic_tracing_opentelemetry::middleware::server::OtelGrpcLayer;
 use tracing::Instrument;
 
 pub async fn start_grpc_server(
-    addr: SocketAddr,
+    config: &GrpcApiConfig,
     services: &Services,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
+    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.port);
     let listener = TcpListener::bind(addr).await?;
+
     let port = listener.local_addr()?.port();
 
     health_reporter
@@ -48,8 +52,14 @@ pub async fn start_grpc_server(
         .build_v1()
         .unwrap();
 
-    join_set.spawn(
-        Server::builder()
+    join_set.spawn({
+        let mut server = Server::builder();
+
+        if let GrpcServerTlsConfig::Enabled(tls) = &config.tls {
+            server = server.tls_config(tls.to_tonic())?;
+        };
+
+        server
             .layer(
                 OtelGrpcLayer::default()
                     .filter(tonic_tracing_opentelemetry::middleware::filters::reject_healthcheck),
@@ -71,8 +81,8 @@ pub async fn start_grpc_server(
             )
             .serve_with_incoming(TcpListenerStream::new(listener))
             .map_err(anyhow::Error::from)
-            .in_current_span(),
-    );
+            .in_current_span()
+    });
 
     services
         .component_compilation_service

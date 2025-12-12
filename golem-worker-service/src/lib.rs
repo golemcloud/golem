@@ -30,7 +30,7 @@ pub mod swagger_ui;
 
 use crate::config::WorkerServiceConfig;
 use crate::service::Services;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
@@ -39,7 +39,6 @@ use poem::listener::Listener;
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
 
@@ -122,13 +121,9 @@ impl WorkerService {
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<u16, anyhow::Error> {
-        grpcapi::start_grpc_server(
-            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.worker_grpc_port).into(),
-            self.services.clone(),
-            join_set,
-        )
-        .await
-        .map_err(|err| anyhow!(err).context("gRPC server failed"))
+        grpcapi::start_grpc_server(&self.config.grpc, self.services.clone(), join_set)
+            .await
+            .context("gRPC server failed")
     }
 
     async fn start_http_server(

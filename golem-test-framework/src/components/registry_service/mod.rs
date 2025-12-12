@@ -220,7 +220,7 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         //
-        .with("GOLEM__GRPC_PORT", grpc_port.to_string())
+        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
         .with_optional_otlp("registry_service", otlp)

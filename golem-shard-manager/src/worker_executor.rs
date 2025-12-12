@@ -18,10 +18,10 @@ use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::time::error::Elapsed;
@@ -132,7 +132,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
 
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
         // NOTE: retries are handled in healthcheck.rs
-        let endpoint = pod.endpoint();
+        let endpoint = pod.endpoint(self.config.client_config.tls_enabled());
         let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
         match conn {
             Ok(conn) => match conn {
@@ -187,10 +187,7 @@ impl WorkerExecutorServiceDefault {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            GrpcClientConfig {
-                retries_on_unavailable: config.retries.clone(),
-                connect_timeout: config.connect_timeout,
-            },
+            config.client_config.clone(),
         );
         Self { config, client }
     }
@@ -210,10 +207,14 @@ impl WorkerExecutorServiceDefault {
 
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,
-            self.client.call("assign_shards", pod.uri(), move |client| {
-                let assign_shards_request = assign_shards_request.clone();
-                Box::pin(client.assign_shards(assign_shards_request))
-            }),
+            self.client.call(
+                "assign_shards",
+                pod.uri(self.config.client_config.tls_enabled()),
+                move |client| {
+                    let assign_shards_request = assign_shards_request.clone();
+                    Box::pin(client.assign_shards(assign_shards_request))
+                },
+            ),
         )
         .await
         .map_err(|_: Elapsed| ShardManagerError::Timeout)?
@@ -252,10 +253,14 @@ impl WorkerExecutorServiceDefault {
 
         let revoke_shards_response = timeout(
             self.config.revoke_shards_timeout,
-            self.client.call("revoke_shards", pod.uri(), move |client| {
-                let revoke_shards_request = revoke_shards_request.clone();
-                Box::pin(client.revoke_shards(revoke_shards_request))
-            }),
+            self.client.call(
+                "revoke_shards",
+                pod.uri(self.config.client_config.tls_enabled()),
+                move |client| {
+                    let revoke_shards_request = revoke_shards_request.clone();
+                    Box::pin(client.revoke_shards(revoke_shards_request))
+                },
+            ),
         )
         .await
         .map_err(|_: Elapsed| ShardManagerError::Timeout)?

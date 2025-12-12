@@ -107,7 +107,7 @@ async fn env_vars(
             "GOLEM__CUSTOM_REQUEST_PORT",
             custom_request_port.to_string(),
         )
-        .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
+        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__PORT", http_port.to_string())
         .with(
             "GOLEM__ENGINE__ENABLE_FS_CACHE",
