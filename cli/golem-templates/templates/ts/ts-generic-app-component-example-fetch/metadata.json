@@ -1,4 +1,4 @@
 {
-  "description": "A TypeScript worker making a remote request using 'fetch'",
+  "description": "A TypeScript agent making a remote request using 'fetch'",
   "appComponentGroup": "generic"
 }

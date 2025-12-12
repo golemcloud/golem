@@ -17,7 +17,7 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::log::logln;
+use crate::log::{logln, LogColorize};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
@@ -58,13 +58,13 @@ impl EnvironmentCommandHandler {
                     let application = self
                         .ctx
                         .app_handler()
-                        .get_or_create_remote_application()
+                        .get_or_create_server_application_by_manifest()
                         .await?;
 
                     match application {
                         Some(application) => {
                             let environment = self
-                                .get_or_create_remote_environment(
+                                .get_or_create_server_environment(
                                     &application.id,
                                     &env.environment_name,
                                 )
@@ -75,10 +75,10 @@ impl EnvironmentCommandHandler {
                                 environment,
                             ))
                         }
-                        None => self.manifest_is_required_error(mode)?,
+                        None => self.environment_is_required_error(mode)?,
                     }
                 }
-                None => self.manifest_is_required_error(mode)?,
+                None => self.environment_is_required_error(mode)?,
             },
         }
     }
@@ -89,10 +89,7 @@ impl EnvironmentCommandHandler {
         environment_reference: &EnvironmentReference,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
         if !mode.allowed(environment_reference) {
-            log_error("The requested command requires using an application manifest environment.");
-            logln("");
-            log_text_view(&EnvironmentNameHelp);
-            bail!(NonSuccessfulExit);
+            self.environment_is_required_error(mode)?;
         }
 
         match environment_reference {
@@ -102,13 +99,13 @@ impl EnvironmentCommandHandler {
                 let application = self
                     .ctx
                     .app_handler()
-                    .get_or_create_remote_application()
+                    .get_or_create_server_application_by_manifest()
                     .await?;
 
                 match application {
                     Some(application) => {
                         let environment = self
-                            .get_or_create_remote_environment(&application.id, environment_name)
+                            .get_or_create_server_environment(&application.id, environment_name)
                             .await?;
                         Ok(ResolvedEnvironmentIdentity::new(
                             Some(environment_reference),
@@ -116,7 +113,7 @@ impl EnvironmentCommandHandler {
                             environment,
                         ))
                     }
-                    None => self.manifest_is_required_error(mode)?,
+                    None => self.environment_is_required_error(mode)?,
                 }
             }
             // NOTE: with app-env references we DO NOT create anything, these are used for
@@ -128,26 +125,17 @@ impl EnvironmentCommandHandler {
                 let application = self
                     .ctx
                     .app_handler()
-                    .get_remote_application(&self.ctx.account_id().await?, application_name)
+                    .get_server_application_or_err(&self.ctx.account_id().await?, application_name)
                     .await?;
 
-                match application {
-                    Some(application) => {
-                        let environment = self
-                            .ctx
-                            .golem_clients()
-                            .await?
-                            .environment
-                            .get_application_environment(&application.id.0, &environment_name.0)
-                            .await?;
-                        Ok(ResolvedEnvironmentIdentity::new(
-                            Some(environment_reference),
-                            application,
-                            environment,
-                        ))
-                    }
-                    None => self.manifest_is_required_error(mode)?,
-                }
+                let environment = self
+                    .get_server_environment_or_err(&application.id, environment_name)
+                    .await?;
+                Ok(ResolvedEnvironmentIdentity::new(
+                    Some(environment_reference),
+                    application,
+                    environment,
+                ))
             }
             EnvironmentReference::AccountApplicationEnvironment { .. } => {
                 // TODO: atomic: use search / lookup API once available
@@ -179,7 +167,7 @@ impl EnvironmentCommandHandler {
         }
     }
 
-    async fn get_remote_environment(
+    async fn get_server_environment(
         &self,
         application_id: &ApplicationId,
         environment_name: &EnvironmentName,
@@ -193,13 +181,33 @@ impl EnvironmentCommandHandler {
             .map_service_error_not_found_as_opt()
     }
 
-    async fn get_or_create_remote_environment(
+    async fn get_server_environment_or_err(
         &self,
         application_id: &ApplicationId,
         environment_name: &EnvironmentName,
     ) -> anyhow::Result<golem_client::model::Environment> {
         match self
-            .get_remote_environment(application_id, environment_name)
+            .get_server_environment(application_id, environment_name)
+            .await?
+        {
+            Some(environment) => Ok(environment),
+            None => {
+                log_error(format!(
+                    "Environment {} not found",
+                    environment_name.0.log_color_highlight()
+                ));
+                bail!(NonSuccessfulExit);
+            }
+        }
+    }
+
+    async fn get_or_create_server_environment(
+        &self,
+        application_id: &ApplicationId,
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<golem_client::model::Environment> {
+        match self
+            .get_server_environment(application_id, environment_name)
             .await?
         {
             Some(environment) => Ok(environment),
@@ -239,15 +247,15 @@ impl EnvironmentCommandHandler {
         }
     }
 
-    fn manifest_is_required_error<T>(&self, mode: EnvironmentResolveMode) -> anyhow::Result<T> {
+    fn environment_is_required_error<T>(&self, mode: EnvironmentResolveMode) -> anyhow::Result<T> {
         match mode {
             EnvironmentResolveMode::ManifestOnly => {
                 log_error(
-                    "The requested command requires using an application manifest environment.",
+                    "The requested command requires an environment from an application manifest.",
                 );
             }
             EnvironmentResolveMode::Any => {
-                log_error("The requested command requires using an application manifest or selection of an environment via flags or environment variables.");
+                log_error("The requested command requires an environment from an application manifest or via flags or environment variables.");
             }
         }
         logln("");

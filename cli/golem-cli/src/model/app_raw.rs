@@ -38,14 +38,14 @@ pub struct ApplicationWithSource {
 
 impl ApplicationWithSource {
     pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-        Self::from_yaml_string(file.clone(), fs::read_to_string(file.clone())?)
+        Self::from_yaml_string(file.clone(), &fs::read_to_string(file.clone())?)
             .with_context(|| anyhow!("Failed to load source {}", file.log_color_highlight()))
     }
 
-    pub fn from_yaml_string(source: PathBuf, string: String) -> serde_yaml::Result<Self> {
+    pub fn from_yaml_string(source: PathBuf, string: &str) -> serde_yaml::Result<Self> {
         Ok(Self {
             source,
-            application: Application::from_yaml_str(string.as_str())?,
+            application: Application::from_yaml_str(string)?,
         })
     }
 
