@@ -839,6 +839,19 @@ impl ComponentCommandHandler {
         component_revision_selection: Option<ComponentRevisionSelection<'_>>,
         deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<ComponentDto> {
+        if deploy_args.is_some() || self.ctx.deploy_args().is_any_set() {
+            self.ctx
+                .app_handler()
+                .deploy(DeployConfig {
+                    plan: false,
+                    stage: false,
+                    approve_staging_steps: false,
+                    force_build: None,
+                    deploy_args: deploy_args.cloned().unwrap_or_else(DeployArgs::none),
+                })
+                .await?;
+        }
+
         match self
             .resolve_component(environment, component_name, component_revision_selection)
             .await?
@@ -887,7 +900,7 @@ impl ComponentCommandHandler {
                             stage: false,
                             approve_staging_steps: false,
                             force_build: None,
-                            deploy_args: deploy_args.cloned().unwrap_or_else(DeployArgs::none),
+                            deploy_args: DeployArgs::none(),
                         })
                         .await?;
                     self.ctx
