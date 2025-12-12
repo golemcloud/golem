@@ -30,7 +30,7 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::info;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AccountError {
