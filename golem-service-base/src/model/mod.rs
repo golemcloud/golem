@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod auth;
-pub mod component;
 pub mod plugin_registration;
 
 use golem_common::model::account::AccountId;
