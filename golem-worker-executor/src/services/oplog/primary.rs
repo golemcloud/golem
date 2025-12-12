@@ -15,7 +15,9 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+};
 use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentId;

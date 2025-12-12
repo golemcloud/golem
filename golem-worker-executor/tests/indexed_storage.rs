@@ -174,18 +174,25 @@ async fn multi_sqlite_storage(
 }
 
 #[derive(Debug, Clone)]
-struct IndexedStorageNamespacePair {
+struct IndexedStorageNamespaces {
     ns: IndexedStorageNamespace,
+    ns_other: IndexedStorageNamespace,
     meta: IndexedStorageMetaNamespace,
 }
 
 #[test_dep(tagged_as = "ns1")]
-fn ns() -> IndexedStorageNamespacePair {
-    IndexedStorageNamespacePair {
+fn ns() -> IndexedStorageNamespaces {
+    IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::OpLog {
             worker_id: WorkerId {
                 component_id: ComponentId::new(),
                 worker_name: "test".to_string(),
+            },
+        },
+        ns_other: IndexedStorageNamespace::OpLog {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test2".to_string(),
             },
         },
         meta: IndexedStorageMetaNamespace::Oplog,
@@ -193,12 +200,19 @@ fn ns() -> IndexedStorageNamespacePair {
 }
 
 #[test_dep(tagged_as = "ns2")]
-fn ns2() -> IndexedStorageNamespacePair {
-    IndexedStorageNamespacePair {
+fn ns2() -> IndexedStorageNamespaces {
+    IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::CompressedOpLog {
             worker_id: WorkerId {
                 component_id: ComponentId::new(),
                 worker_name: "test".to_string(),
+            },
+            level: 1,
+        },
+        ns_other: IndexedStorageNamespace::CompressedOpLog {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test2".to_string(),
             },
             level: 1,
         },
@@ -215,8 +229,8 @@ define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_mem
 async fn exists_append(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -238,8 +252,8 @@ async fn exists_append(
 async fn namespaces_are_separate(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns1: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns1: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -259,8 +273,8 @@ async fn namespaces_are_separate(
 async fn can_append_and_get(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -316,8 +330,8 @@ async fn can_append_and_get(
 async fn append_cannot_overwrite(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -340,8 +354,8 @@ async fn append_cannot_overwrite(
 async fn append_can_skip(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -385,8 +399,8 @@ async fn append_can_skip(
 async fn length(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -414,8 +428,8 @@ async fn length(
 async fn scan_empty(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -441,8 +455,8 @@ async fn scan_empty(
 async fn scan_with_no_pattern_single_paged(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -482,15 +496,17 @@ async fn scan_with_no_pattern_single_paged(
 async fn scan_with_no_pattern_paginated(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
     let key1 = "key1";
     let key2 = "key2";
+    let key3 = "key2";
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
+    let value3 = "value3".as_bytes().to_vec();
 
     is.append(
         "svc",
@@ -518,10 +534,21 @@ async fn scan_with_no_pattern_paginated(
         "svc",
         "api",
         "entity",
-        ns.ns.clone(),
+        ns2.ns.clone(),
         key2,
         1,
         value2.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns_other.clone(),
+        key3,
+        3,
+        value3.clone(),
     )
     .await
     .unwrap();
@@ -555,9 +582,24 @@ async fn scan_with_no_pattern_paginated(
         }
     }
 
+    let mut r3: Vec<String> = Vec::new();
+    loop {
+        let (next, chunk) = is
+            .scan("svc", "api", ns.meta.clone(), "*", cursor, 1)
+            .await
+            .unwrap();
+        r3.extend(chunk);
+        cursor = next;
+
+        if cursor == 0 {
+            break;
+        }
+    }
+
     let mut all = Vec::new();
     all.extend(r1.clone());
     all.extend(r2.clone());
+    all.extend(r3.clone());
     all.sort();
 
     // Note: Redis does not guarantee to return the asked number of items, it is just a hint.
@@ -565,6 +607,7 @@ async fn scan_with_no_pattern_paginated(
     // check!(r2.len() == 1);
     check!(all.contains(&key1.to_string()));
     check!(all.contains(&key2.to_string()));
+    check!(all.contains(&key3.to_string()));
 }
 
 #[test]
@@ -572,8 +615,8 @@ async fn scan_with_no_pattern_paginated(
 async fn scan_with_prefix_pattern_single_paged(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -618,8 +661,8 @@ async fn scan_with_prefix_pattern_single_paged(
 async fn scan_with_prefix_pattern_paginated(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -686,8 +729,8 @@ async fn scan_with_prefix_pattern_paginated(
 async fn exists_append_delete(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -710,8 +753,8 @@ async fn exists_append_delete(
 async fn delete_is_per_namespace(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns1: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns1: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -732,8 +775,8 @@ async fn delete_is_per_namespace(
 async fn delete_non_existing(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -749,8 +792,8 @@ async fn delete_non_existing(
 async fn first(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -798,8 +841,8 @@ async fn first(
 async fn last(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -847,8 +890,8 @@ async fn last(
 async fn closest_low(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -896,8 +939,8 @@ async fn closest_low(
 async fn closest_match(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -945,8 +988,8 @@ async fn closest_match(
 async fn closest_mid(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -994,8 +1037,8 @@ async fn closest_mid(
 async fn closest_high(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -1027,8 +1070,8 @@ async fn closest_high(
 async fn drop_prefix_no_match(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -1087,8 +1130,8 @@ async fn drop_prefix_no_match(
 async fn drop_prefix_partial(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -1147,8 +1190,8 @@ async fn drop_prefix_partial(
 async fn drop_prefix_full(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespacePair,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespacePair,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 

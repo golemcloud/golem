@@ -101,11 +101,11 @@ impl MultiSqliteIndexedStorage {
     async fn namespace_to_db(&self, namespace: &IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog { worker_id } => {
-                format!("oplog-{}", self.worker_id_hash(worker_id).await)
+                format!("oplog-{}.db", self.worker_id_hash(worker_id).await)
             }
             IndexedStorageNamespace::CompressedOpLog { worker_id, level } => {
                 format!(
-                    "compressed-oplog-l{}-{}",
+                    "compressed-oplog-l{}-{}.db",
                     level,
                     self.worker_id_hash(worker_id).await
                 )
@@ -207,7 +207,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
 
         // Decode cursor: upper 32 bits = file index, lower 32 bits = scan cursor within file
         let file_index = (cursor >> 32) as usize;
-        let file_cursor = (cursor & 0xFFFFFFFF) as u64;
+        let file_cursor = cursor & 0xFFFFFFFF;
 
         let mut results = Vec::new();
         let mut current_file_cursor = file_cursor;

@@ -14,7 +14,9 @@
 
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
@@ -187,7 +189,10 @@ impl CompressedOplogArchive {
             .indexed_storage
             .with_entity("compressed_oplog", "read", "compressed_entry")
             .closest::<CompressedOplogChunk>(
-                IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level },
+                IndexedStorageNamespace::CompressedOpLog {
+                    worker_id: self.worker_id.clone(),
+                    level: self.level,
+                },
                 &self.key,
                 end_of_range.into(),
             )
@@ -356,7 +361,10 @@ impl OplogArchive for CompressedOplogArchive {
         self.indexed_storage
             .with("compressed_oplog", "length")
             .length(
-                IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level },
+                IndexedStorageNamespace::CompressedOpLog {
+                    worker_id: self.worker_id.clone(),
+                    level: self.level,
+                },
                 &self.key,
             )
             .await

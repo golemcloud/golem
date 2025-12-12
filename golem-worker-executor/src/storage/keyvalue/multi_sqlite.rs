@@ -99,13 +99,13 @@ impl MultiSqliteKeyValueStorage {
         match namespace {
             KeyValueStorageNamespace::RunningWorkers => "kv-running_workers".to_string(),
             KeyValueStorageNamespace::Worker { worker_id } => {
-                format!("kv-worker-{}", self.worker_id_hash(worker_id).await)
+                format!("kv-worker-{}.db", self.worker_id_hash(worker_id).await)
             }
             KeyValueStorageNamespace::Promise { worker_id } => {
-                format!("kv-worker-{}", self.worker_id_hash(worker_id).await)
+                format!("kv-worker-{}.db", self.worker_id_hash(worker_id).await)
             }
-            KeyValueStorageNamespace::Schedule => "kv-schedule".to_string(),
-            KeyValueStorageNamespace::UserDefined { .. } => "kv-user-defined".to_string(),
+            KeyValueStorageNamespace::Schedule => "kv-schedule.db".to_string(),
+            KeyValueStorageNamespace::UserDefined { .. } => "kv-user-defined.db".to_string(),
         }
     }
 

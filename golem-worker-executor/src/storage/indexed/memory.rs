@@ -60,6 +60,7 @@ impl InMemoryIndexedStorage {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn match_key(
         namespace: IndexedStorageMetaNamespace,
         prefix: &str,

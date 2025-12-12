@@ -221,7 +221,9 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
         self.key_value_storage
             .with("promise", "complete")
             .exists(
-                KeyValueStorageNamespace::Promise { worker_id: promise_id.worker_id.clone() },
+                KeyValueStorageNamespace::Promise {
+                    worker_id: promise_id.worker_id.clone(),
+                },
                 &get_promise_redis_key(promise_id),
             )
             .await
@@ -244,7 +246,9 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         self.key_value_storage
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
-                KeyValueStorageNamespace::Promise { worker_id: worker_id.clone() },
+                KeyValueStorageNamespace::Promise {
+                    worker_id: worker_id.clone(),
+                },
                 &key,
                 &RedisPromiseState::Pending,
             )
@@ -282,7 +286,9 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .key_value_storage
             .with_entity("promise", "poll", "promise")
             .get(
-                KeyValueStorageNamespace::Promise { worker_id: promise_id.worker_id.clone() },
+                KeyValueStorageNamespace::Promise {
+                    worker_id: promise_id.worker_id.clone(),
+                },
                 &get_promise_result_redis_key(&promise_id),
             )
             .await
@@ -310,7 +316,9 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .key_value_storage
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
-                KeyValueStorageNamespace::Promise { worker_id: promise_id.worker_id.clone() },
+                KeyValueStorageNamespace::Promise {
+                    worker_id: promise_id.worker_id.clone(),
+                },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
             )
