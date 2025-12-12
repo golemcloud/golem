@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use axum::extract::Query;
 use axum::response::Response;
 use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::{stream, StreamExt};
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use http::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -43,13 +44,9 @@ async fn custom_durability_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let response = Arc::new(AtomicU32::new(0));
     let response_clone = response.clone();
@@ -83,13 +80,16 @@ async fn custom_durability_1(
         .in_current_span(),
     );
 
-    let component_id = executor.component("custom_durability").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "custom_durability")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "custom-durability-1", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "custom-durability-1", env, vec![])
+        .await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -97,18 +97,12 @@ async fn custom_durability_1(
             "golem:it-exports/golem-it-api.{callback}",
             vec!["a".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result2 = executor
         .invoke_and_await(
@@ -116,16 +110,16 @@ async fn custom_durability_1(
             "golem:it-exports/golem-it-api.{callback}",
             vec!["b".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
     assert_eq!(result1, vec![Value::String("0-a".to_string())]);
     assert_eq!(result2, vec![Value::String("1-b".to_string())]);
+    Ok(())
 }
 
 #[test]
@@ -134,13 +128,9 @@ async fn lazy_pollable(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
@@ -186,13 +176,16 @@ async fn lazy_pollable(
         .in_current_span(),
     );
 
-    let component_id = executor.component("custom_durability").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "custom_durability")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "custom-durability-1", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "custom-durability-1", env, vec![])
+        .await?;
 
     signal_tx.send(()).unwrap();
 
@@ -202,8 +195,8 @@ async fn lazy_pollable(
             "golem:it-exports/golem-it-api.{[constructor]lazy-pollable-test}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let res_handle_type = AnalysedType::Handle(TypeHandle {
         name: None,
         owner: None,
@@ -218,8 +211,7 @@ async fn lazy_pollable(
             "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
             vec![res.clone(), 1u32.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     signal_tx.send(()).unwrap();
 
@@ -229,8 +221,7 @@ async fn lazy_pollable(
             "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
             vec![res.clone(), 2u32.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     signal_tx.send(()).unwrap();
 
@@ -240,17 +231,12 @@ async fn lazy_pollable(
             "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
             vec![res.clone(), 3u32.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     signal_tx.send(()).unwrap();
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     signal_tx.send(()).unwrap();
 
@@ -260,14 +246,14 @@ async fn lazy_pollable(
             "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
             vec![res.clone(), 3u32.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
     http_server.abort();
 
     assert_eq!(s1, vec![Value::String("chunk-1-0\n".to_string())]);
     assert_eq!(s2, vec![Value::String("chunk-1-1\n".to_string())]);
     assert_eq!(s3, vec![Value::String("chunk-1-2\n".to_string())]);
     assert_eq!(s4, vec![Value::String("chunk-3-0\n".to_string())]);
+    Ok(())
 }

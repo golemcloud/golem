@@ -118,10 +118,8 @@ mod internal {
             for branch in if_branches.iter().skip(1).rev() {
                 if let Expr::Cond { rhs, .. } = &mut expr {
                     let else_copy = *rhs.clone();
-                    *rhs = Box::new(
-                        Expr::cond(branch.condition.clone(), branch.body.clone(), else_copy)
-                            .merge_inferred_type(branch.body.inferred_type()),
-                    );
+                    **rhs = Expr::cond(branch.condition.clone(), branch.body.clone(), else_copy)
+                        .merge_inferred_type(branch.body.inferred_type());
                 }
             }
 
@@ -667,7 +665,7 @@ mod desugar_tests {
         let component_dependency_key = ComponentDependencyKey {
             component_name: "foo".to_string(),
             component_id: Uuid::new_v4(),
-            component_version: 0,
+            component_revision: 0,
             root_package_name: None,
             root_package_version: None,
         };

@@ -1,0 +1,237 @@
+package golem:rpc@0.2.2;
+
+interface types {
+  use wasi:clocks/wall-clock@0.2.3.{datetime};
+  use wasi:io/poll@0.2.3.{pollable};
+
+  /// Represents a Golem agent
+  record agent-id {
+    /// Identifies the component the agent belongs to
+    component-id: component-id,
+    /// String representation of the agent ID (agent type and constructor parameters)
+    agent-id: string
+  }
+
+  /// Represents a Golem component
+  record component-id {
+    uuid: uuid,
+  }
+
+  /// UUID
+  record uuid {
+    high-bits: u64,
+    low-bits: u64
+  }
+
+  /// Parses a UUID from a string
+  parse-uuid: func(uuid: string) -> result<uuid, string>;
+
+  /// Converts a UUID to a string
+  uuid-to-string: func(uuid: uuid) -> string;
+
+  /// The index type used in `wit-value` and `wit-type` to identify nodes
+  type node-index = s32;
+
+  /// Describes an arbitrary value
+  record wit-value {
+    /// The list of `wit-node` values that make up the value. The list is always non-empty,
+    /// and the first element is the root node describing the value. Because WIT does not support
+    /// recursive types, further nodes are pushed into this list, and referenced by index from their parent node.
+    nodes: list<wit-node>,
+  }
+
+  /// One node of a `wit-value`
+  variant wit-node {
+    /// A record value defined by a list of its field values
+    record-value(list<node-index>),
+    /// A variant value defined by a pair of the case index and its inner value
+    variant-value(tuple<u32, option<node-index>>),
+    /// An enum value defined by a case index
+    enum-value(u32),
+    /// A flags value defined by a list of its flag states
+    flags-value(list<bool>),
+    /// A tuple value defined by a list of its item values
+    tuple-value(list<node-index>),
+    /// A list value defined by a list of its item values
+    list-value(list<node-index>),
+    /// An option value defined by an optional inner value
+    option-value(option<node-index>),
+    /// A result value defined by either an ok value or an error value. Both values are optional,
+    /// where the `none` case represents the absence of a value.
+    result-value(result<option<node-index>, option<node-index>>),
+    /// Primitive unsigned 8-bit integer
+    prim-u8(u8),
+    /// Primitive unsigned 16-bit integer
+    prim-u16(u16),
+    /// Primitive unsigned 32-bit integer
+    prim-u32(u32),
+    /// Primitive unsigned 64-bit integer
+    prim-u64(u64),
+    /// Primitive signed 8-bit integer
+    prim-s8(s8),
+    /// Primitive signed 16-bit integer
+    prim-s16(s16),
+    /// Primitive signed 32-bit integer
+    prim-s32(s32),
+    /// Primitive signed 64-bit integer
+    prim-s64(s64),
+    /// Primitive 32-bit floating point number
+    prim-float32(f32),
+    /// Primitive 64-bit floating point number
+    prim-float64(f64),
+    /// Primitive character
+    prim-char(char),
+    /// Primitive boolean
+    prim-bool(bool),
+    /// Primitive string
+    prim-string(string),
+    /// Resource handle pointing to a URI and a resource ID
+    handle(tuple<uri, u64>)
+  }
+
+  /// Describes a type of a `wit-value`
+  record wit-type {
+    /// The nodes consisting of the type definition. Because WIT does not support recursive types, the nodes are represented as a list of named nodes.
+    /// The list is always non-empty, and the first item is the root node.
+    nodes: list<named-wit-type-node>,
+  }
+
+  /// Represents a WIT resource in an instance
+  type resource-id = u64;
+
+  /// Resource handle modes
+  enum resource-mode {
+    /// The resource is owned by this handle
+    owned,
+    /// The resource is owned by someone else, and this handle is just a borrow
+    borrowed
+  }
+
+  /// Represents a node of `wit-type`, with attached metadata
+  record named-wit-type-node {
+    /// Name of the type
+    name: option<string>,
+    /// Owner of the type (usually pointing to a WIT package and interface)
+    owner: option<string>,
+    /// The node representing a type
+    %type: wit-type-node
+  }
+
+  /// Represents a type within a `wit-type` definition. `node-index` values are indices into the
+  /// parent `wit-type`'s `nodes` list.
+  variant wit-type-node {
+    /// Record type, defined by a list of name-type pairs.
+    record-type(list<tuple<string, node-index>>),
+    /// Variant type, defined by a list of name-type pairs. The type is optional, in case it is not defined, the case
+    /// is a unit case.
+    variant-type(list<tuple<string, option<node-index>>>),
+    /// Enum type, defined by a list of its cases.
+    enum-type(list<string>),
+    /// Flags type, defined by a list of its flags.
+    flags-type(list<string>),
+    /// Tuple type, defined by a list of its field's types.
+    tuple-type(list<node-index>),
+    /// List type, defined by the element type
+    list-type(node-index),
+    /// Option type, defined by the element type
+    option-type(node-index),
+    /// Result type, defined by the success and error types. Both types are optional, in case they are not defined, the
+    /// ok or error case is a unit case.
+    result-type(tuple<option<node-index>, option<node-index>>),
+    /// Unsigned 8-bit integer
+    prim-u8-type,
+    /// Unsigned 16-bit integer
+    prim-u16-type,
+    /// Unsigned 32-bit integer
+    prim-u32-type,
+    /// Unsigned 64-bit integer
+    prim-u64-type,
+    /// Signed 8-bit integer
+    prim-s8-type,
+    /// Signed 16-bit integer
+    prim-s16-type,
+    /// Signed 32-bit integer
+    prim-s32-type,
+    /// Signed 64-bit integer
+    prim-s64-type,
+    /// 32-bit floating point number
+    prim-f32-type,
+    /// 64-bit floating point number
+    prim-f64-type,
+    /// Unicode character
+    prim-char-type,
+    /// Boolean value
+    prim-bool-type,
+    /// String value
+    prim-string-type,
+    /// Handle type, defined by a resource ID and borrowing mode
+    handle-type(tuple<resource-id, resource-mode>)
+  }
+
+  /// A value and its type
+  record value-and-type {
+    /// Value
+    value: wit-value,
+    /// Type of `value`
+    typ: wit-type
+  }
+
+  /// URI value
+  record uri {
+    value: string,
+  }
+
+  /// Possible failures of an RPC call
+  variant rpc-error {
+    /// Protocol level error
+    protocol-error(string),
+    /// Access denied
+    denied(string),
+    /// Target agent or function not found
+    not-found(string),
+    /// Internal error on the remote side
+    remote-internal-error(string)
+  }
+
+  /// An RPC client
+  resource wasm-rpc {
+    /// Constructs the RPC client connecting to the given target agent
+    constructor(agent-id: agent-id);
+
+    /// Invokes a remote function with the given parameters, and awaits the result
+    invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
+
+    /// Triggers the invocation of a remote function with the given parameters, and returns immediately.
+    invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
+
+    /// Invokes a remote function with the given parameters, and returns a `future-invoke-result` value which can
+    /// be polled for the result.
+    ///
+    /// With this function it is possible to call multiple (different) agents simultaneously.
+    async-invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> future-invoke-result;
+
+    /// Schedule invocation for later
+    schedule-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>);
+
+    /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
+    schedule-cancelable-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>) -> cancellation-token;
+  }
+
+  /// Represents a pollable invocation result
+  resource future-invoke-result {
+    /// Subscribes to the result of the invocation
+    subscribe: func() -> pollable;
+    /// Poll for the invocation. If the invocation has not completed yet, returns `none`.
+    get: func() -> option<result<wit-value, rpc-error>>;
+  }
+
+  /// Cancellation token for scheduled invocations
+  resource cancellation-token {
+    /// Cancel the scheduled invocation
+    cancel: func();
+  }
+}
+
+world wit-value {
+    import types;
+}

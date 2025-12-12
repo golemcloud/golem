@@ -18,17 +18,18 @@ use crate::context::{Context, RibReplState};
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{logln, set_log_output, Output};
-use crate::model::component::ComponentView;
+use crate::model::component::{ComponentNameMatchKind, ComponentRevisionSelection, ComponentView};
+use crate::model::environment::EnvironmentResolveMode;
+use crate::model::format::Format;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
-use crate::model::{
-    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, Format, IdempotencyKey,
-    WorkerName,
-};
+use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use colored::Colorize;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::IdempotencyKey;
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
@@ -59,7 +60,7 @@ impl RibReplHandler {
     pub async fn cmd_repl(
         &self,
         component_name: Option<ComponentName>,
-        component_version: Option<u64>,
+        component_revision: Option<ComponentRevision>,
         deploy_args: Option<&DeployArgs>,
         script: Option<String>,
         script_file: Option<PathBuf>,
@@ -100,18 +101,18 @@ impl RibReplHandler {
             .ctx
             .component_handler()
             .component_by_name_with_auto_deploy(
-                selected_components.project.as_ref(),
+                &selected_components.environment,
                 ComponentNameMatchKind::App,
                 &component_name,
-                component_version.map(|v| v.into()),
+                component_revision.map(|r| r.into()),
                 deploy_args,
             )
             .await?;
 
         let component_dependency_key = ComponentDependencyKey {
             component_name: component.component_name.0.clone(),
-            component_id: component.versioned_component_id.component_id,
-            component_version: component.versioned_component_id.version,
+            component_id: component.id.0,
+            component_revision: component.revision.into(),
             root_package_name: component.metadata.root_package_name().clone(),
             root_package_version: component.metadata.root_package_version().clone(),
         };
@@ -316,7 +317,7 @@ impl RibDependencyManager for RibReplHandler {
 impl WorkerFunctionInvoke for RibReplHandler {
     async fn invoke(
         &self,
-        component_id: Uuid,
+        _component_id: Uuid,
         component_name: &str,
         worker_name: &str,
         function_name: &str,
@@ -331,13 +332,21 @@ impl WorkerFunctionInvoke for RibReplHandler {
         .to_string()
         .into();
 
+        let component_name = ComponentName(component_name.to_string());
+
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
         let component = self
             .ctx
             .component_handler()
-            .component(
-                None,
-                component_id.into(),
-                Some(ComponentVersionSelection::ByWorkerName(&worker_name)),
+            .resolve_component(
+                &environment,
+                &component_name,
+                Some(ComponentRevisionSelection::ByWorkerName(&worker_name)),
             )
             .await?;
 
@@ -369,7 +378,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
                 &worker_name,
                 function_name,
                 arguments,
-                IdempotencyKey::new(),
+                IdempotencyKey::fresh(),
                 false,
                 stream_args,
             )

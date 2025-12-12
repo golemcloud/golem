@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::config::{ConfigLoader, ConfigLoaderConfig};
 use golem_common::model::RetryConfig;
-use golem_common::SafeDisplay;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Write, path::PathBuf, time::Duration};
 
@@ -308,7 +308,9 @@ impl<T: ConfigLoaderConfig> MergedConfigLoaderOrDumper<T> {
             },
             None => match config_loader.load_or_dump_config() {
                 Some(_) => {
-                    panic!("illegal state while loading, got config for '{name}', while expected dumping");
+                    panic!(
+                        "illegal state while loading, got config for '{name}', while expected dumping"
+                    );
                 }
                 None => None,
             },

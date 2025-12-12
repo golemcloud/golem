@@ -13,6 +13,7 @@ proc-macro = true
 
 [dependencies]
 heck = "0.5.0"
+proc-macro-crate = "3.4.0"
 proc-macro2 = "1"
 quote = "1"
-syn = {version = "2", features = ["extra-traits", "full", "fold"]}
+syn = {version = "2", features = ["extra-traits", "full", "fold", "parsing"]}

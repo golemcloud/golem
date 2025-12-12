@@ -96,8 +96,11 @@ impl SqliteKeyValueStorage {
             KeyValueStorageNamespace::Worker => "worker".to_string(),
             KeyValueStorageNamespace::Promise => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
-            KeyValueStorageNamespace::UserDefined { project_id, bucket } => {
-                format!("user-defined:{project_id}:{bucket}")
+            KeyValueStorageNamespace::UserDefined {
+                environment_id,
+                bucket,
+            } => {
+                format!("user-defined:{environment_id}:{bucket}")
             }
         }
     }
@@ -152,7 +155,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .await
             .map_err(|err| err.to_safe_string())?;
         }
-        api.commit(tx).await.map_err(|err| err.to_safe_string())
+        tx.commit().await.map_err(|err| err.to_safe_string())
     }
 
     async fn set_if_not_exists(
@@ -232,7 +235,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         let results: Vec<DBKeyValue> = self
             .pool
             .with_ro(svc_name, api_name)
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
             .map_err(|err| err.to_safe_string())?;
 
@@ -285,7 +288,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .await
             .map_err(|err| err.to_safe_string())?;
         }
-        api.commit(tx).await.map_err(|err| err.to_safe_string())
+        tx.commit().await.map_err(|err| err.to_safe_string())
     }
 
     async fn exists(
@@ -318,7 +321,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all::<(String,), _>(query)
+            .fetch_all_as::<(String,), _>(query)
             .await
             .map(|vec| vec.into_iter().map(|k| k.0).collect::<Vec<String>>())
             .map_err(|err| err.to_safe_string())
@@ -386,7 +389,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all::<DBValue, _>(query)
+            .fetch_all_as::<DBValue, _>(query)
             .await
             .map(|vec| {
                 vec.into_iter()
@@ -464,7 +467,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all::<DBScoreValue, _>(query)
+            .fetch_all_as::<DBScoreValue, _>(query)
             .await
             .map(|vec| {
                 vec.into_iter()
@@ -493,7 +496,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all::<DBScoreValue, _>(query)
+            .fetch_all_as::<DBScoreValue, _>(query)
             .await
             .map(|vec| {
                 vec.into_iter()

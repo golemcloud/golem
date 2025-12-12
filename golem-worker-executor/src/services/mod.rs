@@ -12,28 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::worker_activator::WorkerActivator;
-use std::sync::Arc;
-
-use crate::services::agent_types::AgentTypesService;
-use crate::services::events::Events;
-use crate::services::plugins::Plugins;
-use crate::workerctx::WorkerCtx;
-use file_loader::FileLoader;
-use tokio::runtime::Handle;
-
 pub mod active_workers;
 pub mod agent_types;
 pub mod blob_store;
-pub mod compiled_component;
 pub mod component;
 pub mod events;
 pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
-pub mod plugins;
-pub mod projects;
 pub mod promise;
 pub mod rdbms;
 pub mod resource_limits;
@@ -47,6 +34,14 @@ pub mod worker_enumeration;
 pub mod worker_event;
 pub mod worker_fork;
 pub mod worker_proxy;
+
+use crate::services::agent_types::AgentTypesService;
+use crate::services::events::Events;
+use crate::services::worker_activator::WorkerActivator;
+use crate::workerctx::WorkerCtx;
+use file_loader::FileLoader;
+use std::sync::Arc;
+use tokio::runtime::Handle;
 
 #[derive(Clone)]
 pub struct NoAdditionalDeps {}
@@ -164,10 +159,6 @@ pub trait HasFileLoader {
     fn file_loader(&self) -> Arc<FileLoader>;
 }
 
-pub trait HasPlugins {
-    fn plugins(&self) -> Arc<dyn Plugins>;
-}
-
 pub trait HasOplogProcessorPlugin {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin>;
 }
@@ -178,10 +169,6 @@ pub trait HasRdbmsService {
 
 pub trait HasResourceLimits {
     fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits>;
-}
-
-pub trait HasProjectService {
-    fn project_service(&self) -> Arc<dyn projects::ProjectService>;
 }
 
 /// HasAll is a shortcut for requiring all available service dependencies
@@ -208,10 +195,8 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardManagerService
     + HasShardService
     + HasFileLoader
-    + HasPlugins
     + HasOplogProcessorPlugin
     + HasResourceLimits
-    + HasProjectService
     + HasExtraDeps<Ctx>
     + Clone
     + Sync
@@ -242,10 +227,8 @@ impl<
             + HasShardManagerService
             + HasShardService
             + HasFileLoader
-            + HasPlugins
             + HasOplogProcessorPlugin
             + HasResourceLimits
-            + HasProjectService
             + HasExtraDeps<Ctx>
             + Clone
             + Sync,
@@ -281,10 +264,8 @@ pub struct All<Ctx: WorkerCtx> {
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
-    project_service: Arc<dyn projects::ProjectService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -315,10 +296,8 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             rdbms_service: self.rdbms_service.clone(),
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
-            plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
-            project_service: self.project_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -353,10 +332,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
-        project_service: Arc<dyn projects::ProjectService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -384,10 +361,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             worker_proxy,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             resource_limits,
-            project_service,
             extra_deps,
         }
     }
@@ -418,10 +393,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.worker_proxy(),
             this.events(),
             this.file_loader(),
-            this.plugins(),
             this.oplog_processor_plugin(),
             this.resource_limits(),
-            this.project_service(),
             this.extra_deps(),
         )
     }
@@ -583,12 +556,6 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasFileLoader for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasPlugins for T {
-    fn plugins(&self) -> Arc<dyn Plugins> {
-        self.all().plugins.clone()
-    }
-}
-
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin> {
         self.all().oplog_processor_plugin.clone()
@@ -598,12 +565,6 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasResourceLimits for T {
     fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits> {
         self.all().resource_limits.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasProjectService for T {
-    fn project_service(&self) -> Arc<dyn projects::ProjectService> {
-        self.all().project_service.clone()
     }
 }
 

@@ -15,11 +15,10 @@
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog_constructor::CreateDebugOplogConstructor;
 use async_trait::async_trait;
-use golem_common::base_model::ProjectId;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{
-    ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord,
-};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
@@ -117,7 +116,7 @@ impl OplogService for DebugOplogService {
         // oplog_service.read will be always part of a replay (and never live)
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
         self.debug_session
-            .update_oplog_index(debug_session_id, idx)
+            .update_oplog_index(&debug_session_id, idx)
             .await;
         self.inner.read(owned_worker_id, idx, n).await
     }
@@ -128,13 +127,13 @@ impl OplogService for DebugOplogService {
 
     async fn scan_for_component(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(project_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, cursor, count)
             .await
     }
 

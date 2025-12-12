@@ -12,63 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use syn::{GenericArgument, PathArguments, ReturnType, Type};
-
-pub struct FunctionInputInfo {
-    pub input_shape: DefaultOrMultimodal,
-}
-
-impl FunctionInputInfo {
-    pub fn from_signature(sig: &syn::Signature) -> FunctionInputInfo {
-        let typed_params: Vec<_> = skip_self_parameters(sig);
-
-        if typed_params.len() == 1 {
-            let only_param = &typed_params[0];
-
-            if let Type::Path(type_path) = &*only_param.ty {
-                if let Some(seg) = type_path.path.segments.last() {
-                    if seg.ident == "Multimodal" {
-                        return FunctionInputInfo {
-                            input_shape: DefaultOrMultimodal::Multimodal,
-                        };
-                    }
-                }
-            }
-        }
-
-        FunctionInputInfo {
-            input_shape: DefaultOrMultimodal::Default,
-        }
-    }
-}
+use syn::{ReturnType, Type};
 
 pub struct FunctionOutputInfo {
-    pub output_shape: DefaultOrMultimodal,
-    pub future_or_immediate: FutureOrImmediate,
+    pub future_or_immediate: Asyncness,
     pub is_unit: bool,
 }
 
 impl FunctionOutputInfo {
     pub fn from_signature(sig: &syn::Signature) -> FunctionOutputInfo {
-        let function_kind = get_function_kind(sig);
-
-        if let syn::ReturnType::Type(_, ty) = &sig.output {
-            if let Some(inner_type) = extract_inner_type_if_future(ty) {
-                if is_multimodal_type(inner_type) {
-                    return FunctionOutputInfo {
-                        output_shape: DefaultOrMultimodal::Multimodal,
-                        future_or_immediate: function_kind,
-                        is_unit: false,
-                    };
-                }
-            } else if is_multimodal_type(ty) {
-                return FunctionOutputInfo {
-                    output_shape: DefaultOrMultimodal::Multimodal,
-                    future_or_immediate: function_kind,
-                    is_unit: false,
-                };
-            }
-        }
+        let function_kind = get_asyncness(sig);
 
         let is_unit = match &sig.output {
             ReturnType::Type(_, ty) => match &**ty {
@@ -79,102 +32,55 @@ impl FunctionOutputInfo {
         };
 
         FunctionOutputInfo {
-            output_shape: DefaultOrMultimodal::Default,
             future_or_immediate: function_kind,
             is_unit,
         }
     }
 }
 
-pub enum FutureOrImmediate {
+pub enum Asyncness {
     Future,
     Immediate,
 }
 
-// DefaultOrMultimodal refers to the type of input parameters (not each parameter individually) or output parameter type
-// Default refers all types that can be part of DataValue::Tuple
-pub enum DefaultOrMultimodal {
-    Default,
-    Multimodal,
-}
-
-pub fn is_constructor_method(sig: &syn::Signature) -> bool {
+pub fn is_constructor_method(sig: &syn::Signature, agent_impl_type: Option<&str>) -> bool {
     match &sig.output {
         ReturnType::Type(_, ty) => match &**ty {
-            Type::Path(tp) => tp.path.segments.last().unwrap().ident == "Self",
+            Type::Path(tp) => {
+                let return_ident = &tp.path.segments.last().unwrap().ident;
+
+                return_ident == "Self"
+                    || match agent_impl_type {
+                        Some(impl_name) => return_ident == impl_name,
+                        None => false,
+                    }
+            }
             _ => false,
         },
         _ => false,
     }
 }
 
-pub fn get_function_kind(sig: &syn::Signature) -> FutureOrImmediate {
+pub fn is_static_method(sig: &syn::Signature) -> bool {
+    sig.receiver().is_none()
+}
+
+pub fn trim_type_parameter(self_ty: &syn::Type) -> String {
+    match self_ty {
+        syn::Type::Path(type_path) => {
+            let ident = &type_path.path.segments.last().unwrap().ident;
+            ident.to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+pub fn get_asyncness(sig: &syn::Signature) -> Asyncness {
     if sig.asyncness.is_some() {
-        FutureOrImmediate::Future
+        Asyncness::Future
     } else {
-        FutureOrImmediate::Immediate
+        Asyncness::Immediate
     }
-}
-
-pub fn skip_self_parameters(sig: &syn::Signature) -> Vec<&syn::PatType> {
-    sig.inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            syn::FnArg::Typed(pat_ty) => Some(pat_ty),
-            _ => None,
-        })
-        .collect()
-}
-
-fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            if seg.ident == "impl" || seg.ident == "Future" {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    for arg in &args.args {
-                        if let GenericArgument::Type(inner_ty) = arg {
-                            return Some(inner_ty);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-pub fn extract_inner_type_if_multimodal(ty: &Type) -> Option<&Type> {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Multimodal" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
-                        return Some(inner_ty);
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
-pub fn is_unstructured_text(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            return seg.ident == "UnstructuredText";
-        }
-    }
-    false
-}
-
-pub fn is_unstructured_binary(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            return seg.ident == "UnstructuredBinary";
-        }
-    }
-    false
 }
 
 pub fn has_async_trait_attribute(impl_block: &syn::ItemImpl) -> bool {
@@ -185,13 +91,4 @@ pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
     let path = attr.path();
 
     path.is_ident("async_trait") || path.is_ident("async_trait::async_trait")
-}
-
-fn is_multimodal_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            return seg.ident == "Multimodal";
-        }
-    }
-    false
 }

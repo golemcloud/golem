@@ -24,7 +24,6 @@ use crate::fs::compile_and_collect_globs;
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
 };
-use crate::model::app::AppComponentName;
 use crate::model::app_raw;
 use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
@@ -36,6 +35,7 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
 use colored::Colorize;
 use gag::BufferRedirect;
+use golem_common::model::component::ComponentName;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
@@ -46,12 +46,13 @@ use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
     ctx: &mut ApplicationContext,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
     command: &app_raw::BuildCommand,
 ) -> anyhow::Result<()> {
     let base_build_dir = ctx
         .application
-        .component_source_dir(component_name)
+        .component(component_name)
+        .source_dir()
         .to_path_buf();
     match command {
         app_raw::BuildCommand::External(external_command) => {
@@ -77,7 +78,7 @@ pub async fn execute_build_command(
 
 async fn execute_agent_wrapper(
     ctx: &mut ApplicationContext,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
     base_build_dir: &Path,
     command: &GenerateAgentWrapper,
 ) -> anyhow::Result<()> {
@@ -145,34 +146,18 @@ async fn execute_agent_wrapper(
             ),
         );
 
-        let redirect = (!enabled!(Level::WARN))
-            .then(|| BufferRedirect::stderr().ok())
-            .flatten();
-
-        let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
-            wrapper_context,
-            wrapper_wasm_path.as_std_path(),
-        );
-
-        if result.is_err() {
-            if let Some(mut redirect) = redirect {
-                let mut output = Vec::new();
-                let read_result = redirect.read_to_end(&mut output);
-                drop(redirect);
-                read_result.expect("Failed to read stderr from moonbit redirect");
-                std::io::stderr()
-                    .write_all(output.as_slice())
-                    .expect("Failed to write captured moonbit stderr");
-            }
-        }
-
-        result
+        with_hidden_output_unless_error(|| {
+            crate::model::agent::moonbit::generate_moonbit_wrapper(
+                wrapper_context,
+                wrapper_wasm_path.as_std_path(),
+            )
+        })
     })())
 }
 
 async fn execute_compose_agent_wrapper(
     ctx: &ApplicationContext,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
     base_build_dir: &Path,
     command: &ComposeAgentWrapper,
 ) -> anyhow::Result<()> {
@@ -251,10 +236,12 @@ async fn execute_inject_to_prebuilt_quick_js(
                 );
                 let _indent = LogIndent::new();
 
-                moonbit_component_generator::get_script::generate_get_script_component(
-                    &js_module_contents,
-                    &js_module_wasm,
-                )?;
+                with_hidden_output_unless_error(|| {
+                    moonbit_component_generator::get_script::generate_get_script_component(
+                        &js_module_contents,
+                        &js_module_wasm,
+                    )
+                })?;
 
                 commands::composition::compose(
                     base_wasm.as_std_path(),
@@ -283,7 +270,7 @@ pub async fn execute_custom_command(
     ctx: &ApplicationContext,
     command_name: &str,
 ) -> Result<(), CustomCommandError> {
-    let all_custom_commands = ctx.application.all_custom_commands(ctx.build_profile());
+    let all_custom_commands = ctx.application.all_custom_commands();
     if !all_custom_commands.contains(command_name) {
         return Err(CustomCommandError::CommandNotFound);
     }
@@ -313,10 +300,8 @@ pub async fn execute_custom_command(
     }
 
     for component_name in ctx.application.component_names() {
-        let properties = &ctx
-            .application
-            .component_properties(component_name, ctx.build_profile());
-        if let Some(custom_command) = properties.custom_commands.get(command_name) {
+        let component = &ctx.application.component(component_name);
+        if let Some(custom_command) = component.custom_commands().get(command_name) {
             log_action(
                 "Executing",
                 format!(
@@ -328,12 +313,8 @@ pub async fn execute_custom_command(
             let _indent = LogIndent::new();
 
             for step in custom_command {
-                if let Err(error) = execute_external_command(
-                    ctx,
-                    ctx.application.component_source_dir(component_name),
-                    step,
-                )
-                .await
+                if let Err(error) =
+                    execute_external_command(ctx, component.source_dir(), step).await
                 {
                     return Err(CustomCommandError::CommandError { error });
                 }
@@ -665,4 +646,29 @@ impl CommandExt for Command {
             .await
             .with_context(|| format!("Failed to execute {command_name}"))
     }
+}
+
+fn with_hidden_output_unless_error<F, R>(f: F) -> anyhow::Result<R>
+where
+    F: FnOnce() -> anyhow::Result<R>,
+{
+    let redirect = (!enabled!(Level::WARN))
+        .then(|| BufferRedirect::stderr().ok())
+        .flatten();
+
+    let result = f();
+
+    if result.is_err() {
+        if let Some(mut redirect) = redirect {
+            let mut output = Vec::new();
+            let read_result = redirect.read_to_end(&mut output);
+            drop(redirect);
+            read_result.expect("Failed to read stderr from moonbit redirect");
+            std::io::stderr()
+                .write_all(output.as_slice())
+                .expect("Failed to write captured moonbit stderr");
+        }
+    }
+
+    result
 }

@@ -14,11 +14,11 @@
 
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
-    golem_agentic::{
-        exports::golem::agent::guest::AgentType,
-        golem::{agent::common::ElementSchema, api::host::AgentId},
-    },
+    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
 };
+use golem_wasm::golem_rpc_0_2_x::types::parse_uuid;
+use golem_wasm::{AgentId, ComponentId};
+use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
@@ -28,7 +28,6 @@ pub struct State {
     pub agent_types: RefCell<AgentTypes>,
     pub agent_instance: RefCell<AgentInstance>,
     pub agent_initiators: RefCell<AgentInitiators>,
-    pub agent_id: RefCell<Option<AgentId>>,
 }
 
 #[derive(Default)]
@@ -50,7 +49,7 @@ pub fn get_state() -> &'static State {
 
 #[derive(Default)]
 pub struct AgentInstance {
-    pub resolved_agent: Option<Arc<ResolvedAgent>>,
+    pub resolved_agent: Option<Rc<ResolvedAgent>>,
 }
 
 #[derive(Default)]
@@ -102,16 +101,14 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
 
 pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
     let state = get_state();
-    let agent_id = resolved_agent.agent_id.clone();
 
-    state.agent_instance.borrow_mut().resolved_agent = Some(Arc::new(resolved_agent));
-    state.agent_id.borrow_mut().replace(agent_id);
+    state.agent_instance.borrow_mut().resolved_agent = Some(Rc::new(resolved_agent));
 }
 
 // To be used only in agent implementation
 pub fn with_agent_instance_async<F, Fut, R>(f: F) -> R
 where
-    F: FnOnce(Arc<ResolvedAgent>) -> Fut,
+    F: FnOnce(Rc<ResolvedAgent>) -> Fut,
     Fut: Future<Output = R>,
 {
     let agent_instance = get_state()
@@ -139,7 +136,24 @@ where
 }
 
 pub fn get_agent_id() -> AgentId {
-    get_state().agent_id.borrow().clone().unwrap()
+    let env_vars: HashMap<String, String> =
+        HashMap::from_iter(crate::bindings::wasi::cli::environment::get_environment());
+    let raw_agent_id = env_vars
+        .get("GOLEM_AGENT_ID")
+        .expect("Missing GOLEM_AGENT_ID environment variable"); // This is always provided by the Golem runtime
+    let raw_component_id = env_vars
+        .get("GOLEM_COMPONENT_ID")
+        .expect("Missing GOLEM_COMPONENT_ID environment variable");
+    AgentId {
+        component_id: ComponentId {
+            uuid: parse_uuid(raw_component_id).expect("Invalid GOLEM_COMPONENT_ID"),
+        },
+        agent_id: raw_agent_id.clone(),
+    }
+}
+
+pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {
+    get_state().agent_instance.borrow().resolved_agent.clone()
 }
 
 pub fn get_constructor_parameter_type(
@@ -199,8 +213,6 @@ pub fn get_method_parameter_type(
     }
 }
 
-// A call to agent initiator is only from outside and should never be happening in any other part of the call
-// and hence it is safe to create a reactor and register forever
 pub fn with_agent_initiator<F, Fut, R>(f: F, agent_type_name: &AgentTypeName) -> R
 where
     F: FnOnce(Arc<dyn AgentInitiator>) -> Fut,
@@ -214,7 +226,12 @@ where
         .agent_initiators
         .get(agent_type_name)
         .cloned()
-        .unwrap();
+        .unwrap_or_else(|| {
+            panic!(
+                "Agent initiator not found for agent type name: {}",
+                agent_type_name.0
+            )
+        });
 
     block_on(async move { f(agent_initiator).await })
 }

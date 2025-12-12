@@ -39,7 +39,7 @@ impl MessageWithFields for AgentTypeView {
 
 impl From<&RegisteredAgentType> for AgentTypeView {
     fn from(value: &RegisteredAgentType) -> Self {
-        AgentTypeView::new(value)
+        AgentTypeView::new(value, true)
     }
 }
 

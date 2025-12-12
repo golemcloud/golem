@@ -36,6 +36,7 @@ inherit_test_dep!(Tracing);
 use crate::{crate_path, workspace_path, Tracing};
 use assert2::assert;
 use colored::Colorize;
+use golem_cli::fs::{read_to_string, write_str};
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
@@ -65,6 +66,7 @@ mod cmd {
     pub static COMPONENT: &str = "component";
     pub static DEPLOY: &str = "deploy";
     pub static GET: &str = "get";
+    pub static LIST: &str = "list";
     pub static INVOKE: &str = "invoke";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
@@ -77,7 +79,6 @@ mod flag {
     pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
-    pub static REDEPLOY_ALL: &str = "--redeploy-all";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
     pub static TEMPLATE_GROUP: &str = "--template-group";
@@ -303,17 +304,6 @@ impl TestContext {
             if let Ok(val) = std::env::var(key) {
                 env.insert(key.to_string(), val);
             }
-        }
-
-        // TODO: remove before 1.3.A release
-        if !env.contains_key("GOLEM_RUST_PATH") && !env.contains_key("GOLEM_RUST_VERSION") {
-            env.insert(
-                "GOLEM_RUST_PATH".to_string(),
-                workspace_path()
-                    .join("sdks/rust/golem-rust")
-                    .to_string_lossy()
-                    .to_string(),
-            );
         }
 
         let ctx = Self {
@@ -555,4 +545,16 @@ fn contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
         }
     }
     remaining_patterns.is_empty()
+}
+
+pub fn replace_strings_in_file(
+    path: impl AsRef<Path>,
+    replace: &[(&str, &str)],
+) -> anyhow::Result<()> {
+    let path = path.as_ref();
+    let mut content = read_to_string(path)?;
+    for (from, to) in replace {
+        content = content.replace(from, to);
+    }
+    write_str(path, content)
 }

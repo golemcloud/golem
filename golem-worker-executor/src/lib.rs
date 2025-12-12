@@ -47,8 +47,6 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
-use crate::services::plugins::{Plugins, PluginsObservations};
-use crate::services::projects::ProjectService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -73,6 +71,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -95,7 +94,6 @@ use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{info, Instrument};
-use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
@@ -169,18 +167,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Ok(grpc_port)
     }
 
-    #[allow(clippy::type_complexity)]
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>);
-
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
-        plugin_observations: Arc<dyn PluginsObservations>,
-        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService>;
 
     /// Allows customizing the `All` service.
@@ -210,10 +201,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-        project_service: Arc<dyn ProjectService>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -395,20 +385,19 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let initial_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
-    let (plugins, plugins_observations) = bootstrap.create_plugins(&golem_config);
 
-    let project_service = services::projects::configured(&golem_config.project_service);
+    let registry_service = Arc::new(GrpcRegistryService::new(&golem_config.registry_service));
 
     let component_service = bootstrap.create_component_service(
         &golem_config,
+        registry_service.clone(),
         blob_storage.clone(),
-        plugins_observations,
-        project_service.clone(),
     );
 
     let agent_type_service = services::agent_types::configured(
         &golem_config.agent_types_service,
         component_service.clone(),
+        registry_service.clone(),
     );
 
     let golem_config = Arc::new(golem_config.clone());
@@ -490,11 +479,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let worker_proxy: Arc<dyn WorkerProxy> = Arc::new(RemoteWorkerProxy::new(
         golem_config.public_worker_api.uri(),
-        golem_config
-            .public_worker_api
-            .access_token
-            .parse::<Uuid>()
-            .expect("Access token must be an UUID"),
         golem_config.public_worker_api.retries.clone(),
         golem_config.public_worker_api.connect_timeout,
     ));
@@ -510,16 +494,12 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         component_service.clone(),
         shard_service.clone(),
         lazy_worker_activator.clone(),
-        plugins.clone(),
-        project_service.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
-        plugins.clone(),
-        project_service.clone(),
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
@@ -569,10 +549,9 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             worker_proxy,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
-            project_service,
             agent_type_service,
+            registry_service,
         )
         .await?;
 

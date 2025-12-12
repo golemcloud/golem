@@ -12,15 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Display, Formatter};
-use std::sync::Arc;
-
 use super::file_loader::FileLoader;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -29,20 +23,24 @@ use crate::services::{
     rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin,
-    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
-use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{ValueAndType, WitValue};
 use rib::{ParsedFunctionName, ParsedFunctionSite};
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use tokio::runtime::Handle;
 use tracing::debug;
 
@@ -53,7 +51,6 @@ pub trait Rpc: Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -67,7 +64,6 @@ pub trait Rpc: Send + Sync {
         function_params: Vec<WitValue>,
         self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -81,7 +77,6 @@ pub trait Rpc: Send + Sync {
         function_params: Vec<WitValue>,
         self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -241,9 +236,8 @@ impl Rpc for RemoteInvocationRpc {
     async fn create_demand(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        _self_created_by: &AccountId,
+        self_created_by: &AccountId,
         _self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         _self_stack: InvocationContextStack, // TODO: make invocation context propagating through the worker start API
@@ -255,9 +249,9 @@ impl Rpc for RemoteInvocationRpc {
         self.worker_proxy
             .start(
                 owned_worker_id,
-                self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
+                self_created_by,
             )
             .await?;
 
@@ -270,9 +264,8 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        _self_created_by: &AccountId,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -285,10 +278,10 @@ impl Rpc for RemoteInvocationRpc {
                 function_name,
                 function_params,
                 self_worker_id.clone(),
-                self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
+                self_created_by,
             )
             .await?)
     }
@@ -299,9 +292,8 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        _self_created_by: &AccountId,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -314,10 +306,10 @@ impl Rpc for RemoteInvocationRpc {
                 function_name,
                 function_params,
                 self_worker_id.clone(),
-                self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
+                self_created_by,
             )
             .await?)
     }
@@ -347,10 +339,8 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
-    project_service: Arc<dyn ProjectService>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     extra_deps: Ctx::ExtraDeps,
 }
@@ -380,10 +370,8 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
-            plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
-            project_service: self.project_service.clone(),
             agent_types_service: self.agent_types_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
@@ -532,12 +520,6 @@ impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasPlugins for DirectWorkerInvocationRpc<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins> {
-        self.plugins.clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DirectWorkerInvocationRpc<Ctx> {
     fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin> {
         self.oplog_processor_plugin.clone()
@@ -553,12 +535,6 @@ impl<Ctx: WorkerCtx> HasRdbmsService for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasResourceLimits for DirectWorkerInvocationRpc<Ctx> {
     fn resource_limits(&self) -> Arc<dyn ResourceLimits> {
         self.resource_limits.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasProjectService for DirectWorkerInvocationRpc<Ctx> {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
     }
 }
 
@@ -590,10 +566,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -620,10 +594,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             worker_activator,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             resource_limits,
-            project_service,
             agent_types_service,
             extra_deps,
         }
@@ -727,7 +699,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -743,7 +714,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 self_created_by,
                 owned_worker_id,
-                Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
                 Some(self_config),
                 None,
@@ -760,7 +730,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     owned_worker_id,
                     self_created_by,
                     self_worker_id,
-                    self_args,
                     self_env,
                     self_config,
                     self_stack,
@@ -777,7 +746,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         function_params: Vec<WitValue>,
         self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -803,7 +771,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 self_created_by,
                 owned_worker_id,
-                Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
                 Some(self_config),
                 None,
@@ -826,7 +793,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     function_params,
                     self_created_by,
                     self_worker_id,
-                    self_args,
                     self_env,
                     self_config,
                     self_stack,
@@ -843,7 +809,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         function_params: Vec<WitValue>,
         self_created_by: &AccountId,
         self_worker_id: &WorkerId,
-        self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -869,7 +834,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 self_created_by,
                 owned_worker_id,
-                Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
                 Some(self_config),
                 None,
@@ -891,7 +855,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     function_params,
                     self_created_by,
                     self_worker_id,
-                    self_args,
                     self_env,
                     self_config,
                     self_stack,

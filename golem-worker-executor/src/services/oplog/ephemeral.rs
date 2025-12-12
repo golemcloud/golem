@@ -15,12 +15,13 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CommitLevel, Oplog};
-use async_mutex::Mutex;
+use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_common::model::OwnedWorkerId;
+use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -168,6 +169,37 @@ impl Oplog for EphemeralOplog {
                 "Missing oplog entry {oplog_index} in {:?} for ephemeral oplog",
                 self.target
             );
+        }
+    }
+
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        record_oplog_call("read_many");
+        let state = self.state.lock().await;
+
+        let last_idx = oplog_index.range_end(n);
+
+        if last_idx < state.last_committed_idx {
+            // The whole range is already committed no further action needed
+            self.target.read(oplog_index, n).await
+        } else {
+            // There can be some uncommitted entries in the buffer
+            let mut result = self
+                .target
+                .read_range(oplog_index, state.last_committed_idx)
+                .await;
+
+            let uncommitted_count = last_idx.distance_from(state.last_committed_idx);
+            let buffered_to_take =
+                min(max(0, uncommitted_count), state.buffer.len() as i64) as usize;
+
+            let mut current = state.last_committed_idx;
+            for idx in 0..buffered_to_take {
+                current = current.next();
+                let entry = state.buffer[idx].clone();
+                result.insert(current, entry);
+            }
+
+            result
         }
     }
 

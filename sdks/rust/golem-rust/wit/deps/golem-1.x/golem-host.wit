@@ -18,15 +18,15 @@ interface host {
     }
 
     /// Represents a Golem component's version
-    type component-version = u64;
+    type component-revision = u64;
 
     /// Represents a Golem Cloud account
     record account-id {
-        value: string
+        uuid: uuid
     }
 
-    /// Represents a Golem project
-    record project-id {
+    /// Represents a Golem environment
+    record environment-id {
       uuid: uuid,
     }
 
@@ -171,7 +171,7 @@ interface host {
         /// The current agent status
         status: agent-status,
         /// The component version the agent is running with
-        component-version: u64,
+        component-revision: u64,
         /// The agent's current retry count
         retry-count: u64
     }
@@ -196,12 +196,19 @@ interface host {
         revert-last-invocations(u64)
     }
 
-    /// Indicates which agent the code is running on after `fork`
-    enum fork-result {
+    /// Details about the fork result
+    record fork-details {
+        forked-phantom-id: uuid,
+    }
+
+    /// Indicates which agent the code is running on after `fork`.
+    /// The parameter contains details about the fork result, such as the phantom-ID of the newly
+    /// created agent.
+    variant fork-result {
         /// The original agent that called `fork`
-        original,
+        original(fork-details),
         /// The new agent
-        forked
+        forked(fork-details)
     }
 
     resource get-promise-result {
@@ -272,7 +279,7 @@ interface host {
 
     /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
     /// not waiting for the agent to get updated.
-    update-agent:  func(agent-id: agent-id, target-version: component-version, mode: update-mode);
+    update-agent:  func(agent-id: agent-id, target-revision: component-revision, mode: update-mode);
 
     /// Get the current agent's metadata
     get-self-metadata: func() -> agent-metadata;
@@ -305,10 +312,11 @@ interface host {
     /// Returns none when no component for the specified component-reference or no agent with the specified agent-name exists.
     resolve-agent-id-strict: func(component-reference: string, agent-name: string) -> option<agent-id>;
 
-    /// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
-    /// and this agent continues running as well. The return value is going to be different in this agent and
-    /// the forked agent.
-    fork: func(new-name: string) -> fork-result;
+    /// Forks the current agent at the current execution point. The new agent gets the same base agent ID but
+    /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+    /// both sides. The newly created agent continues running from the same point, but the return value is
+    /// going to be different in this agent and the forked agent.
+    fork: func() -> fork-result;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents

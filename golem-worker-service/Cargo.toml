@@ -9,27 +9,21 @@ description = "Golem Worker Service including API Gateway functionalities"
 
 license-file = "../LICENSE"
 
+autotests = false
+autobenches = false
+
 [[bin]]
 name = "golem-worker-service"
 path = "src/server.rs"
 test = false
 
 [lib]
+path = "src/lib.rs"
 harness = false
 
 [[test]]
-name = "services_tests"
-path = "tests/services_tests.rs"
-harness = false
-
-[[test]]
-name = "api_gateway_end_to_end_tests"
-path = "tests/api_gateway_end_to_end_tests.rs"
-harness = false
-
-[[test]]
-name = "api_oas_convert_tests"
-path = "tests/api_oas_convert_tests.rs"
+name = "session-store"
+path = "tests/session_store.rs"
 harness = false
 
 [[bench]]
@@ -59,6 +53,7 @@ futures = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+humantime-serde.workspace = true
 hyper = { workspace = true }
 include_dir = { workspace = true }
 mime = { workspace = true }
@@ -108,12 +103,13 @@ uuid = { workspace = true }
 x509-certificate = { workspace = true }
 
 [dev-dependencies]
+golem-test-framework.workspace = true
+
 assert2 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
+tempfile.workspace = true
 test-r = { workspace = true }
 tryhard = { workspace = true }

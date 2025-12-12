@@ -78,7 +78,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerGetData>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -89,7 +89,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .get_data(project_id, container_name.clone(), name.clone(), start, end)
+                .get_data(
+                    environment_id,
+                    container_name.clone(),
+                    name.clone(),
+                    start,
+                    end,
+                )
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -131,7 +137,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerWriteData>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -148,7 +154,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .write_data(project_id, container_name.clone(), name.clone(), data)
+                .write_data(environment_id, container_name.clone(), name.clone(), data)
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -178,7 +184,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerListObject>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -189,7 +195,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .list_objects(project_id, container_name.clone())
+                .list_objects(environment_id, container_name.clone())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -230,7 +236,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -241,7 +247,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .delete_object(project_id, container_name.clone(), name.clone())
+                .delete_object(environment_id, container_name.clone(), name.clone())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -277,7 +283,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -288,7 +294,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .delete_objects(project_id, container_name.clone(), names.clone())
+                .delete_objects(environment_id, container_name.clone(), names.clone())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -320,7 +326,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerHasObject>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -331,7 +337,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .has_object(project_id, container_name.clone(), name.clone())
+                .has_object(environment_id, container_name.clone(), name.clone())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -363,7 +369,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerObjectInfo>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -374,10 +380,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .object_info(project_id, container_name.clone(), name.clone())
+                .object_info(environment_id, container_name.clone(), name.clone())
                 .await
                 .map_err(|err| err.to_string());
-
             durability.try_trigger_retry(self, &result).await?;
 
             let result = HostResponseBlobStoreObjectMetadata { result };
@@ -415,7 +420,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerClear>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
-        let project_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -426,10 +431,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .clear(project_id, container_name.clone())
+                .clear(environment_id, container_name.clone())
                 .await
                 .map_err(|err| err.to_string());
-
             durability.try_trigger_retry(self, &result).await?;
 
             let result = HostResponseBlobStoreUnit { result };

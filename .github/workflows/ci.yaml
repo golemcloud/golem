@@ -34,7 +34,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: true
@@ -90,7 +90,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -141,7 +141,7 @@ jobs:
         run: |
           mkdir -pv target/debug
           find target/nextest-archive
-          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/          
+          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -252,6 +252,8 @@ jobs:
             description: "IT #2"
           - name: integration-tests-group3
             description: "IT #3"
+          - name: integration-tests-group4
+            description: "IT #4"
           - name: api-tests
             description: "API tests"
           - name: cli-integration-tests-group1
@@ -369,7 +371,7 @@ jobs:
         run: cargo binstall --force cargo-component@0.21.1
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -387,7 +389,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v1-golem-rust
+          prefix-key: v2-golem-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -466,7 +468,7 @@ jobs:
         run: rustup target add ${{ matrix.platform.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -539,20 +541,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Extract metadata (tags, labels) for cloud service
-        id: meta-cloud-service
-        uses: docker/metadata-action@v5
-        with:
-          images: golemservices/cloud-service
-      - name: Build and push cloud-service
-        uses: useblacksmith/build-push-action@v1
-        with:
-          context: .
-          file: ./cloud-service/docker/Dockerfile
-          push: true
-          platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-cloud-service.outputs.tags }}
-          labels: ${{ steps.meta-cloud-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for worker executor
         id: meta-worker-executor
         uses: docker/metadata-action@v5
@@ -567,6 +556,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem debugging service
         id: meta-golem-debugging-service
         uses: docker/metadata-action@v5
@@ -581,6 +571,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-debugging-service.outputs.tags }}
           labels: ${{ steps.meta-golem-debugging-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for shard manager
         id: meta-shard-manager
         uses: docker/metadata-action@v5
@@ -644,20 +635,22 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Extract metadata (tags, labels) for golem component service
-        id: meta-golem-component-service
+
+      - name: Extract metadata (tags, labels) for registry service
+        id: meta-registry-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-component-service
-      - name: Build and push golem component service image
+          images: golemservices/registry-service
+      - name: Build and push registry-service
         uses: useblacksmith/build-push-action@v1
         with:
           context: .
-          file: ./golem-component-service/docker/Dockerfile
+          file: ./golem-registry-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-component-service.outputs.tags }}
-          labels: ${{ steps.meta-golem-component-service.outputs.labels }}
+          tags: ${{ steps.meta-registry-service.outputs.tags }}
+          labels: ${{ steps.meta-registry-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem worker service
         id: meta-golem-worker-service
         uses: docker/metadata-action@v5
@@ -672,6 +665,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-worker-service.outputs.tags }}
           labels: ${{ steps.meta-golem-worker-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem component compilation service
         id: meta-golem-component-compilation-service
         uses: docker/metadata-action@v5
@@ -710,7 +704,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: release
           cache-all-crates: true
           save-if: true
@@ -743,9 +737,8 @@ jobs:
             os: macos-latest
           - rust-target: aarch64-apple-darwin
             os: macos-latest
-# Windows build is temporarily disabled
-#          - rust-target: x86_64-pc-windows-gnu
-#            os: windows-latest
+          - rust-target: x86_64-pc-windows-msvc
+            os: windows-latest
     name: Publish binaries of ${{ matrix.project }}
     runs-on: ${{ matrix.cfg.os }}
     permissions:
@@ -766,7 +759,7 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0-rust"
+          prefix-key: v4-rust
           shared-key: release-${{ matrix.cfg.rust-target }}
           cache-all-crates: true
           save-if: true
@@ -793,82 +786,82 @@ jobs:
       - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.cfg.os != 'windows-latest'
 
-      - name: Import Code Signing Certificate
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-          
-          # Create and unlock keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # Import certificate
-          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
-          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
-          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          
-          # Add keychain to search list
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-          
-          # Set partition list to allow codesign to access the certificate
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+#      - name: Import Code Signing Certificate
+#        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+#        env:
+#          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+#          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+#        run: |
+#          # Create temporary keychain
+#          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+#          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+#
+#          # Create and unlock keychain
+#          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+#          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+#          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+#
+#          # Import certificate
+#          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+#          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+#          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+#
+#          # Add keychain to search list
+#          security list-keychain -d user -s "$KEYCHAIN_PATH"
+#
+#          # Set partition list to allow codesign to access the certificate
+#          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-      - name: Code Sign Binary
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-          
-          # Sign with hardened runtime
-          codesign --force \
-            --options runtime \
-            --timestamp \
-            --sign "Developer ID Application: $APPLE_TEAM_ID" \
-            "$BINARY_PATH"
-          
-          # Verify signature
-          codesign --verify --verbose "$BINARY_PATH"
-          codesign --display --verbose=4 "$BINARY_PATH"
-
-      - name: Create Notarization Archive
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        run: |
-          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
-          
-          # Create zip for notarization
-          zip -j "$ZIP_PATH" "$BINARY_PATH"
-
-      - name: Submit for Notarization
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
-          
-          # Submit for notarization (async - no wait)
-          xcrun notarytool submit "$ZIP_PATH" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait false
-          
-          echo "Notarization submitted. Check status in Apple Developer portal."
-
-      - name: Cleanup Keychain
-        if: contains(matrix.cfg.rust-target, 'apple-darwin') && always()
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          security delete-keychain "$KEYCHAIN_PATH" || true
+#      - name: Code Sign Binary
+#        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+#        env:
+#          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+#        run: |
+#          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+#
+#          # Sign with hardened runtime
+#          codesign --force \
+#            --options runtime \
+#            --timestamp \
+#            --sign "Developer ID Application: $APPLE_TEAM_ID" \
+#            "$BINARY_PATH"
+#
+#          # Verify signature
+#          codesign --verify --verbose "$BINARY_PATH"
+#          codesign --display --verbose=4 "$BINARY_PATH"
+#
+#      - name: Create Notarization Archive
+#        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+#        run: |
+#          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+#          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+#
+#          # Create zip for notarization
+#          zip -j "$ZIP_PATH" "$BINARY_PATH"
+#
+#      - name: Submit for Notarization
+#        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+#        env:
+#          APPLE_ID: ${{ secrets.APPLE_ID }}
+#          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+#          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+#        run: |
+#          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+#
+#          # Submit for notarization (async - no wait)
+#          xcrun notarytool submit "$ZIP_PATH" \
+#            --apple-id "$APPLE_ID" \
+#            --team-id "$APPLE_TEAM_ID" \
+#            --password "$APPLE_APP_PASSWORD" \
+#            --wait false
+#
+#          echo "Notarization submitted. Check status in Apple Developer portal."
+#
+#      - name: Cleanup Keychain
+#        if: contains(matrix.cfg.rust-target, 'apple-darwin') && always()
+#        run: |
+#          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+#          security delete-keychain "$KEYCHAIN_PATH" || true
 
       - name: Login GH CLI
         shell: bash

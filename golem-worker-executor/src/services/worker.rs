@@ -124,16 +124,17 @@ impl WorkerService for DefaultWorkerService {
             .into_iter()
             .next();
 
+        tracing::debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
+
         match initial_oplog_entry {
             None => None,
             Some((
                 _,
                 OplogEntry::Create {
                     worker_id,
-                    component_version,
-                    args,
+                    component_revision,
                     env,
-                    project_id,
+                    environment_id,
                     created_by,
                     timestamp,
                     parent,
@@ -141,25 +142,26 @@ impl WorkerService for DefaultWorkerService {
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     wasi_config_vars,
+                    original_phantom_id,
                 },
             )) => {
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id,
-                    args,
                     env,
                     wasi_config_vars,
-                    project_id,
+                    environment_id,
                     created_by,
                     created_at: timestamp,
                     parent,
                     last_known_status: WorkerStatusRecord {
-                        component_version,
-                        component_version_for_replay: component_version,
+                        component_revision,
+                        component_revision_for_replay: component_revision,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,
                         ..WorkerStatusRecord::default()
                     },
+                    original_phantom_id,
                 };
 
                 let status_value: Option<Result<WorkerStatusRecord, String>> = self

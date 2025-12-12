@@ -16,8 +16,10 @@ use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, OwnedWorkerId, WorkerId};
+use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
@@ -35,10 +37,9 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         &self,
         created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
@@ -48,10 +49,9 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         &self,
         created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
@@ -97,10 +97,9 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         &self,
         created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
@@ -111,7 +110,6 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                     .get_or_create_suspended(
                         created_by,
                         owned_worker_id,
-                        worker_args,
                         worker_env,
                         worker_config,
                         component_version,
@@ -130,10 +128,9 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         &self,
         created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
@@ -144,7 +141,6 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                     .get_or_create_running(
                         created_by,
                         owned_worker_id,
-                        worker_args,
                         worker_env,
                         worker_config,
                         component_version,
@@ -191,7 +187,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     None,
                     None,
                     None,
-                    None,
                     &InvocationContextStack::fresh(),
                 )
                 .await
@@ -209,10 +204,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         &self,
         created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
@@ -220,7 +214,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             &self.all,
             created_by,
             owned_worker_id,
-            worker_args,
             worker_env,
             worker_config,
             component_version,
@@ -234,10 +227,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         &self,
         created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
@@ -245,7 +237,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             &self.all,
             created_by,
             owned_worker_id,
-            worker_args,
             worker_env,
             worker_config,
             component_version,

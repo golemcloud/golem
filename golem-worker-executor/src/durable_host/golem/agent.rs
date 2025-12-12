@@ -34,10 +34,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<GolemAgentGetAllAgentTypes>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
         let result = if durability.is_live() {
-            let project_id = &self.owned_worker_id.project_id;
+            let environment_id = &self.owned_worker_id.environment_id;
             let result = self
                 .agent_types_service()
-                .get_all(project_id)
+                .get_all(environment_id)
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -66,10 +66,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
         let result = if durability.is_live() {
-            let project_id = &self.owned_worker_id.project_id;
             let result = self
                 .agent_types_service()
-                .get(project_id, &agent_type_name)
+                .get(&self.owned_worker_id.environment_id, &agent_type_name)
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -94,6 +93,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: String,
         input: DataValue,
+        phantom_id: Option<crate::preview2::golem::rpc::types::Uuid>,
     ) -> anyhow::Result<Result<String, AgentError>> {
         DurabilityHost::observe_function_call(self, "golem_agent", "make_agent_id");
 
@@ -103,7 +103,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
-                    let agent_id = AgentId::new(agent_type_name.to_wit_naming(), input);
+                    let agent_id = AgentId::new(
+                        agent_type_name.to_wit_naming(),
+                        input,
+                        phantom_id.map(|id| id.into()),
+                    );
                     Ok(Ok(agent_id.to_string()))
                 }
                 Err(err) => Ok(Err(AgentError::InvalidInput(err))),
@@ -116,12 +120,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn parse_agent_id(
         &mut self,
         agent_id: String,
-    ) -> anyhow::Result<Result<(String, DataValue), AgentError>> {
+    ) -> anyhow::Result<
+        Result<
+            (
+                String,
+                DataValue,
+                Option<crate::preview2::golem::rpc::types::Uuid>,
+            ),
+            AgentError,
+        >,
+    > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
         match AgentId::parse(agent_id, component_metadata) {
-            Ok(agent_id) => Ok(Ok((agent_id.agent_type, agent_id.parameters.into()))),
+            Ok(agent_id) => Ok(Ok((
+                agent_id.agent_type,
+                agent_id.parameters.into(),
+                agent_id.phantom_id.map(|id| id.into()),
+            ))),
             Err(error) => Ok(Err(AgentError::InvalidAgentId(error))),
         }
     }

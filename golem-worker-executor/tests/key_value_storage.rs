@@ -14,8 +14,8 @@
 
 use crate::WorkerExecutorTestDependencies;
 use async_trait::async_trait;
-use golem_common::base_model::ProjectId;
 use golem_common::config::RedisConfig;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
@@ -27,7 +27,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 #[async_trait]
 trait GetKeyValueStorage: Debug {
@@ -140,7 +140,7 @@ fn ns() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::Worker,
         ns2: KeyValueStorageNamespace::UserDefined {
-            project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
             bucket: "test-bucket".to_string(),
         },
     }
@@ -150,7 +150,7 @@ fn ns() -> Namespaces {
 fn ns2() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::UserDefined {
-            project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
             bucket: "test-bucket".to_string(),
         },
         ns2: KeyValueStorageNamespace::Worker,

@@ -14,16 +14,24 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[derive(Debug, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
+
+    #[oai(skip)]
+    #[serde(skip)]
+    pub cause: Option<anyhow::Error>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[derive(Debug, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 pub struct ErrorBody {
     pub error: String,
+
+    #[oai(skip)]
+    #[serde(skip)]
+    pub cause: Option<anyhow::Error>,
 }
 
 mod protobuf {
@@ -32,12 +40,30 @@ mod protobuf {
 
     impl From<golem_api_grpc::proto::golem::common::ErrorBody> for ErrorBody {
         fn from(value: golem_api_grpc::proto::golem::common::ErrorBody) -> Self {
+            Self {
+                error: value.error,
+                cause: None,
+            }
+        }
+    }
+
+    impl From<ErrorBody> for golem_api_grpc::proto::golem::common::ErrorBody {
+        fn from(value: ErrorBody) -> Self {
             Self { error: value.error }
         }
     }
 
     impl From<golem_api_grpc::proto::golem::common::ErrorsBody> for ErrorsBody {
         fn from(value: golem_api_grpc::proto::golem::common::ErrorsBody) -> Self {
+            Self {
+                errors: value.errors,
+                cause: None,
+            }
+        }
+    }
+
+    impl From<ErrorsBody> for golem_api_grpc::proto::golem::common::ErrorsBody {
+        fn from(value: ErrorsBody) -> Self {
             Self {
                 errors: value.errors,
             }

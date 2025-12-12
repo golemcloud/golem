@@ -12,112 +12,129 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::{BinaryReference, ElementValue};
-use crate::golem_agentic::golem::agent::common::{ElementSchema, TextReference};
+use crate::golem_agentic::golem::agent::common::ElementSchema;
+use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
 use crate::wasm_rpc::WitValue;
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm::Value;
 
 pub trait Schema {
-    fn get_type() -> ElementSchema;
-    fn to_element_value(self) -> Result<ElementValue, String>;
-    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String>
+    fn get_type() -> StructuredSchema;
+    fn to_structured_value(self) -> Result<StructuredValue, String>;
+    fn from_structured_value(
+        value: StructuredValue,
+        schema: StructuredSchema,
+    ) -> Result<Self, String>
+    where
+        Self: Sized;
+
+    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized;
 
     fn to_wit_value(self) -> Result<WitValue, String>
     where
-        Self: Sized,
-    {
-        let element_value = self.to_element_value()?;
+        Self: Sized;
+}
 
-        match element_value {
-            ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-            ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
-                BinaryReference::Url(url) => {
-                    let value = Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(Value::String(url))),
-                    };
+#[derive(Debug)]
+pub enum StructuredSchema {
+    Default(ElementSchema),
+    Multimodal(Vec<(String, ElementSchema)>),
+}
 
-                    Ok(WitValue::from(value))
-                }
-                BinaryReference::Inline(binary_source) => {
-                    let restriction_record =
-                        Value::Record(vec![Value::String(binary_source.binary_type.mime_type)]);
-
-                    let value = Value::Variant {
-                        case_idx: 1,
-                        case_value: Some(Box::new(Value::Record(vec![
-                            Value::List(binary_source.data.into_iter().map(Value::U8).collect()),
-                            restriction_record,
-                        ]))),
-                    };
-
-                    Ok(WitValue::from(value))
-                }
-            },
-            ElementValue::UnstructuredText(text_reference) => match text_reference {
-                TextReference::Url(url) => {
-                    let value = Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(Value::String(url))),
-                    };
-
-                    Ok(WitValue::from(value))
-                }
-
-                TextReference::Inline(text_source) => {
-                    let restriction_record = text_source.text_type.map(|text_type| {
-                        Box::new(Value::Record(vec![Value::String(text_type.language_code)]))
-                    });
-
-                    let value = Value::Variant {
-                        case_idx: 1,
-                        case_value: Some(Box::new(Value::Record(vec![
-                            Value::String(text_source.data),
-                            Value::Option(restriction_record),
-                        ]))),
-                    };
-
-                    Ok(WitValue::from(value))
-                }
-            },
+impl StructuredSchema {
+    pub fn get_element_schema(self) -> Option<ElementSchema> {
+        match self {
+            StructuredSchema::Default(element_schema) => Some(element_schema),
+            StructuredSchema::Multimodal(_) => None,
         }
     }
 }
 
+#[derive(Debug)]
+pub enum StructuredValue {
+    Default(ElementValue),
+    Multimodal(Vec<(String, ElementValue)>),
+}
+
+impl StructuredValue {
+    pub fn get_element_value(self) -> Option<ElementValue> {
+        match self {
+            StructuredValue::Default(element_value) => Some(element_value),
+            StructuredValue::Multimodal(_) => None,
+        }
+    }
+
+    pub fn get_multimodal_value(self) -> Option<Vec<(String, ElementValue)>> {
+        match self {
+            StructuredValue::Default(_) => None,
+            StructuredValue::Multimodal(multimodal_values) => Some(multimodal_values),
+        }
+    }
+}
+
+// Handles the component model types via the IntoValue and FromValueAndType traits
+// This doesn't cover UnstructuredText, UnstructuredBinary
 impl<T: IntoValue + FromValueAndType> Schema for T {
-    fn get_type() -> ElementSchema {
-        ElementSchema::ComponentModel(T::get_type())
+    fn get_type() -> StructuredSchema {
+        StructuredSchema::Default(ElementSchema::ComponentModel(T::get_type()))
     }
 
-    fn to_element_value(self) -> Result<ElementValue, String> {
+    fn to_structured_value(self) -> Result<StructuredValue, String> {
         let wit_value = self.into_value();
-        Ok(ElementValue::ComponentModel(wit_value))
+        Ok(StructuredValue::Default(ElementValue::ComponentModel(
+            wit_value,
+        )))
     }
 
-    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String> {
+    fn from_structured_value(
+        value: StructuredValue,
+        schema: StructuredSchema,
+    ) -> Result<Self, String> {
         match value {
-            ElementValue::ComponentModel(wit_value) => {
-                let value_and_type = ValueAndType {
-                    value: wit_value,
-                    typ: match schema {
-                        ElementSchema::ComponentModel(wit_type) => wit_type,
-                        _ => {
-                            return Err(format!(
-                                "Expected ComponentModel schema, got: {:?}",
-                                schema
-                            ))
-                        }
-                    },
-                };
-
-                T::from_value_and_type(value_and_type)
+            StructuredValue::Default(ElementValue::ComponentModel(wit_value)) => {
+                T::from_wit_value(wit_value, schema)
             }
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
+        }
+    }
+
+    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String> {
+        let value_and_type = ValueAndType {
+            value: wit_value,
+            typ: match schema {
+                StructuredSchema::Default(ElementSchema::ComponentModel(wit_type)) => wit_type,
+                _ => return Err(format!("Expected ComponentModel schema, got: {:?}", schema)),
+            },
+        };
+
+        T::from_value_and_type(value_and_type)
+    }
+
+    fn to_wit_value(self) -> Result<WitValue, String> {
+        let value_out = self.to_structured_value()?;
+
+        let element_value_result = match value_out {
+            StructuredValue::Default(element_value) => Ok(element_value),
+            StructuredValue::Multimodal(_) => {
+                Err("Expected element value but found multimodal".to_string())
+            }
+        };
+
+        let element_value = element_value_result?;
+
+        match element_value {
+            ElementValue::ComponentModel(wit_value) => Ok(wit_value),
+            ElementValue::UnstructuredBinary(binary_reference) => Err(format!(
+                "Expected ComponentModel value, got UnstructuredBinary: {:?}",
+                binary_reference
+            )),
+            ElementValue::UnstructuredText(text_reference) => Err(format!(
+                "Expected ComponentModel value, got UnstructuredText: {:?}",
+                text_reference
+            )),
         }
     }
 }
@@ -132,6 +149,10 @@ pub trait MultimodalSchema {
         Self: Sized;
 
     fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
+    where
+        Self: Sized;
+
+    fn from_wit_value(wit_value: (String, WitValue)) -> Result<Self, String>
     where
         Self: Sized;
 

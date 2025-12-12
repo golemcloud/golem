@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::cloud_service::CloudService;
-use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
+use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
@@ -41,14 +40,12 @@ impl SpawnedWorkerExecutorCluster {
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis>,
-        component_service: Arc<dyn ComponentService>,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        shared_client: bool,
-        cloud_service: Arc<dyn CloudService>,
+        registry_service: Arc<dyn RegistryService>,
         otlp: bool,
     ) -> Arc<dyn WorkerExecutor> {
         Arc::new(
@@ -58,14 +55,12 @@ impl SpawnedWorkerExecutorCluster {
                 http_port,
                 grpc_port,
                 redis,
-                component_service,
                 shard_manager,
                 worker_service,
                 verbosity,
                 out_level,
                 err_level,
-                shared_client,
-                cloud_service,
+                registry_service,
                 otlp,
             )
             .await,
@@ -78,15 +73,13 @@ impl SpawnedWorkerExecutorCluster {
         base_grpc_port: u16,
         executable: &Path,
         working_directory: &Path,
-        redis: Arc<dyn Redis + 'static>,
-        component_service: Arc<dyn ComponentService + 'static>,
-        shard_manager: Arc<dyn ShardManager + 'static>,
-        worker_service: Arc<dyn WorkerService + 'static>,
+        redis: Arc<dyn Redis>,
+        shard_manager: Arc<dyn ShardManager>,
+        worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        shared_client: bool,
-        cloud_service: Arc<dyn CloudService>,
+        registry_service: Arc<dyn RegistryService>,
         otlp: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
@@ -103,14 +96,12 @@ impl SpawnedWorkerExecutorCluster {
                     http_port,
                     grpc_port,
                     redis.clone(),
-                    component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
                     verbosity,
                     out_level,
                     err_level,
-                    shared_client,
-                    cloud_service.clone(),
+                    registry_service.clone(),
                     otlp,
                 )
                 .in_current_span(),

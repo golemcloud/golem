@@ -1,4 +1,4 @@
-use crate::app::{cmd, flag, TestContext};
+use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
 use crate::Tracing;
 use golem_cli::fs;
 use indoc::indoc;
@@ -31,7 +31,7 @@ async fn test_rust_counter() {
             flag::YES,
             cmd::AGENT,
             cmd::INVOKE,
-            &format!("app:counter/counter({{ id: \"{uuid}\" }})"),
+            &format!("app:counter/counter-agent(\"{uuid}\")"),
             "increment",
         ])
         .await;
@@ -85,7 +85,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         indoc! { r#"
             components:
               rust:agent:
-                template: rust
+                templates: rust
         "# },
     )
     .unwrap();
@@ -393,8 +393,15 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(
         &ctx,
-        "fun-multi-modal",
+        "rust:agent/foo-agent.{fun-multi-modal}",
         &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-multi-modal-basic}",
+        &[r#"[text(url("foo"))]"#],
     )
     .await;
 
@@ -514,7 +521,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         indoc! { r#"
             components:
               ts:agent:
-                template: ts
+                templates: ts
         "# },
     )
     .unwrap();
@@ -534,7 +541,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
@@ -558,7 +565,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function optional (that has null, defined as union)
     run_and_assert(
         &ctx,
-        "fun-optional",
+        "ts:agent/foo-agent.{fun-optional}",
         &[
             "some(case1(\"foo\"))",
             "{a: some(\"foo\")}",
@@ -570,6 +577,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         ],
     )
     .await;
+
+    run_and_assert(&ctx, "fun-optional-q-mark", &["x", "none", r#"some("y")"#]).await;
 
     // function with a simple object
     run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
@@ -613,7 +622,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
 
     // Multimodal
-    run_and_assert(&ctx, "fun-multimodal", &["[input-text({val: \"foo\"})]"]).await;
+    run_and_assert(&ctx, "fun-multimodal", &["[text(\"foo\")]"]).await;
 
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
@@ -723,7 +732,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 #[test]
 async fn test_common_dep_plugs_errors() {
     let mut ctx = TestContext::new();
-    let app_name = "common_dep_plug_errors";
+    let app_name = "common-dep-plug-errors";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
@@ -755,18 +764,17 @@ async fn test_common_dep_plugs_errors() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
 
-            dependencies:
-              app:weather-agent:
-              - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
-              - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_google.wasm
-              - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_serper.wasm
-              - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_tavily.wasm
+                dependencies:
+                - type: wasm
+                  url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
+                - type: wasm
+                  url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_google.wasm
+                - type: wasm
+                  url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_serper.wasm
+                - type: wasm
+                  url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_tavily.wasm
         "# },
     )
         .unwrap();
@@ -788,12 +796,11 @@ async fn test_common_dep_plugs_errors() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
 
-            dependencies:
-              app:weather-agent:
-              - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
+                dependencies:
+                - type: wasm
+                  url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
         "# },
     )
         .unwrap();
@@ -806,7 +813,7 @@ async fn test_common_dep_plugs_errors() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
         "# },
     )
     .unwrap();
@@ -835,7 +842,7 @@ async fn test_common_dep_plugs_errors() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     let outputs = ctx
@@ -856,7 +863,7 @@ async fn test_common_dep_plugs_errors() {
 #[test]
 async fn test_component_env_var_substitution() {
     let mut ctx = TestContext::new();
-    let app_name = "env_var_substitution";
+    let app_name = "env-var-substitution";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
@@ -879,7 +886,7 @@ async fn test_component_env_var_substitution() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
                 env:
                   NORMAL: 'REALLY'
                   VERY_CUSTOM_ENV_VAR_SECRET_1: '{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}'
@@ -896,7 +903,9 @@ async fn test_component_env_var_substitution() {
     assert!(outputs.success());
 
     // But deploying will do so, so it should fail
-    let outputs = ctx.cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx
+        .cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY, flag::YES])
+        .await;
     assert!(!outputs.success());
 
     assert!(outputs.stderr_contains_ordered([
@@ -913,21 +922,24 @@ async fn test_component_env_var_substitution() {
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_1", "123");
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_3", "456");
 
-    let outputs = ctx.cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx
+        .cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY, flag::YES])
+        .await;
     assert!(outputs.success());
 
     assert!(outputs.stdout_contains_ordered([
-        "COMPOSED=123-456",
-        "NORMAL=REALLY",
-        "VERY_CUSTOM_ENV_VAR_SECRET_1=123",
-        "VERY_CUSTOM_ENV_VAR_SECRET_2=456",
+        "+      env:",
+        "+        COMPOSED: 123-456",
+        "+        NORMAL: REALLY",
+        "+        VERY_CUSTOM_ENV_VAR_SECRET_1: '123'",
+        "+        VERY_CUSTOM_ENV_VAR_SECRET_2: '456'",
     ]));
 }
 
 #[test]
 async fn test_http_api_merging() {
     let mut ctx = TestContext::new();
-    let app_name = "http_api_merging";
+    let app_name = "http-api-merging";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
@@ -948,6 +960,15 @@ async fn test_http_api_merging() {
         .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter2"])
         .await;
     assert!(outputs.success());
+
+    let component2_source_path = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-counter2")
+            .join("src")
+            .join("main.ts"),
+    );
+    replace_strings_in_file(component2_source_path, &[("CounterAgent", "CounterAgent2")]).unwrap();
+
     let component2_manifest_path = ctx.cwd_path_join(
         Path::new("components-ts")
             .join("app-counter2")
@@ -960,7 +981,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter1:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
@@ -977,7 +998,7 @@ async fn test_http_api_merging() {
 
               deployments:
                 local:
-                - host: localhost:9006
+                - domain: http_api_merging.localhost:9006
                   definitions:
                   - def-a
         "# },
@@ -989,7 +1010,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter2:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
@@ -1001,12 +1022,12 @@ async fn test_http_api_merging() {
                     binding:
                       componentName: app:counter2
                       response: |
-                        let agent = counter-agent("b");
+                        let agent = counter-agent2("b");
                         agent.increment()
 
               deployments:
                 local:
-                - host: localhost:9006
+                - domain: http_api_merging.localhost:9006
                   definitions:
                   - def-b
         "# },
@@ -1022,8 +1043,8 @@ async fn test_http_api_merging() {
         "Application API definitions:",
         "  def-a@0.0.1",
         "  def-b@0.0.2",
-        "Application API deployments for profile local:",
-        "  localhost:9006",
+        "Application API deployments for environment local:",
+        "  http_api_merging.localhost:9006",
         "    def-a",
         "    def-b",
     ]));
@@ -1034,7 +1055,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
@@ -1051,7 +1072,7 @@ async fn test_http_api_merging() {
 
               deployments:
                 local:
-                - host: localhost:9006
+                - domain: http_api_merging.localhost:9006
                   definitions:
                   - def-b
                   - def-a
@@ -1062,7 +1083,7 @@ async fn test_http_api_merging() {
     let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains(
-        "error: HTTP API Deployment local - localhost:9006 - def-a is defined in multiple sources"
+        "error: HTTP API Deployment local - http_api_merging.localhost:9006 - def-a is defined in multiple sources"
     ));
 
     // Let's switch back to the good config and deploy, then call the exposed APIs
@@ -1071,7 +1092,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter2:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
@@ -1083,12 +1104,12 @@ async fn test_http_api_merging() {
                     binding:
                       componentName: app:counter2
                       response: |
-                        let agent = counter-agent("b");
+                        let agent = counter-agent2("b");
                         agent.increment()
 
               deployments:
                 local:
-                - host: localhost:9006
+                - domain: test_http_api_merging.localhost:9006
                   definitions:
                   - def-b
         "# },
@@ -1097,20 +1118,24 @@ async fn test_http_api_merging() {
 
     ctx.start_server().await;
 
-    let outputs = ctx
-        .cli([cmd::APP, cmd::DEPLOY, flag::REDEPLOY_ALL, flag::YES])
-        .await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
-        "API def-a/0.0.1 deployed at localhost:9006",
-        "API def-b/0.0.2 deployed at localhost:9006"
+        "+httpApiDeployments:",
+        "+  http_api_merging.localhost:9006:",
+        "+    apis:",
+        "+    - def-a",
+        "+  test_http_api_merging.localhost:9006:",
+        "+    apis:",
+        "+    - def-b",
+        "Deployed all changes"
     ]));
 }
 
 #[test]
 async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     let mut ctx = TestContext::new();
-    let app_name = "common_dep_plug_errors";
+    let app_name = "common-dep-plug-errors";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
@@ -1122,6 +1147,21 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
+
+    let component_golem_yaml = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-agent")
+            .join("golem.yaml"),
+    );
+    fs::write_str(
+        &component_golem_yaml,
+        indoc! { r#"
+          components:
+            app:agent:
+              templates: ts
+        "#},
+    )
+    .unwrap();
 
     let component_source_code = ctx.cwd_path_join(
         Path::new("components-ts")
@@ -1163,7 +1203,6 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             cmd::AGENT,
             cmd::INVOKE,
             flag::YES,
-            flag::REDEPLOY_ALL,
             r#"long-agent-name({one-field: "1212", another-field: 100})"#,
             "ask",
             r#"{one-field: "1", another-field: 2}"#,
@@ -1196,7 +1235,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
 #[test]
 async fn test_naming_extremes() {
     let mut ctx = TestContext::new();
-    let app_name = "test_naming_extremes";
+    let app_name = "test-naming-extremes";
 
     ctx.start_server().await;
 
@@ -1207,6 +1246,22 @@ async fn test_naming_extremes() {
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
     assert!(outputs.success());
+
+    let component_golem_yaml = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-agent")
+            .join("golem.yaml"),
+    );
+
+    fs::write_str(
+        component_golem_yaml,
+        indoc! { r#"
+            components:
+              app:agent:
+                templates: ts
+        "# },
+    )
+    .unwrap();
 
     let component_source_code = ctx.cwd_path_join(
         Path::new("components-ts")

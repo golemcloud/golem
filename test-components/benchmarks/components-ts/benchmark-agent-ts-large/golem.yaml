@@ -24,13 +24,13 @@ httpApi:
 
   deployments:
     local:
-    - host: localhost:9006
+    - domain: localhost:9006
       definitions:
       - benchmark-agent-ts-large-api
 
 components:
   benchmark:agent-ts-large:
-    template: ts
+    templates: ts
 
     #  Component environment variables can reference system environment variables with minijinja syntax:
     #

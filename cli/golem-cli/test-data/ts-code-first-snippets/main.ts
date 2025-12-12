@@ -1,4 +1,12 @@
-import {BaseAgent, Result, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods, Multimodal} from '@golemcloud/golem-ts-sdk';
+import {
+    BaseAgent,
+    Result,
+    agent,
+    UnstructuredText,
+    UnstructuredBinary,
+    WithRemoteMethods,
+    MultimodalAdvanced
+} from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
 import {
@@ -27,8 +35,8 @@ import {
 } from './model';
 
 
-export type InputText = { val: string };
-export type InputImage = Uint8Array;
+export type InputText = { val: string, tag: "text" };
+export type InputImage = { val: Uint8Array; tag: "image" };
 
 @agent()
 class FooAgent extends BaseAgent {
@@ -152,6 +160,11 @@ class FooAgent extends BaseAgent {
             param7,)
     }
 
+    async funOptionalQMark(param1: string, param2?: number, param3?: string) {
+        return this.barAgent.funOptionalQMark(
+            param1, param2, param3
+        )
+    }
 
     async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {
         return await this.barAgent.funObjectComplexType(text);
@@ -170,8 +183,6 @@ class FooAgent extends BaseAgent {
     async funNumber(numberType: NumberType): Promise<NumberType> {
         return await this.barAgent.funNumber(numberType);
     }
-
-
 
 
     async funString(stringType: StringType): Promise<Types.StringType> {
@@ -244,7 +255,7 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUnstructuredBinary(unstructuredText);
     }
 
-    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
+    async funMultimodal(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise<string> {
         return await this.barAgent.funMultimodal(multimodal);
     }
 
@@ -346,6 +357,10 @@ class BarAgent extends BaseAgent {
         return Promise.resolve(concatenatedResult);
     }
 
+    async funOptionalQMark(param1: string, param2?: number, param3?: string) {
+        return Promise.resolve({param1, param2, param3})
+    }
+
     async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {
         return text
     }
@@ -415,7 +430,7 @@ class BarAgent extends BaseAgent {
         return "foo"
     }
 
-    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
+    async funMultimodal(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise<string> {
         return "foo"
     }
 

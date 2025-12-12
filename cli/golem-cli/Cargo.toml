@@ -99,6 +99,7 @@ synoptic = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -126,6 +127,10 @@ webbrowser = { workspace = true }
 warp = { workspace = true }
 rmcp = { version = "0.1.5", features = ["server"], optional = true }
 tokio-util = { workspace = true, optional = true }
+
+[target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
+openssl = { workspace = true }
+openssl-sys = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }

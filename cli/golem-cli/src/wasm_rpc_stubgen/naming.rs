@@ -2,6 +2,7 @@ pub mod wit {
     use crate::log::LogColorize;
     use crate::wasm_rpc_stubgen::stub::FunctionStub;
     use anyhow::{anyhow, bail};
+    use golem_common::model::component::ComponentName;
     use std::path::{Path, PathBuf};
 
     pub static DEPS_DIR: &str = "deps";
@@ -153,6 +154,30 @@ pub mod wit {
 
     pub fn schedule_function_name(function: &FunctionStub) -> String {
         format!("schedule-{}", function.name)
+    }
+
+    pub fn parser_package_name_from_component_name(
+        component_name: &ComponentName,
+    ) -> anyhow::Result<wit_parser::PackageName> {
+        let component_name = component_name.as_str();
+        let package_name_re =
+            regex::Regex::new(r"^(?P<namespace>[^:]+):(?P<name>[^@]+)(?:@(?P<version>.+))?$")?;
+        let captures = package_name_re
+            .captures(component_name)
+            .ok_or_else(|| anyhow!("Invalid component name format: {}", component_name))?;
+        let namespace = captures.name("namespace").unwrap().as_str().to_string();
+        let name = captures.name("name").unwrap().as_str().to_string();
+        let version = captures
+            .name("version")
+            .map(|m| m.as_str().to_string())
+            .map(|v| semver::Version::parse(&v))
+            .transpose()?;
+
+        Ok(wit_parser::PackageName {
+            namespace,
+            name,
+            version,
+        })
     }
 }
 

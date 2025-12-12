@@ -192,13 +192,13 @@ impl Guest for Component {
 
     fn update_worker(
         worker_id: AgentId,
-        component_version: ComponentVersion,
+        component_revision: ComponentRevision,
         update_mode: UpdateMode,
     ) {
         println!(
-            "Update worker worker id: {worker_id:?}, component version: {component_version:?}, update mode: {update_mode:?}"
+            "Update worker worker id: {worker_id:?}, component revision: {component_revision:?}, update mode: {update_mode:?}"
         );
-        bindings::golem::api::host::update_agent(&worker_id, component_version, update_mode);
+        bindings::golem::api::host::update_agent(&worker_id, component_revision, update_mode);
     }
 
     fn generate_idempotency_keys() -> (

@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::Agent;
 use std::cell::RefCell;
-
-use crate::{agentic::Agent, golem_agentic::golem::api::host::AgentId};
 
 pub struct ResolvedAgent {
     pub agent: RefCell<Box<dyn Agent>>,
-    pub agent_id: AgentId,
 }
 
 impl ResolvedAgent {
-    pub fn new(agent: Box<dyn Agent>, agent_id: AgentId) -> ResolvedAgent {
+    pub fn new(agent: Box<dyn Agent>) -> ResolvedAgent {
         ResolvedAgent {
             agent: RefCell::new(agent),
-            agent_id,
         }
     }
 }

@@ -2,7 +2,7 @@ mod model;
 
 use std::collections::HashMap;
 
-use golem_rust::agentic::{Agent, Multimodal, UnstructuredBinary, UnstructuredText};
+use golem_rust::agentic::{Agent, MultimodalAdvanced, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
 
@@ -92,9 +92,14 @@ trait FooAgent {
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
 
-    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+    async fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData>;
+
+    async fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal;
+
     async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+
     async fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+
     async fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
 }
 
@@ -259,8 +264,12 @@ impl FooAgent for FooAgentImpl {
             .fun_enum_with_only_literals(enum_with_only_literals).await
     }
 
-    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+    async fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData> {
         self.client.fun_multi_modal(input).await
+    }
+
+    async fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal {
+        self.client.fun_multi_modal_basic(input).await
     }
 
     async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
@@ -356,7 +365,9 @@ trait BarAgent {
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
 
-    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+    fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData>;
+
+    fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal;
 
     fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
 
@@ -372,6 +383,8 @@ struct BarAgentImpl {
 #[agent_implementation]
 impl BarAgent for BarAgentImpl {
     fn new(opt_string: Option<String>) -> Self {
+        let _ = SingletonAgentClient::get();
+
         BarAgentImpl {
             _id: opt_string.unwrap_or_else(|| "default_id".to_string()),
         }
@@ -517,7 +530,11 @@ impl BarAgent for BarAgentImpl {
         enum_with_only_literals
     }
 
-    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+    fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData> {
+        input
+    }
+
+    fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal {
         input
     }
 
@@ -532,5 +549,23 @@ impl BarAgent for BarAgentImpl {
     fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
         input
     }
+}
 
+#[agent_definition]
+trait SingletonAgent {
+    fn new() -> Self;
+    fn get_value(&self) -> u32;
+}
+
+struct SingletonImpl{}
+
+#[agent_implementation]
+impl SingletonAgent for SingletonImpl {
+    fn new() -> Self {
+        SingletonImpl{}
+    }
+
+    fn get_value(&self) -> u32 {
+        42
+    }
 }

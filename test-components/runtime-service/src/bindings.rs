@@ -39,7 +39,7 @@ pub mod golem {
                 }
             }
             /// Represents a Golem component's version
-            pub type ComponentVersion = u64;
+            pub type ComponentRevision = u64;
             /// Configures how the executor retries failures
             #[repr(C)]
             #[derive(Clone, Copy)]
@@ -503,7 +503,7 @@ pub mod golem {
                 /// The current agent status
                 pub status: AgentStatus,
                 /// The component version the agent is running with
-                pub component_version: u64,
+                pub component_revision: u64,
                 /// The agent's current retry count
                 pub retry_count: u64,
             }
@@ -518,7 +518,7 @@ pub mod golem {
                         .field("env", &self.env)
                         .field("config-vars", &self.config_vars)
                         .field("status", &self.status)
-                        .field("component-version", &self.component_version)
+                        .field("component-revision", &self.component_revision)
                         .field("retry-count", &self.retry_count)
                         .finish()
                 }
@@ -588,14 +588,31 @@ pub mod golem {
                     }
                 }
             }
-            /// Indicates which agent the code is running on after `fork`
-            #[repr(u8)]
-            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            /// Details about the fork result
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct ForkDetails {
+                pub forked_phantom_id: Uuid,
+            }
+            impl ::core::fmt::Debug for ForkDetails {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ForkDetails")
+                        .field("forked-phantom-id", &self.forked_phantom_id)
+                        .finish()
+                }
+            }
+            /// Indicates which agent the code is running on after `fork`.
+            /// The parameter contains details about the fork result, such as the phantom-ID of the newly
+            /// created agent.
+            #[derive(Clone, Copy)]
             pub enum ForkResult {
                 /// The original agent that called `fork`
-                Original,
+                Original(ForkDetails),
                 /// The new agent
-                Forked,
+                Forked(ForkDetails),
             }
             impl ::core::fmt::Debug for ForkResult {
                 fn fmt(
@@ -603,25 +620,12 @@ pub mod golem {
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     match self {
-                        ForkResult::Original => {
-                            f.debug_tuple("ForkResult::Original").finish()
+                        ForkResult::Original(e) => {
+                            f.debug_tuple("ForkResult::Original").field(e).finish()
                         }
-                        ForkResult::Forked => {
-                            f.debug_tuple("ForkResult::Forked").finish()
+                        ForkResult::Forked(e) => {
+                            f.debug_tuple("ForkResult::Forked").field(e).finish()
                         }
-                    }
-                }
-            }
-            impl ForkResult {
-                #[doc(hidden)]
-                pub unsafe fn _lift(val: u8) -> ForkResult {
-                    if !cfg!(debug_assertions) {
-                        return ::core::mem::transmute(val);
-                    }
-                    match val {
-                        0 => ForkResult::Original,
-                        1 => ForkResult::Forked,
-                        _ => panic!("invalid enum discriminant"),
                     }
                 }
             }
@@ -1092,7 +1096,7 @@ pub mod golem {
                                                 env: result24,
                                                 config_vars: result33,
                                                 status: AgentStatus::_lift(l34 as u8),
-                                                component_version: l35 as u64,
+                                                component_revision: l35 as u64,
                                                 retry_count: l36 as u64,
                                             }
                                         };
@@ -1668,7 +1672,7 @@ pub mod golem {
             /// not waiting for the agent to get updated.
             pub fn update_agent(
                 agent_id: &AgentId,
-                target_version: ComponentVersion,
+                target_revision: ComponentRevision,
                 mode: UpdateMode,
             ) -> () {
                 unsafe {
@@ -1716,7 +1720,7 @@ pub mod golem {
                             _rt::as_i64(low_bits2),
                             ptr3.cast_mut(),
                             len3,
-                            _rt::as_i64(target_version),
+                            _rt::as_i64(target_revision),
                             mode.clone() as i32,
                         )
                     };
@@ -1901,7 +1905,7 @@ pub mod golem {
                         env: result21,
                         config_vars: result30,
                         status: AgentStatus::_lift(l31 as u8),
-                        component_version: l32 as u64,
+                        component_revision: l32 as u64,
                         retry_count: l33 as u64,
                     };
                     result34
@@ -2123,7 +2127,7 @@ pub mod golem {
                                     env: result26,
                                     config_vars: result35,
                                     status: AgentStatus::_lift(l36 as u8),
-                                    component_version: l37 as u64,
+                                    component_revision: l37 as u64,
                                     retry_count: l38 as u64,
                                 }
                             };
@@ -2502,26 +2506,59 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
-            /// and this agent continues running as well. The return value is going to be different in this agent and
-            /// the forked agent.
-            pub fn fork(new_name: &str) -> ForkResult {
+            /// Forks the current agent at the current execution point. The new agent gets the same base agent ID but
+            /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+            /// both sides. The newly created agent continues running from the same point, but the return value is
+            /// going to be different in this agent and the forked agent.
+            pub fn fork() -> ForkResult {
                 unsafe {
-                    let vec0 = new_name;
-                    let ptr0 = vec0.as_ptr().cast::<u8>();
-                    let len0 = vec0.len();
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "fork"]
-                        fn wit_import1(_: *mut u8, _: usize) -> i32;
+                        fn wit_import1(_: *mut u8);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import1(_: *mut u8, _: usize) -> i32 {
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
                         unreachable!()
                     }
-                    let ret = unsafe { wit_import1(ptr0.cast_mut(), len0) };
-                    ForkResult::_lift(ret as u8)
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let v7 = match l2 {
+                        0 => {
+                            let e7 = {
+                                let l3 = *ptr0.add(8).cast::<i64>();
+                                let l4 = *ptr0.add(16).cast::<i64>();
+                                ForkDetails {
+                                    forked_phantom_id: super::super::super::golem::rpc::types::Uuid {
+                                        high_bits: l3 as u64,
+                                        low_bits: l4 as u64,
+                                    },
+                                }
+                            };
+                            ForkResult::Original(e7)
+                        }
+                        n => {
+                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                            let e7 = {
+                                let l5 = *ptr0.add(8).cast::<i64>();
+                                let l6 = *ptr0.add(16).cast::<i64>();
+                                ForkDetails {
+                                    forked_phantom_id: super::super::super::golem::rpc::types::Uuid {
+                                        high_bits: l5 as u64,
+                                        low_bits: l6 as u64,
+                                    },
+                                }
+                            };
+                            ForkResult::Forked(e7)
+                        }
+                    };
+                    let result8 = v7;
+                    result8
                 }
             }
         }
@@ -14136,7 +14173,7 @@ pub mod exports {
                 use super::super::super::super::_rt;
                 pub type ComponentId = super::super::super::super::golem::api::host::ComponentId;
                 pub type AgentId = super::super::super::super::golem::api::host::AgentId;
-                pub type ComponentVersion = super::super::super::super::golem::api::host::ComponentVersion;
+                pub type ComponentRevision = super::super::super::super::golem::api::host::ComponentRevision;
                 pub type UpdateMode = super::super::super::super::golem::api::host::UpdateMode;
                 pub type AgentAnyFilter = super::super::super::super::golem::api::host::AgentAnyFilter;
                 pub type AgentMetadata = super::super::super::super::golem::api::host::AgentMetadata;
@@ -14424,7 +14461,7 @@ pub mod exports {
                                 env: env32,
                                 config_vars: config_vars32,
                                 status: status32,
-                                component_version: component_version32,
+                                component_revision: component_revision32,
                                 retry_count: retry_count32,
                             } = e;
                             let super::super::super::super::golem::rpc::types::AgentId {
@@ -14580,7 +14617,7 @@ pub mod exports {
                                 .cast::<u8>() = (status32.clone() as i32) as u8;
                             *base
                                 .add(24 + 8 * ::core::mem::size_of::<*const u8>())
-                                .cast::<i64>() = _rt::as_i64(component_version32);
+                                .cast::<i64>() = _rt::as_i64(component_revision32);
                             *base
                                 .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                                 .cast::<i64>() = _rt::as_i64(retry_count32);
@@ -14714,7 +14751,7 @@ pub mod exports {
                         env: env2,
                         config_vars: config_vars2,
                         status: status2,
-                        component_version: component_version2,
+                        component_revision: component_revision2,
                         retry_count: retry_count2,
                     } = result0;
                     let super::super::super::super::golem::rpc::types::AgentId {
@@ -14870,7 +14907,7 @@ pub mod exports {
                         .cast::<u8>() = (status2.clone() as i32) as u8;
                     *ptr1
                         .add(24 + 8 * ::core::mem::size_of::<*const u8>())
-                        .cast::<i64>() = _rt::as_i64(component_version2);
+                        .cast::<i64>() = _rt::as_i64(component_revision2);
                     *ptr1
                         .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>() = _rt::as_i64(retry_count2);
@@ -15001,7 +15038,7 @@ pub mod exports {
                                 env: env3,
                                 config_vars: config_vars3,
                                 status: status3,
-                                component_version: component_version3,
+                                component_revision: component_revision3,
                                 retry_count: retry_count3,
                             } = e;
                             let super::super::super::super::golem::rpc::types::AgentId {
@@ -15157,7 +15194,7 @@ pub mod exports {
                                 .cast::<u8>() = (status3.clone() as i32) as u8;
                             *ptr2
                                 .add(32 + 8 * ::core::mem::size_of::<*const u8>())
-                                .cast::<i64>() = _rt::as_i64(component_version3);
+                                .cast::<i64>() = _rt::as_i64(component_revision3);
                             *ptr2
                                 .add(40 + 8 * ::core::mem::size_of::<*const u8>())
                                 .cast::<i64>() = _rt::as_i64(retry_count3);
@@ -15337,7 +15374,7 @@ pub mod exports {
                     fn get_worker_metadata(agent_id: AgentId) -> Option<AgentMetadata>;
                     fn update_worker(
                         agent_id: AgentId,
-                        component_version: ComponentVersion,
+                        component_revision: ComponentRevision,
                         update_mode: UpdateMode,
                     ) -> ();
                     fn generate_idempotency_keys() -> (Uuid, Uuid);
@@ -15692,12 +15729,12 @@ pub(crate) use __export_runtime_service_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 12020] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xee\\\x01A\x02\x01A)\
-\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
-method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
-le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
-\0\x12wasi:io/poll@0.2.3\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 12067] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9d]\x01A\x02\x01A)\x01\
+B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
+od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
+lock\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\
+\x12wasi:io/poll@0.2.3\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
 \x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duratio\
 n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\
 \x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\
@@ -15747,82 +15784,83 @@ ethod]cancellation-token.cancel\x01F\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc7\0
 \x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01I\x03\
 \0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\x03\0\x03\x0cc\
 omponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\x02\x03\0\x03\x08\
-agent-id\x01B\x85\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
+agent-id\x01B\x87\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
 \x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\
 \x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\
 \x08agent-id\x03\0\x08\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x0a\x01w\x04\0\
 \x0boplog-index\x03\0\x0c\x01r\x02\x08agent-id\x09\x09oplog-idx\x0d\x04\0\x0apro\
-mise-id\x03\0\x0e\x01w\x04\0\x11component-version\x03\0\x10\x01r\x01\x05values\x04\
-\0\x0aaccount-id\x03\0\x12\x01r\x01\x04uuid\x05\x04\0\x0aproject-id\x03\0\x14\x01\
-ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11\
-max-jitter-factor\x16\x04\0\x0cretry-policy\x03\0\x17\x01q\x03\x0fpersist-nothin\
-g\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\
-\x03\0\x19\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x1b\
-\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04les\
-s\x04\0\x11filter-comparator\x03\0\x1d\x01m\x05\x05equal\x09not-equal\x04like\x08\
-not-like\x0bstarts-with\x04\0\x18string-filter-comparator\x03\0\x1f\x01m\x07\x07\
-running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\
-\x0cagent-status\x03\0!\x01r\x02\x0acomparator\x20\x05values\x04\0\x11agent-name\
--filter\x03\0#\x01r\x02\x0acomparator\x1e\x05value\"\x04\0\x13agent-status-filte\
-r\x03\0%\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x14agent-version-filter\x03\0\
-'\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x17agent-created-at-filter\x03\0)\x01\
-r\x03\x04names\x0acomparator\x20\x05values\x04\0\x10agent-env-filter\x03\0+\x01r\
-\x03\x04names\x0acomparator\x20\x05values\x04\0\x18agent-config-vars-filter\x03\0\
--\x01q\x06\x04name\x01$\0\x06status\x01&\0\x07version\x01(\0\x0acreated-at\x01*\0\
-\x03env\x01,\0\x10wasi-config-vars\x01.\0\x04\0\x15agent-property-filter\x03\0/\x01\
-p0\x01r\x01\x07filters1\x04\0\x10agent-all-filter\x03\02\x01p3\x01r\x01\x07filte\
-rs4\x04\0\x10agent-any-filter\x03\05\x01ps\x01o\x02ss\x01p8\x01r\x07\x08agent-id\
-\x09\x04args7\x03env9\x0bconfig-vars9\x06status\"\x11component-versionw\x0bretry\
--countw\x04\0\x0eagent-metadata\x03\0:\x04\0\x0aget-agents\x03\x01\x01q\x02\x15r\
-evert-to-oplog-index\x01\x0d\0\x17revert-last-invocations\x01w\0\x04\0\x13revert\
--agent-target\x03\0=\x01m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0?\x04\
-\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccomponent-id\x03\x06fil\
-ter\xc2\0\x07precise\x7f\0\xc3\0\x04\0\x17[constructor]get-agents\x01D\x01h<\x01\
-p;\x01k\xc6\0\x01@\x01\x04self\xc5\0\0\xc7\0\x04\0\x1b[method]get-agents.get-nex\
-t\x01H\x01hA\x01i\x0b\x01@\x01\x04self\xc9\0\0\xca\0\x04\0$[method]get-promise-r\
-esult.subscribe\x01K\x01p}\x01k\xcc\0\x01@\x01\x04self\xc9\0\0\xcd\0\x04\0\x1e[m\
-ethod]get-promise-result.get\x01N\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01O\x01i\
-A\x01@\x01\x0apromise-id\x0f\0\xd0\0\x04\0\x0bget-promise\x01Q\x01@\x02\x0apromi\
-se-id\x0f\x04data\xcc\0\0\x7f\x04\0\x10complete-promise\x01R\x01@\0\0\x0d\x04\0\x0f\
-get-oplog-index\x01S\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0fset-oplog-index\x01\
-T\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01U\x04\0\x14mark-begin-ope\
-ration\x01S\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01V\x01@\0\0\
-\x18\x04\0\x10get-retry-policy\x01W\x01@\x01\x10new-retry-policy\x18\x01\0\x04\0\
-\x10set-retry-policy\x01X\x01@\0\0\x1a\x04\0\x1bget-oplog-persistence-level\x01Y\
-\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-leve\
-l\x01Z\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01[\x01@\x01\x0aidempotent\x7f\
-\x01\0\x04\0\x14set-idempotence-mode\x01\\\x01@\0\0\x05\x04\0\x18generate-idempo\
-tency-key\x01]\x01@\x03\x08agent-id\x09\x0etarget-version\x11\x04mode\x1c\x01\0\x04\
-\0\x0cupdate-agent\x01^\x01@\0\0;\x04\0\x11get-self-metadata\x01_\x01k;\x01@\x01\
-\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\x0fsource-age\
-nt-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\0\x0afork-ag\
-ent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\x01\
-c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-component-i\
-d\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\0\x10\
-resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\x01\x08new-name\
-s\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0b\x01B\x04\x04\0\
-\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug\
--string\x01\x02\x03\0\x13wasi:io/error@0.2.3\x05\x0c\x02\x03\0\x05\x05error\x01B\
-(\x02\x03\x02\x01\x0d\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollab\
-le\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\
-\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-strea\
-m\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\
-\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking\
--read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[met\
-hod]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01\
-i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\
-\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\
-\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]\
-output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\
-\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\
-\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\
-\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\
-\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]output-stream.b\
-locking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\
-\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]output-stream.b\
-locking-splice\x01\x18\x03\0\x15wasi:io/streams@0.2.3\x05\x0e\x02\x03\0\x06\x0ci\
-nput-stream\x02\x03\0\x06\x0doutput-stream\x01B\xc1\x01\x02\x03\x02\x01\x06\x04\0\
-\x08duration\x03\0\0\x02\x03\x02\x01\x0f\x04\0\x0cinput-stream\x03\0\x02\x02\x03\
+mise-id\x03\0\x0e\x01w\x04\0\x12component-revision\x03\0\x10\x01r\x01\x04uuid\x05\
+\x04\0\x0aaccount-id\x03\0\x12\x01r\x01\x04uuid\x05\x04\0\x0eenvironment-id\x03\0\
+\x14\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amultip\
+lieru\x11max-jitter-factor\x16\x04\0\x0cretry-policy\x03\0\x17\x01q\x03\x0fpersi\
+st-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persiste\
+nce-level\x03\0\x19\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\
+\x03\0\x1b\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-eq\
+ual\x04less\x04\0\x11filter-comparator\x03\0\x1d\x01m\x05\x05equal\x09not-equal\x04\
+like\x08not-like\x0bstarts-with\x04\0\x18string-filter-comparator\x03\0\x1f\x01m\
+\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exi\
+ted\x04\0\x0cagent-status\x03\0!\x01r\x02\x0acomparator\x20\x05values\x04\0\x11a\
+gent-name-filter\x03\0#\x01r\x02\x0acomparator\x1e\x05value\"\x04\0\x13agent-sta\
+tus-filter\x03\0%\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x14agent-version-fi\
+lter\x03\0'\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x17agent-created-at-filte\
+r\x03\0)\x01r\x03\x04names\x0acomparator\x20\x05values\x04\0\x10agent-env-filter\
+\x03\0+\x01r\x03\x04names\x0acomparator\x20\x05values\x04\0\x18agent-config-vars\
+-filter\x03\0-\x01q\x06\x04name\x01$\0\x06status\x01&\0\x07version\x01(\0\x0acre\
+ated-at\x01*\0\x03env\x01,\0\x10wasi-config-vars\x01.\0\x04\0\x15agent-property-\
+filter\x03\0/\x01p0\x01r\x01\x07filters1\x04\0\x10agent-all-filter\x03\02\x01p3\x01\
+r\x01\x07filters4\x04\0\x10agent-any-filter\x03\05\x01ps\x01o\x02ss\x01p8\x01r\x07\
+\x08agent-id\x09\x04args7\x03env9\x0bconfig-vars9\x06status\"\x12component-revis\
+ionw\x0bretry-countw\x04\0\x0eagent-metadata\x03\0:\x04\0\x0aget-agents\x03\x01\x01\
+q\x02\x15revert-to-oplog-index\x01\x0d\0\x17revert-last-invocations\x01w\0\x04\0\
+\x13revert-agent-target\x03\0=\x01r\x01\x11forked-phantom-id\x05\x04\0\x0cfork-d\
+etails\x03\0?\x01q\x02\x08original\x01\xc0\0\0\x06forked\x01\xc0\0\0\x04\0\x0bfo\
+rk-result\x03\0A\x04\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccom\
+ponent-id\x03\x06filter\xc4\0\x07precise\x7f\0\xc5\0\x04\0\x17[constructor]get-a\
+gents\x01F\x01h<\x01p;\x01k\xc8\0\x01@\x01\x04self\xc7\0\0\xc9\0\x04\0\x1b[metho\
+d]get-agents.get-next\x01J\x01hC\x01i\x0b\x01@\x01\x04self\xcb\0\0\xcc\0\x04\0$[\
+method]get-promise-result.subscribe\x01M\x01p}\x01k\xce\0\x01@\x01\x04self\xcb\0\
+\0\xcf\0\x04\0\x1e[method]get-promise-result.get\x01P\x01@\0\0\x0f\x04\0\x0ecrea\
+te-promise\x01Q\x01iC\x01@\x01\x0apromise-id\x0f\0\xd2\0\x04\0\x0bget-promise\x01\
+S\x01@\x02\x0apromise-id\x0f\x04data\xce\0\0\x7f\x04\0\x10complete-promise\x01T\x01\
+@\0\0\x0d\x04\0\x0fget-oplog-index\x01U\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0f\
+set-oplog-index\x01V\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01W\x04\0\
+\x14mark-begin-operation\x01U\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-oper\
+ation\x01X\x01@\0\0\x18\x04\0\x10get-retry-policy\x01Y\x01@\x01\x10new-retry-pol\
+icy\x18\x01\0\x04\0\x10set-retry-policy\x01Z\x01@\0\0\x1a\x04\0\x1bget-oplog-per\
+sistence-level\x01[\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-opl\
+og-persistence-level\x01\\\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01]\x01@\x01\
+\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01^\x01@\0\0\x05\x04\0\x18\
+generate-idempotency-key\x01_\x01@\x03\x08agent-id\x09\x0ftarget-revision\x11\x04\
+mode\x1c\x01\0\x04\0\x0cupdate-agent\x01`\x01@\0\0;\x04\0\x11get-self-metadata\x01\
+a\x01k;\x01@\x01\x08agent-id\x09\0\xe2\0\x04\0\x12get-agent-metadata\x01c\x01@\x03\
+\x0fsource-agent-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\
+\0\x0afork-agent\x01d\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0c\
+revert-agent\x01e\x01k\x03\x01@\x01\x13component-references\0\xe6\0\x04\0\x14res\
+olve-component-id\x01g\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\
+\xe8\0\x04\0\x10resolve-agent-id\x01i\x04\0\x17resolve-agent-id-strict\x01i\x01@\
+\0\0\xc2\0\x04\0\x04fork\x01j\x03\0\x14golem:api/host@1.3.0\x05\x0b\x01B\x04\x04\
+\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-deb\
+ug-string\x01\x02\x03\0\x13wasi:io/error@0.2.3\x05\x0c\x02\x03\0\x05\x05error\x01\
+B(\x02\x03\x02\x01\x0d\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08polla\
+ble\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\
+\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-s\
+tream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\
+\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.bloc\
+king-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19\
+[method]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\
+\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\
+\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\
+\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[met\
+hod]output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-write-and-f\
+lush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\
+\x15\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\
+\x04\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\
+\x13\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]output-stre\
+am.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03le\
+nw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]output-stre\
+am.blocking-splice\x01\x18\x03\0\x15wasi:io/streams@0.2.3\x05\x0e\x02\x03\0\x06\x0c\
+input-stream\x02\x03\0\x06\x0doutput-stream\x01B\xc1\x01\x02\x03\x02\x01\x06\x04\
+\0\x08duration\x03\0\0\x02\x03\x02\x01\x0f\x04\0\x0cinput-stream\x03\0\x02\x02\x03\
 \x02\x01\x10\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x0d\x04\0\x08io-er\
 ror\x03\0\x06\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\
 \x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05\
@@ -15917,11 +15955,11 @@ options\x03\0\x02\x02\x03\x02\x01\x14\x04\0\x18future-incoming-response\x03\0\x0
 \x02\x03\x02\x01\x15\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01\
 i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06\
 handle\x01\x0d\x03\0\x20wasi:http/outgoing-handler@0.2.3\x05\x16\x02\x03\0\x04\x0c\
-component-id\x02\x03\0\x04\x08agent-id\x02\x03\0\x04\x11component-version\x02\x03\
+component-id\x02\x03\0\x04\x08agent-id\x02\x03\0\x04\x12component-revision\x02\x03\
 \0\x04\x0bupdate-mode\x02\x03\0\x04\x10agent-any-filter\x02\x03\0\x04\x0eagent-m\
 etadata\x02\x03\0\x04\x04uuid\x01B'\x02\x03\x02\x01\x17\x04\0\x0ccomponent-id\x03\
-\0\0\x02\x03\x02\x01\x18\x04\0\x08agent-id\x03\0\x02\x02\x03\x02\x01\x19\x04\0\x11\
-component-version\x03\0\x04\x02\x03\x02\x01\x1a\x04\0\x0bupdate-mode\x03\0\x06\x02\
+\0\0\x02\x03\x02\x01\x18\x04\0\x08agent-id\x03\0\x02\x02\x03\x02\x01\x19\x04\0\x12\
+component-revision\x03\0\x04\x02\x03\x02\x01\x1a\x04\0\x0bupdate-mode\x03\0\x06\x02\
 \x03\x02\x01\x1b\x04\0\x10agent-any-filter\x03\0\x08\x02\x03\x02\x01\x1c\x04\0\x0e\
 agent-metadata\x03\0\x0a\x02\x03\x02\x01\x1d\x04\0\x04uuid\x03\0\x0c\x01@\0\0w\x04\
 \0\x04jump\x01\x0e\x01@\x01\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-\
@@ -15930,8 +15968,8 @@ retries\x01\x0f\x01@\x01\x08replicas}\x01\0\x04\0\x0fexplicit-commit\x01\x10\x01
 idempotence-flag\x01\x12\x04\0\x0fpersist-nothing\x01\x11\x01k\x09\x01p\x0b\x01@\
 \x03\x0ccomponent-id\x01\x06filter\x13\x07precise\x7f\0\x14\x04\0\x0bget-workers\
 \x01\x15\x01@\0\0\x0b\x04\0\x11get-self-metadata\x01\x16\x01k\x0b\x01@\x01\x08ag\
-ent-id\x03\0\x17\x04\0\x13get-worker-metadata\x01\x18\x01@\x03\x08agent-id\x03\x11\
-component-version\x05\x0bupdate-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x19\x01\
+ent-id\x03\0\x17\x04\0\x13get-worker-metadata\x01\x18\x01@\x03\x08agent-id\x03\x12\
+component-revision\x05\x0bupdate-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x19\x01\
 o\x02\x0d\x0d\x01@\0\0\x1a\x04\0\x19generate-idempotency-keys\x01\x1b\x04\0\x0cg\
 olem:it/api\x05\x1e\x04\0\x18golem:it/runtime-service\x04\0\x0b\x15\x01\0\x0frun\
 time-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\

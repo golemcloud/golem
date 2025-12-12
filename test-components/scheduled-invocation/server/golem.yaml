@@ -5,4 +5,4 @@
 
 components:
   it:scheduled-invocation-server:
-    template: rust
+    templates: rust

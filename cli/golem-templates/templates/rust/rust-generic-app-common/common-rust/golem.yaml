@@ -1,8 +1,8 @@
 # golem-app-manifest-header
 
-templates:
+componentTemplates:
   rust:
-    profiles:
+    presets:
       debug:
         build:
           - command: cargo component build
@@ -35,7 +35,6 @@ templates:
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
         clean:
           - src/bindings.rs
-    defaultProfile: debug
 customCommands:
   cargo-clean:
     - command: cargo clean

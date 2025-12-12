@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::Schema;
+use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{
     ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType, WitValue,
 };
@@ -57,7 +57,7 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
     /// ```
     pub fn from_inline(text: String, language_code: T) -> UnstructuredText<T> {
         UnstructuredText::Text {
-            text: text.into(),
+            text,
             language_code: Some(language_code),
         }
     }
@@ -147,7 +147,7 @@ impl UnstructuredText<AnyLanguage> {
     ///
     /// ```
     pub fn from_url_any(url: String) -> UnstructuredText<AnyLanguage> {
-        UnstructuredText::Url(url.into())
+        UnstructuredText::Url(url)
     }
 
     /// Create an `UnstructuredText` instance from inline text without specifying a language code.
@@ -161,7 +161,7 @@ impl UnstructuredText<AnyLanguage> {
     ///
     pub fn from_inline_any(text: String) -> UnstructuredText<AnyLanguage> {
         UnstructuredText::Text {
-            text: text.into(),
+            text,
             language_code: None,
         }
     }
@@ -199,7 +199,7 @@ impl AllowedLanguages for AnyLanguage {
 }
 
 impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
-    fn get_type() -> ElementSchema {
+    fn get_type() -> StructuredSchema {
         let restrictions = if T::all().is_empty() {
             None
         } else {
@@ -213,10 +213,12 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             Some(restrictions)
         };
 
-        ElementSchema::UnstructuredText(TextDescriptor { restrictions })
+        StructuredSchema::Default(ElementSchema::UnstructuredText(TextDescriptor {
+            restrictions,
+        }))
     }
 
-    fn to_element_value(self) -> Result<ElementValue, String> {
+    fn to_structured_value(self) -> Result<StructuredValue, String> {
         match self {
             UnstructuredText::Text {
                 text,
@@ -226,25 +228,42 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                     language_code: code.to_language_code().to_string(),
                 });
 
-                Ok(ElementValue::UnstructuredText(TextReference::Inline(
-                    TextSource {
+                Ok(StructuredValue::Default(ElementValue::UnstructuredText(
+                    TextReference::Inline(TextSource {
                         data: text,
                         text_type,
-                    },
+                    }),
                 )))
             }
 
-            UnstructuredText::Url(url) => {
-                Ok(ElementValue::UnstructuredText(TextReference::Url(url)))
-            }
+            UnstructuredText::Url(url) => Ok(StructuredValue::Default(
+                ElementValue::UnstructuredText(TextReference::Url(url)),
+            )),
         }
     }
 
-    fn from_element_value(value: ElementValue, _schema: ElementSchema) -> Result<Self, String>
+    fn from_wit_value(wit_value: WitValue, _schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
-        match value {
+        UnstructuredText::from_wit_value(wit_value)
+    }
+
+    fn from_structured_value(
+        value: StructuredValue,
+        _schema: StructuredSchema,
+    ) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let element_value = match value {
+            StructuredValue::Default(value) => Ok(value),
+            StructuredValue::Multimodal(_) => {
+                Err("input mismatch. expected default value, found multimodal".to_string())
+            }
+        }?;
+
+        match element_value {
             ElementValue::ComponentModel(_) => {
                 Err("Expected UnstructuredText ElementValue, got ComponentModel".to_string())
             }
@@ -277,6 +296,56 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             ElementValue::UnstructuredBinary(_) => {
                 Err("Expected UnstructuredText ElementValue, got UnstructuredBinary".to_string())
             }
+        }
+    }
+
+    fn to_wit_value(self) -> Result<golem_wasm::WitValue, String>
+    where
+        Self: Sized,
+    {
+        let value_type = self.to_structured_value()?;
+
+        let element_value_result = match value_type {
+            StructuredValue::Default(element_value) => Ok(element_value),
+            StructuredValue::Multimodal(_) => {
+                Err("Expected element value but found multimodal".to_string())
+            }
+        };
+
+        let element_value = element_value_result?;
+
+        match element_value {
+            ElementValue::ComponentModel(wit_value) => Ok(wit_value),
+            ElementValue::UnstructuredBinary(binary_reference) => Err(format!(
+                "Expected ComponentModel value, got UnstructuredBinary: {:?}",
+                binary_reference
+            )),
+            ElementValue::UnstructuredText(text_reference) => match text_reference {
+                TextReference::Url(url) => {
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::String(url))),
+                    };
+
+                    Ok(golem_wasm::WitValue::from(value))
+                }
+
+                TextReference::Inline(text_source) => {
+                    let restriction_record = text_source.text_type.map(|text_type| {
+                        Box::new(Value::Record(vec![Value::String(text_type.language_code)]))
+                    });
+
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(Value::Record(vec![
+                            Value::String(text_source.data),
+                            Value::Option(restriction_record),
+                        ]))),
+                    };
+
+                    Ok(golem_wasm::WitValue::from(value))
+                }
+            },
         }
     }
 }

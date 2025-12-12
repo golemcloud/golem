@@ -2,19 +2,19 @@
 resolver = "2"
 
 members = [
-    "cloud-service",
     "golem-api-grpc",
     "golem-client",
     "golem-common",
     "golem-debugging-service",
     "golem-service-base",
-    "golem-component-service",
     "golem-component-compilation-service",
+    "golem-registry-service",
     "golem-rib",
     "golem-rib-repl",
     "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor",
+    "golem-worker-executor-test-utils",
     "golem-worker-service",
     "integration-tests",
     "golem-wasm",
@@ -89,8 +89,8 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
-golem-component-service = { path = "golem-component-service" }
-golem-openapi-client-generator = "=0.0.16"
+golem-openapi-client-generator = { version = "=0.0.17" }
+golem-registry-service = { path = "golem-registry-service" }
 golem-rib = { version = "=0.0.0", path = "golem-rib" }
 golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
@@ -100,6 +100,7 @@ golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
 golem-wasm = { version = "=0.0.0", path = "golem-wasm" }
 golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
+golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
 
 
@@ -107,12 +108,9 @@ anyhow = "1.0.97"
 applying = "1.0.1"
 arbitrary = "1.4.1"
 assert2 = "0.3.15"
-async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio", ] }
 async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-lock = "3.4.0"
-async-mutex = "1.4.0"
 async-recursion = "1.1.1"
 async-rwlock = "1.3.0"
 async-scoped = "0.9.0"
@@ -127,7 +125,7 @@ base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
-blake3 = "1.5.5"
+blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
 camino = "1.1.10"
 cap-std = "3.4.2" # keep in sync with wasmtime
@@ -141,7 +139,6 @@ clap = { version = "4.5.32", features = ["derive", "suggestions", "color", "help
 clap-verbosity-flag = { version = "3.0.2", features = ["tracing"] }
 clap_complete = "4.5.45"
 cli-table = "0.4.9"
-cloud-service = { path = "cloud-service" }
 colored = "3.0.0"
 colored-diff = "0.2.3"
 combine = "4.6.7"
@@ -183,8 +180,8 @@ humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
 ident-mash = "0.1.0"
 include_dir = "0.7.4"
-indexmap = "2.10.0"
-indoc = "2.0.5"
+indexmap = { version = "2.12.0", features = ["serde"] }
+indoc = "2.0.6"
 inquire = "0.7.5"
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
@@ -206,9 +203,9 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 minijinja = "2.7.0"
-moonbit-component-generator = { version = "0.0.6", features = ["get-script"] }
+moonbit-component-generator = { version = "0.0.10", features = ["get-script"] }
 nanoid = "0.4.0"
-native-tls = "0.2.13"
+native-tls = "=0.2.13"
 nom = "7.1.3"
 nondestructive = "0.0.26"
 nonempty-collections = "0.3.0"
@@ -216,6 +213,8 @@ num-traits = "0.2.19"
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "3.5.0"
+openssl = "=0.10.73"
+openssl-sys = "=0.9.109"
 opentelemetry = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0" }
 opentelemetry-prometheus-text-exporter = "=0.2.0"
@@ -241,6 +240,7 @@ protox = "0.9.0"
 quote = "1.0.37"
 rand = "0.9.0"
 range-set-blaze = "0.1.16"
+rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
 reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
@@ -315,26 +315,26 @@ tryhard = "0.5.1"
 typed-path = "0.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
-uuid = { version = "1.15.1", features = ["serde", "v4", "v5"] }
+uuid = { version = "1.15.1", features = ["serde", "v4", "v5", "v7"] }
 version-compare = "0.2.0"
 wac-graph = "=0.6.1"
 walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
-wasm-rquickjs = "0.0.20"
+wasm-rquickjs = "0.0.21"
 wasm-wave = "0.235"
 wasmparser = "0.229.0"
-wasmprinter = "0.219.1"
+wasmprinter = "0.229.0"
 wasmtime = { version = "=33.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=33.0.0" }
 wasmtime-wasi-http = { version = "=33.0.0" }
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
-wit-bindgen = "0.43.0"
+wit-bindgen = "0.41.0"
 wit-bindgen-rt = "=0.40.0"
-wit-bindgen-rust = "0.43.0"
+wit-bindgen-rust = "0.41.0"
 wit-component = "0.235"
 wit-encoder = "0.235"
 wit-parser = "0.235"

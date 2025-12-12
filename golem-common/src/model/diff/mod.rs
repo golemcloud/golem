@@ -1,0 +1,188 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+mod component;
+mod deployment;
+mod environment;
+mod hash;
+mod http_api_definition;
+mod http_api_deployment;
+mod plugin;
+mod ser;
+
+pub use component::*;
+pub use deployment::*;
+pub use environment::*;
+pub use hash::*;
+pub use http_api_definition::*;
+pub use http_api_deployment::*;
+pub use plugin::*;
+pub use ser::*;
+
+use serde::{Serialize, Serializer};
+use similar::TextDiff;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub trait Diffable {
+    type DiffResult: Serialize;
+
+    fn diff_with_local(&self, local: &Self) -> Option<Self::DiffResult> {
+        Self::diff(local, self)
+    }
+
+    fn diff_with_server(&self, server: &Self) -> Option<Self::DiffResult> {
+        Self::diff(self, server)
+    }
+
+    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult>;
+
+    fn unified_yaml_diff_with_local(&self, local: &Self, mode: SerializeMode) -> String
+    where
+        Self: Serialize,
+    {
+        Self::unified_yaml_diff(local, self, mode)
+    }
+
+    fn unified_yaml_diff_with_server(&self, server: &Self, mode: SerializeMode) -> String
+    where
+        Self: Serialize,
+    {
+        Self::unified_yaml_diff(self, server, mode)
+    }
+
+    fn unified_yaml_diff(local: &Self, server: &Self, mode: SerializeMode) -> String
+    where
+        Self: Serialize,
+    {
+        unified_diff(
+            to_yaml_with_mode(&server, mode).expect("failed to serialize server"),
+            to_yaml_with_mode(&local, mode).expect("failed to serialize server"),
+        )
+    }
+}
+
+pub fn unified_diff(server: impl AsRef<str>, local: impl AsRef<str>) -> String {
+    TextDiff::from_lines(server.as_ref(), local.as_ref())
+        .unified_diff()
+        .context_radius(4)
+        .header("server", "local")
+        .to_string()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BTreeMapDiffValue<ValueDiff> {
+    Create,
+    Delete,
+    Update(ValueDiff),
+}
+
+impl<ValueDiff: Serialize> Serialize for BTreeMapDiffValue<ValueDiff> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            BTreeMapDiffValue::Create => serializer.serialize_str("create"),
+            BTreeMapDiffValue::Delete => serializer.serialize_str("delete"),
+            BTreeMapDiffValue::Update(diff) => diff.serialize(serializer),
+        }
+    }
+}
+
+pub type BTreeMapDiff<K, V> = BTreeMap<K, BTreeMapDiffValue<<V as Diffable>::DiffResult>>;
+
+impl<K, V> Diffable for BTreeMap<K, V>
+where
+    K: Ord + Clone + Serialize,
+    V: Diffable,
+    V::DiffResult: Serialize,
+{
+    type DiffResult = BTreeMapDiff<K, V>;
+
+    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
+        let mut diff = BTreeMap::new();
+
+        let keys = local.keys().chain(server.keys()).collect::<BTreeSet<_>>();
+
+        for key in keys {
+            match (local.get(key), server.get(key)) {
+                (Some(local), Some(server)) => {
+                    if let Some(value_diff) = local.diff_with_server(server) {
+                        diff.insert(key.clone(), BTreeMapDiffValue::Update(value_diff));
+                    }
+                }
+                (Some(_), None) => {
+                    diff.insert(key.clone(), BTreeMapDiffValue::Create);
+                }
+                (None, Some(_)) => {
+                    diff.insert(key.clone(), BTreeMapDiffValue::Delete);
+                }
+                (None, None) => {
+                    unreachable!("key must be present either in local or server");
+                }
+            }
+        }
+
+        if diff.is_empty() {
+            None
+        } else {
+            Some(diff)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BTreeSetDiffValue {
+    Create,
+    Delete,
+}
+
+pub type BTreeSetDiff<K> = BTreeMap<K, BTreeSetDiffValue>;
+
+impl<K> Diffable for BTreeSet<K>
+where
+    K: Ord + Clone + Serialize,
+{
+    type DiffResult = BTreeSetDiff<K>;
+
+    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
+        let mut diff = BTreeMap::new();
+
+        let keys = local.iter().chain(server.iter()).collect::<BTreeSet<_>>();
+
+        for key in keys {
+            match (local.contains(key), server.contains(key)) {
+                (true, true) => {
+                    // NOP, same
+                }
+                (true, false) => {
+                    diff.insert(key.clone(), BTreeSetDiffValue::Create);
+                }
+                (false, true) => {
+                    diff.insert(key.clone(), BTreeSetDiffValue::Delete);
+                }
+                (false, false) => {
+                    panic!("unreachable");
+                }
+            }
+        }
+
+        if diff.is_empty() {
+            None
+        } else {
+            Some(diff)
+        }
+    }
+}

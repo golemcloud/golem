@@ -38,7 +38,7 @@
 
 components:
   it:agent-counters:
-    template: rust
+    templates: rust
 
     #  Component environment variables can reference system environment variables with minijinja syntax:
     #

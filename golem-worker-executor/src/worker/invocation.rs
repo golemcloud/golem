@@ -20,7 +20,7 @@ use anyhow::anyhow;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{IdempotencyKey, OplogIndex};
+use golem_common::model::OplogIndex;
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
@@ -76,14 +76,14 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             result
         }
         Ok(InvokeResult::Interrupted {
-            interrupt_kind: InterruptKind::Interrupt,
+            interrupt_kind: InterruptKind::Interrupt(_),
             ..
         }) => {
             record_invocation(was_live_before, "interrupted");
             result
         }
         Ok(InvokeResult::Interrupted {
-            interrupt_kind: InterruptKind::Suspend,
+            interrupt_kind: InterruptKind::Suspend(_),
             ..
         }) => {
             record_invocation(was_live_before, "suspended");
@@ -411,8 +411,6 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
     let proxy = Proxy::new(&mut *store, instance)?;
     let mut store_context = store.as_context_mut();
 
-    store_context.data_mut().borrow_fuel().await?;
-
     let idempotency_key = store_context.data().get_current_idempotency_key().await;
     if let Some(idempotency_key) = &idempotency_key {
         store_context
@@ -482,12 +480,9 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         }
     };
 
-    let consumed_fuel = finish_invocation_and_get_fuel_consumption(
-        &mut store.as_context_mut(),
-        raw_function_name,
-        idempotency_key,
-    )
-    .await?;
+    let consumed_fuel =
+        finish_invocation_and_get_fuel_consumption(&mut store.as_context_mut(), raw_function_name)
+            .await?;
 
     match res_or_error {
         Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, Some(resp))),
@@ -516,15 +511,11 @@ async fn drop_resource<Ctx: WorkerCtx>(
 
     if let Some((_, resource)) = store.data_mut().get(resource_id).await {
         debug!("Dropping resource {resource:?} in {raw_function_name}");
-        store.data_mut().borrow_fuel().await?;
 
         let result = resource.resource_drop_async(&mut store).await;
 
         let current_fuel_level = store.get_fuel().unwrap_or(0);
-        let consumed_fuel = store
-            .data_mut()
-            .return_fuel(current_fuel_level as i64)
-            .await?;
+        let consumed_fuel = store.data_mut().return_fuel(current_fuel_level);
 
         match result {
             Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, None)),
@@ -547,10 +538,8 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     function: Func,
     params: Vec<Val>,
     raw_function_name: &str,
-) -> Result<(anyhow::Result<Vec<Val>>, i64), WorkerExecutorError> {
+) -> Result<(anyhow::Result<Vec<Val>>, u64), WorkerExecutorError> {
     let mut store = store.as_context_mut();
-
-    store.data_mut().borrow_fuel().await?;
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
     if let Some(idempotency_key) = &idempotency_key {
@@ -578,8 +567,7 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     };
 
     let consumed_fuel_for_call =
-        finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name, idempotency_key)
-            .await?;
+        finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name).await?;
 
     Ok((result.map(|_| results), consumed_fuel_for_call))
 }
@@ -587,27 +575,15 @@ async fn call_exported_function<Ctx: WorkerCtx>(
 async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     raw_function_name: &str,
-    idempotency_key: Option<IdempotencyKey>,
-) -> Result<i64, WorkerExecutorError> {
+) -> Result<u64, WorkerExecutorError> {
     let current_fuel_level = store.get_fuel().unwrap_or(0);
-    let consumed_fuel_for_call = store
-        .data_mut()
-        .return_fuel(current_fuel_level as i64)
-        .await?;
+    let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level);
 
     if consumed_fuel_for_call > 0 {
         debug!(
             "Fuel consumed for call {raw_function_name}: {}",
             consumed_fuel_for_call
         );
-    }
-
-    if let Some(idempotency_key) = idempotency_key {
-        store
-            .data()
-            .get_public_state()
-            .event_service()
-            .emit_invocation_finished(raw_function_name, &idempotency_key, store.data().is_live());
     }
 
     record_invocation_consumption(consumed_fuel_for_call);
@@ -618,27 +594,27 @@ async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
 #[derive(Clone, Debug)]
 pub enum InvokeResult {
     /// The invoked function exited with exit code 0
-    Exited { consumed_fuel: i64 },
+    Exited { consumed_fuel: u64 },
     /// The invoked function has failed
     Failed {
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         error: WorkerError,
         retry_from: OplogIndex,
     },
     /// The invoked function succeeded and produced a result
     Succeeded {
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         output: Option<Value>,
     },
     /// The function was running but got interrupted
     Interrupted {
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         interrupt_kind: InterruptKind,
     },
 }
 
 impl InvokeResult {
-    pub fn from_success(consumed_fuel: i64, output: Option<Value>) -> Self {
+    pub fn from_success(consumed_fuel: u64, output: Option<Value>) -> Self {
         InvokeResult::Succeeded {
             consumed_fuel,
             output,
@@ -646,7 +622,7 @@ impl InvokeResult {
     }
 
     pub fn from_error<Ctx: WorkerCtx>(
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         error: &anyhow::Error,
         retry_from: OplogIndex,
     ) -> Self {
@@ -664,29 +640,12 @@ impl InvokeResult {
         }
     }
 
-    pub fn consumed_fuel(&self) -> i64 {
+    pub fn consumed_fuel(&self) -> u64 {
         match self {
             InvokeResult::Exited { consumed_fuel, .. }
             | InvokeResult::Failed { consumed_fuel, .. }
             | InvokeResult::Succeeded { consumed_fuel, .. }
             | InvokeResult::Interrupted { consumed_fuel, .. } => *consumed_fuel,
-        }
-    }
-
-    pub fn add_fuel(&mut self, extra_fuel: i64) {
-        match self {
-            InvokeResult::Exited { consumed_fuel } => {
-                *consumed_fuel += extra_fuel;
-            }
-            InvokeResult::Failed { consumed_fuel, .. } => {
-                *consumed_fuel += extra_fuel;
-            }
-            InvokeResult::Succeeded { consumed_fuel, .. } => {
-                *consumed_fuel += extra_fuel;
-            }
-            InvokeResult::Interrupted { consumed_fuel, .. } => {
-                *consumed_fuel += extra_fuel;
-            }
         }
     }
 
@@ -699,7 +658,7 @@ impl InvokeResult {
                 retry_from: *retry_from,
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
-                Some(TrapType::Interrupt(interrupt_kind.clone()))
+                Some(TrapType::Interrupt(*interrupt_kind))
             }
             InvokeResult::Exited { .. } => Some(TrapType::Exit),
             _ => None,

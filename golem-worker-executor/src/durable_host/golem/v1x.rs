@@ -15,10 +15,10 @@
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
-    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
+    find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x::host::{
-    AgentAnyFilter, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
+    AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
@@ -26,15 +26,13 @@ use crate::preview2::golem_api_1_x::oplog::{
 use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
-use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
+use crate::services::{HasOplogService, HasWorker};
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use desert_rust::{
-    BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
-};
+use golem_common::model::agent::AgentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::host_functions::{
     GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
     GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
@@ -44,17 +42,17 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiComponentSlug,
-    HostRequestGolemApiComponentSlugAndAgentName, HostRequestGolemApiFork,
-    HostRequestGolemApiForkAgent, HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent,
-    HostRequestGolemApiUpdateAgent, HostRequestNoInput, HostResponseGolemApiAgentId,
-    HostResponseGolemApiAgentMetadata, HostResponseGolemApiComponentId, HostResponseGolemApiFork,
-    HostResponseGolemApiIdempotencyKey, HostResponseGolemApiPromiseCompletion,
-    HostResponseGolemApiPromiseId, HostResponseGolemApiPromiseResult,
-    HostResponseGolemApiSelfAgentMetadata, HostResponseGolemApiUnit, OplogEntry,
+    HostRequestGolemApiComponentSlugAndAgentName, HostRequestGolemApiForkAgent,
+    HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent, HostRequestGolemApiUpdateAgent,
+    HostRequestNoInput, HostResponseGolemApiAgentId, HostResponseGolemApiAgentMetadata,
+    HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
+    HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
+    HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
+    HostResponseGolemApiUnit, OplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,7 +70,14 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
         precise: bool,
     ) -> anyhow::Result<Resource<GetAgents>> {
         self.observe_function_call("golem::api::get-workers", "new");
-        let entry = GetAgentsEntry::new(component_id.into(), filter.map(|f| f.into()), precise);
+        let entry = GetAgentsEntry::new(
+            component_id.into(),
+            filter
+                .map(|f| f.try_into())
+                .transpose()
+                .map_err(|e: String| anyhow!(e))?,
+            precise,
+        );
         let resource = self.as_wasi_view().table().push(entry)?;
         Ok(resource)
     }
@@ -88,7 +93,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
             .get::<GetAgentsEntry>(&self_)
             .map(|e| {
                 (
-                    e.component_id.clone(),
+                    e.component_id,
                     e.filter.clone(),
                     e.count,
                     e.precise,
@@ -158,15 +163,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<Resource<GetPromiseResultEntry>> {
-        // only the agent that originally created the promise is woken up when it is completed.
-        if golem_common::base_model::WorkerId::from(promise_id.agent_id.clone())
-            != *self.worker_id()
-        {
-            return Err(anyhow!(
-                "Tried awaiting a promise not created by the current agent"
-            ));
-        }
-
         let entry =
             GetPromiseResultEntry::new(promise_id.into(), self.state.promise_service.clone());
         Ok(self.table().push(entry)?)
@@ -195,13 +191,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let promise_completion_result = if is_local_worker {
                 self.public_state
                     .promise_service
-                    .complete(promise_id.clone(), data)
+                    .complete(promise_id.clone(), data, self.created_by())
                     .await?
             } else {
                 // talk to the executor that actually owns the promise
                 self.state
                     .worker_proxy
-                    .complete_promise(promise_id.clone(), data)
+                    .complete_promise(promise_id.clone(), data, self.created_by())
                     .await?
             };
 
@@ -417,13 +413,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.persistence_level != new_persistence_level {
             // commit all pending entries and change persistence level
             if self.state.is_live() {
-                self.state
-                    .oplog
-                    .add(OplogEntry::change_persistence_level(new_persistence_level))
-                    .await;
                 self.public_state
                     .worker()
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .add_and_commit_oplog(OplogEntry::change_persistence_level(
+                        new_persistence_level,
+                    ))
                     .await;
             } else {
                 let oplog_index_before = self.state.current_oplog_index().await;
@@ -510,14 +504,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn update_agent(
         &mut self,
         worker_id: golem_api_1_x::host::AgentId,
-        target_version: ComponentVersion,
+        target_version: u64,
         mode: golem_api_1_x::host::UpdateMode,
     ) -> anyhow::Result<()> {
         let durability =
             Durability::<GolemApiUpdateWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let agent_id: WorkerId = worker_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &agent_id);
+        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.environment_id, &agent_id);
 
         let mode = match mode {
             golem_api_1_x::host::UpdateMode::Automatic => {
@@ -528,11 +522,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
 
+        let target_revision: ComponentRevision =
+            target_version.try_into().map_err(|e: String| anyhow!(e))?;
+
         let result = if durability.is_live() {
             let result = self
                 .state
                 .worker_proxy
-                .update(&owned_worker_id, target_version, mode)
+                .update(&owned_worker_id, target_revision, mode, self.created_by())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -541,7 +538,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self,
                     HostRequestGolemApiUpdateAgent {
                         agent_id,
-                        target_version,
+                        target_revision,
                         mode,
                     },
                     HostResponseGolemApiUnit { result },
@@ -592,7 +589,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let agent_id: WorkerId = agent_id.into();
 
         let result = if durability.is_live() {
-            let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &agent_id);
+            let owned_worker_id =
+                OwnedWorkerId::new(&self.owned_worker_id.environment_id, &agent_id);
             let result = self.state.worker_service.get(&owned_worker_id).await;
             let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
                 let mut metadata = result.initial_worker_metadata;
@@ -645,7 +643,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .worker_proxy
-                .fork_worker(&source_worker_id, &target_worker_id, &oplog_index_cut_off)
+                .fork_worker(
+                    &source_worker_id,
+                    &target_worker_id,
+                    &oplog_index_cut_off,
+                    self.created_by(),
+                )
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -677,11 +680,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = if durability.is_live() {
             let agent_id: WorkerId = agent_id.into();
-            let target: golem_common::model::RevertWorkerTarget = revert_target.into();
+            let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
             let result = self
                 .worker_proxy()
-                .revert(&agent_id, target.clone())
+                .revert(&agent_id, target.clone(), self.created_by())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -713,7 +716,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .component_service
                 .resolve_component(
                     component_slug.clone(),
-                    self.state.component_metadata.owner.clone(),
+                    self.state.component_metadata.environment_id,
+                    self.state.component_metadata.application_id,
+                    self.state.component_metadata.account_id,
                 )
                 .await
                 .map_err(|err| err.to_string());
@@ -787,11 +792,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|err| anyhow!(err))
     }
 
-    async fn fork(&mut self, new_name: String) -> anyhow::Result<ForkResult> {
+    async fn fork(&mut self) -> anyhow::Result<ForkResult> {
         let durability =
             Durability::<GolemApiFork>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let result = if durability.is_live() {
+            let forked_phantom_id = Uuid::new_v4();
+
+            let new_name = if let Some(agent_id) = self.agent_id() {
+                AgentId::new(
+                    agent_id.agent_type.clone(),
+                    agent_id.parameters.clone(),
+                    Some(forked_phantom_id),
+                )
+                .to_string()
+            } else {
+                format!("{}-{}", self.worker_id().worker_name, forked_phantom_id)
+            };
+
             let target_agent_id = WorkerId {
                 component_id: self.owned_worker_id.component_id(),
                 worker_name: new_name.clone(),
@@ -811,6 +829,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     &self.owned_worker_id,
                     &target_agent_id,
                     oplog_index_cut_off,
+                    forked_phantom_id,
                 )
                 .await
                 .map(|_| golem_common::model::ForkResult::Original)
@@ -820,8 +839,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(durability
                 .persist(
                     self,
-                    HostRequestGolemApiFork { name: new_name },
+                    HostRequestNoInput {},
                     HostResponseGolemApiFork {
+                        forked_phantom_id,
                         result: fork_result,
                     },
                 )
@@ -831,10 +851,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => Ok(match result {
-                golem_common::model::ForkResult::Original => ForkResult::Original,
-                golem_common::model::ForkResult::Forked => ForkResult::Forked,
-            }),
+            Ok(fork_result) => {
+                let details = ForkDetails {
+                    forked_phantom_id: result.forked_phantom_id.into(),
+                };
+                Ok(match fork_result {
+                    golem_common::model::ForkResult::Original => ForkResult::Original(details),
+                    golem_common::model::ForkResult::Forked => ForkResult::Forked(details),
+                })
+            }
             Err(err) => Err(anyhow!(err)),
         }
     }
@@ -848,13 +873,13 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
         self.observe_function_call("golem::api::get-oplog", "new");
 
-        let account_id = self.owned_worker_id.project_id();
+        let account_id = self.owned_worker_id.environment_id();
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
         let start = OplogIndex::from_u64(start);
         let initial_component_version =
-            find_component_version_at(self.state.oplog_service(), &owned_worker_id, start).await?;
+            find_component_revision_at(self.state.oplog_service(), &owned_worker_id, start).await?;
 
         let entry = GetOplogEntry::new(owned_worker_id, start, initial_component_version, 100);
         let resource = self.as_wasi_view().table().push(entry)?;
@@ -869,16 +894,12 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
-        let plugins = self.state.plugins();
-        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = get_public_oplog_chunk(
             component_service,
             oplog_service,
-            plugins,
-            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -891,7 +912,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             self.as_wasi_view()
                 .table()
                 .get_mut(&self_)?
-                .update(chunk.next_oplog_index, chunk.current_component_version);
+                .update(chunk.next_oplog_index, chunk.current_component_revision);
             Ok(Some(
                 chunk
                     .entries
@@ -946,7 +967,16 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let result = if durability.is_live() {
+            let self_worker_id = self.worker_id().clone();
             let entry = self.table().get(&resource)?;
+
+            // only the agent that originally created the promise is woken up when it is completed.
+            if entry.promise_id.worker_id != self_worker_id {
+                return Err(anyhow!(
+                    "Tried awaiting a promise not created by the current agent"
+                ));
+            }
+
             let result = entry.get_handle().await.get().await;
             durability
                 .persist(
@@ -996,7 +1026,7 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
 pub struct GetOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub page_size: usize,
 }
 
@@ -1004,7 +1034,7 @@ impl GetOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentVersion,
+        initial_component_version: ComponentRevision,
         page_size: usize,
     ) -> Self {
         Self {
@@ -1018,7 +1048,7 @@ impl GetOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentVersion,
+        current_component_version: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_version = current_component_version;
@@ -1033,13 +1063,13 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<SearchOplog>> {
         self.observe_function_call("golem::api::search-oplog", "new");
 
-        let account_id = self.owned_worker_id.project_id();
+        let account_id = self.owned_worker_id.environment_id();
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
         let start = OplogIndex::INITIAL;
         let initial_component_version =
-            find_component_version_at(self.state.oplog_service(), &owned_worker_id, start).await?;
+            find_component_revision_at(self.state.oplog_service(), &owned_worker_id, start).await?;
 
         let entry =
             SearchOplogEntry::new(owned_worker_id, start, initial_component_version, 100, text);
@@ -1062,16 +1092,12 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
-        let plugins = self.state.plugins();
-        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = search_public_oplog(
             component_service,
             oplog_service,
-            plugins,
-            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -1085,7 +1111,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             self.as_wasi_view()
                 .table()
                 .get_mut(&self_)?
-                .update(chunk.next_oplog_index, chunk.current_component_version);
+                .update(chunk.next_oplog_index, chunk.current_component_revision);
             Ok(Some(
                 chunk
                     .entries
@@ -1120,7 +1146,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .component_service
             .resolve_component(
                 component_slug.clone(),
-                self.state.component_metadata.owner.clone(),
+                self.state.component_metadata.environment_id,
+                self.state.component_metadata.application_id,
+                self.state.component_metadata.account_id,
             )
             .await?;
 
@@ -1131,7 +1159,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         if let Some(worker_id) = worker_id.clone() {
             let owned_id = OwnedWorkerId {
-                project_id: self.state.owned_worker_id.project_id(),
+                environment_id: self.state.owned_worker_id.environment_id(),
                 worker_id,
             };
 
@@ -1149,7 +1177,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 pub struct SearchOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub page_size: usize,
     pub query: String,
 }
@@ -1158,7 +1186,7 @@ impl SearchOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentVersion,
+        initial_component_version: ComponentRevision,
         page_size: usize,
         query: String,
     ) -> Self {
@@ -1174,7 +1202,7 @@ impl SearchOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentVersion,
+        current_component_version: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_version = current_component_version;
@@ -1183,19 +1211,21 @@ impl SearchOplogEntry {
 
 impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {}
 
-impl From<golem_api_1_x::host::RevertAgentTarget> for golem_common::model::RevertWorkerTarget {
+impl From<golem_api_1_x::host::RevertAgentTarget>
+    for golem_common::model::worker::RevertWorkerTarget
+{
     fn from(value: golem_api_1_x::host::RevertAgentTarget) -> Self {
         match value {
             golem_api_1_x::host::RevertAgentTarget::RevertToOplogIndex(index) => {
-                golem_common::model::RevertWorkerTarget::RevertToOplogIndex(
-                    golem_common::model::RevertToOplogIndex {
+                golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
+                    golem_common::model::worker::RevertToOplogIndex {
                         last_oplog_index: OplogIndex::from_u64(index),
                     },
                 )
             }
             golem_api_1_x::host::RevertAgentTarget::RevertLastInvocations(n) => {
-                golem_common::model::RevertWorkerTarget::RevertLastInvocations(
-                    golem_common::model::RevertLastInvocations {
+                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(
+                    golem_common::model::worker::RevertLastInvocations {
                         number_of_invocations: n,
                     },
                 )
@@ -1335,16 +1365,18 @@ impl From<golem_common::model::WorkerStatus> for golem_api_1_x::host::AgentStatu
     }
 }
 
-impl From<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::WorkerFilter {
-    fn from(filter: golem_api_1_x::host::AgentPropertyFilter) -> Self {
-        match filter {
+impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::WorkerFilter {
+    type Error = String;
+
+    fn try_from(filter: golem_api_1_x::host::AgentPropertyFilter) -> Result<Self, Self::Error> {
+        let converted = match filter {
             golem_api_1_x::host::AgentPropertyFilter::Name(filter) => {
                 golem_common::model::WorkerFilter::new_name(filter.comparator.into(), filter.value)
             }
             golem_api_1_x::host::AgentPropertyFilter::Version(filter) => {
                 golem_common::model::WorkerFilter::new_version(
                     filter.comparator.into(),
-                    filter.value,
+                    filter.value.try_into()?,
                 )
             }
             golem_api_1_x::host::AgentPropertyFilter::Status(filter) => {
@@ -1373,21 +1405,32 @@ impl From<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::Wor
                     filter.value,
                 )
             }
-        }
+        };
+        Ok(converted)
     }
 }
 
-impl From<golem_api_1_x::host::AgentAllFilter> for golem_common::model::WorkerFilter {
-    fn from(filter: golem_api_1_x::host::AgentAllFilter) -> Self {
-        let filters = filter.filters.into_iter().map(|f| f.into()).collect();
-        golem_common::model::WorkerFilter::new_and(filters)
+impl TryFrom<golem_api_1_x::host::AgentAllFilter> for golem_common::model::WorkerFilter {
+    type Error = String;
+    fn try_from(filter: golem_api_1_x::host::AgentAllFilter) -> Result<Self, Self::Error> {
+        let filters = filter
+            .filters
+            .into_iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(golem_common::model::WorkerFilter::new_and(filters))
     }
 }
 
-impl From<AgentAnyFilter> for golem_common::model::WorkerFilter {
-    fn from(filter: AgentAnyFilter) -> Self {
-        let filters = filter.filters.into_iter().map(|f| f.into()).collect();
-        golem_common::model::WorkerFilter::new_or(filters)
+impl TryFrom<AgentAnyFilter> for golem_common::model::WorkerFilter {
+    type Error = String;
+    fn try_from(filter: AgentAnyFilter) -> Result<Self, Self::Error> {
+        let filters = filter
+            .filters
+            .into_iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(golem_common::model::WorkerFilter::new_or(filters))
     }
 }
 
@@ -1395,11 +1438,11 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
     fn from(value: AgentMetadataForGuests) -> Self {
         Self {
             agent_id: value.agent_id.into(),
-            args: value.args,
+            args: vec![],
             env: value.env,
             config_vars: value.config_vars.into_iter().collect(),
             status: value.status.into(),
-            component_version: value.component_version,
+            component_revision: value.component_revision.into(),
             retry_count: 0,
         }
     }
@@ -1433,31 +1476,6 @@ impl GetAgentsEntry {
     }
 }
 
-impl BinarySerializer for ForkResult {
-    fn serialize<Output: BinaryOutput>(
-        &self,
-        context: &mut SerializationContext<Output>,
-    ) -> Result<(), desert_rust::Error> {
-        match self {
-            ForkResult::Original => <u8 as BinarySerializer>::serialize(&0u8, context),
-            ForkResult::Forked => <u8 as BinarySerializer>::serialize(&1u8, context),
-        }
-    }
-}
-
-impl BinaryDeserializer for ForkResult {
-    fn deserialize(context: &mut DeserializationContext<'_>) -> Result<Self, desert_rust::Error> {
-        let value = <u8 as BinaryDeserializer>::deserialize(context)?;
-        match value {
-            0 => Ok(ForkResult::Original),
-            1 => Ok(ForkResult::Forked),
-            other => Err(desert_rust::Error::InvalidConstructorId {
-                constructor_id: other as u32,
-                type_name: "ForkResult".to_string(),
-            }),
-        }
-    }
-}
 #[derive(Clone)]
 pub struct GetPromiseResultEntry {
     promise_id: PromiseId,

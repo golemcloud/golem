@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "worker-executor")]
+pub mod compiled_component;
 pub mod initial_component_files;
 pub mod plugin_wasm_files;
 pub mod routing_table;

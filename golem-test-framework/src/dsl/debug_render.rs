@@ -31,13 +31,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(
                 result,
-                "{pad}component version: {}",
-                &params.component_version,
-            );
-            let _ = writeln!(
-                result,
-                "{pad}args:              {}",
-                &params.args.join(", "),
+                "{pad}component revision: {}",
+                &params.component_revision,
             );
             let _ = writeln!(result, "{pad}env:");
             for (k, v) in &params.env {
@@ -50,8 +45,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             for plugin in &params.initial_active_plugins {
                 let _ = writeln!(
                     result,
-                    "{pad}  - installation id: {}",
-                    &plugin.installation_id
+                    "{pad}  - plugin priority: {}",
+                    &plugin.plugin_priority
                 );
                 let inner_pad = format!("{pad}    ");
                 log_plugin_description(&mut result, &inner_pad, plugin);
@@ -202,15 +197,19 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
                 let _ = writeln!(
                     result,
-                    "{pad}target version: {}",
-                    &inner_params.target_version,
+                    "{pad}target revision: {}",
+                    &inner_params.target_revision,
                 );
             }
         },
         PublicOplogEntry::PendingUpdate(params) => {
             let _ = writeln!(result, "ENQUEUED UPDATE");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}target version:    {}", &params.target_version,);
+            let _ = writeln!(
+                result,
+                "{pad}target revision:   {}",
+                &params.target_revision,
+            );
             match &params.description {
                 PublicUpdateDescription::Automatic(_) => {
                     let _ = writeln!(result, "{pad}type:              automatic");
@@ -223,13 +222,17 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::SuccessfulUpdate(params) => {
             let _ = writeln!(result, "SUCCESSFUL UPDATE");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}target version:    {}", &params.target_version,);
+            let _ = writeln!(
+                result,
+                "{pad}target revision:   {}",
+                &params.target_revision,
+            );
             let _ = writeln!(result, "{pad}new active plugins:");
             for plugin in &params.new_active_plugins {
                 let _ = writeln!(
                     result,
-                    "{pad}  - installation id: {}",
-                    &plugin.installation_id,
+                    "{pad}  - plugin priority: {}",
+                    &plugin.plugin_priority,
                 );
                 let inner_pad = format!("{pad}    ");
                 log_plugin_description(&mut result, &inner_pad, plugin);
@@ -238,7 +241,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::FailedUpdate(params) => {
             let _ = writeln!(result, "FAILED UPDATE");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}target version:    {}", &params.target_version,);
+            let _ = writeln!(
+                result,
+                "{pad}target revision:   {}",
+                &params.target_revision,
+            );
             if let Some(details) = &params.details {
                 let _ = writeln!(result, "{pad}error:             {details}");
             }
@@ -273,8 +280,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(
                 result,
-                "{pad}installation id:   {}",
-                &params.plugin.installation_id,
+                "{pad}plugin priority:   {}",
+                &params.plugin.plugin_priority,
             );
             log_plugin_description(&mut result, pad, &params.plugin);
         }
@@ -283,8 +290,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(
                 result,
-                "{pad}installation id:   {}",
-                &params.plugin.installation_id,
+                "{pad}plugin priority:   {}",
+                &params.plugin.plugin_priority,
             );
             log_plugin_description(&mut result, pad, &params.plugin);
         }

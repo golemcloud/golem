@@ -21,10 +21,12 @@ golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
+applying = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 combine = { workspace = true }
@@ -42,6 +44,8 @@ itertools = { workspace = true }
 lazy_static = { workspace = true }
 mac_address = { workspace = true }
 nonempty-collections = { workspace = true }
+openapiv3 = { workspace = true }
+openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
@@ -57,6 +61,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shadow-rs = { workspace = true }
+similar = { workspace = true }
 sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
