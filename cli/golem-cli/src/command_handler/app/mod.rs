@@ -576,11 +576,11 @@ impl AppCommandHandler {
 
         let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
 
+        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
+
         if deploy_quick_diff.is_up_to_date() {
             return Ok(None);
         }
-
-        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
         log_action("Diffing", "");
 
