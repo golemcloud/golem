@@ -23,7 +23,7 @@ pub mod services;
 
 use self::bootstrap::Services;
 use self::config::RegistryServiceConfig;
-use anyhow::anyhow;
+use anyhow::Context;
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
@@ -33,7 +33,6 @@ use poem::middleware::Cors;
 use poem::middleware::{CookieJarManager, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
@@ -109,13 +108,9 @@ impl RegistryService {
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<u16, anyhow::Error> {
-        let port = crate::grpc::start_grpc_server(
-            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.grpc_port).into(),
-            &self.services,
-            join_set,
-        )
-        .await
-        .map_err(|err| anyhow!(err).context("gRPC server failed"))?;
+        let port = crate::grpc::start_grpc_server(&self.config.grpc, &self.services, join_set)
+            .await
+            .context("starting gRPC server failed")?;
 
         info!("Started registry-service grpc server on port {port}");
         Ok(port)

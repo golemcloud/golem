@@ -1,7 +1,6 @@
 ## Generated from default config
 cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
-grpc_port = 9091
 http_port = 8081
 workspace = "release"
 
@@ -19,12 +18,17 @@ connect_timeout = "10s"
 host = "localhost"
 port = 9091
 
-[component_compilation.config.retries]
+[component_compilation.config.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[component_compilation.config.tls]
+type = "Disabled"
+
+[component_compilation.config.tls.config]
 
 [component_transformer_plugin_caller.retries]
 max_attempts = 5
@@ -45,6 +49,14 @@ max_connections = 10
 type = "NoOp"
 
 [domain_provisioner.config]
+
+[grpc]
+port = 9090
+
+[grpc.tls]
+type = "Disabled"
+
+[grpc.tls.config]
 
 [initial_accounts.marketing]
 email = "marketing@user"

@@ -19,9 +19,8 @@ use std::fmt::{Display, Formatter};
 
 pub mod base_model;
 pub mod cache;
-pub mod client;
 pub mod config;
-pub mod grpc;
+// pub mod grpc;
 pub mod json_yaml;
 pub mod metrics;
 pub mod model;

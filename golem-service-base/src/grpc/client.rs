@@ -12,20 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::RetryConfig;
-use crate::retries::RetryState;
+use golem_common::SafeDisplay;
+use golem_common::model::base64::Base64;
+use golem_common::model::{Empty, RetryConfig};
+use golem_common::retries::RetryState;
 use http::Uri;
 use scc::hash_map::Entry;
+use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::{OtelGrpcLayer, OtelGrpcService};
 use tower::ServiceBuilder;
-use tracing::{debug, debug_span, warn, Instrument};
+use tracing::{Instrument, debug, debug_span, warn};
 
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
@@ -102,8 +106,13 @@ impl<T: Clone> GrpcClient<T> {
         match &*entry {
             Some(client) => Ok(client.clone()),
             None => {
-                let endpoint = Endpoint::new(self.endpoint.clone())?
+                let mut endpoint = Endpoint::new(self.endpoint.clone())?
                     .connect_timeout(self.config.connect_timeout);
+
+                if let GrpcClientTlsConfig::Enabled(tls) = &self.config.tls {
+                    endpoint = endpoint.tls_config(tls.to_tonic())?;
+                }
+
                 let channel = endpoint.connect_lazy();
                 let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
                 let client = (self.client_factory)(channel);
@@ -193,7 +202,12 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         match entry {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
-                let endpoint = Endpoint::new(endpoint)?.connect_timeout(connect_timeout);
+                let mut endpoint = Endpoint::new(endpoint)?.connect_timeout(connect_timeout);
+
+                if let GrpcClientTlsConfig::Enabled(tls) = &self.config.tls {
+                    endpoint = endpoint.tls_config(tls.to_tonic())?;
+                }
+
                 let channel = endpoint.connect_lazy();
                 let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
                 let client = (self.client_factory)(channel);
@@ -210,10 +224,18 @@ pub struct GrpcClientConnection<T: Clone> {
     client: T,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrpcClientConfig {
+    #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
     pub retries_on_unavailable: RetryConfig,
+    pub tls: GrpcClientTlsConfig,
+}
+
+impl GrpcClientConfig {
+    pub fn tls_enabled(&self) -> bool {
+        matches!(self.tls, GrpcClientTlsConfig::Enabled(_))
+    }
 }
 
 impl Default for GrpcClientConfig {
@@ -221,7 +243,107 @@ impl Default for GrpcClientConfig {
         Self {
             connect_timeout: Duration::from_secs(10),
             retries_on_unavailable: RetryConfig::default(),
+            tls: GrpcClientTlsConfig::Disabled(Empty {}),
         }
+    }
+}
+
+impl SafeDisplay for GrpcClientConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "connect_timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries_on_unavailable:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.retries_on_unavailable.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "tls:");
+        let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum GrpcClientTlsConfig {
+    Enabled(EnabledGrpcClientTlsConfig),
+    Disabled(Empty),
+}
+
+impl SafeDisplay for GrpcClientTlsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            Self::Enabled(inner) => {
+                let _ = writeln!(&mut result, "Enabled:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            Self::Disabled(_) => {
+                let _ = writeln!(&mut result, "Disabled");
+            }
+        }
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EnabledGrpcClientTlsConfig {
+    /// client-specific certificate  — issued by cluster CA
+    pub client_cert: Base64,
+    /// private key for client_cert
+    pub client_key: Base64,
+    /// CA certificate used to validate server certificates (PEM)
+    pub server_ca_cert: Base64,
+    /// expected server domain/SAN. If None the domain name validation is disabled
+    pub server_domain_name: Option<String>,
+}
+
+impl SafeDisplay for EnabledGrpcClientTlsConfig {
+    fn to_safe_string(&self) -> String {
+        use sha2::{Digest, Sha256};
+
+        fn fingerprint(data: &[u8]) -> String {
+            let hash = Sha256::digest(data);
+            hex::encode(hash)
+        }
+
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "client_cert_sha256: {}",
+            fingerprint(&self.client_cert.0)
+        );
+        let _ = writeln!(&mut result, "client_key: *******");
+        let _ = writeln!(
+            &mut result,
+            "server_ca_cert_sha256: {}",
+            fingerprint(&self.server_ca_cert.0)
+        );
+
+        let _ = writeln!(
+            &mut result,
+            "server_domain_name: {:?}",
+            self.server_domain_name
+        );
+        result
+    }
+}
+
+impl EnabledGrpcClientTlsConfig {
+    pub fn to_tonic(&self) -> ClientTlsConfig {
+        use tonic::transport::{Certificate, Identity};
+
+        let ca = Certificate::from_pem(&self.server_ca_cert.0);
+        let identity = Identity::from_pem(&self.client_cert.0, &self.client_key.0);
+
+        let mut config = ClientTlsConfig::new().ca_certificate(ca).identity(identity);
+
+        if let Some(domain_name) = &self.server_domain_name {
+            config = config.domain_name(domain_name);
+        }
+
+        config
     }
 }
 

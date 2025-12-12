@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{CompileWorkerConfig, StaticComponentServiceConfig};
+use crate::config::{CompileWorkerConfig, StaticRegistryServiceConfig};
 use crate::metrics::record_compilation_time;
 use crate::model::*;
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RegistryServiceConfig;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ pub struct CompileWorker {
 
 impl CompileWorker {
     pub async fn start(
-        component_service_config: Option<StaticComponentServiceConfig>,
+        component_service_config: Option<StaticRegistryServiceConfig>,
         config: CompileWorkerConfig,
 
         engine: Engine,
@@ -52,9 +52,9 @@ impl CompileWorker {
         mut recv: mpsc::Receiver<CompilationRequest>,
     ) {
         let worker = Self {
+            config,
             engine,
             compiled_component_service,
-            config: config.clone(),
             client: Arc::new(Mutex::new(None)),
         };
 
@@ -106,17 +106,17 @@ impl CompileWorker {
         );
     }
 
-    async fn set_client(&self, config: StaticComponentServiceConfig) {
+    async fn set_client(&self, config: StaticRegistryServiceConfig) {
         info!(
-            "Initializing component service client for {}:{}",
+            "Initializing registry service client for {}:{}",
             config.host, config.port
         );
 
-        let client = GrpcRegistryService::new(&RegistryServiceConfig {
+        let client = GrpcRegistryService::new(&GrpcRegistryServiceConfig {
             host: config.host,
             port: config.port,
-            retries: self.config.retries.clone(),
-            ..Default::default()
+            max_message_size: self.config.max_message_size,
+            client_config: self.config.client_config.clone(),
         });
 
         self.client.lock().await.replace(client);

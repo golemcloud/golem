@@ -18,10 +18,10 @@ use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::time::error::Elapsed;
@@ -187,10 +187,7 @@ impl WorkerExecutorServiceDefault {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            GrpcClientConfig {
-                retries_on_unavailable: config.retries.clone(),
-                connect_timeout: config.connect_timeout,
-            },
+            config.client_config.clone(),
         );
         Self { config, client }
     }

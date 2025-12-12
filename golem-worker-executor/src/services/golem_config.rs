@@ -21,16 +21,17 @@ use golem_common::config::{
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::RegistryServiceConfig;
+use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::grpc::client::GrpcClientConfig;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::time::Duration;
-use url::Url;
 
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,10 +55,9 @@ pub struct GolemConfig {
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
-    pub registry_service: RegistryServiceConfig,
+    pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
-    pub grpc_address: String,
-    pub port: u16,
+    pub grpc: GrpcApiConfig,
     pub http_address: String,
     pub http_port: u16,
 }
@@ -158,12 +158,45 @@ impl SafeDisplay for GolemConfig {
         );
         let _ = writeln!(&mut result, "engine:");
         let _ = writeln!(&mut result, "{}", self.engine.to_safe_string_indented());
-        let _ = writeln!(&mut result, "gRPC address: {}", self.grpc_address);
-        let _ = writeln!(&mut result, "gRPC port: {}", self.port);
+
+        let _ = writeln!(&mut result, "grpc:");
+        let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
+
         let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
 
         result
+    }
+}
+
+impl Default for GolemConfig {
+    fn default() -> Self {
+        Self {
+            tracing: TracingConfig::local_dev("worker-executor"),
+            tracing_file_name_with_port: true,
+            key_value_storage: KeyValueStorageConfig::default(),
+            indexed_storage: IndexedStorageConfig::default(),
+            blob_storage: BlobStorageConfig::default(),
+            limits: Limits::default(),
+            retry: RetryConfig::max_attempts_3(),
+            compiled_component_service: CompiledComponentServiceConfig::default(),
+            shard_manager_service: ShardManagerServiceConfig::default(),
+            oplog: OplogConfig::default(),
+            suspend: SuspendConfig::default(),
+            scheduler: SchedulerConfig::default(),
+            active_workers: ActiveWorkersConfig::default(),
+            public_worker_api: WorkerServiceGrpcConfig::default(),
+            memory: MemoryConfig::default(),
+            rdbms: RdbmsConfig::default(),
+            resource_limits: ResourceLimitsConfig::default(),
+            component_cache: ComponentCacheConfig::default(),
+            agent_types_service: AgentTypesServiceConfig::default(),
+            registry_service: GrpcRegistryServiceConfig::default(),
+            engine: EngineConfig::default(),
+            grpc: GrpcApiConfig::default(),
+            http_address: "0.0.0.0".to_string(),
+            http_port: 8082,
+        }
     }
 }
 
@@ -228,9 +261,37 @@ impl SafeDisplay for Limits {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GrpcApiConfig {
+    pub port: u16,
+    pub tls: GrpcServerTlsConfig,
+}
+
+impl SafeDisplay for GrpcApiConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "port: {}", self.port);
+
+        let _ = writeln!(&mut result, "tls:");
+        let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
+
+        result
+    }
+}
+
+impl Default for GrpcApiConfig {
+    fn default() -> Self {
+        Self {
+            port: 9093,
+            tls: GrpcServerTlsConfig::disabled(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ShardManagerServiceConfig {
-    Grpc(ShardManagerServiceGrpcConfig),
+    Grpc(Box<ShardManagerServiceGrpcConfig>),
     SingleShard(ShardManagerServiceSingleShardConfig),
 }
 
@@ -255,6 +316,19 @@ pub struct ShardManagerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
     pub retries: RetryConfig,
+    #[serde(flatten)]
+    pub client_config: GrpcClientConfig,
+}
+
+impl ShardManagerServiceGrpcConfig {
+    pub fn uri(&self) -> Uri {
+        build_uri(
+            "shard manager",
+            self.client_config.tls_enabled(),
+            &self.host,
+            self.port,
+        )
+    }
 }
 
 impl SafeDisplay for ShardManagerServiceGrpcConfig {
@@ -262,9 +336,23 @@ impl SafeDisplay for ShardManagerServiceGrpcConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "retries:",);
+
+        let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+
+        let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
+    }
+}
+
+impl Default for ShardManagerServiceGrpcConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9002,
+            retries: RetryConfig::default(),
+            client_config: GrpcClientConfig::default(),
+        }
     }
 }
 
@@ -275,9 +363,19 @@ pub struct ShardManagerServiceSingleShardConfig {}
 pub struct WorkerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
-    pub retries: RetryConfig,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: Duration,
+    #[serde(flatten)]
+    pub client_config: GrpcClientConfig,
+}
+
+impl WorkerServiceGrpcConfig {
+    pub fn uri(&self) -> Uri {
+        build_uri(
+            "worker service",
+            self.client_config.tls_enabled(),
+            &self.host,
+            self.port,
+        )
+    }
 }
 
 impl SafeDisplay for WorkerServiceGrpcConfig {
@@ -285,11 +383,22 @@ impl SafeDisplay for WorkerServiceGrpcConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access token: ****");
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
+    }
+}
+
+impl Default for WorkerServiceGrpcConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9007,
+            client_config: GrpcClientConfig {
+                retries_on_unavailable: RetryConfig::max_attempts_5(),
+                connect_timeout: Duration::from_secs(10),
+                ..Default::default()
+            },
+        }
     }
 }
 
@@ -299,12 +408,6 @@ impl GolemConfig {
             .merge(Toml::file(path))
             .extract()
             .expect("Failed to parse config")
-    }
-
-    pub fn grpc_addr(&self) -> anyhow::Result<SocketAddr> {
-        format!("{}:{}", self.grpc_address, self.port)
-            .parse::<SocketAddr>()
-            .context("grpc_address configuration")
     }
 
     pub fn http_addr(&self) -> anyhow::Result<SocketAddrV4> {
@@ -322,33 +425,13 @@ impl GolemConfig {
                 let elems: Vec<&str> = file_name.split('.').collect();
                 self.tracing.file_name = {
                     if elems.len() == 2 {
-                        Some(format!("{}.{}.{}", elems[0], self.port, elems[1]))
+                        Some(format!("{}.{}.{}", elems[0], self.grpc.port, elems[1]))
                     } else {
-                        Some(format!("{}.{}", file_name, self.port))
+                        Some(format!("{}.{}", file_name, self.grpc.port))
                     }
                 }
             }
         }
-    }
-}
-
-impl ShardManagerServiceGrpcConfig {
-    pub fn url(&self) -> Url {
-        build_url("shard manager", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("shard manager", &self.host, self.port)
-    }
-}
-
-impl WorkerServiceGrpcConfig {
-    pub fn url(&self) -> Url {
-        build_url("worker service", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("worker service", &self.host, self.port)
     }
 }
 
@@ -783,38 +866,6 @@ impl SafeDisplay for EngineConfig {
     }
 }
 
-impl Default for GolemConfig {
-    fn default() -> Self {
-        Self {
-            tracing: TracingConfig::local_dev("worker-executor"),
-            tracing_file_name_with_port: true,
-            key_value_storage: KeyValueStorageConfig::default(),
-            indexed_storage: IndexedStorageConfig::default(),
-            blob_storage: BlobStorageConfig::default(),
-            limits: Limits::default(),
-            retry: RetryConfig::max_attempts_3(),
-            compiled_component_service: CompiledComponentServiceConfig::default(),
-            shard_manager_service: ShardManagerServiceConfig::default(),
-            oplog: OplogConfig::default(),
-            suspend: SuspendConfig::default(),
-            scheduler: SchedulerConfig::default(),
-            active_workers: ActiveWorkersConfig::default(),
-            public_worker_api: WorkerServiceGrpcConfig::default(),
-            memory: MemoryConfig::default(),
-            rdbms: RdbmsConfig::default(),
-            resource_limits: ResourceLimitsConfig::default(),
-            component_cache: ComponentCacheConfig::default(),
-            agent_types_service: AgentTypesServiceConfig::default(),
-            registry_service: RegistryServiceConfig::default(),
-            engine: EngineConfig::default(),
-            grpc_address: "0.0.0.0".to_string(),
-            port: 9000,
-            http_address: "0.0.0.0".to_string(),
-            http_port: 8082,
-        }
-    }
-}
-
 impl HasConfigExamples<GolemConfig> for GolemConfig {
     fn examples() -> Vec<ConfigExample<GolemConfig>> {
         vec![
@@ -867,17 +918,7 @@ impl Default for Limits {
 
 impl Default for ShardManagerServiceConfig {
     fn default() -> Self {
-        Self::Grpc(ShardManagerServiceGrpcConfig::default())
-    }
-}
-
-impl Default for ShardManagerServiceGrpcConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 9002,
-            retries: RetryConfig::default(),
-        }
+        Self::Grpc(Box::default())
     }
 }
 
@@ -916,17 +957,6 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             refresh_interval: Duration::from_secs(2),
-        }
-    }
-}
-
-impl Default for WorkerServiceGrpcConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 9007,
-            retries: RetryConfig::max_attempts_5(),
-            connect_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -1017,14 +1047,11 @@ impl Default for AgentTypesServiceGrpcConfig {
     }
 }
 
-fn build_url(name: &str, host: &str, port: u16) -> Url {
-    Url::parse(&format!("http://{host}:{port}"))
-        .unwrap_or_else(|_| panic!("Failed to parse {name} service URL"))
-}
+fn build_uri(name: &str, use_https: bool, host: &str, port: u16) -> Uri {
+    let scheme = if use_https { "https" } else { "http" };
 
-fn build_uri(name: &str, host: &str, port: u16) -> Uri {
     Uri::builder()
-        .scheme("http")
+        .scheme(scheme)
         .authority(format!("{host}:{port}").as_str())
         .path_and_query("/")
         .build()

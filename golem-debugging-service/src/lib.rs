@@ -317,7 +317,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     Ok(RunDetails {
         http_port,
         // TODO: no grpc config running, this should not be exposed here
-        grpc_port: golem_config.port,
+        grpc_port: golem_config.grpc.port,
         epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
     })
 }
