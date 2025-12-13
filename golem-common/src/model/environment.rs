@@ -44,6 +44,14 @@ impl TryFrom<String> for EnvironmentName {
     }
 }
 
+impl TryFrom<&str> for EnvironmentName {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.to_string().try_into()
+    }
+}
+
 impl FromStr for EnvironmentName {
     type Err = String;
 
