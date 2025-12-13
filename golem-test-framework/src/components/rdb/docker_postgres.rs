@@ -36,7 +36,7 @@ impl DockerPostgresRdb {
     const DEFAULT_PASSWORD: &'static str = "postgres";
     const DEFAULT_DATABASE: &'static str = "postgres";
     const DEFAULT_IMAGE_NAME: &'static str = "postgres";
-    const DEFAULT_IMAGE_TAG: &'static str = "postgres";
+    const DEFAULT_IMAGE_TAG: &'static str = "14";
 
     pub async fn new(unique_network_id: &str, enable_stats: bool) -> Self {
         Self::new_with_image(
