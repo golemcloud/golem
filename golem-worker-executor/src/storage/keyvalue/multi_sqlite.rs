@@ -44,6 +44,10 @@ struct HashCache {
 
 impl MultiSqliteKeyValueStorage {
     pub fn new(root_dir: &Path, max_connections: u32, foreign_keys: bool) -> Self {
+        if !root_dir.exists() {
+            std::fs::create_dir_all(root_dir)
+                .expect("Failed to create root directory for sqlite storage");
+        }
         Self {
             cache: Cache::new(
                 Some(1024),
