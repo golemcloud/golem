@@ -1589,6 +1589,9 @@ pub enum SerializableDbValueNode {
     Range(SerializableRange),
     Set(String),
     Null,
+    Vector(Vec<f32>),
+    Halfvec(Vec<f32>),
+    Sparsevec(SparseVec),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
@@ -1764,6 +1767,37 @@ pub struct SerializableDomain {
 pub struct SerializableRange {
     pub name: String,
     pub value: ValuesRange<NodeIndex>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SparseVec {
+    pub dim: i32,
+    pub indices: Vec<i32>,
+    pub values: Vec<f32>,
+}
+
+impl SparseVec {
+    pub fn to_map(&self) -> HashMap<&i32, &f32> {
+        let mut map = HashMap::new();
+        for (idx, val) in self.indices.iter().zip(self.values.iter()) {
+            map.insert(idx, val);
+        }
+        map
+    }
+}
+
+impl Display for SparseVec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{")?;
+        for (i, (idx, val)) in self.indices.iter().zip(self.values.iter()).enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{}:{}", idx, val)?;
+        }
+        write!(f, "}}/{}", self.dim)
+    }
 }
 
 impl<T> From<ValuesRange<T>> for PgRange<T> {
@@ -1987,6 +2021,9 @@ pub enum SerializableDbColumnTypeNode {
     Array(NodeIndex),
     Range(SerializableRangeType),
     Null,
+    Vector,
+    Halfvec,
+    Sparsevec,
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]

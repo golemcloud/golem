@@ -55,6 +55,7 @@ fred = { workspace = true }
 fs-set-times = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
+half = { workspace = true }
 heck = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }

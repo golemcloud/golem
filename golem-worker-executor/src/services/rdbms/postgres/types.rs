@@ -19,7 +19,7 @@ use golem_common::model::oplog::types::{
     Enumeration, EnumerationType, Interval, SerializableComposite, SerializableCompositeType,
     SerializableDbColumn, SerializableDbColumnType, SerializableDbColumnTypeNode,
     SerializableDbValueNode, SerializableDomain, SerializableDomainType, SerializableRange,
-    SerializableRangeType, TimeTz, ValuesRange,
+    SerializableRangeType, SparseVec, TimeTz, ValuesRange,
 };
 use golem_wasm::NodeIndex;
 use itertools::Itertools;
@@ -249,6 +249,9 @@ pub enum DbColumnType {
     Array(Box<DbColumnType>),
     Range(RangeType),
     Null,
+    Vector,
+    Halfvec,
+    Sparsevec,
 }
 
 impl DbColumnType {
@@ -324,6 +327,9 @@ impl Display for DbColumnType {
                 write!(f, "range: {v}")
             }
             DbColumnType::Null => write!(f, "null"),
+            DbColumnType::Vector => write!(f, "vector"),
+            DbColumnType::Halfvec => write!(f, "halfvec"),
+            DbColumnType::Sparsevec => write!(f, "sparsevec"),
         }
     }
 }
@@ -372,6 +378,9 @@ pub enum DbValue {
     Array(Vec<DbValue>),
     Range(Box<Range>),
     Null,
+    Vector(Vec<f32>),
+    Halfvec(Vec<half::f16>),
+    Sparsevec(SparseVec),
 }
 
 impl From<DbValue> for SerializableDbValue {
@@ -466,6 +475,12 @@ impl From<DbValue> for SerializableDbValue {
                     )
                 }
                 DbValue::Null => add_node(target, SerializableDbValueNode::Null),
+                DbValue::Vector(v) => add_node(target, SerializableDbValueNode::Vector(v)),
+                DbValue::Halfvec(v) => add_node(
+                    target,
+                    SerializableDbValueNode::Halfvec(v.into_iter().map(|v| v.to_f32()).collect()),
+                ),
+                DbValue::Sparsevec(v) => add_node(target, SerializableDbValueNode::Sparsevec(v)),
             }
         }
 
@@ -565,6 +580,11 @@ impl TryFrom<SerializableDbValue> for DbValue {
                     })))
                 }
                 SerializableDbValueNode::Null => Ok(DbValue::Null),
+                SerializableDbValueNode::Vector(v) => Ok(DbValue::Vector(v)),
+                SerializableDbValueNode::Halfvec(v) => Ok(DbValue::Halfvec(
+                    v.into_iter().map(half::f16::from_f32).collect(),
+                )),
+                SerializableDbValueNode::Sparsevec(v) => Ok(DbValue::Sparsevec(v)),
                 _ => Err(format!(
                     "Unsupported SerializableDbValueNode variant for PostgreSQL: {:?}",
                     node
@@ -636,6 +656,9 @@ impl Display for DbValue {
             DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
             DbValue::Range(v) => write!(f, "{v}"),
             DbValue::Null => write!(f, "NULL"),
+            DbValue::Vector(v) => write!(f, "{}", v.iter().format(", ")),
+            DbValue::Halfvec(v) => write!(f, "{}", v.iter().format(", ")),
+            DbValue::Sparsevec(v) => write!(f, "{v}"),
         }
     }
 }
@@ -742,6 +765,9 @@ impl DbValue {
                 DbColumnType::Array(Box::new(t))
             }
             DbValue::Null => DbColumnType::Null,
+            DbValue::Vector(_) => DbColumnType::Vector,
+            DbValue::Halfvec(_) => DbColumnType::Halfvec,
+            DbValue::Sparsevec(_) => DbColumnType::Sparsevec,
         }
     }
 }
@@ -905,6 +931,15 @@ impl From<DbColumnType> for SerializableDbColumnType {
                 DbColumnType::Null => {
                     nodes.push(SerializableDbColumnTypeNode::Null);
                 }
+                DbColumnType::Vector => {
+                    nodes.push(SerializableDbColumnTypeNode::Vector);
+                }
+                DbColumnType::Halfvec => {
+                    nodes.push(SerializableDbColumnTypeNode::Halfvec);
+                }
+                DbColumnType::Sparsevec => {
+                    nodes.push(SerializableDbColumnTypeNode::Sparsevec);
+                }
             }
 
             (nodes.len() - 1) as NodeIndex
@@ -999,6 +1034,9 @@ impl TryFrom<SerializableDbColumnType> for DbColumnType {
                     )))
                 }
                 SerializableDbColumnTypeNode::Null => Ok(DbColumnType::Null),
+                SerializableDbColumnTypeNode::Vector => Ok(DbColumnType::Vector),
+                SerializableDbColumnTypeNode::Halfvec => Ok(DbColumnType::Halfvec),
+                SerializableDbColumnTypeNode::Sparsevec => Ok(DbColumnType::Sparsevec),
                 _ => Err(format!(
                     "Unsupported SerializableDbColumnTypeNode variant: {:?}",
                     node

@@ -36,7 +36,12 @@ impl DockerMysqlRdb {
     const DEFAULT_IMAGE_TAG: &'static str = "8";
 
     pub async fn new(unique_network_id: &str) -> Self {
-        Self::new_with_image(unique_network_id, Self::DEFAULT_IMAGE_NAME, Self::DEFAULT_IMAGE_TAG).await
+        Self::new_with_image(
+            unique_network_id,
+            Self::DEFAULT_IMAGE_NAME,
+            Self::DEFAULT_IMAGE_TAG,
+        )
+        .await
     }
 
     pub async fn new_with_image(unique_network_id: &str, image: &str, tag: &str) -> Self {

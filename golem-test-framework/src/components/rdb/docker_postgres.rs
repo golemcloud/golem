@@ -39,10 +39,21 @@ impl DockerPostgresRdb {
     const DEFAULT_IMAGE_TAG: &'static str = "postgres";
 
     pub async fn new(unique_network_id: &str, enable_stats: bool) -> Self {
-        Self::new_with_image(unique_network_id, enable_stats, Self::DEFAULT_IMAGE_NAME, Self::DEFAULT_IMAGE_TAG).await
+        Self::new_with_image(
+            unique_network_id,
+            enable_stats,
+            Self::DEFAULT_IMAGE_NAME,
+            Self::DEFAULT_IMAGE_TAG,
+        )
+        .await
     }
 
-    pub async fn new_with_image(unique_network_id: &str, enable_stats: bool, image: &str, tag: &str) -> Self {
+    pub async fn new_with_image(
+        unique_network_id: &str,
+        enable_stats: bool,
+        image: &str,
+        tag: &str,
+    ) -> Self {
         info!("Starting Postgres container");
 
         let database = Self::DEFAULT_DATABASE;

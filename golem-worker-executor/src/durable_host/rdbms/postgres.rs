@@ -1226,6 +1226,9 @@ fn from_db_value(
             ))
         }
         postgres_types::DbValue::Null => Ok((DbValue::Null, DbValueResourceRep::None)),
+        postgres_types::DbValue::Vector(v) => todo!(),
+        postgres_types::DbValue::Halfvec(v) => todo!(),
+        postgres_types::DbValue::Sparsevec(v) => todo!(),
     }
 }
 
@@ -1477,6 +1480,11 @@ fn from_db_column_type(
             ))
         }
         postgres_types::DbColumnType::Null => Err("Type 'Null' is not supported".to_string()),
+        postgres_types::DbColumnType::Vector => Err("Type 'Vector' is not supported".to_string()),
+        postgres_types::DbColumnType::Halfvec => Err("Type 'Halfvec' is not supported".to_string()),
+        postgres_types::DbColumnType::Sparsevec => {
+            Err("Type 'Sparsevec' is not supported".to_string())
+        }
     }
 }
 
