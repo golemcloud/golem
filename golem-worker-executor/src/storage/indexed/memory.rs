@@ -337,10 +337,15 @@ mod tests {
     use golem_common::model::WorkerId;
 
     fn test_worker_id() -> WorkerId {
-        WorkerId {
-            component_id: ComponentId::new(),
-            worker_name: "worker".to_string(),
-        }
+        use std::sync::OnceLock;
+        static WORKER_ID: OnceLock<WorkerId> = OnceLock::new();
+
+        WORKER_ID
+            .get_or_init(|| WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "worker".to_string(),
+            })
+            .clone()
     }
 
     #[test]
