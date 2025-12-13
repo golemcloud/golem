@@ -28,7 +28,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
 
@@ -441,6 +441,7 @@ impl SafeDisplay for OplogConfig {
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
     Sqlite(DbSqliteConfig),
+    MultiSqlite(KeyValueStorageMultiSqliteConfig),
     InMemory(KeyValueStorageInMemoryConfig),
 }
 
@@ -456,11 +457,32 @@ impl SafeDisplay for KeyValueStorageConfig {
                 let _ = writeln!(&mut result, "sqlite:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
+            KeyValueStorageConfig::MultiSqlite(inner) => {
+                let _ = writeln!(&mut result, "multi-sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
             KeyValueStorageConfig::InMemory(inner) => {
                 let _ = writeln!(&mut result, "in-memory:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
         }
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyValueStorageMultiSqliteConfig {
+    pub root_dir: PathBuf,
+    pub max_connections: u32,
+    pub foreign_keys: bool,
+}
+
+impl SafeDisplay for KeyValueStorageMultiSqliteConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "root dir: {}", self.root_dir.display());
+        let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
+        let _ = writeln!(&mut result, "foreign keys: {}", self.foreign_keys);
         result
     }
 }
@@ -480,7 +502,9 @@ pub enum IndexedStorageConfig {
     KVStoreRedis(IndexedStorageKVStoreRedisConfig),
     Redis(RedisConfig),
     KVStoreSqlite(IndexedStorageKVStoreSqliteConfig),
+    KVStoreMultiSqlite(IndexedStorageKVStoreMultiSqliteConfig),
     Sqlite(DbSqliteConfig),
+    MultiSqlite(IndexedStorageMultiSqliteConfig),
     InMemory(IndexedStorageInMemoryConfig),
 }
 
@@ -500,8 +524,16 @@ impl SafeDisplay for IndexedStorageConfig {
                 let _ = writeln!(&mut result, "sqlite kv-store:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
+            IndexedStorageConfig::KVStoreMultiSqlite(inner) => {
+                let _ = writeln!(&mut result, "multi-sqlite kv-store:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
             IndexedStorageConfig::Sqlite(inner) => {
                 let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::MultiSqlite(inner) => {
+                let _ = writeln!(&mut result, "multi-sqlite:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             IndexedStorageConfig::InMemory(inner) => {
@@ -528,6 +560,32 @@ pub struct IndexedStorageKVStoreSqliteConfig {}
 impl SafeDisplay for IndexedStorageKVStoreSqliteConfig {
     fn to_safe_string(&self) -> String {
         "".to_string()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStorageKVStoreMultiSqliteConfig {}
+
+impl SafeDisplay for IndexedStorageKVStoreMultiSqliteConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStorageMultiSqliteConfig {
+    pub root_dir: PathBuf,
+    pub max_connections: u32,
+    pub foreign_keys: bool,
+}
+
+impl SafeDisplay for IndexedStorageMultiSqliteConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "root dir: {}", self.root_dir.display());
+        let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
+        let _ = writeln!(&mut result, "foreign keys: {}", self.foreign_keys);
+        result
     }
 }
 

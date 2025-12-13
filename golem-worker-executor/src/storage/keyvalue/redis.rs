@@ -33,8 +33,9 @@ impl RedisKeyValueStorage {
 
     fn use_hash(namespace: &KeyValueStorageNamespace) -> Option<String> {
         match namespace {
-            KeyValueStorageNamespace::Worker => None,
-            KeyValueStorageNamespace::Promise => Some("promises".to_string()),
+            KeyValueStorageNamespace::Worker { .. } => None,
+            KeyValueStorageNamespace::RunningWorkers => None,
+            KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,
             KeyValueStorageNamespace::UserDefined {
                 environment_id,

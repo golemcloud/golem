@@ -17,9 +17,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
+use golem_common::model::WorkerId;
 use golem_common::serialization::{deserialize, serialize};
 
 pub mod memory;
+pub mod multi_sqlite;
 pub mod redis;
 pub mod sqlite;
 
@@ -66,7 +68,7 @@ pub trait IndexedStorage: Debug + Sync {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: IndexedStorageMetaNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
@@ -252,7 +254,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
 
     pub async fn scan(
         &self,
-        namespace: IndexedStorageNamespace,
+        namespace: IndexedStorageMetaNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
@@ -600,8 +602,16 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 }
 
+/// Various namespaces for indexed storage
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
-    OpLog,
-    CompressedOpLog { level: usize },
+    OpLog { worker_id: WorkerId },
+    CompressedOpLog { worker_id: WorkerId, level: usize },
+}
+
+/// Various namespaces for operations working on multiple indexed storage namespaces such as scan
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub enum IndexedStorageMetaNamespace {
+    Oplog,
+    CompressedOplog { level: usize },
 }

@@ -59,10 +59,12 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{rdbms, shard_manager, All, HasConfig};
+use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
@@ -314,6 +316,15 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             );
             (None, Some(pool), key_value_storage)
         }
+        KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(MultiSqliteKeyValueStorage::new(
+                    &multi_sqlite.root_dir,
+                    multi_sqlite.max_connections,
+                    multi_sqlite.foreign_keys,
+                ));
+            (None, None, key_value_storage)
+        }
     };
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
@@ -337,6 +348,17 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
                     .map_err(|err| anyhow!(err))?,
             )
         }
+        IndexedStorageConfig::KVStoreMultiSqlite(_) => {
+            match &golem_config.key_value_storage {
+                KeyValueStorageConfig::MultiSqlite(multi_sqlite) =>
+                    Arc::new(MultiSqliteIndexedStorage::new(
+                        &multi_sqlite.root_dir,
+                        multi_sqlite.max_connections,
+                        multi_sqlite.foreign_keys,
+                    )),
+                _ => panic!("Invalid configuration: multi-sqlite must be used as key-value storage when using KVStoreMultiSqlite")
+            }
+        }
         IndexedStorageConfig::Sqlite(sqlite) => {
             let pool = SqlitePool::configured(sqlite)
                 .await
@@ -346,6 +368,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
                     .await
                     .map_err(|err| anyhow!(err))?,
             )
+        }
+        IndexedStorageConfig::MultiSqlite(multi_sqlite) => {
+            Arc::new(MultiSqliteIndexedStorage::new(
+                &multi_sqlite.root_dir,
+                multi_sqlite.max_connections,
+                multi_sqlite.foreign_keys,
+            ))
         }
         IndexedStorageConfig::InMemory(_) => {
             Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())

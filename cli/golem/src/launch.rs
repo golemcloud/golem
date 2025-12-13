@@ -35,9 +35,9 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, ResourceLimitsConfig,
-    ResourceLimitsGrpcConfig, ShardManagerServiceConfig, ShardManagerServiceGrpcConfig,
-    WorkerServiceGrpcConfig,
+    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
+    ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::config::{RouteResolverConfig, WorkerServiceConfig};
 use golem_worker_service::WorkerService;
@@ -257,25 +257,17 @@ fn worker_executor_config(
     let mut config = WorkerExecutorConfig {
         port: 0,
         http_port: 0,
-        key_value_storage:
-        KeyValueStorageConfig::Sqlite(
-            DbSqliteConfig {
-                database: args
-                    .data_dir
-                    .join("kv-store.db")
-                    .to_string_lossy()
-                    .to_string(),
-                max_connections: 4,
-                foreign_keys: false,
-            },
-        ),
-        indexed_storage:
-        IndexedStorageConfig::KVStoreSqlite(
-            IndexedStorageKVStoreSqliteConfig {},
+        key_value_storage: KeyValueStorageConfig::MultiSqlite(KeyValueStorageMultiSqliteConfig {
+            root_dir: args.data_dir.join("kv-store"),
+            max_connections: 4,
+            foreign_keys: false,
+        }),
+        indexed_storage: IndexedStorageConfig::KVStoreMultiSqlite(
+            IndexedStorageKVStoreMultiSqliteConfig {},
         ),
         blob_storage: blob_storage_config(args),
-        compiled_component_service: golem_service_base::service::compiled_component::CompiledComponentServiceConfig::Enabled(
-            golem_service_base::service::compiled_component::CompiledComponentServiceEnabledConfig {},
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
         ),
         shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
             host: args.router_addr.clone(),
