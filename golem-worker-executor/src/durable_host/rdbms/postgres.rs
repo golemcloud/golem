@@ -26,8 +26,8 @@ use crate::preview2::golem::rdbms::postgres::{
     Composite, CompositeType, Datebound, Daterange, DbColumn, DbColumnType, DbResult, DbRow,
     DbValue, Domain, DomainType, Enumeration, EnumerationType, Error, Host, HostDbConnection,
     HostDbResultStream, HostDbTransaction, HostLazyDbColumnType, HostLazyDbValue, Int4bound,
-    Int4range, Int8bound, Int8range, Interval, Numbound, Numrange, Range, RangeType, Tsbound,
-    Tsrange, Tstzbound, Tstzrange, ValueBound, ValuesRange,
+    Int4range, Int8bound, Int8range, Interval, Numbound, Numrange, Range, RangeType, SparseVec,
+    Tsbound, Tsrange, Tstzbound, Tstzrange, ValueBound, ValuesRange,
 };
 use crate::preview2::golem::rdbms::types::Timetz;
 use crate::services::rdbms::postgres::types as postgres_types;
@@ -339,6 +339,26 @@ impl From<Enumeration> for golem_common::model::oplog::payload::types::Enumerati
         Self {
             name: v.name,
             value: v.value,
+        }
+    }
+}
+
+impl From<SparseVec> for golem_common::model::oplog::payload::types::SparseVec {
+    fn from(v: SparseVec) -> Self {
+        Self {
+            dim: v.dim,
+            indices: v.indices,
+            values: v.values,
+        }
+    }
+}
+
+impl From<golem_common::model::oplog::payload::types::SparseVec> for SparseVec {
+    fn from(v: golem_common::model::oplog::payload::types::SparseVec) -> Self {
+        Self {
+            dim: v.dim,
+            indices: v.indices,
+            values: v.values,
         }
     }
 }
@@ -949,6 +969,15 @@ fn to_db_value(
         DbValue::Money(v) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Money(v),
         )),
+        DbValue::Vector(v) => Ok(DbValueWithResourceRep::new_resource_none(
+            postgres_types::DbValue::Vector(v),
+        )),
+        DbValue::Halfvec(v) => Ok(DbValueWithResourceRep::new_resource_none(
+            postgres_types::DbValue::Halfvec(v.into_iter().map(half::f16::from_f32).collect()),
+        )),
+        DbValue::Sparsevec(v) => Ok(DbValueWithResourceRep::new_resource_none(
+            postgres_types::DbValue::Sparsevec(v.into()),
+        )),
         DbValue::Enumeration(v) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Enumeration(v.into()),
         )),
@@ -1158,6 +1187,14 @@ fn from_db_value(
         }
         postgres_types::DbValue::Oid(v) => Ok((DbValue::Oid(v), DbValueResourceRep::None)),
         postgres_types::DbValue::Money(v) => Ok((DbValue::Money(v), DbValueResourceRep::None)),
+        postgres_types::DbValue::Vector(v) => Ok((DbValue::Vector(v), DbValueResourceRep::None)),
+        postgres_types::DbValue::Halfvec(v) => Ok((
+            DbValue::Halfvec(v.into_iter().map(|v| v.to_f32()).collect()),
+            DbValueResourceRep::None,
+        )),
+        postgres_types::DbValue::Sparsevec(v) => {
+            Ok((DbValue::Sparsevec(v.into()), DbValueResourceRep::None))
+        }
         postgres_types::DbValue::Enumeration(v) => {
             Ok((DbValue::Enumeration(v.into()), DbValueResourceRep::None))
         }
@@ -1226,9 +1263,6 @@ fn from_db_value(
             ))
         }
         postgres_types::DbValue::Null => Ok((DbValue::Null, DbValueResourceRep::None)),
-        postgres_types::DbValue::Vector(v) => todo!(),
-        postgres_types::DbValue::Halfvec(v) => todo!(),
-        postgres_types::DbValue::Sparsevec(v) => todo!(),
     }
 }
 
@@ -1412,6 +1446,15 @@ fn from_db_column_type(
         postgres_types::DbColumnType::Money => {
             Ok((DbColumnType::Money, DbColumnTypeResourceRep::None))
         }
+        postgres_types::DbColumnType::Vector => {
+            Ok((DbColumnType::Vector, DbColumnTypeResourceRep::None))
+        }
+        postgres_types::DbColumnType::Halfvec => {
+            Ok((DbColumnType::Halfvec, DbColumnTypeResourceRep::None))
+        }
+        postgres_types::DbColumnType::Sparsevec => {
+            Ok((DbColumnType::Sparsevec, DbColumnTypeResourceRep::None))
+        }
         postgres_types::DbColumnType::Enumeration(v) => Ok((
             DbColumnType::Enumeration(v.into()),
             DbColumnTypeResourceRep::None,
@@ -1480,11 +1523,6 @@ fn from_db_column_type(
             ))
         }
         postgres_types::DbColumnType::Null => Err("Type 'Null' is not supported".to_string()),
-        postgres_types::DbColumnType::Vector => Err("Type 'Vector' is not supported".to_string()),
-        postgres_types::DbColumnType::Halfvec => Err("Type 'Halfvec' is not supported".to_string()),
-        postgres_types::DbColumnType::Sparsevec => {
-            Err("Type 'Sparsevec' is not supported".to_string())
-        }
     }
 }
 
@@ -1616,6 +1654,15 @@ fn to_db_column_type(
         )),
         DbColumnType::Money => Ok(DbColumnTypeWithResourceRep::new_resource_none(
             postgres_types::DbColumnType::Money,
+        )),
+        DbColumnType::Vector => Ok(DbColumnTypeWithResourceRep::new_resource_none(
+            postgres_types::DbColumnType::Vector,
+        )),
+        DbColumnType::Halfvec => Ok(DbColumnTypeWithResourceRep::new_resource_none(
+            postgres_types::DbColumnType::Halfvec,
+        )),
+        DbColumnType::Sparsevec => Ok(DbColumnTypeWithResourceRep::new_resource_none(
+            postgres_types::DbColumnType::Sparsevec,
         )),
         DbColumnType::Enumeration(v) => Ok(DbColumnTypeWithResourceRep::new_resource_none(
             postgres_types::DbColumnType::Enumeration(v.into()),
