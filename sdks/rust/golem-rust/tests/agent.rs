@@ -38,7 +38,7 @@ mod tests {
     pub struct Tree {
         pub value: String,
         pub left: Option<Box<Tree>>,
-        pub right: Option<Box<Tree>>,
+        pub right: Vec<Tree>,
     }
 
     #[test]
@@ -50,15 +50,15 @@ mod tests {
                 left: Some(Box::new(Tree {
                     value: "left.left".to_string(),
                     left: None,
-                    right: None,
+                    right: vec![],
                 })),
-                right: None,
+                right: vec![],
             })),
-            right: Some(Box::new(Tree {
+            right: vec![Tree {
                 value: "right".to_string(),
                 left: None,
-                right: None,
-            })),
+                right: vec![],
+            }],
         };
 
         let mut tree_arena = TreeArena::new();
@@ -74,10 +74,14 @@ mod tests {
         dbg!(&result);
 
 
+        let schema = TreeNonRecursive::get_type();
+
+        dbg!(&schema);
+
+
         assert!(false);
         assert_eq!(tree.value, "root");
         assert_eq!(tree.left.as_ref().unwrap().value, "left");
-        assert_eq!(tree.right.as_ref().unwrap().value, "right");
     }
 
 
