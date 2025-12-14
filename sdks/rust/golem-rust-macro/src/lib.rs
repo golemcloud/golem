@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro_crate::{crate_name, FoundCrate};
-use syn::DeriveInput;
+use syn::{parse_macro_input, DeriveInput};
 
 use crate::transaction::golem_operation_impl;
 
@@ -59,6 +59,13 @@ pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(AllowedMimeTypes, attributes(mime_type))]
 pub fn derive_allowed_mimetypes(input: TokenStream) -> TokenStream {
     agentic::derive_allowed_mime_types(input)
+}
+
+#[proc_macro_derive(NonRecursive)]
+pub fn derive_non_recursive(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    let golem_rust_crate_ident = get_golem_rust_crate_ident();
+    agentic::derive_non_recursive(&ast)
 }
 
 #[proc_macro_attribute]

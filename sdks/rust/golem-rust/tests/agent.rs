@@ -28,10 +28,54 @@ mod tests {
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
     use std::fmt::Debug;
     use test_r::test;
+    use golem_rust::NonRecursive;
 
-    struct AgentWithTypeParameterImpl<T> {
+    struct AgentWithTypeParameterImpl<T>     {
         _request_id: T,
     }
+
+    #[derive(NonRecursive, Debug)]
+    pub struct Tree {
+        pub value: String,
+        pub left: Option<Box<Tree>>,
+        pub right: Option<Box<Tree>>,
+    }
+
+    #[test]
+    fn test_recursion() {
+        let tree = Tree {
+            value: "root".to_string(),
+            left: Some(Box::new(Tree {
+                value: "left".to_string(),
+                left: None,
+                right: None,
+            })),
+            right: Some(Box::new(Tree {
+                value: "right".to_string(),
+                left: None,
+                right: None,
+            })),
+        };
+
+        let mut tree_arena = TreeArena::new();
+
+        let root_idx = tree.to_arena(&mut tree_arena);
+
+        dbg!(&tree_arena);
+
+        dbg!("Tree arena: {:?}", root_idx);
+
+        let result = Tree::from_arena(root_idx, &mut tree_arena);
+
+        dbg!(&result);
+
+
+        assert!(false);
+        assert_eq!(tree.value, "root");
+        assert_eq!(tree.left.as_ref().unwrap().value, "left");
+        assert_eq!(tree.right.as_ref().unwrap().value, "right");
+    }
+
 
     #[agent_definition]
     trait AgentWithTypeParameter<T: Schema + Clone + Debug> {

@@ -12,23 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use agent_definition_impl::*;
-pub use agent_implementation_impl::*;
-pub use allowed_language_derivation::*;
-pub use allowed_mimetypes_derivation::*;
-pub use client_generation::*;
-pub use compile_errors::*;
-pub use multimodal_derivation::*;
-pub use non_recursive::*;
-pub use schema_derivation::*;
+/// Trait to convert a recursive type into a non-recursive, index-based version.
+pub trait ToNonRecursive {
+    type NonRecursive;
 
-mod agent_definition_impl;
-mod agent_implementation_impl;
-mod allowed_language_derivation;
-mod allowed_mimetypes_derivation;
-mod client_generation;
-mod compile_errors;
-mod helpers;
-mod multimodal_derivation;
-mod schema_derivation;
-mod non_recursive;
+    fn to_non_recursive(&self, arena: &mut Vec<Self::NonRecursive>) -> usize;
+}
+
+pub trait ArenaTransform<Arena, Target> {
+    fn to_index(&self, arena: &mut Arena) -> Target;
+    fn from_index(index: Target, arena: &Arena) -> Self;
+}
