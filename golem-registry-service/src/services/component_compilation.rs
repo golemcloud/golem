@@ -12,22 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::ComponentCompilationConfig;
+use crate::config::{ComponentCompilationConfig, ComponentCompilationEnabledConfig};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
     ComponentCompilationRequest,
     component_compilation_service_client::ComponentCompilationServiceClient,
 };
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::RetryConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
-use http::Uri;
+use golem_service_base::grpc::client::GrpcClient;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -48,11 +45,7 @@ pub fn configured(config: &ComponentCompilationConfig) -> Arc<dyn ComponentCompi
     match config {
         ComponentCompilationConfig::Disabled(_) => Arc::new(DisabledComponentCompilationService),
         ComponentCompilationConfig::Enabled(inner) => {
-            Arc::new(GrpcComponentCompilationService::new(
-                inner.uri(),
-                inner.retries.clone(),
-                inner.connect_timeout,
-            ))
+            Arc::new(GrpcComponentCompilationService::new(inner))
         }
     }
 }
@@ -63,7 +56,7 @@ pub struct GrpcComponentCompilationService {
 }
 
 impl GrpcComponentCompilationService {
-    pub fn new(uri: Uri, retries: RetryConfig, connect_timeout: Duration) -> Self {
+    pub fn new(config: &ComponentCompilationEnabledConfig) -> Self {
         let client = GrpcClient::new(
             "component-compilation-service",
             |channel| {
@@ -71,11 +64,8 @@ impl GrpcComponentCompilationService {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            uri,
-            GrpcClientConfig {
-                retries_on_unavailable: retries,
-                connect_timeout,
-            },
+            config.uri(),
+            config.client_config.clone(),
         );
         Self {
             client,
