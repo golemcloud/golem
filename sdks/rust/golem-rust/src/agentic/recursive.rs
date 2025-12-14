@@ -4,7 +4,6 @@ pub trait ArenaMember<Arena> {
     fn inflate(non_rec: Self::NonRecursive, arena: &Arena) -> Self;
 }
 
-// MARKER: Box wrapper
 impl<A, T: ArenaMember<A>> ArenaMember<A> for Box<T> {
     type NonRecursive = T::NonRecursive;
     fn deflate(&self, arena: &mut A) -> Self::NonRecursive {
@@ -15,7 +14,6 @@ impl<A, T: ArenaMember<A>> ArenaMember<A> for Box<T> {
     }
 }
 
-// MARKER: Option wrapper
 impl<A, T: ArenaMember<A>> ArenaMember<A> for Option<T> {
     type NonRecursive = Option<T::NonRecursive>;
     fn deflate(&self, arena: &mut A) -> Self::NonRecursive {
@@ -26,7 +24,6 @@ impl<A, T: ArenaMember<A>> ArenaMember<A> for Option<T> {
     }
 }
 
-// MARKER: Vector wrapper
 impl<A, T: ArenaMember<A>> ArenaMember<A> for Vec<T> {
     type NonRecursive = Vec<T::NonRecursive>;
     fn deflate(&self, arena: &mut A) -> Self::NonRecursive {
@@ -37,7 +34,6 @@ impl<A, T: ArenaMember<A>> ArenaMember<A> for Vec<T> {
     }
 }
 
-// MARKER: Leaf Types (Non-recursive)
 macro_rules! impl_arena_leaf {
     ($($t:ty),*) => {
         $(
@@ -50,4 +46,4 @@ macro_rules! impl_arena_leaf {
     };
 }
 
-impl_arena_leaf!(i32, u32, i64, u64, f32, f64, String, bool, usize);
+impl_arena_leaf!(i8, u8, i16, u16, i32, u32, i64, u64, f32, f64, String, bool, usize);

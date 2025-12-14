@@ -6,7 +6,7 @@ pub fn derive_non_recursive(input: &DeriveInput) -> TokenStream {
     let name = &input.ident;
     let non_rec_name = format_ident!("{}NonRecursive", name);
     let arena_name = format_ident!("{}Arena", name);
-    
+
     let trait_path = quote!(golem_rust::agentic::ArenaMember);
 
     let fields = match &input.data {
@@ -16,7 +16,7 @@ pub fn derive_non_recursive(input: &DeriveInput) -> TokenStream {
         },
         _ => panic!("NonRecursive only supports structs"),
     };
-    
+
     let field_idents: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
     let field_types: Vec<_> = fields.named.iter().map(|f| &f.ty).collect();
 
@@ -40,13 +40,13 @@ pub fn derive_non_recursive(input: &DeriveInput) -> TokenStream {
             }
         }
 
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, golem_rust::Schema)]
         pub struct #non_rec_name {
             #(pub #field_idents: <#field_types as #trait_path<#arena_name>>::NonRecursive,)*
         }
 
         impl #name {
-            
+
             pub fn to_arena(&self, arena: &mut #arena_name) -> usize {
                 let flattened = #non_rec_name {
                     #(#field_idents: #trait_path::<#arena_name>::deflate(&self.#field_idents, arena),)*
@@ -54,7 +54,7 @@ pub fn derive_non_recursive(input: &DeriveInput) -> TokenStream {
                 arena.add(flattened)
             }
 
-            
+
             pub fn from_arena(index: usize, arena: &#arena_name) -> Self {
                 let node = arena.get(index);
                 Self {

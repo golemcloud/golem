@@ -106,6 +106,27 @@ pub trait FromValueAndType: Sized {
     ) -> Result<Self, String>;
 }
 
+impl IntoValue for usize {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u64(self as u64)
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u64()
+    }
+}
+
+impl FromValueAndType for usize {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u64()
+            .map(|v| v as usize)
+            .ok_or_else(|| "Expected usize".to_string())
+    }
+}
+
 impl IntoValue for u8 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         builder.u8(self)
