@@ -47,7 +47,11 @@ mod tests {
             value: "root".to_string(),
             left: Some(Box::new(Tree {
                 value: "left".to_string(),
-                left: None,
+                left: Some(Box::new(Tree {
+                    value: "left.left".to_string(),
+                    left: None,
+                    right: None,
+                })),
                 right: None,
             })),
             right: Some(Box::new(Tree {

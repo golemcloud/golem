@@ -12,12 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// Trait to convert a recursive type into a non-recursive, index-based version.
-pub trait ToNonRecursive {
-    type NonRecursive;
-
-    fn to_non_recursive(&self, arena: &mut Vec<Self::NonRecursive>) -> usize;
-}
 
 pub trait ArenaTransform<Arena, Target> {
     fn to_index(&self, arena: &mut Arena) -> Target;
