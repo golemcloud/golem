@@ -41,6 +41,8 @@ mod tests {
         pub right: Vec<Tree>,
     }
 
+
+
     #[test]
     fn test_recursion() {
         let tree = Tree {
