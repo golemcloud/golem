@@ -13,66 +13,79 @@ pub fn derive_non_recursive(input: &DeriveInput) -> TokenStream {
         if let Fields::Named(f) = &s.fields { f } else { panic!("Named fields only") }
     } else { panic!("Only structs supported") };
 
-    // 1. Generate fields for the NonRecursive struct
+
     let struct_fields = fields.named.iter().map(|f| {
         let f_name = &f.ident;
         let f_ty = &f.ty;
-        let type_str = quote!(#f_ty).to_string();
-        if type_str.contains(&name.to_string()) {
-            quote! { pub #f_name: Option<usize> }
-        } else {
-            quote! { pub #f_name: #f_ty }
+        quote! {
+            pub #f_name: <#f_ty as golem_rust::agentic::ArenaMember<#arena_name>>::NonRecursive
         }
     });
 
-    // 2. Logic for flattening: Recursive -> Arena (to_arena)
     let to_arena_fields = fields.named.iter().map(|f| {
         let f_name = &f.ident;
-        let type_str = quote!(#f.ty).to_string();
-        if type_str.contains(&name.to_string()) {
-            quote! { #f_name: self.#f_name.as_ref().map(|node| node.to_arena(arena)) }
-        } else {
-            quote! { #f_name: self.#f_name.clone() }
-        }
+        let f_ty = &f.ty;
+        quote! { #f_name: <#f_ty as golem_rust::agentic::ArenaMember<#arena_name>>::deflate(&self.#f_name, arena) }
     });
 
-    // 3. Logic for inflating: Arena -> Recursive (from_arena)
     let from_arena_fields = fields.named.iter().map(|f| {
         let f_name = &f.ident;
-        let type_str = quote!(#f.ty).to_string();
-        if type_str.contains(&name.to_string()) {
-            quote! { #f_name: node.#f_name.map(|idx| Box::new(#name::from_arena(idx, arena))) }
-        } else {
-            quote! { #f_name: node.#f_name.clone() }
-        }
+        let f_ty = &f.ty;
+        // This calls <F as ArenaMember<Arena>>::inflate(...)
+        // If F is Option<Box<Tree>>, this will recursively call Tree::from_arena(idx, arena)
+        quote! {
+        #f_name: <#f_ty as golem_rust::agentic::ArenaMember<#arena_name>>::inflate(node.#f_name.clone(), arena)
+    }
     });
 
-    let expanded = quote! {
-        #[derive(Debug, Clone)]
-        pub struct #non_rec_name { #(#struct_fields,)* }
 
-        #[derive(Debug, Clone)]
+    let q = quote! {
+        #[derive(Debug)]
         pub struct #arena_name { pub nodes: Vec<#non_rec_name> }
+
         impl #arena_name {
-            pub fn new() -> Self { Self { nodes: Vec::new() } }
+            pub fn new() -> Self {
+                Self { nodes: Vec::new() }
+            }
+
             pub fn add(&mut self, node: #non_rec_name) -> usize {
-                let idx = self.nodes.len();
-                self.nodes.push(node);
-                idx
+              let idx = self.nodes.len();
+              self.nodes.push(node);
+              idx
             }
         }
+
+        #[derive(Clone, Debug)] // Indices are usually clonable
+        pub struct #non_rec_name { #(#struct_fields,)* }
 
         impl #name {
             pub fn to_arena(&self, arena: &mut #arena_name) -> usize {
-                let non_rec = #non_rec_name { #(#to_arena_fields,)* };
-                arena.add(non_rec)
+                // Push a placeholder or handle recursion
+                // (Simplified for brevity: in real impl, handle depth-first)
+                let flattened = #non_rec_name { #(#to_arena_fields,)* };
+                arena.add(flattened)
             }
-
             pub fn from_arena(idx: usize, arena: &#arena_name) -> Self {
-                let node = &arena.nodes[idx];
-                Self { #(#from_arena_fields,)* }
+
+              let node = &arena.nodes[idx];
+
+              Self {
+                #(#from_arena_fields,)*
+              }
+            }
+        }
+
+        // Essential: Link the original type to the ArenaMember trait
+        impl golem_rust::agentic::ArenaMember<#arena_name> for #name {
+            type NonRecursive = usize;
+            fn deflate(&self, arena: &mut #arena_name) -> Self::NonRecursive {
+                self.to_arena(arena)
+            }
+            fn inflate(idx: Self::NonRecursive, arena: &#arena_name) -> Self {
+                Self::from_arena(idx, arena)
             }
         }
     };
-    TokenStream::from(expanded)
+
+    TokenStream::from(q)
 }

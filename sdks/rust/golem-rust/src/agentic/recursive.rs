@@ -13,7 +13,54 @@
 // limitations under the License.
 
 
-pub trait ArenaTransform<Arena, Target> {
-    fn to_index(&self, arena: &mut Arena) -> Target;
-    fn from_index(index: Target, arena: &Arena) -> Self;
+pub trait ArenaMember<Arena> {
+    type NonRecursive; // The 'Index' version (e.g., usize, Vec<usize>, or the type itself)
+
+    fn deflate(&self, arena: &mut Arena) -> Self::NonRecursive;
+    fn inflate(non_rec: Self::NonRecursive, arena: &Arena) -> Self;
 }
+
+impl<A, T: ArenaMember<A>> ArenaMember<A> for Box<T> {
+    type NonRecursive = T::NonRecursive;
+    fn deflate(&self, arena: &mut A) -> Self::NonRecursive {
+        (**self).deflate(arena)
+    }
+    fn inflate(val: Self::NonRecursive, arena: &A) -> Self {
+        Box::new(T::inflate(val, arena))
+    }
+}
+
+impl<A, T: ArenaMember<A>> ArenaMember<A> for Option<T> {
+    type NonRecursive = Option<T::NonRecursive>;
+    fn deflate(&self, arena: &mut A) -> Self::NonRecursive {
+        self.as_ref().map(|inner| inner.deflate(arena))
+    }
+    fn inflate(val: Self::NonRecursive, arena: &A) -> Self {
+        val.map(|inner| T::inflate(inner, arena))
+    }
+}
+
+
+impl<A, T: ArenaMember<A>> ArenaMember<A> for Vec<T> {
+    type NonRecursive = Vec<T::NonRecursive>;
+    fn deflate(&self, arena: &mut A) -> Self::NonRecursive {
+        self.iter().map(|inner| inner.deflate(arena)).collect()
+    }
+    fn inflate(val: Self::NonRecursive, arena: &A) -> Self {
+        val.into_iter().map(|inner| T::inflate(inner, arena)).collect()
+    }
+}
+
+macro_rules! impl_leaf {
+    ($t:ty) => {
+        impl<A> ArenaMember<A> for $t {
+            type NonRecursive = $t;
+            fn deflate(&self, _: &mut A) -> Self::NonRecursive { self.clone() }
+            fn inflate(val: Self::NonRecursive, _: &A) -> Self { val }
+        }
+    };
+}
+
+impl_leaf!(i32);
+impl_leaf!(String);
+impl_leaf!(bool);
