@@ -971,7 +971,7 @@ fn to_db_value(
             postgres_types::DbValue::Vector(v),
         )),
         DbValue::Halfvec(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Halfvec(v.into_iter().map(half::f16::from_f32).collect()),
+            postgres_types::DbValue::Halfvec(half::vec::HalfFloatVecExt::from_f32_slice(&v)),
         )),
         DbValue::Sparsevec(v) => {
             let v = v.try_into()?;

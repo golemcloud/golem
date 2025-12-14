@@ -582,7 +582,7 @@ impl TryFrom<SerializableDbValue> for DbValue {
                 SerializableDbValueNode::Null => Ok(DbValue::Null),
                 SerializableDbValueNode::Vector(v) => Ok(DbValue::Vector(v)),
                 SerializableDbValueNode::Halfvec(v) => Ok(DbValue::Halfvec(
-                    v.into_iter().map(half::f16::from_f32).collect(),
+                    half::vec::HalfFloatVecExt::from_f32_slice(&v),
                 )),
                 SerializableDbValueNode::Sparsevec(v) => Ok(DbValue::Sparsevec(v)),
                 _ => Err(format!(
@@ -1442,10 +1442,7 @@ pub mod tests {
                 1.0, 2.0, 3.0, 4.0, 5.0,
             ])]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Halfvec(
-                vec![1.0, 2.0, 3.0, 4.0, 5.0]
-                    .into_iter()
-                    .map(half::f16::from_f32)
-                    .collect(),
+                half::vec::HalfFloatVecExt::from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Sparsevec(
                 postgres_types::SparseVec::try_new(5, vec![1, 2, 4], vec![1.0, 2.0, 4.0]).unwrap(),

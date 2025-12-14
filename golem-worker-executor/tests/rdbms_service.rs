@@ -629,12 +629,9 @@ async fn postgres_create_insert_select_test(
                     ),
                 ))),
                 postgres_types::DbValue::Vector(vec![1.0, 2.0, 3.0, 4.0, 5.0]),
-                postgres_types::DbValue::Halfvec(
-                    vec![1.0, 2.0, 3.0, 4.0, 5.0]
-                        .into_iter()
-                        .map(half::f16::from_f32)
-                        .collect(),
-                ),
+                postgres_types::DbValue::Halfvec(half::vec::HalfFloatVecExt::from_f32_slice(&[
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                ])),
                 postgres_types::DbValue::Sparsevec(
                     SparseVec::try_new(5, vec![1, 2, 4], vec![1.0, 2.0, 4.0]).unwrap(),
                 ),
@@ -1529,10 +1526,7 @@ async fn postgres_create_insert_select_array_test(
                     1.0, 2.0, 3.0, 4.0, 5.0,
                 ])]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Halfvec(
-                    vec![1.0, 2.0, 3.0, 4.0, 5.0]
-                        .into_iter()
-                        .map(half::f16::from_f32)
-                        .collect(),
+                    half::vec::HalfFloatVecExt::from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Sparsevec(
                     SparseVec::try_new(5, vec![1, 2, 4], vec![1.0, 2.0, 4.0]).unwrap(),
