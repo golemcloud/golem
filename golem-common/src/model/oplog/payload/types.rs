@@ -1778,6 +1778,20 @@ pub struct SparseVec {
 }
 
 impl SparseVec {
+    pub fn try_new(dim: i32, indices: Vec<i32>, values: Vec<f32>) -> Result<Self, String> {
+        if indices.len() != values.len() {
+            Err("Indices and values must have the same length".to_string())
+        } else if indices.len() > dim as usize {
+            Err("Indices must be less than or equal to dim".to_string())
+        } else {
+            Ok(SparseVec {
+                dim,
+                indices,
+                values,
+            })
+        }
+    }
+
     pub fn to_map(&self) -> HashMap<&i32, &f32> {
         let mut map = HashMap::new();
         for (idx, val) in self.indices.iter().zip(self.values.iter()) {

@@ -343,13 +343,11 @@ impl From<Enumeration> for golem_common::model::oplog::payload::types::Enumerati
     }
 }
 
-impl From<SparseVec> for golem_common::model::oplog::payload::types::SparseVec {
-    fn from(v: SparseVec) -> Self {
-        Self {
-            dim: v.dim,
-            indices: v.indices,
-            values: v.values,
-        }
+impl TryFrom<SparseVec> for golem_common::model::oplog::payload::types::SparseVec {
+    type Error = String;
+
+    fn try_from(v: SparseVec) -> Result<Self, Self::Error> {
+        golem_common::model::oplog::payload::types::SparseVec::try_new(v.dim, v.indices, v.values)
     }
 }
 
@@ -975,9 +973,12 @@ fn to_db_value(
         DbValue::Halfvec(v) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Halfvec(v.into_iter().map(half::f16::from_f32).collect()),
         )),
-        DbValue::Sparsevec(v) => Ok(DbValueWithResourceRep::new_resource_none(
-            postgres_types::DbValue::Sparsevec(v.into()),
-        )),
+        DbValue::Sparsevec(v) => {
+            let v = v.try_into()?;
+            Ok(DbValueWithResourceRep::new_resource_none(
+                postgres_types::DbValue::Sparsevec(v),
+            ))
+        }
         DbValue::Enumeration(v) => Ok(DbValueWithResourceRep::new_resource_none(
             postgres_types::DbValue::Enumeration(v.into()),
         )),
