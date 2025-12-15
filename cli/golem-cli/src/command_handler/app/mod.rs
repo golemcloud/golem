@@ -47,10 +47,8 @@ use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
-use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentRevision, DeploymentRollback, DeploymentVersion,
-};
+use golem_common::model::component::{ComponentDto, ComponentName};
+use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentVersion};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -431,13 +429,12 @@ impl AppCommandHandler {
     }
 
     async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
-        let environment_handler = self.ctx.environment_handler();
-
-        let environment = environment_handler
+        let environment = self
+            .ctx
+            .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
-
-        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let agent_types = self
             .ctx
@@ -467,10 +464,10 @@ impl AppCommandHandler {
 
     async fn deploy_by_version(
         &self,
-        version: String,
-        deploy_args: DeployArgs,
+        _version: String,
+        _deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        let environment = self
+        let _environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
@@ -483,8 +480,8 @@ impl AppCommandHandler {
 
     async fn deploy_by_revision(
         &self,
-        revision: DeploymentRevision,
-        deploy_args: DeployArgs,
+        _revision: DeploymentRevision,
+        _deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         /*
         let environment_handler = self.ctx.environment_handler();
@@ -1033,16 +1030,12 @@ impl AppCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         deployment_revision: DeploymentRevision,
     ) -> anyhow::Result<RevertQuickDiff> {
-        let current_deployment = self
-            .ctx
-            .environment_handler()
-            .resolved_current_deployment(&environment)?
-            .clone();
-
         let clients = self.ctx.golem_clients().await?;
+        let current_deployment = environment.current_deployment_or_err()?.clone();
+
         let Some(target_deployment) = clients
             .environment
-            .get_deployment_summary(&&environment.environment_id.0, deployment_revision.get())
+            .get_deployment_summary(&environment.environment_id.0, deployment_revision.get())
             .await
             .map_service_error_not_found_as_opt()?
         else {
@@ -1094,7 +1087,7 @@ impl AppCommandHandler {
         })
     }
 
-    async fn detailed_revert_diff(&self, revert_diff: RevertDiff) -> anyhow::Result<RevertDiff> {
+    async fn detailed_revert_diff(&self, _revert_diff: RevertDiff) -> anyhow::Result<RevertDiff> {
         todo!()
     }
 
@@ -1414,7 +1407,6 @@ impl AppCommandHandler {
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
         let clients = self.ctx.golem_clients().await?;
-        let environment_handler = self.ctx.environment_handler();
 
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
@@ -1426,11 +1418,12 @@ impl AppCommandHandler {
             .collect::<Result<Vec<ComponentName>, _>>()
             .map_err(|err| anyhow!(err))?;
 
-        let environment = environment_handler
+        let environment = self
+            .ctx
+            .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
-
-        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let mut components = Vec::with_capacity(selected_component_names.len());
         for component_name in &selected_component_names {

@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::HintError;
 use crate::log::LogColorize;
 use crate::model::app_raw::Environment;
 use crate::model::text::environment::format_resolved_environment_identity;
+use anyhow::bail;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::environment::{
+    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName,
+};
 use indoc::formatdoc;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -169,6 +173,15 @@ impl ResolvedEnvironmentIdentity {
 
     pub fn text_format(&self) -> String {
         format_resolved_environment_identity(self)
+    }
+
+    pub fn current_deployment_or_err(&self) -> anyhow::Result<&EnvironmentCurrentDeploymentView> {
+        match self.server_environment.current_deployment.as_ref() {
+            Some(deployment) => Ok(deployment),
+            None => {
+                bail!(HintError::EnvironmentHasNoDeployment);
+            }
+        }
     }
 }
 

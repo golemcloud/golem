@@ -23,7 +23,7 @@ use crate::model::text::fmt::log_error;
 use crate::model::text::http_api_definition::HttpApiDefinitionGetView;
 use crate::model::{app, OpenApiDefinitionOutputFormat};
 use anyhow::{anyhow, bail};
-use golem_client::api::HttpApiDefinitionClient;
+use golem_client::api::{EnvironmentClient, HttpApiDefinitionClient};
 use golem_client::model::{HttpApiDefinitionCreation, HttpApiDefinitionUpdate};
 use golem_common::cache::SimpleCache;
 use golem_common::model::deployment::{DeploymentPlanHttpApiDefintionEntry, DeploymentRevision};
@@ -101,12 +101,16 @@ impl ApiDefinitionCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let clients = self.ctx.golem_clients().await?;
 
         let definitions = clients
-            .api_definition
-            .list_environment_http_api_definitions(&environment.environment_id.0)
+            .environment
+            .list_deployment_http_api_definitions(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+            )
             .await
             .map_service_error()?
             .values;
@@ -356,10 +360,15 @@ impl ApiDefinitionCommandHandler {
         revision: Option<&HttpApiDefinitionRevision>,
     ) -> anyhow::Result<Option<HttpApiDefinition>> {
         let clients = self.ctx.golem_clients().await?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let Some(definition) = clients
             .api_definition
-            .get_http_api_definition_in_environment(&environment.environment_id.0, &name.0)
+            .get_http_api_definition_in_deployment(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+                &name.0,
+            )
             .await
             .map_service_error_not_found_as_opt()?
         else {

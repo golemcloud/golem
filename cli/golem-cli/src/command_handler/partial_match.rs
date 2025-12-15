@@ -233,6 +233,14 @@ impl ErrorHandler {
                 logln("");
                 Ok(())
             }
+            HintError::EnvironmentHasNoDeployment => {
+                logln(
+                    "The requested operation requires an existing deployment for the environment!",
+                );
+                logln("");
+                logln("User 'golem app deploy' for deploying, or select a different environment.");
+                Ok(())
+            }
             HintError::ShowClapHelp(help_target) => {
                 // TODO: we should print to STDERR to match normal help behaviour,
                 //       but 'print_long_help' is hardcoded to use STDOUT.

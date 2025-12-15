@@ -297,13 +297,17 @@ impl ComponentCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let results = self
             .ctx
             .golem_clients()
             .await?
             .component
-            .get_environment_components(&environment.environment_id.0)
+            .get_deployment_components(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+            )
             .await?
             .values
             .into_iter()
@@ -381,16 +385,16 @@ impl ComponentCommandHandler {
 
         if no_matches {
             if revision.is_some() && selected_components.component_names.len() == 1 {
-                let latest = self
-                    .get_latest_deployed_server_component_by_name(
+                let current = self
+                    .get_current_deployed_server_component_by_name(
                         &selected_components.environment,
                         &selected_components.component_names[0],
                     )
                     .await;
-                if let Ok(Some(latest)) = latest {
+                if let Ok(Some(current)) = current {
                     log_error(format!(
-                        "Component revision not found, latest deployed revision: {}",
-                        latest.revision.to_string().log_color_highlight()
+                        "Component revision not found, current deployed revision: {}",
+                        current.revision.to_string().log_color_highlight()
                     ));
                 } else {
                     log_error("Component revision not found");
@@ -433,17 +437,17 @@ impl ComponentCommandHandler {
         component_name: Option<ComponentName>,
     ) -> anyhow::Result<Vec<ComponentDto>> {
         let clients = self.ctx.golem_clients().await?;
-        let environment_handler = self.ctx.environment_handler();
 
         let selected_component_names = self
             .opt_select_components_by_app_dir_or_name(component_name.as_ref())
             .await?;
 
-        let environment = environment_handler
+        let environment = self
+            .ctx
+            .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
-
-        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let mut components = Vec::with_capacity(selected_component_names.component_names.len());
         for component_name in &selected_component_names.component_names {
@@ -917,7 +921,6 @@ impl ComponentCommandHandler {
         }
     }
 
-    // TODO: merge these 3 args into "component lookup" or "selection" struct
     pub async fn resolve_component(
         &self,
         environment: &ResolvedEnvironmentIdentity,
@@ -925,7 +928,7 @@ impl ComponentCommandHandler {
         component_version_selection: Option<ComponentRevisionSelection<'_>>,
     ) -> anyhow::Result<Option<ComponentDto>> {
         let component = self
-            .get_latest_deployed_server_component_by_name(environment, component_name)
+            .get_current_deployed_server_component_by_name(environment, component_name)
             .await?;
 
         match (component, component_version_selection) {
@@ -1216,16 +1219,22 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    pub async fn get_latest_deployed_server_component_by_name(
+    pub async fn get_current_deployed_server_component_by_name(
         &self,
         environment: &ResolvedEnvironmentIdentity,
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<ComponentDto>> {
+        let current_deployment = environment.current_deployment_or_err()?;
+
         self.ctx
             .golem_clients()
             .await?
             .component
-            .get_environment_component(&environment.environment_id.0, component_name.0.as_str())
+            .get_deployment_component(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+                component_name.0.as_str(),
+            )
             .await
             .map_service_error_not_found_as_opt()
     }

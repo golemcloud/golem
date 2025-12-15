@@ -162,7 +162,7 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_update_to_latest(
+    pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
         worker_name: &WorkerName,
@@ -170,7 +170,7 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Agent {}/{} will be updated to the latest component revision: {}. Do you want to continue?",
+            format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
                     worker_name.0.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()

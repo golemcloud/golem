@@ -72,17 +72,20 @@ impl ApiDeploymentCommandHandler {
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
         let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
-
-        let clients = self.ctx.golem_clients().await?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let result = clients
             .api_deployment
-            .list_http_api_deployments_in_environment(&environment.environment_id.0)
+            .list_http_api_deployments_in_deployment(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+            )
             .await
             .map_service_error()?
             .values;
@@ -99,10 +102,15 @@ impl ApiDeploymentCommandHandler {
         revision: Option<&HttpApiDeploymentRevision>,
     ) -> anyhow::Result<Option<HttpApiDeployment>> {
         let clients = self.ctx.golem_clients().await?;
+        let current_deployment = environment.current_deployment_or_err()?;
 
         let Some(deployment) = clients
             .api_deployment
-            .get_http_api_deployment_in_environment(&environment.environment_id.0, &domain.0)
+            .get_http_api_deployment_in_deployment(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+                &domain.0,
+            )
             .await
             .map_service_error_not_found_as_opt()?
         else {

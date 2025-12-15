@@ -657,18 +657,16 @@ impl WorkerCommandHandler {
         precise: bool,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
-        let environment_handler = self.ctx.environment_handler();
         let component_handler = self.ctx.component_handler();
 
         let (components, filters) = match agent_type_name {
             Some(agent_type_name) => {
-                let environment = environment_handler
-                    .resolve_environment(EnvironmentResolveMode::Any)
-                    .await?;
-                let current_deployment = self
+                let environment = self
                     .ctx
                     .environment_handler()
-                    .resolved_current_deployment(&environment)?;
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await?;
+                let current_deployment = environment.current_deployment_or_err()?;
 
                 debug!("Finding agent type {}", agent_type_name);
                 let Some(agent_type) = clients
@@ -717,10 +715,7 @@ impl WorkerCommandHandler {
                     .await?;
 
                 let environment = &selected_components.environment;
-                let current_deployment = self
-                    .ctx
-                    .environment_handler()
-                    .resolved_current_deployment(environment)?;
+                let current_deployment = environment.current_deployment_or_err()?;
 
                 let mut components = Vec::with_capacity(selected_components.component_names.len());
                 for component_name in selected_components.component_names {
@@ -858,10 +853,10 @@ impl WorkerCommandHandler {
         let target_revision = match target_revision {
             Some(target_version) => target_version,
             None => {
-                let Some(latest_deployed_revision) = self
+                let Some(current_deployed_revision) = self
                     .ctx
                     .component_handler()
-                    .get_latest_deployed_server_component_by_name(
+                    .get_current_deployed_server_component_by_name(
                         environment,
                         &component.component_name,
                     )
@@ -873,15 +868,15 @@ impl WorkerCommandHandler {
                     );
                 };
 
-                if !self.ctx.interactive_handler().confirm_update_to_latest(
+                if !self.ctx.interactive_handler().confirm_update_to_current(
                     &component.component_name,
                     &worker_name,
-                    latest_deployed_revision.revision,
+                    current_deployed_revision.revision,
                 )? {
                     bail!(NonSuccessfulExit)
                 }
 
-                latest_deployed_revision.revision
+                current_deployed_revision.revision
             }
         };
 
