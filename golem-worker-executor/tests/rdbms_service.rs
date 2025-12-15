@@ -343,6 +343,22 @@ async fn postgres_create_insert_select_test(
         r#"
              CREATE EXTENSION IF NOT EXISTS vector;
         "#,
+    ];
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
+            None,
+        ),
+    )
+    .await;
+
+    let statements = vec![
         r#"
              CREATE TYPE test_enum AS ENUM ('regular', 'special');
         "#,
@@ -1036,6 +1052,22 @@ async fn postgres_create_insert_select_array_test(
         r#"
              CREATE EXTENSION IF NOT EXISTS vector;
         "#,
+    ];
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
+            None,
+        ),
+    )
+    .await;
+
+    let statements = vec![
         r#"
             CREATE TYPE a_test_enum AS ENUM ('first', 'second', 'third');
         "#,

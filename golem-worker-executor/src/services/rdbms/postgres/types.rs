@@ -656,8 +656,8 @@ impl Display for DbValue {
             DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
             DbValue::Range(v) => write!(f, "{v}"),
             DbValue::Null => write!(f, "NULL"),
-            DbValue::Vector(v) => write!(f, "{}", v.iter().format(", ")),
-            DbValue::Halfvec(v) => write!(f, "{}", v.iter().format(", ")),
+            DbValue::Vector(v) => write!(f, "[{}]", v.iter().format(", ")),
+            DbValue::Halfvec(v) => write!(f, "[{}]", v.iter().format(", ")),
             DbValue::Sparsevec(v) => write!(f, "{v}"),
         }
     }
