@@ -27,7 +27,54 @@ mod tests {
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
     use std::fmt::Debug;
+    use golem_wasm::NodeBuilder;
     use test_r::test;
+    use golem_rust::IntoValue;
+
+    #[derive(IntoValue)]
+    enum Foo {
+        A(String),
+        B(Vec<Foo>)
+    }
+
+    impl golem_rust::value_and_type::IntoValue for Foo {
+        fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+            use NodeBuilder;
+            match self {
+                Foo::A(inner) => {
+                    let builder = builder.variant(0u32);
+                    inner.add_to_builder(builder).finish()
+                }
+                Foo::B(inner)
+                => {
+                    let mut builder = builder.variant(1u32);
+
+                    for item in inner {
+                        builder = item.add_to_builder(builder.list_item());
+                    }
+                    builder.parent_builder().finish()
+                }
+            }
+        }
+        fn add_to_type_builder<B: crate::value_and_type::TypeNodeBuilder>(builder: B) -> B::Result {
+            use crate::value_and_type::TypeNodeBuilder;
+            let mut builder = builder.variant(Some("Foo".to_string()), None);
+            builder = <String as crate::value_and_type::IntoValue>::add_to_type_builder(builder.case("a"));
+            {
+                let target_idx = builder.target_idx;
+                builder.cases.push(("b".to_string(), Some(target_idx)));
+            }
+            builder.finish( ) } }
+
+    #[test]
+    fn test_rec() {
+        use golem_rust::value_and_type::IntoValue;
+        let foo = Foo::B(vec![Foo::A("test".to_string())]);
+        let wit_value = foo.into_value();
+
+        dbg!(wit_value);
+        assert!(false);
+    }
 
     struct AgentWithTypeParameterImpl<T> {
         _request_id: T,

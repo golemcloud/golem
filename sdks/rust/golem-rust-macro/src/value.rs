@@ -14,11 +14,17 @@
 
 use heck::ToKebabCase;
 use proc_macro::TokenStream;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::hash::Hash;
 use proc_macro2::{Ident, Span};
-use quote::quote;
-use syn::{Data, DeriveInput, Fields, Lit, LitStr, Variant};
+use quote::{quote, ToTokens};
+use syn::{Data, DeriveInput, Fields, Lit, LitStr, Type, Variant};
 
 pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> TokenStream {
+
+    let mut typ_cache: HashMap<String, u32> = HashMap::new();
+
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
@@ -60,6 +66,11 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
             }
         }
         Data::Enum(data) => {
+            let enum_ident = &ast.ident;
+
+            typ_cache.insert(enum_ident.to_string(), 0);
+
+
             let is_simple_enum = data
                 .variants
                 .iter()
@@ -123,6 +134,25 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                                     }
                                 }
                             } else {
+
+                                let collected = variant.fields.iter().next().unwrap().ty.clone();
+
+                                let name = unwrap_if_vec(&collected);
+
+                                if let Some(unwrapped_type) = name {
+                                    let result = get_name(unwrapped_type).unwrap();
+                                    if typ_cache.contains_key(&result) {
+                                        return quote! {
+                                            #ident::#case_ident(inner) => {
+                                                    let builder = builder.variant(#idx);
+                                                builder.finish()
+                                            }
+                                        };
+                                    }
+                                }
+
+                                dbg!(collected);
+
                                 quote! {
                                     #ident::#case_ident(inner) => {
                                         let builder = builder.variant(#idx);
@@ -211,10 +241,27 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                         } else if has_single_anonymous_field(&variant.fields) {
                             let single_field = variant.fields.iter().next().unwrap();
                             let typ = &single_field.ty;
+                            let unwrapped_type = unwrap_if_vec(typ);
 
-                            quote! {
-                                builder = <#typ as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
+                            let result = if unwrapped_type.is_some() {
+                                get_name(unwrapped_type.unwrap()).unwrap()
+                            } else {
+                                "".to_string()
+                            };
+
+                            if unwrapped_type.is_some() && typ_cache.contains_key(&result) {
+                                quote! {
+                                   {
+                                      let target_idx = builder.target_idx;
+                                      builder.cases.push((#case_name.to_string(), Some(target_idx)));
+                                   }
+                                }
+                            } else {
+                                quote! {
+                                    builder = <#typ as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
+                                }
                             }
+
                         } else {
                             let (_, inner_add_to_type_builder) = record_or_tuple(&ident_lit, &variant.fields, golem_rust_crate_ident);
 
@@ -264,6 +311,39 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
     };
 
     result.into()
+}
+
+fn get_name(typ: &Type) -> Option<String> {
+    if let Type::Path(type_path) = typ {
+        if type_path.qself.is_none()
+            && type_path.path.segments.len() == 1
+        {
+            return Some(type_path.path.segments[0].ident.to_string());
+        }
+    }
+    None
+}
+
+fn unwrap_if_vec(typ: &syn::Type) -> Option<&syn::Type> {
+    if let Type::Path(type_path) = typ {
+        if type_path.qself.is_none()
+            && type_path.path.segments.len() == 1
+            && type_path.path.segments[0].ident == "Vec"
+        {
+            if let syn::PathArguments::AngleBracketed(angle_bracketed_args) =
+                &type_path.path.segments[0].arguments
+            {
+                if angle_bracketed_args.args.len() == 1 {
+                    if let syn::GenericArgument::Type(inner_type) =
+                        angle_bracketed_args.args.first().unwrap()
+                    {
+                        return Some(inner_type);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn record_or_tuple(

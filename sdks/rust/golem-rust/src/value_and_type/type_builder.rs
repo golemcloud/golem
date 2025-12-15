@@ -917,8 +917,8 @@ impl<ParentBuilder: TypeNodeBuilder> InnerTypeNodeBuilder
 
 pub struct WitTypeVariantBuilder<ParentBuilder: TypeNodeBuilder> {
     builder: ParentBuilder,
-    target_idx: NodeIndex,
-    cases: Vec<(String, Option<NodeIndex>)>,
+    pub target_idx: NodeIndex,
+    pub cases: Vec<(String, Option<NodeIndex>)>,
 }
 
 impl<ParentBuilder: TypeNodeBuilder> WitTypeVariantBuilder<ParentBuilder> {
