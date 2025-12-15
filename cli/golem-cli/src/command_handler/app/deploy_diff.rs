@@ -16,9 +16,10 @@ use crate::model::app;
 use crate::model::component::{show_exported_agents, ComponentDeployProperties};
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::component::is_sensitive_env_var_name;
+use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
     DeploymentPlanHttpApiDeploymentEntry,
@@ -26,7 +27,8 @@ use golem_common::model::deployment::{
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
+use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionName};
+use golem_common::model::http_api_deployment::HttpApiDeployment;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
@@ -62,6 +64,12 @@ impl DeployQuickDiff {
         );
         server_deployment_hash == Some(&self.local_deployment_hash)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DiffKind {
+    Stage,
+    Server,
 }
 
 #[derive(Debug)]
@@ -199,7 +207,7 @@ impl DeployDiff {
             .get(component_name)
             .unwrap_or_else(|| {
                 panic!(
-                    "Illegal state, missing component {} from component deploy properties",
+                    "Expected component {} not found in deployable manifest",
                     component_name
                 )
             })
@@ -213,7 +221,7 @@ impl DeployDiff {
             .get(http_api_definition_name)
             .unwrap_or_else(|| {
                 panic!(
-                    "Illegal state, missing HTTP API definition {} from deployable manifest",
+                    "Expected HTTP API definition {} not found in deployable manifest",
                     http_api_definition_name
                 )
             })
@@ -227,7 +235,7 @@ impl DeployDiff {
             .get(domain)
             .unwrap_or_else(|| {
                 panic!(
-                    "Illegal state, missing HTTP API deployment {} from deployable manifest",
+                    "Expected HTTP API deployment {} not found in deployable manifest",
                     domain
                 )
             })
@@ -243,7 +251,7 @@ impl DeployDiff {
             .find(|component| &component.name == component_name)
             .unwrap_or_else(|| {
                 panic!(
-                    "Expected component {} not found in deployment plan",
+                    "Expected component {} not found in staged deployment",
                     component_name
                 )
             })
@@ -259,7 +267,7 @@ impl DeployDiff {
             .find(|def| &def.name == http_api_definition_name)
             .unwrap_or_else(|| {
                 panic!(
-                    "Expected HTTP API definition {} not found in deployment plan",
+                    "Expected HTTP API definition {} not found in staged deployment",
                     http_api_definition_name
                 )
             })
@@ -275,10 +283,217 @@ impl DeployDiff {
             .find(|dep| &dep.domain == domain)
             .unwrap_or_else(|| {
                 panic!(
+                    "Expected HTTP API deployment {} not found in staged deployment",
+                    domain
+                )
+            })
+    }
+
+    pub fn server_component_identity(
+        &self,
+        component_name: &ComponentName,
+    ) -> &DeploymentPlanComponentEntry {
+        self.server_deployment
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected component {}  not found in server deployment, no deployment",
+                    component_name
+                )
+            })
+            .components
+            .iter()
+            .find(|component| &component.name == component_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected component {} not found in staged deployment",
+                    component_name
+                )
+            })
+    }
+
+    pub fn server_http_api_definition_identity(
+        &self,
+        http_api_definition_name: &HttpApiDefinitionName,
+    ) -> &DeploymentPlanHttpApiDefintionEntry {
+        self.server_deployment
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected HTTP API definition {} not found in staged deployment, no deployment",
+                    http_api_definition_name
+                )
+            })
+            .http_api_definitions
+            .iter()
+            .find(|def| &def.name == http_api_definition_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected HTTP API definition {} not found in staged deployment",
+                    http_api_definition_name
+                )
+            })
+    }
+
+    pub fn server_http_api_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &DeploymentPlanHttpApiDeploymentEntry {
+        self.server_deployment
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected HTTP API deployment {} not found in deployment plan, no deployment",
+                    domain
+                )
+            })
+            .http_api_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
                     "Expected HTTP API deployment {} not found in deployment plan",
                     domain
                 )
             })
+    }
+
+    pub fn component_identity(
+        &self,
+        kind: DiffKind,
+        component_name: &ComponentName,
+    ) -> &DeploymentPlanComponentEntry {
+        match kind {
+            DiffKind::Stage => self.staged_component_identity(component_name),
+            DiffKind::Server => self.server_component_identity(component_name),
+        }
+    }
+
+    pub fn http_api_definition_identity(
+        &self,
+        kind: DiffKind,
+        http_api_definition_name: &HttpApiDefinitionName,
+    ) -> &DeploymentPlanHttpApiDefintionEntry {
+        match kind {
+            DiffKind::Stage => self.staged_http_api_definition_identity(http_api_definition_name),
+            DiffKind::Server => self.server_http_api_definition_identity(http_api_definition_name),
+        }
+    }
+
+    pub fn http_api_deployment_identity(
+        &self,
+        kind: DiffKind,
+        domain: &Domain,
+    ) -> &DeploymentPlanHttpApiDeploymentEntry {
+        match kind {
+            DiffKind::Stage => self.staged_http_api_deployment_identity(domain),
+            DiffKind::Server => self.server_http_api_deployment_identity(domain),
+        }
+    }
+
+    pub fn add_details(&mut self, kind: DiffKind, details: DeployDetails) -> anyhow::Result<()> {
+        for (component_name, component) in details.component {
+            self.add_component_details(kind, component_name, component);
+        }
+
+        for (http_api_definition_name, http_api_definition) in details.http_api_definition {
+            self.add_http_api_definition_details(
+                kind,
+                http_api_definition_name,
+                http_api_definition,
+            );
+        }
+
+        for (domain, http_api_deployment) in details.http_api_deployment {
+            self.add_http_api_deployment_details(kind, domain, http_api_deployment)
+        }
+
+        match kind {
+            DiffKind::Stage => {
+                self.diff_stage = self
+                    .diffable_staged_deployment
+                    .diff_with_local(&self.diffable_local_deployment);
+            }
+            DiffKind::Server => {
+                match self
+                    .diffable_server_deployment
+                    .diff_with_local(&self.diffable_local_deployment)
+                {
+                    Some(diff) => self.diff = diff,
+                    None => {
+                        bail!("Illegal state: empty diff between server and local deployment after adding details")
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn add_component_details(
+        &mut self,
+        kind: DiffKind,
+        component_name: ComponentName,
+        component: ComponentDto,
+    ) {
+        match kind {
+            DiffKind::Stage => {
+                self.diffable_staged_deployment
+                    .components
+                    .insert(component_name.0.clone(), component.to_diffable().into());
+                self.staged_agent_types
+                    .insert(component_name.0, component.metadata.agent_types().to_vec());
+            }
+            DiffKind::Server => {
+                self.diffable_server_deployment
+                    .components
+                    .insert(component_name.0.clone(), component.to_diffable().into());
+                self.server_agent_types
+                    .insert(component_name.0, component.metadata.agent_types().to_vec());
+            }
+        }
+    }
+
+    pub fn add_http_api_definition_details(
+        &mut self,
+        kind: DiffKind,
+        http_api_definition_name: HttpApiDefinitionName,
+        http_api_definition: HttpApiDefinition,
+    ) {
+        match &kind {
+            DiffKind::Stage => {
+                self.diffable_staged_deployment.http_api_definitions.insert(
+                    http_api_definition_name.0,
+                    http_api_definition.to_diffable().into(),
+                );
+            }
+            DiffKind::Server => {
+                self.diffable_server_deployment.http_api_definitions.insert(
+                    http_api_definition_name.0,
+                    http_api_definition.to_diffable().into(),
+                );
+            }
+        }
+    }
+
+    pub fn add_http_api_deployment_details(
+        &mut self,
+        kind: DiffKind,
+        domain: Domain,
+        http_api_deployment: HttpApiDeployment,
+    ) {
+        match &kind {
+            DiffKind::Stage => {
+                self.diffable_staged_deployment
+                    .http_api_deployments
+                    .insert(domain.0, http_api_deployment.to_diffable().into());
+            }
+            DiffKind::Server => {
+                self.diffable_server_deployment
+                    .http_api_deployments
+                    .insert(domain.0, http_api_deployment.to_diffable().into());
+            }
+        }
     }
 
     pub fn current_deployment_revision(&self) -> Option<CurrentDeploymentRevision> {
@@ -384,6 +599,14 @@ impl DeployDiff {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DeployDetails {
+    pub component: Vec<(ComponentName, ComponentDto)>,
+    pub http_api_definition: Vec<(HttpApiDefinitionName, HttpApiDefinition)>,
+    pub http_api_deployment: Vec<(Domain, HttpApiDeployment)>,
+}
+
+#[derive(Debug, Clone)]
 pub struct UnifiedDiffs {
     pub deployment_diff_stage: Option<String>,
     pub agent_diff_stage: Option<String>,
