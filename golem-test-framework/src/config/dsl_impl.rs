@@ -193,18 +193,30 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
-        let component_directy = self.deps.component_directory();
+        let component_directory = self.deps.component_directory();
+        let client = self.deps.registry_service().client(&self.token).await;
 
         let updated_wasm = if let Some(wasm_name) = wasm_name {
-            let source_path: PathBuf = component_directy.join(format!("{wasm_name}.wasm"));
-            Some(File::open(source_path).await?)
+            let source_path: PathBuf = component_directory.join(format!("{wasm_name}.wasm"));
+
+            let component = client.get_component(&component_id.0).await?;
+
+            let source_path = rename_component_if_needed(
+                self.deps.borrow().temp_directory(),
+                &source_path,
+                &component.component_name.0,
+            )?;
+
+            let agent_types = extract_agent_types(&source_path, false, true).await?;
+
+            Some((File::open(source_path).await?, agent_types))
         } else {
             None
         };
 
         let (_tmp_dir, maybe_new_files_archive) = if !new_files.is_empty() {
             let (tmp_dir, new_files_archive) =
-                build_ifs_archive(component_directy, &new_files).await?;
+                build_ifs_archive(component_directory, &new_files).await?;
             (Some(tmp_dir), Some(File::open(new_files_archive).await?))
         } else {
             (None, None)
@@ -222,8 +234,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             })
             .apply(BTreeMap::from_iter);
 
-        let client = self.deps.registry_service().client(&self.token).await;
-
         let component = client
             .update_component(
                 &component_id.0,
@@ -233,10 +243,12 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     removed_files,
                     dynamic_linking,
                     env,
-                    agent_types: None,
+                    agent_types: updated_wasm
+                        .as_ref()
+                        .map(|(_wasm, agent_types)| agent_types.clone()),
                     plugin_updates: Vec::new(),
                 },
-                updated_wasm,
+                updated_wasm.map(|(wasm, _agent_types)| wasm),
                 maybe_new_files_archive,
             )
             .await?;

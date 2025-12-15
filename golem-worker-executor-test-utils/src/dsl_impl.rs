@@ -79,9 +79,9 @@ impl TestDsl for TestWorkerExecutor {
             ));
         }
 
-        let component_directy = &self.deps.component_directory;
+        let component_directory = &self.deps.component_directory;
 
-        let source_path = component_directy.join(format!("{wasm_name}.wasm"));
+        let source_path = component_directory.join(format!("{wasm_name}.wasm"));
 
         let component_name = if unique {
             let uuid = Uuid::new_v4();
@@ -108,7 +108,7 @@ impl TestDsl for TestWorkerExecutor {
 
         let mut converted_files = Vec::new();
         for entry in files {
-            let full_source_path = component_directy.join(entry.source_path);
+            let full_source_path = component_directory.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
             let content_hash = self
                 .deps
@@ -199,14 +199,23 @@ impl TestDsl for TestWorkerExecutor {
             ));
         };
 
-        let component_directy = &self.deps.component_directory;
+        let component_dir = &self.deps.component_directory;
 
-        let source_path =
-            wasm_name.map(|wasm_name| component_directy.join(format!("{wasm_name}.wasm")));
+        let source_path = if let Some(wasm_name) = wasm_name {
+            let source_path = component_dir.join(format!("{wasm_name}.wasm"));
+            let source_path = rename_component_if_needed(
+                self.deps.component_temp_directory.path(),
+                &source_path,
+                &latest_version.component_name.0,
+            )?;
+            Some(source_path)
+        } else {
+            None
+        };
 
         let mut converted_new_files = Vec::new();
         for entry in new_files {
-            let full_source_path = component_directy.join(entry.source_path);
+            let full_source_path = component_dir.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
             let content_hash = self
                 .deps

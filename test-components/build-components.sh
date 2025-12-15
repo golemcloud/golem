@@ -2,9 +2,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_components=("update-test-env-var")
-
-rust_test_apps=("auction-example" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters"  "rpc" )
+rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
+"option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
+"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests" "update-test-env-var")
+rust_test_apps=("auction-example" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters"  "rpc" "agent-updates")
 c_test_components=("large-initial-memory" "large-dynamic-memory")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc")
 benchmark_apps=("benchmarks")
@@ -65,25 +66,25 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   done
 fi
 
-#if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
-#  echo "Building the Rust test apps"
-#  TEST_COMP_DIR="$(pwd)"
-#  export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
-#  for subdir in "${rust_test_apps[@]}"; do
-#    echo "Building $subdir..."
-#    pushd "$subdir" || exit
-#
-#    if [ "$rebuild" = true ]; then
-#      golem-cli app --preset release clean
-#      cargo clean
-#    fi
-#
-#    golem-cli app --preset release build
-#    golem-cli app --preset release copy
-#
-#    popd || exit
-#  done
-#fi
+if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
+  echo "Building the Rust test apps"
+  TEST_COMP_DIR="$(pwd)"
+  export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
+  for subdir in "${rust_test_apps[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$rebuild" = true ]; then
+      golem-cli app --preset release clean
+      cargo clean
+    fi
+
+    golem-cli app --preset release build
+    golem-cli app --preset release copy
+
+    popd || exit
+  done
+fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "c" ]; then
   echo "Building the C test components"
