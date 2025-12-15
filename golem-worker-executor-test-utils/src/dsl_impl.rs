@@ -268,7 +268,6 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .create_worker(CreateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                component_version: latest_version.revision.into(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 env,
