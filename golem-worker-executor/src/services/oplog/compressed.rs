@@ -14,7 +14,9 @@
 
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
@@ -65,7 +67,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
     async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
         self.indexed_storage
             .with("compressed_oplog", "delete")
-            .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &Self::compressed_oplog_key(&owned_worker_id.worker_id))
+            .delete(IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level }, &Self::compressed_oplog_key(&owned_worker_id.worker_id))
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to drop compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
@@ -86,7 +88,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         self.indexed_storage
             .with("compressed_oplog", "exists")
             .exists(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level },
                 &Self::compressed_oplog_key(&owned_worker_id.worker_id),
             )
             .await
@@ -107,7 +109,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             .indexed_storage
             .with("compressed_oplog", "scan")
             .scan(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageMetaNamespace::CompressedOplog { level: self.level },
                 &PrimaryOplogService::key_pattern(component_id),
                 cursor,
                 count,
@@ -133,7 +135,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
-                .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &key)
+                .last_id(IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level }, &key)
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to get last entry from compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
@@ -187,7 +189,10 @@ impl CompressedOplogArchive {
             .indexed_storage
             .with_entity("compressed_oplog", "read", "compressed_entry")
             .closest::<CompressedOplogChunk>(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageNamespace::CompressedOpLog {
+                    worker_id: self.worker_id.clone(),
+                    level: self.level,
+                },
                 &self.key,
                 end_of_range.into(),
             )
@@ -304,7 +309,7 @@ impl OplogArchive for CompressedOplogArchive {
             self.indexed_storage
                 .with_entity("compressed_oplog", "append", "compressed_entry")
                 .append(
-                    IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                    IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level },
                     &self.key,
                     last_id.into(),
                     &compressed_chunk,
@@ -323,7 +328,7 @@ impl OplogArchive for CompressedOplogArchive {
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
-                .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
+                .last_id(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to get the last entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -335,7 +340,7 @@ impl OplogArchive for CompressedOplogArchive {
         let worker_id = &self.worker_id;
         let before = self.length().await;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
-            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key, last_dropped_id.into())
+            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key, last_dropped_id.into())
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to drop prefix from compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -343,7 +348,7 @@ impl OplogArchive for CompressedOplogArchive {
         let remaining = self.length().await;
         if remaining == 0 {
             self.indexed_storage.with("compressed_oplog", "drop_prefix")
-                .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
+                .delete(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to drop compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -356,7 +361,10 @@ impl OplogArchive for CompressedOplogArchive {
         self.indexed_storage
             .with("compressed_oplog", "length")
             .length(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageNamespace::CompressedOpLog {
+                    worker_id: self.worker_id.clone(),
+                    level: self.level,
+                },
                 &self.key,
             )
             .await
