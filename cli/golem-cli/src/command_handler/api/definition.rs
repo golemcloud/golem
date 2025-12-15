@@ -412,7 +412,7 @@ impl ApiDefinitionCommandHandler {
     ) -> anyhow::Result<Value> {
         let deployment_revision = match deployment_revision {
             Some(deployment_revision) => deployment_revision.to_owned(),
-            None => match &environment.remote_environment.current_deployment {
+            None => match &environment.server_environment.current_deployment {
                 Some(deployment) => deployment.deployment_revision,
                 None => {
                     log_error("The application is not deployed. Run {}, then export!");

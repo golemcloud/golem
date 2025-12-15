@@ -71,6 +71,7 @@ pub struct Context {
     manifest_environment: Option<SelectedManifestEnvironment>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
+    http_parallelism: usize,
     auth_token_override: Option<String>,
     client_config: ClientConfig,
     yes: bool,
@@ -309,7 +310,8 @@ impl Context {
             deploy_args,
             profile,
             app_context_config,
-            http_batch_size: global_flags.http_batch_size.unwrap_or(50),
+            http_batch_size: global_flags.http_batch_size(),
+            http_parallelism: global_flags.http_parallelism(),
             auth_token_override: global_flags.auth_token,
             environment_reference,
             manifest_environment,
@@ -400,6 +402,10 @@ impl Context {
 
     pub fn http_batch_size(&self) -> u64 {
         self.http_batch_size
+    }
+
+    pub fn http_parallelism(&self) -> usize {
+        self.http_parallelism
     }
 
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
