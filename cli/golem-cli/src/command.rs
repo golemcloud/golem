@@ -854,7 +854,7 @@ pub mod app {
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::application::ApplicationName;
-    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::deployment::DeploymentRevision;
     use golem_templates::model::GuestLanguage;
 
     #[derive(Debug, Subcommand)]
@@ -889,7 +889,7 @@ pub mod app {
             version: Option<String>,
             /// Revert to the specified revision
             #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
-            revision: Option<ComponentRevision>,
+            revision: Option<DeploymentRevision>,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]

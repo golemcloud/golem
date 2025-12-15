@@ -27,6 +27,7 @@ use golem_common::model::deployment::{
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionName};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use itertools::Itertools;
@@ -98,7 +99,7 @@ impl DeployDiff {
         self.staged_deployment_hash == self.server_deployment_hash
     }
 
-    pub fn unified_diffs(&self, show_sensitive: bool) -> UnifiedDiffs {
+    pub fn unified_diffs(&self, show_sensitive: bool) -> DeployUnifiedDiffs {
         let local_for_stage = self.normalized_diff_deployment(
             show_sensitive,
             &self.diffable_local_deployment,
@@ -177,7 +178,7 @@ impl DeployDiff {
             })
             .join("\n");
 
-        UnifiedDiffs {
+        DeployUnifiedDiffs {
             deployment_diff_stage: self.diff_stage.is_some().then(|| {
                 staged_deployment.unified_yaml_diff_with_local(
                     &local_for_stage,
@@ -599,17 +600,48 @@ impl DeployDiff {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeployDetails {
     pub component: Vec<(ComponentName, ComponentDto)>,
     pub http_api_definition: Vec<(HttpApiDefinitionName, HttpApiDefinition)>,
     pub http_api_deployment: Vec<(Domain, HttpApiDeployment)>,
 }
 
-#[derive(Debug, Clone)]
-pub struct UnifiedDiffs {
+#[derive(Debug)]
+pub struct DeployUnifiedDiffs {
     pub deployment_diff_stage: Option<String>,
     pub agent_diff_stage: Option<String>,
     pub deployment_diff: String,
     pub agent_diff: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct RevertQuickDiff {
+    pub environment: ResolvedEnvironmentIdentity,
+    pub current_deployment: EnvironmentCurrentDeploymentView,
+    pub target_deployment: DeploymentSummary,
+}
+
+impl RevertQuickDiff {
+    pub fn is_target_same_as_server(&self) -> bool {
+        debug!(
+            server_deployment_hash = self.current_deployment.deployment_hash.to_string(),
+            target_deployment_hash = self.target_deployment.deployment_hash.to_string(),
+            "is_up_to_date"
+        );
+        self.current_deployment.deployment_hash == self.target_deployment.deployment_hash
+    }
+}
+
+#[derive(Debug)]
+pub struct RevertDiff {
+    pub environment: ResolvedEnvironmentIdentity,
+    pub current_deployment_meta: EnvironmentCurrentDeploymentView,
+    pub target_deployment: DeploymentSummary,
+    pub server_deployment: DeploymentSummary,
+    pub diffable_target_deployment: diff::Deployment,
+    pub diffable_server_deployment: diff::Deployment,
+    pub server_agent_types: HashMap<String, Vec<AgentType>>,
+    pub target_agent_types: HashMap<String, Vec<AgentType>>,
+    pub diff: diff::DeploymentDiff,
 }

@@ -19,7 +19,7 @@ use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
 use crate::command_handler::app::deploy_diff::{
-    DeployDetails, DeployDiff, DeployQuickDiff, DiffKind,
+    DeployDetails, DeployDiff, DeployQuickDiff, DiffKind, RevertDiff, RevertQuickDiff,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -48,7 +48,9 @@ use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
-use golem_common::model::deployment::{CurrentDeployment, DeploymentVersion};
+use golem_common::model::deployment::{
+    CurrentDeployment, DeploymentRevision, DeploymentRollback, DeploymentVersion,
+};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -323,7 +325,7 @@ impl AppCommandHandler {
         stage: bool,
         approve_staging_steps: bool,
         version: Option<String>,
-        revision: Option<ComponentRevision>,
+        revision: Option<DeploymentRevision>,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
@@ -465,20 +467,53 @@ impl AppCommandHandler {
 
     async fn deploy_by_version(
         &self,
-        _version: String,
-        _deploy_args: DeployArgs,
+        version: String,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        // TODO: atomic: missing client method
-        todo!()
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        // TODO: atomic
+
+        Ok(())
     }
 
     async fn deploy_by_revision(
         &self,
-        _version: ComponentRevision,
-        _deploy_args: DeployArgs,
+        revision: DeploymentRevision,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        // TODO: atomic: missing client method
-        todo!()
+        /*
+        let environment_handler = self.ctx.environment_handler();
+
+        let environment = environment_handler
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let quick_diff = self.revert_quick_diff(environment, revision).await?;
+        if quick_diff.is_target_same_as_server() {
+
+        }
+
+        let clients = self.ctx.golem_clients().await?;
+        let result = clients
+            .environment
+            .rollback_environment(
+                &environment.environment_id.0,
+                &DeploymentRollback {
+                    current_revision: current_deployment.revision,
+                    deployment_revision: revision,
+                },
+            )
+            .await
+            .map_service_error()?;
+
+         */
+        todo!();
+        Ok(())
     }
 
     pub async fn deploy(&self, config: DeployConfig) -> anyhow::Result<()> {
@@ -789,15 +824,15 @@ impl AppCommandHandler {
 
         let server_deployment_hash = diffable_server_deployment.hash();
 
-        let server_staged_deployment = clients
+        let staged_deployment = clients
             .environment
             .get_environment_deployment_plan(&deploy_quick_diff.environment.environment_id.0)
             .await
             .map_service_error()?;
 
-        let diffable_server_staged_deployment = server_staged_deployment.to_diffable();
+        let diffable_staged_deployment = staged_deployment.to_diffable();
 
-        let server_staged_deployment_hash = diffable_server_staged_deployment.hash();
+        let staged_deployment_hash = diffable_staged_deployment.hash();
 
         let Some(diff) = diffable_server_deployment
             .diff_with_local(&deploy_quick_diff.diffable_local_deployment)
@@ -805,7 +840,7 @@ impl AppCommandHandler {
             bail!(anyhow!("The environment was changed concurrently while diffing. Retry planning and deploying!"))
         };
 
-        let diff_stage = diffable_server_staged_deployment
+        let diff_stage = diffable_staged_deployment
             .diff_with_local(&deploy_quick_diff.diffable_local_deployment);
 
         Ok(DeployDiff {
@@ -821,10 +856,10 @@ impl AppCommandHandler {
             diffable_server_deployment,
             server_deployment_hash,
             server_agent_types: HashMap::new(),
-            staged_deployment: server_staged_deployment,
-            staged_deployment_hash: server_staged_deployment_hash,
+            staged_deployment,
+            staged_deployment_hash,
             staged_agent_types: HashMap::new(),
-            diffable_staged_deployment: diffable_server_staged_deployment,
+            diffable_staged_deployment,
             diff,
             diff_stage,
         })
@@ -970,6 +1005,99 @@ impl AppCommandHandler {
         }))
     }
 
+    async fn prepare_revert(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+        deployment_revision: DeploymentRevision,
+    ) -> anyhow::Result<Option<RevertDiff>> {
+        log_action("Preparing", "revert");
+        let _indent = LogIndent::new();
+
+        let revert_quick_diff = self
+            .revert_quick_diff(environment, deployment_revision)
+            .await?;
+
+        debug!("revert_quick_diff: {:?}", revert_quick_diff);
+
+        if revert_quick_diff.is_target_same_as_server() {
+            return Ok(None);
+        }
+
+        log_action("Diffing", "current deployment with target revision");
+
+        todo!()
+    }
+
+    async fn revert_quick_diff(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+        deployment_revision: DeploymentRevision,
+    ) -> anyhow::Result<RevertQuickDiff> {
+        let current_deployment = self
+            .ctx
+            .environment_handler()
+            .resolved_current_deployment(&environment)?
+            .clone();
+
+        let clients = self.ctx.golem_clients().await?;
+        let Some(target_deployment) = clients
+            .environment
+            .get_deployment_summary(&&environment.environment_id.0, deployment_revision.get())
+            .await
+            .map_service_error_not_found_as_opt()?
+        else {
+            log_error(format!(
+                "Deployment revision {} not found",
+                deployment_revision.get().to_string().log_color_highlight(),
+            ));
+            // TODO: atomic: list available deployment revisions
+            bail!(NonSuccessfulExit);
+        };
+
+        Ok(RevertQuickDiff {
+            environment,
+            current_deployment,
+            target_deployment,
+        })
+    }
+
+    async fn revert_diff(&self, quick_diff: RevertQuickDiff) -> anyhow::Result<RevertDiff> {
+        let clients = self.ctx.golem_clients().await?;
+
+        let server_deployment = clients
+            .environment
+            .get_deployment_summary(
+                &quick_diff.environment.environment_id.0,
+                quick_diff.current_deployment.deployment_revision.get(),
+            )
+            .await
+            .map_service_error()?;
+
+        let diffable_target_deployment = quick_diff.target_deployment.to_diffable();
+        let diffable_server_deployment = server_deployment.to_diffable();
+
+        let Some(diff) = diffable_server_deployment.diff_with_server(&diffable_server_deployment)
+        else {
+            bail!("Illegal state: empty diff between server and target deployment after fetching summaries")
+        };
+
+        Ok(RevertDiff {
+            environment: quick_diff.environment,
+            current_deployment_meta: quick_diff.current_deployment,
+            target_deployment: quick_diff.target_deployment,
+            server_deployment,
+            diffable_target_deployment,
+            diffable_server_deployment,
+            server_agent_types: HashMap::new(),
+            target_agent_types: HashMap::new(),
+            diff,
+        })
+    }
+
+    async fn detailed_revert_diff(&self, revert_diff: RevertDiff) -> anyhow::Result<RevertDiff> {
+        todo!()
+    }
+
     async fn apply_changes_to_stage(
         &self,
         approve_staging_steps: bool,
@@ -1113,6 +1241,38 @@ impl AppCommandHandler {
         let clients = self.ctx.golem_clients().await?;
 
         log_action("Deploying", "staged changes to the environment");
+
+        let result = clients
+            .environment
+            .deploy_environment(
+                &deploy_diff.environment.environment_id.0,
+                &DeploymentCreation {
+                    current_revision: deploy_diff.current_deployment_revision(),
+                    expected_deployment_hash: deploy_diff.local_deployment_hash,
+                    version: DeploymentVersion("".to_string()), // TODO: atomic
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        log_action("Deployed", "all changes");
+
+        self.ctx.log_handler().log_view(&DeploymentNewView {
+            application_name: deploy_diff.environment.application_name.clone(),
+            environment_name: deploy_diff.environment.environment_name.clone(),
+            deployment: result.clone(),
+        });
+
+        Ok(result)
+    }
+
+    async fn revert_environment(
+        &self,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<CurrentDeployment> {
+        let clients = self.ctx.golem_clients().await?;
+
+        log_action("Reverting", "environment to revision {}");
 
         let result = clients
             .environment
