@@ -281,11 +281,13 @@ fn worker_executor_config(
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
-        shard_manager_service: ShardManagerServiceConfig::Grpc(Box::new(ShardManagerServiceGrpcConfig {
-            host: args.router_addr.clone(),
-            port: shard_manager_run_details.grpc_port,
-            ..ShardManagerServiceGrpcConfig::default()
-        })),
+        shard_manager_service: ShardManagerServiceConfig::Grpc(Box::new(
+            ShardManagerServiceGrpcConfig {
+                host: args.router_addr.clone(),
+                port: shard_manager_run_details.grpc_port,
+                ..ShardManagerServiceGrpcConfig::default()
+            },
+        )),
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
             host: args.router_addr.clone(),
             port: registry_service_run_details.grpc_port,
@@ -302,7 +304,7 @@ fn worker_executor_config(
         public_worker_api: WorkerServiceGrpcConfig {
             host: args.router_addr.clone(),
             port: worker_service_run_details.grpc_port,
-            client_config: GrpcClientConfig::default()
+            client_config: GrpcClientConfig::default(),
         },
         ..Default::default()
     };
