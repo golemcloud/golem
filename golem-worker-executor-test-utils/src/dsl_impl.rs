@@ -114,7 +114,7 @@ impl TestDsl for TestWorkerExecutor {
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
-                    &environment_id,
+                    environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
@@ -212,7 +212,7 @@ impl TestDsl for TestWorkerExecutor {
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
-                    &latest_version.environment_id,
+                    latest_version.environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
@@ -259,7 +259,7 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .create_worker(CreateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                component_version: latest_version.revision.into(),
+                component_revision: latest_version.revision.into(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 env,

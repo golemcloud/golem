@@ -15,22 +15,22 @@ use uuid::Uuid;
 pub trait PluginRepo: Send + Sync {
     async fn create(&self, plugin: PluginRecord) -> RepoResult<Option<PluginRecord>>;
 
-    async fn delete(&self, plugin_id: &Uuid, actor: &Uuid) -> RepoResult<Option<PluginRecord>>;
+    async fn delete(&self, plugin_id: Uuid, actor: Uuid) -> RepoResult<Option<PluginRecord>>;
 
     async fn get_by_id(
         &self,
-        plugin_id: &Uuid,
+        plugin_id: Uuid,
         include_deleted: bool,
     ) -> RepoResult<Option<PluginRecord>>;
 
     async fn get_by_name_and_version(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         name: &str,
         version: &str,
     ) -> RepoResult<Option<PluginRecord>>;
 
-    async fn list_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<PluginRecord>>;
+    async fn list_by_account(&self, account_id: Uuid) -> RepoResult<Vec<PluginRecord>>;
 }
 
 pub struct LoggedPluginRepo<Repo: PluginRepo> {
@@ -44,11 +44,11 @@ impl<Repo: PluginRepo> LoggedPluginRepo<Repo> {
         Self { repo }
     }
 
-    fn span_id(plugin_id: &Uuid) -> Span {
+    fn span_id(plugin_id: Uuid) -> Span {
         info_span!(SPAN_NAME, plugin_id=%plugin_id)
     }
 
-    fn span_account(account_id: &Uuid) -> Span {
+    fn span_account(account_id: Uuid) -> Span {
         info_span!(SPAN_NAME, account_id=%account_id)
     }
 
@@ -60,11 +60,11 @@ impl<Repo: PluginRepo> LoggedPluginRepo<Repo> {
 #[async_trait]
 impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
     async fn create(&self, plugin: PluginRecord) -> RepoResult<Option<PluginRecord>> {
-        let span = Self::span_id(&plugin.plugin_id);
+        let span = Self::span_id(plugin.plugin_id);
         self.repo.create(plugin).instrument(span).await
     }
 
-    async fn delete(&self, plugin_id: &Uuid, actor: &Uuid) -> RepoResult<Option<PluginRecord>> {
+    async fn delete(&self, plugin_id: Uuid, actor: Uuid) -> RepoResult<Option<PluginRecord>> {
         self.repo
             .delete(plugin_id, actor)
             .instrument(Self::span_id(plugin_id))
@@ -73,7 +73,7 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
 
     async fn get_by_id(
         &self,
-        plugin_id: &Uuid,
+        plugin_id: Uuid,
         include_deleted: bool,
     ) -> RepoResult<Option<PluginRecord>> {
         self.repo
@@ -84,7 +84,7 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
 
     async fn get_by_name_and_version(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         name: &str,
         version: &str,
     ) -> RepoResult<Option<PluginRecord>> {
@@ -94,7 +94,7 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
             .await
     }
 
-    async fn list_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<PluginRecord>> {
+    async fn list_by_account(&self, account_id: Uuid) -> RepoResult<Vec<PluginRecord>> {
         self.repo
             .list_by_account(account_id)
             .instrument(Self::span_account(account_id))
@@ -172,7 +172,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
         ).await.none_on_unique_violation()
     }
 
-    async fn delete(&self, plugin_id: &Uuid, actor: &Uuid) -> RepoResult<Option<PluginRecord>> {
+    async fn delete(&self, plugin_id: Uuid, actor: Uuid) -> RepoResult<Option<PluginRecord>> {
         let deleted_at = SqlDateTime::now();
 
         self.with_rw("delete")
@@ -201,7 +201,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        plugin_id: &Uuid,
+        plugin_id: Uuid,
         include_deleted: bool,
     ) -> RepoResult<Option<PluginRecord>> {
         self.with_ro("get_by_id")
@@ -233,7 +233,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
 
     async fn get_by_name_and_version(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         name: &str,
         version: &str,
     ) -> RepoResult<Option<PluginRecord>> {
@@ -265,7 +265,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
             .await
     }
 
-    async fn list_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<PluginRecord>> {
+    async fn list_by_account(&self, account_id: Uuid) -> RepoResult<Vec<PluginRecord>> {
         self.with_ro("list_by_account")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"

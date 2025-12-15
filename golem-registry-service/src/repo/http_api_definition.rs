@@ -35,7 +35,7 @@ use uuid::Uuid;
 pub trait HttpApiDefinitionRepo: Send + Sync {
     async fn create(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
         version_check: bool,
@@ -49,43 +49,43 @@ pub trait HttpApiDefinitionRepo: Send + Sync {
 
     async fn delete(
         &self,
-        user_account_id: &Uuid,
-        http_api_definition_id: &Uuid,
+        user_account_id: Uuid,
+        http_api_definition_id: Uuid,
         revision_id: i64,
     ) -> Result<(), HttpApiDefinitionRepoError>;
 
     async fn get_staged_by_id(
         &self,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn get_staged_by_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn get_in_deployment_by_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         name: &str,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn get_by_id_and_revision(
         &self,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn list_by_deployment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>>;
 }
@@ -101,23 +101,23 @@ impl<Repo: HttpApiDefinitionRepo> LoggedHttpApiDefinitionRepo<Repo> {
         Self { repo }
     }
 
-    fn span_name(environment_id: &Uuid, name: &str) -> Span {
+    fn span_name(environment_id: Uuid, name: &str) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, name)
     }
 
-    fn span_id(http_api_definition_id: &Uuid) -> Span {
+    fn span_id(http_api_definition_id: Uuid) -> Span {
         info_span!(SPAN_NAME, http_api_definition_id = %http_api_definition_id)
     }
 
-    fn span_id_and_revision(http_api_definition_id: &Uuid, revision_id: i64) -> Span {
+    fn span_id_and_revision(http_api_definition_id: Uuid, revision_id: i64) -> Span {
         info_span!(SPAN_NAME, http_api_definition_id = %http_api_definition_id, revision_id)
     }
 
-    fn span_env(environment_id: &Uuid) -> Span {
+    fn span_env(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
     }
 
-    fn span_env_and_deployment(environment_id: &Uuid, deployment_revision_id: i64) -> Span {
+    fn span_env_and_deployment(environment_id: Uuid, deployment_revision_id: i64) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id)
     }
 }
@@ -126,7 +126,7 @@ impl<Repo: HttpApiDefinitionRepo> LoggedHttpApiDefinitionRepo<Repo> {
 impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinitionRepo<Repo> {
     async fn create(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
         version_check: bool,
@@ -142,7 +142,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         revision: HttpApiDefinitionRevisionRecord,
         version_check: bool,
     ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
-        let span = Self::span_id(&revision.http_api_definition_id);
+        let span = Self::span_id(revision.http_api_definition_id);
         self.repo
             .update(revision, version_check)
             .instrument(span)
@@ -151,8 +151,8 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
     async fn delete(
         &self,
-        user_account_id: &Uuid,
-        http_api_definition_id: &Uuid,
+        user_account_id: Uuid,
+        http_api_definition_id: Uuid,
         revision_id: i64,
     ) -> Result<(), HttpApiDefinitionRepoError> {
         self.repo
@@ -163,7 +163,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
     async fn get_staged_by_id(
         &self,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(http_api_definition_id)
@@ -173,7 +173,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
     async fn get_staged_by_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
@@ -184,7 +184,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
     async fn get_in_deployment_by_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         name: &str,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
@@ -199,7 +199,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
     async fn get_by_id_and_revision(
         &self,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
@@ -213,7 +213,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
     async fn list_staged(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .list_staged(environment_id)
@@ -223,7 +223,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
     async fn list_by_deployment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.list_by_deployment(environment_id, deployment_revision_id)
@@ -277,7 +277,7 @@ impl<DBP: Pool> DbHttpApiDefinitionRepo<DBP> {
 impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
     async fn create(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
         version_check: bool,
@@ -303,7 +303,6 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             return self.update(recreated_revision, version_check).await;
         }
 
-        let environment_id = *environment_id;
         let name = name.to_owned();
 
         self.with_tx_err("create", |tx| {
@@ -389,13 +388,10 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn delete(
         &self,
-        user_account_id: &Uuid,
-        http_api_definition_id: &Uuid,
+        user_account_id: Uuid,
+        http_api_definition_id: Uuid,
         revision_id: i64,
     ) -> Result<(), HttpApiDefinitionRepoError> {
-        let user_account_id = *user_account_id;
-        let http_api_definition_id = *http_api_definition_id;
-
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision: HttpApiDefinitionRevisionRecord = Self::insert_revision(
@@ -431,7 +427,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn get_staged_by_id(
         &self,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
@@ -453,7 +449,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn get_staged_by_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("get_staged_by_name")
@@ -477,7 +473,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn get_in_deployment_by_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         name: &str,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
@@ -511,7 +507,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn get_by_id_and_revision(
         &self,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("get_by_id_and_revision")
@@ -534,7 +530,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn list_staged(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("list_staged")
             .fetch_all_as(
@@ -556,7 +552,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn list_by_deployment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("list_deployed")
@@ -594,7 +590,7 @@ trait HttpApiDefinitionRepoInternal: HttpApiDefinitionRepo {
 
     async fn version_exists(
         tx: &mut Self::Tx,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
         version: &str,
     ) -> RepoResult<bool>;
 }
@@ -611,7 +607,7 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
         revision: HttpApiDefinitionRevisionRecord,
     ) -> Result<HttpApiDefinitionRevisionRecord, HttpApiDefinitionRepoError> {
         if version_check
-            && Self::version_exists(tx, &revision.http_api_definition_id, &revision.version).await?
+            && Self::version_exists(tx, revision.http_api_definition_id, &revision.version).await?
         {
             return Err(HttpApiDefinitionRepoError::VersionAlreadyExists {
                 version: revision.version,
@@ -645,7 +641,7 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn version_exists(
         tx: &mut Self::Tx,
-        http_api_definition_id: &Uuid,
+        http_api_definition_id: Uuid,
         version: &str,
     ) -> RepoResult<bool> {
         Ok(tx

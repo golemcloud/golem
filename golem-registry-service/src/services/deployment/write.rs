@@ -188,7 +188,7 @@ impl DeploymentWriteService {
 
     pub async fn create_deployment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         data: DeploymentCreation,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
@@ -204,7 +204,7 @@ impl DeploymentWriteService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeployEnvironment,
         )?;
@@ -304,7 +304,7 @@ impl DeploymentWriteService {
 
         let deployment: CurrentDeployment = self
             .deployment_repo
-            .deploy(&auth.account_id().0, record, environment.version_check)
+            .deploy(auth.account_id().0, record, environment.version_check)
             .await
             .map_err(|err| match err {
                 DeployRepoError::ConcurrentModification => {
@@ -322,7 +322,7 @@ impl DeploymentWriteService {
 
     pub async fn rollback_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         payload: DeploymentRollback,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
@@ -338,7 +338,7 @@ impl DeploymentWriteService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeployEnvironment,
         )?;
@@ -358,7 +358,7 @@ impl DeploymentWriteService {
 
         let target_deployment: Deployment = self
             .deployment_repo
-            .get_deployment_revision(&environment_id.0, payload.deployment_revision.into())
+            .get_deployment_revision(environment_id.0, payload.deployment_revision.into())
             .await?
             .ok_or(DeploymentWriteError::DeploymentNotFound(
                 payload.deployment_revision,
@@ -368,8 +368,8 @@ impl DeploymentWriteService {
         let current_deployment: CurrentDeployment = self
             .deployment_repo
             .set_current_deployment(
-                &auth.account_id().0,
-                &environment_id.0,
+                auth.account_id().0,
+                environment_id.0,
                 payload.deployment_revision.into(),
             )
             .await
@@ -390,14 +390,14 @@ impl DeploymentWriteService {
         auth: &AuthCtx,
     ) -> Result<Option<Deployment>, DeploymentWriteError> {
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeployment,
         )?;
 
         let deployment: Option<Deployment> = self
             .deployment_repo
-            .get_latest_revision(&environment.id.0)
+            .get_latest_revision(environment.id.0)
             .await?
             .map(|r| r.try_into())
             .transpose()?;

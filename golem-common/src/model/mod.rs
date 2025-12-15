@@ -249,9 +249,9 @@ pub struct OwnedWorkerId {
 }
 
 impl OwnedWorkerId {
-    pub fn new(environment_id: &EnvironmentId, worker_id: &WorkerId) -> Self {
+    pub fn new(environment_id: EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            environment_id: *environment_id,
+            environment_id,
             worker_id: worker_id.clone(),
         }
     }
@@ -323,7 +323,7 @@ impl ScheduledAction {
                 environment_id,
                 promise_id,
                 ..
-            } => OwnedWorkerId::new(environment_id, &promise_id.worker_id),
+            } => OwnedWorkerId::new(*environment_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
@@ -605,7 +605,7 @@ impl WorkerMetadata {
     }
 
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(&self.environment_id, &self.worker_id)
+        OwnedWorkerId::new(self.environment_id, &self.worker_id)
     }
 }
 

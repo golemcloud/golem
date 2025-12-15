@@ -119,7 +119,7 @@ impl PlanService {
 
         let result = self
             .plan_repo
-            .get_by_id(&plan_id.0)
+            .get_by_id(plan_id.0)
             .await?
             .ok_or(PlanError::PlanNotFound(*plan_id))?;
 

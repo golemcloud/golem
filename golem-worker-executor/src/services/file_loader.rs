@@ -71,8 +71,8 @@ impl FileLoader {
     /// The file will only be valid until the token is dropped.
     pub async fn get_read_only_to(
         &self,
-        environment_id: &EnvironmentId,
-        key: &ComponentFileContentHash,
+        environment_id: EnvironmentId,
+        key: ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<FileUseToken, WorkerExecutorError> {
         self.get_read_only_to_impl(environment_id, key, target)
@@ -88,8 +88,8 @@ impl FileLoader {
     /// Read-write files are copied to target.
     pub async fn get_read_write_to(
         &self,
-        environment_id: &EnvironmentId,
-        key: &ComponentFileContentHash,
+        environment_id: EnvironmentId,
+        key: ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<(), WorkerExecutorError> {
         self.get_read_write_to_impl(environment_id, key, target)
@@ -104,8 +104,8 @@ impl FileLoader {
 
     async fn get_read_only_to_impl(
         &self,
-        environment_id: &EnvironmentId,
-        key: &ComponentFileContentHash,
+        environment_id: EnvironmentId,
+        key: ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<FileUseToken, anyhow::Error> {
         if let Some(parent) = target.parent() {
@@ -139,8 +139,8 @@ impl FileLoader {
 
     async fn get_read_write_to_impl(
         &self,
-        environment_id: &EnvironmentId,
-        key: &ComponentFileContentHash,
+        environment_id: EnvironmentId,
+        key: ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<(), anyhow::Error> {
         if let Some(parent) = target.parent() {
@@ -150,7 +150,7 @@ impl FileLoader {
         // fast path for files that are already in cache
         {
             let cache_guard = self.cache.lock().await;
-            let cache_entry = cache_guard.get(key).and_then(|weak| weak.upgrade());
+            let cache_entry = cache_guard.get(&key).and_then(|weak| weak.upgrade());
 
             // make sure we drop the lock to not block other threads
             drop(cache_guard);
@@ -186,8 +186,8 @@ impl FileLoader {
 
     async fn get_or_add_cache_entry(
         &self,
-        environment_id: &EnvironmentId,
-        key: &ComponentFileContentHash,
+        environment_id: EnvironmentId,
+        key: ComponentFileContentHash,
     ) -> Result<Arc<CacheEntry>, anyhow::Error> {
         let cache_entry;
         {
@@ -195,7 +195,7 @@ impl FileLoader {
             {
                 let mut cache_guard = self.cache.lock().await;
                 if let Some(existing_cache_entry) =
-                    cache_guard.get(key).and_then(|weak| weak.upgrade())
+                    cache_guard.get(&key).and_then(|weak| weak.upgrade())
                 {
                     // we have a file, we can just return it
                     maybe_prelocked_entry = None;
@@ -208,7 +208,7 @@ impl FileLoader {
                     maybe_prelocked_entry = Some(cache_entry.lock().await);
 
                     // we don't want to keep a copy if we are the only ones holding it, so we use a weak reference
-                    cache_guard.insert(key.clone(), Arc::downgrade(&cache_entry));
+                    cache_guard.insert(key, Arc::downgrade(&cache_entry));
                 };
                 drop(cache_guard);
             };
@@ -233,7 +233,7 @@ impl FileLoader {
                     Err(e) => {
                         // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
                         *prelocked_entry = Err(format!("Other thread failed to download: {e}"));
-                        self.cache.lock().await.remove(key);
+                        self.cache.lock().await.remove(&key);
 
                         return Err(e);
                     }
@@ -246,9 +246,9 @@ impl FileLoader {
 
     async fn download_file_to_path_as_read_only(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         path: &Path,
-        key: &ComponentFileContentHash,
+        key: ComponentFileContentHash,
     ) -> Result<(), anyhow::Error> {
         self.download_file_to_path(environment_id, path, key)
             .await?;
@@ -258,9 +258,9 @@ impl FileLoader {
 
     async fn download_file_to_path(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         path: &Path,
-        key: &ComponentFileContentHash,
+        key: ComponentFileContentHash,
     ) -> Result<(), anyhow::Error> {
         debug!("Downloading {} to {}", key, path.display());
 

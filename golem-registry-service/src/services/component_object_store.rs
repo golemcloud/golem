@@ -40,7 +40,7 @@ impl ComponentObjectStore {
 
     pub async fn get(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         object_key: &str,
     ) -> Result<Vec<u8>, Error> {
         self.logged(
@@ -53,7 +53,7 @@ impl ComponentObjectStore {
 
     async fn get_internal(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         object_key: &str,
     ) -> Result<Vec<u8>, Error> {
         let result = self
@@ -61,9 +61,7 @@ impl ComponentObjectStore {
             .get_raw(
                 COMPONENT_FILES_LABEL,
                 "get",
-                BlobStorageNamespace::Components {
-                    environment_id: *environment_id,
-                },
+                BlobStorageNamespace::Components { environment_id },
                 &PathBuf::from(object_key),
             )
             .await
@@ -76,7 +74,7 @@ impl ComponentObjectStore {
 
     pub async fn get_stream(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         object_key: &str,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, Error>>, Error> {
         let span = debug_span!("Getting component stream", environment_id=%environment_id, key = object_key);
@@ -88,7 +86,7 @@ impl ComponentObjectStore {
 
     async fn get_stream_internal(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         object_key: &str,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, Error>>, Error> {
         let result = self
@@ -96,9 +94,7 @@ impl ComponentObjectStore {
             .get_stream(
                 COMPONENT_FILES_LABEL,
                 "get_stream",
-                BlobStorageNamespace::Components {
-                    environment_id: *environment_id,
-                },
+                BlobStorageNamespace::Components { environment_id },
                 &PathBuf::from(object_key),
             )
             .await
@@ -109,11 +105,7 @@ impl ComponentObjectStore {
         Ok(Box::pin(result))
     }
 
-    pub async fn put(
-        &self,
-        environment_id: &EnvironmentId,
-        data: Arc<[u8]>,
-    ) -> Result<Hash, Error> {
+    pub async fn put(&self, environment_id: EnvironmentId, data: Arc<[u8]>) -> Result<Hash, Error> {
         let data_clone = data.clone();
         let object_key: Hash = run_cpu_bound_work(move || blake3::hash(&data_clone))
             .await
@@ -132,13 +124,11 @@ impl ComponentObjectStore {
 
     async fn put_internal(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         object_key: &str,
         data: Arc<[u8]>,
     ) -> Result<(), Error> {
-        let namespace = BlobStorageNamespace::Components {
-            environment_id: *environment_id,
-        };
+        let namespace = BlobStorageNamespace::Components { environment_id };
 
         let path = &PathBuf::from(object_key);
 
@@ -153,9 +143,7 @@ impl ComponentObjectStore {
                     .put_raw(
                         COMPONENT_FILES_LABEL,
                         "put",
-                        BlobStorageNamespace::Components {
-                            environment_id: *environment_id,
-                        },
+                        BlobStorageNamespace::Components { environment_id },
                         &PathBuf::from(object_key),
                         data.as_ref(),
                     )
@@ -173,7 +161,7 @@ impl ComponentObjectStore {
     fn logged<R>(
         &self,
         message: &'static str,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         key: &str,
         result: Result<R, Error>,
     ) -> Result<R, Error> {

@@ -33,23 +33,23 @@ use uuid::Uuid;
 pub trait ApplicationRepo: Send + Sync {
     async fn get_by_name(
         &self,
-        owner_account_id: &Uuid,
+        owner_account_id: Uuid,
         name: &str,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
     async fn get_by_id(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
     async fn list_by_owner(
         &self,
-        owner_account_id: &Uuid,
+        owner_account_id: Uuid,
     ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
     async fn create(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
 
@@ -79,11 +79,11 @@ impl<Repo: ApplicationRepo> LoggedApplicationRepo<Repo> {
         info_span!(SPAN_NAME, application_name)
     }
 
-    fn span_app_id(application_id: &Uuid) -> Span {
+    fn span_app_id(application_id: Uuid) -> Span {
         info_span!(SPAN_NAME, application_id=%application_id)
     }
 
-    fn span_owner_id(owner_account_id: &Uuid) -> Span {
+    fn span_owner_id(owner_account_id: Uuid) -> Span {
         info_span!(SPAN_NAME, owner_account_id=%owner_account_id)
     }
 }
@@ -92,7 +92,7 @@ impl<Repo: ApplicationRepo> LoggedApplicationRepo<Repo> {
 impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn get_by_name(
         &self,
-        owner_account_id: &Uuid,
+        owner_account_id: Uuid,
         name: &str,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
@@ -103,7 +103,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
 
     async fn get_by_id(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
             .get_by_id(application_id)
@@ -113,7 +113,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
 
     async fn list_by_owner(
         &self,
-        owner_account_id: &Uuid,
+        owner_account_id: Uuid,
     ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
             .list_by_owner(owner_account_id)
@@ -123,7 +123,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
 
     async fn create(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
         self.repo
@@ -136,7 +136,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
         &self,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
-        let span = Self::span_app_id(&revision.application_id);
+        let span = Self::span_app_id(revision.application_id);
         self.repo.update(revision).instrument(span).await
     }
 
@@ -144,7 +144,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
         &self,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
-        let span = Self::span_app_id(&revision.application_id);
+        let span = Self::span_app_id(revision.application_id);
         self.repo.delete(revision).instrument(span).await
     }
 }
@@ -191,7 +191,7 @@ impl<DBP: Pool> DbApplicationRepo<DBP> {
 impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn get_by_name(
         &self,
-        owner_account_id: &Uuid,
+        owner_account_id: Uuid,
         name: &str,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         let result: Option<ApplicationExtRevisionRecord> = self
@@ -225,7 +225,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         let result = self
             .with_ro("get_by_id")
@@ -256,7 +256,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
     async fn list_by_owner(
         &self,
-        owner_account_id: &Uuid,
+        owner_account_id: Uuid,
     ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         let result = self
             .with_ro("list_by_owner")
@@ -288,11 +288,9 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
     async fn create(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
-        let account_id = *account_id;
-
         self.with_tx_err("create", |tx| async move {
             tx.execute(
                 sqlx::query(indoc! { r#"

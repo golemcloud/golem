@@ -79,9 +79,9 @@ impl ComponentResolverService {
     pub async fn resolve_deployed_component(
         &self,
         component_reference: String,
-        resolving_environment: &EnvironmentId,
-        resolving_application: &ApplicationId,
-        resolving_account: &AccountId,
+        resolving_environment: EnvironmentId,
+        resolving_application: ApplicationId,
+        resolving_account: AccountId,
         auth: &AuthCtx,
     ) -> Result<Component, ComponentResolverError> {
         let component_slug = ComponentSlug::parse(&component_reference)
@@ -104,15 +104,15 @@ impl ComponentResolverService {
                     .await?;
                 let application = self
                     .application_service
-                    .get_in_account(&account.id, &application_name, &AuthCtx::System)
+                    .get_in_account(account.id, &application_name, &AuthCtx::System)
                     .await?;
                 let environment = self
                     .environment_service
-                    .get_in_application(&application.id, &environment_name, &AuthCtx::System)
+                    .get_in_application(application.id, &environment_name, &AuthCtx::System)
                     .await?;
 
                 self.component_service
-                    .get_deployed_component_by_name(&environment.id, &component_name, auth)
+                    .get_deployed_component_by_name(environment.id, &component_name, auth)
                     .await
                     .map_err(|err| match err {
                         ComponentError::ComponentByNameNotFound(_) => {
@@ -128,11 +128,11 @@ impl ComponentResolverService {
                     .await?;
                 let environment = self
                     .environment_service
-                    .get_in_application(&application.id, &environment_name, &AuthCtx::System)
+                    .get_in_application(application.id, &environment_name, &AuthCtx::System)
                     .await?;
 
                 self.component_service
-                    .get_deployed_component_by_name(&environment.id, &component_name, auth)
+                    .get_deployed_component_by_name(environment.id, &component_name, auth)
                     .await
                     .map_err(|err| match err {
                         ComponentError::ComponentByNameNotFound(_) => {
@@ -148,7 +148,7 @@ impl ComponentResolverService {
                     .await?;
 
                 self.component_service
-                    .get_deployed_component_by_name(&environment.id, &component_name, auth)
+                    .get_deployed_component_by_name(environment.id, &component_name, auth)
                     .await
                     .map_err(|err| match err {
                         ComponentError::ComponentByNameNotFound(_) => {

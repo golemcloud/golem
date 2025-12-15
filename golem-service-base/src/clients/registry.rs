@@ -22,13 +22,13 @@ use golem_api_grpc::proto::golem::registry::v1::registry_service_client::Registr
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
     GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
-    GetAllComponentVersionsRequest, GetAuthDetailsForEnvironmentRequest,
-    GetComponentMetadataRequest, GetLatestComponentMetadataRequest, GetResourceLimitsRequest,
+    GetAllDeployedComponentRevisionsRequest, GetAuthDetailsForEnvironmentRequest,
+    GetComponentMetadataRequest, GetDeployedComponentMetadataRequest, GetResourceLimitsRequest,
     ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
     authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_component_versions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_latest_component_metadata_response,
+    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
+    get_component_metadata_response, get_deployed_component_metadata_response,
     get_resource_limits_response, resolve_component_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
@@ -59,9 +59,10 @@ pub trait RegistryService: Send + Sync {
         &self,
         token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError>;
+
     async fn get_auth_details_for_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         include_deleted: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<AuthDetailsForEnvironment, RegistryServiceError>;
@@ -69,24 +70,21 @@ pub trait RegistryService: Send + Sync {
     // limits api
     async fn get_resource_limits(
         &self,
-        account_id: &AccountId,
-        auth_ctx: &AuthCtx,
+        account_id: AccountId,
     ) -> Result<ResourceLimits, RegistryServiceError>;
 
     async fn update_worker_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
-        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
     async fn update_worker_connection_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
-        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
     // will be a noop if the account no longer exists
@@ -94,59 +92,53 @@ pub trait RegistryService: Send + Sync {
     async fn batch_update_fuel_usage(
         &self,
         updates: HashMap<AccountId, i64>,
-        auth_ctx: &AuthCtx,
     ) -> Result<AccountResourceLimits, RegistryServiceError>;
 
     // components api
     // will return the component even if it is deleted
     async fn download_component(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
-        auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, RegistryServiceError>;
 
     // will also return metadata for deleted components
     async fn get_component_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError>;
 
     // will only return non-deleted components
-    async fn get_latest_component_metadata(
+    async fn get_deployed_component_metadata(
         &self,
-        component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
+        component_id: ComponentId,
     ) -> Result<ComponentDto, RegistryServiceError>;
 
     // will only return non-deleted components
-    async fn get_all_component_versions(
+    async fn get_all_deployed_component_revisions(
         &self,
-        component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
+        component_id: ComponentId,
     ) -> Result<Vec<ComponentDto>, RegistryServiceError>;
 
     // will only return non-deleted components
     async fn resolve_component(
         &self,
-        resolving_account_id: &AccountId,
-        resolving_application_id: &ApplicationId,
-        resolving_environment_id: &EnvironmentId,
+        resolving_account_id: AccountId,
+        resolving_application_id: ApplicationId,
+        resolving_environment_id: EnvironmentId,
         component_slug: &str,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError>;
 
     // agent types api
     async fn get_all_agent_types(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError>;
 
     async fn get_agent_type(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         name: &str,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
@@ -230,7 +222,7 @@ impl RegistryService for GrpcRegistryService {
     ) -> Result<AuthCtx, RegistryServiceError> {
         let response = self
             .client
-            .call("authenticate-token", move |client| {
+            .call("authenticate_token", move |client| {
                 let request = AuthenticateTokenRequest {
                     secret: token.secret().to_string(),
                 };
@@ -254,7 +246,7 @@ impl RegistryService for GrpcRegistryService {
 
     async fn get_auth_details_for_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         include_deleted: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
@@ -262,7 +254,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("get_auth_details_for_environment", move |client| {
                 let request = GetAuthDetailsForEnvironmentRequest {
-                    environment_id: Some((*environment_id).into()),
+                    environment_id: Some(environment_id.into()),
                     include_deleted,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
@@ -288,15 +280,13 @@ impl RegistryService for GrpcRegistryService {
 
     async fn get_resource_limits(
         &self,
-        account_id: &AccountId,
-        auth_ctx: &AuthCtx,
+        account_id: AccountId,
     ) -> Result<ResourceLimits, RegistryServiceError> {
         let response = self
             .client
-            .call("get-resource-limits", move |client| {
+            .call("get_resource_limits", move |client| {
                 let request = GetResourceLimitsRequest {
-                    account_id: Some((*account_id).into()),
-                    auth_ctx: Some(auth_ctx.clone().into()),
+                    account_id: Some(account_id.into()),
                 };
                 Box::pin(client.get_resource_limits(request))
             })
@@ -314,19 +304,17 @@ impl RegistryService for GrpcRegistryService {
 
     async fn update_worker_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
-        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let response = self
             .client
-            .call("update-worker-limit", move |client| {
+            .call("update_worker_limit", move |client| {
                 let request = UpdateWorkerLimitRequest {
-                    account_id: Some((*account_id).into()),
+                    account_id: Some(account_id.into()),
                     worker_id: Some(worker_id.clone().into()),
                     added,
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
                 Box::pin(client.update_worker_limit(request))
@@ -343,19 +331,17 @@ impl RegistryService for GrpcRegistryService {
 
     async fn update_worker_connection_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
-        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let response = self
             .client
-            .call("update-worker-connection-limit", move |client| {
+            .call("update_worker_connection_limit", move |client| {
                 let request = UpdateWorkerConnectionLimitRequest {
-                    account_id: Some((*account_id).into()),
+                    account_id: Some(account_id.into()),
                     worker_id: Some(worker_id.clone().into()),
                     added,
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
                 Box::pin(client.update_worker_connection_limit(request))
@@ -375,7 +361,6 @@ impl RegistryService for GrpcRegistryService {
     async fn batch_update_fuel_usage(
         &self,
         updates: HashMap<AccountId, i64>,
-        auth_ctx: &AuthCtx,
     ) -> Result<AccountResourceLimits, RegistryServiceError> {
         let updates: Vec<FuelUsageUpdate> = updates
             .into_iter()
@@ -387,10 +372,9 @@ impl RegistryService for GrpcRegistryService {
 
         let response = self
             .client
-            .call("batch-update-fuel-usage", move |client| {
+            .call("batch_update_fuel_usage", move |client| {
                 let request = BatchUpdateFuelUsageRequest {
                     updates: updates.clone(),
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
                 Box::pin(client.batch_update_fuel_usage(request))
@@ -413,17 +397,15 @@ impl RegistryService for GrpcRegistryService {
 
     async fn download_component(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
-        auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, RegistryServiceError> {
         let mut response = self
             .client
-            .call("download-component", move |client| {
+            .call("download_component", move |client| {
                 let request = DownloadComponentRequest {
-                    component_id: Some((*component_id).into()),
+                    component_id: Some(component_id.into()),
                     version: component_revision.into(),
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
                 Box::pin(client.download_component(request))
@@ -448,17 +430,15 @@ impl RegistryService for GrpcRegistryService {
 
     async fn get_component_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError> {
         let response = self
             .client
-            .call("get-component-metadata", move |client| {
+            .call("get_component_metadata", move |client| {
                 let request = GetComponentMetadataRequest {
-                    component_id: Some((*component_id).into()),
+                    component_id: Some(component_id.into()),
                     version: component_revision.into(),
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
                 Box::pin(client.get_component_metadata(request))
@@ -479,58 +459,56 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_latest_component_metadata(
+    async fn get_deployed_component_metadata(
         &self,
-        component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
+        component_id: ComponentId,
     ) -> Result<ComponentDto, RegistryServiceError> {
         let response = self
             .client
-            .call("get-latest-component-metadata", move |client| {
-                let request = GetLatestComponentMetadataRequest {
-                    component_id: Some((*component_id).into()),
-                    auth_ctx: Some(auth_ctx.clone().into()),
+            .call("get_deployed_component_metadata", move |client| {
+                let request = GetDeployedComponentMetadataRequest {
+                    component_id: Some(component_id.into()),
                 };
 
-                Box::pin(client.get_latest_component_metadata(request))
+                Box::pin(client.get_deployed_component_metadata(request))
             })
             .await?
             .into_inner();
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(get_latest_component_metadata_response::Result::Success(payload)) => {
+            Some(get_deployed_component_metadata_response::Result::Success(payload)) => {
                 let converted = payload
                     .component
                     .ok_or("missing component field")?
                     .try_into()?;
                 Ok(converted)
             }
-            Some(get_latest_component_metadata_response::Result::Error(error)) => Err(error.into()),
+            Some(get_deployed_component_metadata_response::Result::Error(error)) => {
+                Err(error.into())
+            }
         }
     }
 
-    async fn get_all_component_versions(
+    async fn get_all_deployed_component_revisions(
         &self,
-        component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
+        component_id: ComponentId,
     ) -> Result<Vec<ComponentDto>, RegistryServiceError> {
         let response = self
             .client
-            .call("resolve-component-by-name", move |client| {
-                let request = GetAllComponentVersionsRequest {
-                    component_id: Some((*component_id).into()),
-                    auth_ctx: Some(auth_ctx.clone().into()),
+            .call("get_all_deployed_component_revisions", move |client| {
+                let request = GetAllDeployedComponentRevisionsRequest {
+                    component_id: Some(component_id.into()),
                 };
 
-                Box::pin(client.get_all_component_versions(request))
+                Box::pin(client.get_all_deployed_component_revisions(request))
             })
             .await?
             .into_inner();
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(get_all_component_versions_response::Result::Success(payload)) => {
+            Some(get_all_deployed_component_revisions_response::Result::Success(payload)) => {
                 let converted = payload
                     .components
                     .into_iter()
@@ -538,27 +516,27 @@ impl RegistryService for GrpcRegistryService {
                     .collect::<Result<_, _>>()?;
                 Ok(converted)
             }
-            Some(get_all_component_versions_response::Result::Error(error)) => Err(error.into()),
+            Some(get_all_deployed_component_revisions_response::Result::Error(error)) => {
+                Err(error.into())
+            }
         }
     }
 
     async fn resolve_component(
         &self,
-        resolving_account_id: &AccountId,
-        resolving_application_id: &ApplicationId,
-        resolving_environment_id: &EnvironmentId,
+        resolving_account_id: AccountId,
+        resolving_application_id: ApplicationId,
+        resolving_environment_id: EnvironmentId,
         component_slug: &str,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError> {
         let response = self
             .client
-            .call("resolve-component", move |client| {
+            .call("resolve_component", move |client| {
                 let request = ResolveComponentRequest {
-                    resolving_account_id: Some((*resolving_account_id).into()),
-                    resolving_application_id: Some((*resolving_application_id).into()),
-                    resolving_environment_id: Some((*resolving_environment_id).into()),
+                    resolving_account_id: Some(resolving_account_id.into()),
+                    resolving_application_id: Some(resolving_application_id.into()),
+                    resolving_environment_id: Some(resolving_environment_id.into()),
                     component_slug: component_slug.to_string(),
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
                 Box::pin(client.resolve_component(request))
@@ -581,13 +559,13 @@ impl RegistryService for GrpcRegistryService {
 
     async fn get_all_agent_types(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
         let response = self
             .client
-            .call("get-all-agent-types", move |client| {
+            .call("get_all_agent_types", move |client| {
                 let request = GetAllAgentTypesRequest {
-                    environment_id: Some((*environment_id).into()),
+                    environment_id: Some(environment_id.into()),
                 };
 
                 Box::pin(client.get_all_agent_types(request))
@@ -611,14 +589,14 @@ impl RegistryService for GrpcRegistryService {
 
     async fn get_agent_type(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         name: &str,
     ) -> Result<RegisteredAgentType, RegistryServiceError> {
         let response = self
             .client
-            .call("get-all-agent-types", move |client| {
+            .call("get_agent_type", move |client| {
                 let request = GetAgentTypeRequest {
-                    environment_id: Some((*environment_id).into()),
+                    environment_id: Some(environment_id.into()),
                     agent_type: name.to_string(),
                 };
                 Box::pin(client.get_agent_type(request))
@@ -645,7 +623,7 @@ impl RegistryService for GrpcRegistryService {
     ) -> Result<CompiledRoutes, RegistryServiceError> {
         let response = self
             .client
-            .call("get-active-routes-for-domain", move |client| {
+            .call("get_active_routes_for_domain", move |client| {
                 let request = GetActiveRoutesForDomainRequest {
                     domain: domain.0.clone(),
                 };

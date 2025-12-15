@@ -35,7 +35,7 @@ pub enum ApplicationError {
     ApplicationWithNameAlreadyExists,
     #[error("Application not found for id {0}")]
     ApplicationNotFound(ApplicationId),
-    #[error("Application not found for name {}", 0.0)]
+    #[error("Application not found for name {0}")]
     ApplicationByNameNotFound(ApplicationName),
     #[error("Parent account not found {0}")]
     ParentAccountNotFound(AccountId),
@@ -101,7 +101,7 @@ impl ApplicationService {
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
         self.account_service
-            .get(&account_id, auth)
+            .get(account_id, auth)
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
@@ -110,10 +110,10 @@ impl ApplicationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(&account_id, AccountAction::CreateApplication)?;
+        auth.authorize_account_action(account_id, AccountAction::CreateApplication)?;
 
         self.account_usage_service
-            .ensure_application_within_limits(&account_id)
+            .ensure_application_within_limits(account_id)
             .await?;
 
         let application = Application {
@@ -128,7 +128,7 @@ impl ApplicationService {
 
         let result = self
             .application_repo
-            .create(&account_id.0, record)
+            .create(account_id.0, record)
             .await
             .map_err(|err| match err {
                 ApplicationRepoError::ApplicationViolatesUniqueness => {
@@ -143,13 +143,13 @@ impl ApplicationService {
 
     pub async fn update(
         &self,
-        application_id: &ApplicationId,
+        application_id: ApplicationId,
         update: ApplicationUpdate,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
         let mut application = self.get(application_id, auth).await?;
 
-        auth.authorize_account_action(&application.account_id, AccountAction::UpdateApplication)?;
+        auth.authorize_account_action(application.account_id, AccountAction::UpdateApplication)?;
 
         if update.current_revision != application.revision {
             return Err(ApplicationError::ConcurrentModification);
@@ -183,13 +183,13 @@ impl ApplicationService {
 
     pub async fn delete(
         &self,
-        application_id: &ApplicationId,
+        application_id: ApplicationId,
         current_revision: ApplicationRevision,
         auth: &AuthCtx,
     ) -> Result<(), ApplicationError> {
         let mut application = self.get(application_id, auth).await?;
 
-        auth.authorize_account_action(&application.account_id, AccountAction::DeleteApplication)?;
+        auth.authorize_account_action(application.account_id, AccountAction::DeleteApplication)?;
 
         if current_revision != application.revision {
             return Err(ApplicationError::ConcurrentModification);
@@ -215,25 +215,25 @@ impl ApplicationService {
 
     pub async fn get(
         &self,
-        application_id: &ApplicationId,
+        application_id: ApplicationId,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
         let application: Application = self
             .application_repo
-            .get_by_id(&application_id.0)
+            .get_by_id(application_id.0)
             .await?
-            .ok_or(ApplicationError::ApplicationNotFound(*application_id))?
+            .ok_or(ApplicationError::ApplicationNotFound(application_id))?
             .try_into()?;
 
-        auth.authorize_account_action(&application.account_id, AccountAction::ViewApplications)
-            .map_err(|_| ApplicationError::ApplicationNotFound(*application_id))?;
+        auth.authorize_account_action(application.account_id, AccountAction::ViewApplications)
+            .map_err(|_| ApplicationError::ApplicationNotFound(application_id))?;
 
         Ok(application)
     }
 
     pub async fn get_in_account(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         name: &ApplicationName,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
@@ -242,7 +242,7 @@ impl ApplicationService {
 
         let result: Application = self
             .application_repo
-            .get_by_name(&account_id.0, &name.0)
+            .get_by_name(account_id.0, &name.0)
             .await?
             .ok_or(ApplicationError::ApplicationByNameNotFound(name.clone()))?
             .try_into()?;
@@ -252,7 +252,7 @@ impl ApplicationService {
 
     pub async fn list_in_account(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<Application>, ApplicationError> {
         // TODO: fetch account information from db as part of query
@@ -268,7 +268,7 @@ impl ApplicationService {
 
         let result = self
             .application_repo
-            .list_by_owner(&account_id.0)
+            .list_by_owner(account_id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())

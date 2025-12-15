@@ -97,7 +97,7 @@ pub trait PromiseService: Send + Sync {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: &AccountId,
+        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError>;
 
     // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
@@ -138,7 +138,7 @@ impl PromiseService for LazyPromiseService {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: &AccountId,
+        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -304,7 +304,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: &AccountId,
+        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
@@ -340,7 +340,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             let component_metdata = self
                 .services
                 .component_service
-                .get_metadata(&worker_id.component_id, None)
+                .get_metadata(worker_id.component_id, None)
                 .await?;
 
             let owned_worker_id = OwnedWorkerId {
@@ -447,7 +447,7 @@ impl PromiseService for PromiseServiceMock {
         &self,
         promise_id: PromiseId,
         _data: Vec<u8>,
-        _completed_by: &AccountId,
+        _completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         self.completed.lock().await.insert(promise_id);
         Ok(true)

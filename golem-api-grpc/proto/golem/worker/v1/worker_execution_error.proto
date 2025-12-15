@@ -59,13 +59,13 @@ message FailedToResumeWorker {
 
 message ComponentDownloadFailed {
   golem.component.ComponentId component_id = 1;
-  uint64 component_version = 2;
+  uint64 component_revision = 2;
   string reason = 3;
 }
 
 message ComponentParseFailed {
   golem.component.ComponentId component_id = 1;
-  uint64 component_version = 2;
+  uint64 component_revision = 2;
   string reason = 3;
 }
 

@@ -123,7 +123,7 @@ message InterruptWorkerResponse {
 
 message CreateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
-  uint64 component_version = 2;
+  uint64 component_revision = 2;
   map<string, string> env = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;

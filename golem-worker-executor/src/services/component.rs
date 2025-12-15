@@ -24,7 +24,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_service_base::storage::blob::BlobStorage;
@@ -42,16 +41,16 @@ pub trait ComponentService: Send + Sync {
     async fn get(
         &self,
         engine: &Engine,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
     ) -> Result<(Component, ComponentDto), WorkerExecutorError>;
 
     // If a version is provided, deleted components will also be returned.
     // If no version is provided, only the latest non-deleted version is returned.
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
-        forced_version: Option<ComponentRevision>,
+        component_id: ComponentId,
+        forced_revision: Option<ComponentRevision>,
     ) -> Result<ComponentDto, WorkerExecutorError>;
 
     /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
@@ -119,32 +118,26 @@ impl ComponentService for ComponentServiceDefault {
     async fn get(
         &self,
         engine: &Engine,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
     ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
         let key = ComponentKey {
-            component_id: *component_id,
-            component_version,
+            component_id,
+            component_revision,
         };
-        let component_id_clone = *component_id;
         let engine = engine.clone();
         let compiled_component_service = self.compiled_component_service.clone();
         let metadata = self
-            .get_metadata(component_id, Some(component_version))
+            .get_metadata(component_id, Some(component_revision))
             .await?;
-        let environment_id_clone = metadata.environment_id;
+        let environment_id = metadata.environment_id;
 
         let component = self
             .component_cache
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     let result = compiled_component_service
-                        .get(
-                            &environment_id_clone,
-                            &component_id_clone,
-                            component_version,
-                            &engine,
-                        )
+                        .get(environment_id, component_id, component_revision, &engine)
                         .await;
 
                     let component = match result {
@@ -160,27 +153,22 @@ impl ComponentService for ComponentServiceDefault {
                         None => {
                             let bytes = self
                                 .registry_client
-                                .download_component(
-                                    &component_id_clone,
-                                    component_version,
-                                    &AuthCtx::System,
-                                )
+                                .download_component(component_id, component_revision)
                                 .await
                                 .map_err(|e| WorkerExecutorError::ComponentDownloadFailed {
-                                    component_id: component_id_clone,
-                                    component_version,
+                                    component_id,
+                                    component_revision,
                                     reason: e.to_safe_string(),
                                 })?;
 
                             let start = Instant::now();
-                            let component_id_clone2 = component_id_clone;
                             let span = info_span!("Loading WASM component");
                             let component = spawn_blocking(move || {
                                 let _enter = span.enter();
                                 Component::from_binary(&engine, &bytes).map_err(|e| {
                                     WorkerExecutorError::ComponentParseFailed {
-                                        component_id: component_id_clone2,
-                                        component_version,
+                                        component_id,
+                                        component_revision,
                                         reason: format!("{e}"),
                                     }
                                 })
@@ -195,17 +183,12 @@ impl ComponentService for ComponentServiceDefault {
                             record_compilation_time(compilation_time);
                             debug!(
                                 "Compiled {} in {}ms",
-                                component_id_clone,
+                                component_id,
                                 compilation_time.as_millis(),
                             );
 
                             let result = compiled_component_service
-                                .put(
-                                    &environment_id_clone,
-                                    &component_id_clone,
-                                    component_version,
-                                    &component,
-                                )
+                                .put(environment_id, component_id, component_revision, &component)
                                 .await;
 
                             match result {
@@ -226,27 +209,22 @@ impl ComponentService for ComponentServiceDefault {
 
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
-        forced_version: Option<ComponentRevision>,
+        component_id: ComponentId,
+        forced_revision: Option<ComponentRevision>,
     ) -> Result<ComponentDto, WorkerExecutorError> {
-        match forced_version {
-            Some(version) => {
+        match forced_revision {
+            Some(component_revision) => {
                 let client = self.registry_client.clone();
-                let component_id = *component_id;
                 self.component_metadata_cache
                     .get_or_insert_simple(
                         &ComponentKey {
                             component_id,
-                            component_version: version,
+                            component_revision,
                         },
                         || {
                             Box::pin(async move {
                                 let metadata = client
-                                    .get_component_metadata(
-                                        &component_id,
-                                        version,
-                                        &AuthCtx::System,
-                                    )
+                                    .get_component_metadata(component_id, component_revision)
                                     .await
                                     .map_err(|e| {
                                         WorkerExecutorError::runtime(format!(
@@ -263,7 +241,7 @@ impl ComponentService for ComponentServiceDefault {
             None => {
                 let metadata = self
                     .registry_client
-                    .get_latest_component_metadata(component_id, &AuthCtx::System)
+                    .get_deployed_component_metadata(component_id)
                     .await
                     .map_err(|e| {
                         WorkerExecutorError::runtime(format!(
@@ -276,8 +254,8 @@ impl ComponentService for ComponentServiceDefault {
                     .component_metadata_cache
                     .get_or_insert_simple(
                         &ComponentKey {
-                            component_id: *component_id,
-                            component_version: metadata.revision,
+                            component_id,
+                            component_revision: metadata.revision,
                         },
                         || Box::pin(async move { Ok(metadata) }),
                     )
@@ -298,11 +276,10 @@ impl ComponentService for ComponentServiceDefault {
         let result = self
             .registry_client
             .resolve_component(
-                &resolving_account,
-                &resolving_application,
-                &resolving_environment,
+                resolving_account,
+                resolving_application,
+                resolving_environment,
                 &component_slug,
-                &AuthCtx::System,
             )
             .await;
 
@@ -329,7 +306,7 @@ impl ComponentService for ComponentServiceDefault {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ComponentKey {
     component_id: ComponentId,
-    component_version: ComponentRevision,
+    component_revision: ComponentRevision,
 }
 
 fn create_component_metadata_cache(

@@ -38,13 +38,13 @@ pub trait OAuth2WebflowStateRepo: Send + Sync {
 
     async fn set_token_id(
         &self,
-        state_id: &Uuid,
-        token_id: &Uuid,
+        state_id: Uuid,
+        token_id: Uuid,
     ) -> RepoResult<OAuth2WebFlowStateRecord>;
 
-    async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>>;
+    async fn get_by_id(&self, state_id: Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>>;
 
-    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64>;
+    async fn delete_by_id(&self, state_id: Uuid) -> RepoResult<u64>;
 
     async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64>;
 }
@@ -60,11 +60,11 @@ impl<Repo: OAuth2WebflowStateRepo> LoggedOAuth2WebflowStateRepo<Repo> {
         Self { repo }
     }
 
-    fn span_id(state_id: &Uuid) -> Span {
+    fn span_id(state_id: Uuid) -> Span {
         info_span!(SPAN_NAME, state_id = %state_id)
     }
 
-    fn span_id_and_token(state_id: &Uuid, token_id: &Uuid) -> Span {
+    fn span_id_and_token(state_id: Uuid, token_id: Uuid) -> Span {
         info_span!(SPAN_NAME, state_id = %state_id, token_id = %token_id)
     }
 }
@@ -80,8 +80,8 @@ impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2Webflo
 
     async fn set_token_id(
         &self,
-        state_id: &Uuid,
-        token_id: &Uuid,
+        state_id: Uuid,
+        token_id: Uuid,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.repo
             .set_token_id(state_id, token_id)
@@ -89,14 +89,14 @@ impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2Webflo
             .await
     }
 
-    async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
+    async fn get_by_id(&self, state_id: Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
         self.repo
             .get_by_id(state_id)
             .instrument(Self::span_id(state_id))
             .await
     }
 
-    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64> {
+    async fn delete_by_id(&self, state_id: Uuid) -> RepoResult<u64> {
         self.repo
             .delete_by_id(state_id)
             .instrument(Self::span_id(state_id))
@@ -158,8 +158,8 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
 
     async fn set_token_id(
         &self,
-        state_id: &Uuid,
-        token_id: &Uuid,
+        state_id: Uuid,
+        token_id: Uuid,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         let state: OAuth2WebFlowStateRecord = self
             .with_rw("set_token_id")
@@ -178,7 +178,7 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
         self.with_token(state).await
     }
 
-    async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
+    async fn get_by_id(&self, state_id: Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
         let state: Option<OAuth2WebFlowStateRecord> = self
             .with_ro("get_by_id")
             .fetch_optional_as(
@@ -197,7 +197,7 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
         }
     }
 
-    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64> {
+    async fn delete_by_id(&self, state_id: Uuid) -> RepoResult<u64> {
         let result = self
             .with_rw("delete_by_id")
             .execute(
@@ -231,13 +231,13 @@ trait OAuth2WebflowStateRepoInternal: OAuth2WebflowStateRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_token_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>>;
+    async fn get_token_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenRecord>>;
 
     async fn with_token(
         &self,
         mut state: OAuth2WebFlowStateRecord,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
-        if let Some(token_id) = &state.token_id {
+        if let Some(token_id) = state.token_id {
             state.token = self.get_token_by_id(token_id).await?
             // TODO: fail on None?
         }
@@ -251,7 +251,7 @@ impl OAuth2WebflowStateRepoInternal for DbOAuth2WebflowStateRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_token_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>> {
+    async fn get_token_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenRecord>> {
         self.with_ro("get_token_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"

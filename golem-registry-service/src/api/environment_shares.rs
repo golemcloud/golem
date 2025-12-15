@@ -167,7 +167,7 @@ impl EnvironmentSharesApi {
     ) -> ApiResult<Json<EnvironmentShare>> {
         let share = self
             .environment_share_service
-            .get(&environment_share_id, &auth)
+            .get(environment_share_id, &auth)
             .await?;
         Ok(Json(share))
     }
@@ -207,7 +207,7 @@ impl EnvironmentSharesApi {
     ) -> ApiResult<Json<EnvironmentShare>> {
         let share = self
             .environment_share_service
-            .update(&environment_share_id, data, &auth)
+            .update(environment_share_id, data, &auth)
             .await?;
         Ok(Json(share))
     }
@@ -247,7 +247,7 @@ impl EnvironmentSharesApi {
     ) -> ApiResult<Json<EnvironmentShare>> {
         let share = self
             .environment_share_service
-            .delete(&environment_share_id, current_revision, &auth)
+            .delete(environment_share_id, current_revision, &auth)
             .await?;
         Ok(Json(share))
     }

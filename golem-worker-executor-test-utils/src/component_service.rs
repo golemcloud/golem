@@ -128,7 +128,7 @@ impl ComponentServiceLocalFileSystem {
 
                 let key = CacheKey {
                     component_id,
-                    component_version,
+                    component_revision: component_version,
                 };
 
                 current.metadata.entry(key).or_insert(metadata);
@@ -143,15 +143,14 @@ impl ComponentServiceLocalFileSystem {
         &self,
         wasm_path: &Path,
         engine: &Engine,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
     ) -> Result<Component, WorkerExecutorError> {
         let key = CacheKey {
-            component_id: *component_id,
-            component_version,
+            component_id,
+            component_revision,
         };
-        let component_id = *component_id;
         let engine = engine.clone();
         let compiled_component_service = self.compiled_component_service.clone();
         let path = wasm_path.to_path_buf();
@@ -160,7 +159,7 @@ impl ComponentServiceLocalFileSystem {
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     let result = compiled_component_service
-                        .get(environment_id, &component_id, component_version, &engine)
+                        .get(environment_id, component_id, component_revision, &engine)
                         .await;
 
                     let component = match result {
@@ -183,7 +182,7 @@ impl ComponentServiceLocalFileSystem {
                                     Component::from_binary(&engine, &bytes).map_err(|e| {
                                         WorkerExecutorError::ComponentParseFailed {
                                             component_id,
-                                            component_version,
+                                            component_revision,
                                             reason: format!("{e}"),
                                         }
                                     })
@@ -204,7 +203,7 @@ impl ComponentServiceLocalFileSystem {
                             );
 
                             let result = compiled_component_service
-                                .put(environment_id, &component_id, component_version, &component)
+                                .put(environment_id, component_id, component_revision, &component)
                                 .await;
 
                             match result {
@@ -223,12 +222,12 @@ impl ComponentServiceLocalFileSystem {
 
     async fn get_metadata_for_version(
         &self,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
     ) -> Result<ComponentDto, WorkerExecutorError> {
         let key = CacheKey {
-            component_id: *component_id,
-            component_version,
+            component_id,
+            component_revision,
         };
         let metadata = self.index.read().await.metadata.get(&key).cloned();
 
@@ -238,7 +237,7 @@ impl ComponentServiceLocalFileSystem {
             self.refresh_index().await?;
             let metadata = self.index.read().await.metadata.get(&key).cloned();
             metadata.ok_or(WorkerExecutorError::unknown(format!(
-                "No such component found: {component_id}/{component_version}"
+                "No such component found: {component_id}/{component_revision}"
             )))?
         };
 
@@ -247,19 +246,19 @@ impl ComponentServiceLocalFileSystem {
 
     async fn get_latest_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
     ) -> Result<ComponentDto, WorkerExecutorError> {
         self.refresh_index().await?;
 
         let index = self.index.read().await;
 
-        let latest_version = index.latest_versions.get(component_id);
+        let latest_version = index.latest_versions.get(&component_id);
 
         let metadata = match latest_version {
             Some(component_version) => {
                 let key = CacheKey {
-                    component_id: *component_id,
-                    component_version: *component_version,
+                    component_id,
+                    component_revision: *component_version,
                 };
                 let metadata = index.metadata.get(&key).cloned();
                 metadata.ok_or(WorkerExecutorError::unknown(format!(
@@ -280,12 +279,12 @@ impl ComponentService for ComponentServiceLocalFileSystem {
     async fn get(
         &self,
         engine: &Engine,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
     ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
         let key = CacheKey {
-            component_id: *component_id,
-            component_version,
+            component_id,
+            component_revision,
         };
         let metadata = self.index.read().await.metadata.get(&key).cloned();
 
@@ -295,7 +294,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             self.refresh_index().await?;
             let metadata = self.index.read().await.metadata.get(&key).cloned();
             metadata.ok_or(WorkerExecutorError::unknown(format!(
-                "No such component found: {component_id}/{component_version}"
+                "No such component found: {component_id}/{component_revision}"
             )))?
         };
 
@@ -305,9 +304,9 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             .get_component_from_path(
                 &wasm_path,
                 engine,
-                &metadata.environment_id,
+                metadata.environment_id,
                 component_id,
-                component_version,
+                component_revision,
             )
             .await?;
 
@@ -316,7 +315,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
 
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         forced_version: Option<ComponentRevision>,
     ) -> Result<ComponentDto, WorkerExecutorError> {
         let result = match forced_version {
@@ -374,7 +373,7 @@ impl ComponentMetadataIndex {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct CacheKey {
     component_id: ComponentId,
-    component_version: ComponentRevision,
+    component_revision: ComponentRevision,
 }
 
 fn create_component_cache(

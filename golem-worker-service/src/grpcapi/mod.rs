@@ -157,11 +157,11 @@ pub fn error_to_status(error: WorkerError) -> Status {
                 }
                 worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
                     "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
-                    err.component_id, err.component_version, err.reason
+                    err.component_id, err.component_revision, err.reason
                 ),
                 worker_execution_error::Error::ComponentParseFailed(err) => format!(
                     "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
-                    err.component_id, err.component_version, err.reason
+                    err.component_id, err.component_revision, err.reason
                 ),
                 worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
                     "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",

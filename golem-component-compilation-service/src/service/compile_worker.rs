@@ -18,7 +18,6 @@ use crate::model::*;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
@@ -74,7 +73,7 @@ impl CompileWorker {
                     }
 
                     let result = worker
-                        .compile_component(&request.component, &request.environment_id)
+                        .compile_component(request.component, request.environment_id)
                         .await;
                     match result {
                         Err(error) => {
@@ -124,8 +123,8 @@ impl CompileWorker {
 
     async fn compile_component(
         &self,
-        component_with_version: &ComponentIdAndRevision,
-        environment_id: &EnvironmentId,
+        component_with_version: ComponentIdAndRevision,
+        environment_id: EnvironmentId,
     ) -> Result<Component, CompilationError> {
         let engine = self.engine.clone();
 
@@ -134,7 +133,7 @@ impl CompileWorker {
             .compiled_component_service
             .get(
                 environment_id,
-                &component_with_version.id,
+                component_with_version.id,
                 component_with_version.version,
                 &engine,
             )
@@ -154,17 +153,12 @@ impl CompileWorker {
         // TODO: we should download directly from blob store here.
         if let Some(client) = &*self.client.lock().await {
             let bytes = client
-                .download_component(
-                    &component_with_version.id,
-                    component_with_version.version,
-                    &AuthCtx::System,
-                )
+                .download_component(component_with_version.id, component_with_version.version)
                 .await
                 .map_err(|e| CompilationError::ComponentDownloadFailed(e.to_string()))?;
 
             let start = Instant::now();
             let component = spawn_blocking({
-                let component_with_version = component_with_version.clone();
                 move || {
                     Component::from_binary(&engine, &bytes).map_err(|e| {
                         CompilationError::CompileFailure(format!(

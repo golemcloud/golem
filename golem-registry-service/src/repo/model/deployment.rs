@@ -137,7 +137,7 @@ pub struct DeploymentComponentRevisionRecord {
 
 impl DeploymentComponentRevisionRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         component: Component,
     ) -> Self {
@@ -160,7 +160,7 @@ pub struct DeploymentHttpApiDefinitionRevisionRecord {
 
 impl DeploymentHttpApiDefinitionRevisionRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         http_api_definition: HttpApiDefinition,
     ) -> Self {
@@ -183,7 +183,7 @@ pub struct DeploymentHttpApiDeploymentRevisionRecord {
 
 impl DeploymentHttpApiDeploymentRevisionRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         http_api_deployment: HttpApiDeployment,
     ) -> Self {
@@ -314,7 +314,7 @@ pub struct DeploymentDomainHttpApiDefinitionRecord {
 
 impl DeploymentDomainHttpApiDefinitionRecord {
     pub fn new(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         domain: Domain,
         http_api_definition_id: HttpApiDefinitionId,
@@ -341,7 +341,7 @@ pub struct DeploymentCompiledHttpApiDefinitionRouteRecord {
 
 impl DeploymentCompiledHttpApiDefinitionRouteRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         id: i32,
         compiled_route: CompiledRouteWithContext,
@@ -371,7 +371,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
 
 impl DeploymentRegisteredAgentTypeRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         registered_agent_type: RegisteredAgentType,
     ) -> Self {
@@ -420,7 +420,7 @@ pub struct DeploymentRevisionCreationRecord {
 
 impl DeploymentRevisionCreationRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         version: DeploymentVersion,
         hash: diff::Hash,

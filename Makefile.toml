@@ -782,7 +782,7 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "Disabled" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "Disabled" }
 
 script = { file = "./local-run/start.sh" }
 
@@ -797,7 +797,7 @@ condition = { env_set = [
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "OAuth2" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "OAuth2" }
 
 script = { file = "./local-run/start.sh" }
 

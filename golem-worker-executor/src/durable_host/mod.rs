@@ -192,14 +192,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let component_metadata = component_service
             .get_metadata(
-                &owned_worker_id.component_id(),
+                owned_worker_id.component_id(),
                 Some(worker_config.component_version_for_replay),
             )
             .await?;
 
         let files = prepare_filesystem(
             &file_loader,
-            &owned_worker_id.environment_id,
+            owned_worker_id.environment_id,
             temp_dir.path(),
             &component_metadata.files,
         )
@@ -331,8 +331,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.owned_worker_id
     }
 
-    pub fn created_by(&self) -> &AccountId {
-        &self.state.created_by
+    pub fn created_by(&self) -> AccountId {
+        self.state.created_by
     }
 
     pub fn agent_id(&self) -> Option<AgentId> {
@@ -1219,14 +1219,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let new_metadata = self
             .component_service()
-            .get_metadata(&self.owned_worker_id.component_id(), Some(new_version))
+            .get_metadata(self.owned_worker_id.component_id(), Some(new_version))
             .await?;
 
         let mut current_files = self.state.files.write().await;
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            &self.owned_worker_id.environment_id,
+            self.owned_worker_id.environment_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
@@ -2247,7 +2247,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 | WorkerStatus::Interrupted => {
                     let _ = Worker::get_or_create_running(
                         this,
-                        &created_by,
+                        created_by,
                         &owned_worker_id,
                         None,
                         None,
@@ -3048,7 +3048,7 @@ enum IFSWorkerFile {
 
 async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
-    environment_id: &EnvironmentId,
+    environment_id: EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
@@ -3062,7 +3062,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(environment_id, &file.content_hash, &path)
+                        .get_read_only_to(environment_id, file.content_hash, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -3075,7 +3075,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(environment_id, &file.content_hash, &path)
+                        .get_read_write_to(environment_id, file.content_hash, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
@@ -3088,7 +3088,7 @@ async fn prepare_filesystem(
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
-    environment_id: &EnvironmentId,
+    environment_id: EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<(), WorkerExecutorError> {
@@ -3151,7 +3151,7 @@ async fn update_filesystem(
                     };
 
                     let token = file_loader
-                        .get_read_only_to(environment_id, &file.content_hash, &path)
+                        .get_read_only_to(environment_id, file.content_hash, &path)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
@@ -3168,7 +3168,7 @@ async fn update_filesystem(
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(environment_id, &file.content_hash, &path)
+                            .get_read_only_to(environment_id, file.content_hash, &path)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
@@ -3206,7 +3206,7 @@ async fn update_filesystem(
                     }
 
                     file_loader
-                        .get_read_write_to(environment_id, &file.content_hash, &path)
+                        .get_read_write_to(environment_id, file.content_hash, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
@@ -3219,7 +3219,7 @@ async fn update_filesystem(
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(environment_id, &file.content_hash, &path)
+                        .get_read_write_to(environment_id, file.content_hash, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }

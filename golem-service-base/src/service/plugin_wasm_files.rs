@@ -36,16 +36,14 @@ impl PluginWasmFilesService {
 
     pub async fn get(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         key: &WasmContentHash,
     ) -> Result<Option<Vec<u8>>, Error> {
         self.blob_storage
             .get_raw(
                 PLUGIN_WASM_FILES_LABEL,
                 "get",
-                BlobStorageNamespace::PluginWasmFiles {
-                    account_id: *account_id,
-                },
+                BlobStorageNamespace::PluginWasmFiles { account_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
@@ -53,7 +51,7 @@ impl PluginWasmFilesService {
 
     pub async fn put_if_not_exists(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<WasmContentHash, Error> {
         let hash = data.content_hash().await?;
@@ -64,9 +62,7 @@ impl PluginWasmFilesService {
             .get_metadata(
                 PLUGIN_WASM_FILES_LABEL,
                 "get_metadata",
-                BlobStorageNamespace::PluginWasmFiles {
-                    account_id: *account_id,
-                },
+                BlobStorageNamespace::PluginWasmFiles { account_id },
                 &key,
             )
             .await
@@ -79,9 +75,7 @@ impl PluginWasmFilesService {
                 .put_stream(
                     PLUGIN_WASM_FILES_LABEL,
                     "put",
-                    BlobStorageNamespace::PluginWasmFiles {
-                        account_id: *account_id,
-                    },
+                    BlobStorageNamespace::PluginWasmFiles { account_id },
                     &key,
                     &data.erased(),
                 )

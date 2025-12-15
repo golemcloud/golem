@@ -278,7 +278,7 @@ impl ComponentRevisionRecord {
         self
     }
 
-    pub fn from_model(value: FinalizedComponentRevision, actor: &AccountId) -> Self {
+    pub fn from_model(value: FinalizedComponentRevision, actor: AccountId) -> Self {
         let component_id = value.component_id.0;
         let revision_id: i64 = value.component_revision.into();
 
@@ -393,7 +393,7 @@ impl ComponentFileRecord {
         file: InitialComponentFile,
         component_id: Uuid,
         revision_id: i64,
-        actor: &AccountId,
+        actor: AccountId,
     ) -> Self {
         Self {
             component_id,
@@ -440,7 +440,7 @@ impl ComponentPluginInstallationRecord {
         plugin_installation: InstalledPlugin,
         component_id: Uuid,
         revision_id: i64,
-        actor: &AccountId,
+        actor: AccountId,
     ) -> Self {
         Self {
             component_id,
