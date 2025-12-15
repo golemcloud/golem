@@ -235,7 +235,7 @@ impl EnvironmentCommandHandler {
         &self,
         environment: &'a ResolvedEnvironmentIdentity,
     ) -> anyhow::Result<&'a EnvironmentCurrentDeploymentView> {
-        match environment.remote_environment.current_deployment.as_ref() {
+        match environment.server_environment.current_deployment.as_ref() {
             Some(deployment) => Ok(deployment),
             None => {
                 log_error(format!(

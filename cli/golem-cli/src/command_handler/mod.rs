@@ -192,13 +192,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 fallback_command,
                 partial_match,
             } => {
-                init_tracing(
-                    fallback_command
-                        .global_flags
-                        .verbosity
-                        .as_clap_verbosity_flag(),
-                    false,
-                );
+                init_tracing(fallback_command.global_flags.verbosity(), false);
 
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error, &fallback_command);

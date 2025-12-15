@@ -140,7 +140,7 @@ pub struct ResolvedEnvironmentIdentity {
     pub environment_id: EnvironmentId,
     pub environment_name: EnvironmentName,
 
-    pub remote_environment: golem_client::model::Environment,
+    pub server_environment: golem_client::model::Environment,
 }
 
 impl ResolvedEnvironmentIdentity {
@@ -159,7 +159,7 @@ impl ResolvedEnvironmentIdentity {
             application_name: application.name,
             environment_id: environment.id,
             environment_name: environment.name.clone(),
-            remote_environment: environment,
+            server_environment: environment,
         }
     }
 

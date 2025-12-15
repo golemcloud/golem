@@ -138,7 +138,7 @@ pub struct GolemCliGlobalFlags {
 
     /// Custom path to the config directory (defaults to $HOME/.golem)
     #[arg(long, global = true, display_order = 109)]
-    pub config_dir: Option<PathBuf>,
+    config_dir: Option<PathBuf>,
 
     /// Automatically answer "yes" to any interactive confirm questions
     #[arg(long, short = 'Y', global = true, display_order = 110)]
@@ -157,7 +157,7 @@ pub struct GolemCliGlobalFlags {
     pub template_group: Option<String>,
 
     #[command(flatten)]
-    pub verbosity: Verbosity,
+    verbosity: Verbosity,
 
     // The flags below can only be set through env vars, as they are mostly
     // useful for testing, so we do not want to pollute the flag space with them
@@ -177,7 +177,10 @@ pub struct GolemCliGlobalFlags {
     pub wasm_rpc_offline: bool,
 
     #[arg(skip)]
-    pub http_batch_size: Option<u64>,
+    http_batch_size: Option<u64>,
+
+    #[arg(skip)]
+    http_parallelism: Option<usize>,
 
     #[arg(skip)]
     pub auth_token: Option<String>,
@@ -270,6 +273,12 @@ impl GolemCliGlobalFlags {
                 })?)
         }
 
+        if let Ok(parallelism) = std::env::var("GOLEM_HTTP_PARALLELISM") {
+            self.http_parallelism = Some(parallelism.parse().with_context(|| {
+                format!("Failed to parse GOLEM_HTTP_PARALLELISM: {parallelism}")
+            })?)
+        }
+
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
             self.auth_token = Some(
                 auth_token
@@ -299,6 +308,14 @@ impl GolemCliGlobalFlags {
         self.config_dir
             .clone()
             .unwrap_or_else(|| dirs::home_dir().unwrap().join(".golem"))
+    }
+
+    pub fn http_batch_size(&self) -> u64 {
+        self.http_batch_size.unwrap_or(50)
+    }
+
+    pub fn http_parallelism(&self) -> usize {
+        self.http_parallelism.unwrap_or(4)
     }
 
     pub fn verbosity(&self) -> clap_verbosity_flag::Verbosity {

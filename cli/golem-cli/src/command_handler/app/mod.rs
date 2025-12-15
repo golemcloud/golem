@@ -18,7 +18,9 @@ use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
-use crate::command_handler::app::deploy_diff::{DeployDiff, DeployQuickDiff};
+use crate::command_handler::app::deploy_diff::{
+    DeployDetails, DeployDiff, DeployQuickDiff, DiffKind,
+};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
@@ -40,6 +42,7 @@ use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
@@ -763,7 +766,7 @@ impl AppCommandHandler {
 
         let server_deployment = match &deploy_quick_diff
             .environment
-            .remote_environment
+            .server_environment
             .current_deployment
         {
             Some(current_deployment) => Some(
@@ -831,144 +834,15 @@ impl AppCommandHandler {
         &self,
         mut deploy_diff: DeployDiff,
     ) -> anyhow::Result<DeployDiff> {
-        enum DiffKind {
-            Server,
-            Stage,
-        }
+        let parallelism = self.ctx.http_parallelism();
+        let limiter = Arc::new(tokio::sync::Semaphore::new(parallelism));
 
-        let component_handler = self.ctx.component_handler();
-        let http_api_definition_handler = self.ctx.api_definition_handler();
-        let http_api_deployment_handler = self.ctx.api_deployment_handler();
-
-        for (kind, diff) in [
-            (DiffKind::Stage, deploy_diff.diff_stage.as_ref()),
-            (DiffKind::Server, Some(&deploy_diff.diff)),
-        ] {
-            let Some(diff) = diff else {
-                continue;
-            };
-
-            for (component_name, component_diff) in &diff.components {
-                match component_diff {
-                    diff::BTreeMapDiffValue::Create => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
-                        let component_name = ComponentName(component_name.clone());
-
-                        let component_identity =
-                            deploy_diff.staged_component_identity(&component_name);
-
-                        let component = component_handler
-                            .get_component_revision_by_id(
-                                &component_identity.id,
-                                component_identity.revision,
-                            )
-                            .await?;
-
-                        match &kind {
-                            DiffKind::Server => {
-                                deploy_diff.diffable_server_deployment.components.insert(
-                                    component_name.0.clone(),
-                                    component.to_diffable().into(),
-                                );
-                                deploy_diff.server_agent_types.insert(
-                                    component_name.0,
-                                    component.metadata.agent_types().to_vec(),
-                                );
-                            }
-                            DiffKind::Stage => {
-                                deploy_diff.diffable_staged_deployment.components.insert(
-                                    component_name.0.clone(),
-                                    component.to_diffable().into(),
-                                );
-                                deploy_diff.staged_agent_types.insert(
-                                    component_name.0,
-                                    component.metadata.agent_types().to_vec(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (http_api_definition_name, http_api_definition_diff) in &diff.http_api_definitions {
-                match http_api_definition_diff {
-                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Update(_) => {
-                        let http_api_definition_name =
-                            HttpApiDefinitionName(http_api_definition_name.clone());
-
-                        let definition_identity = deploy_diff
-                            .staged_http_api_definition_identity(&http_api_definition_name);
-
-                        let definition = http_api_definition_handler
-                            .get_http_api_definition_revision_by_id(
-                                &definition_identity.id,
-                                definition_identity.revision,
-                            )
-                            .await?;
-
-                        match &kind {
-                            DiffKind::Server => {
-                                deploy_diff
-                                    .diffable_server_deployment
-                                    .http_api_definitions
-                                    .insert(
-                                        http_api_definition_name.0,
-                                        definition.to_diffable().into(),
-                                    );
-                            }
-                            DiffKind::Stage => {
-                                deploy_diff
-                                    .diffable_staged_deployment
-                                    .http_api_definitions
-                                    .insert(
-                                        http_api_definition_name.0,
-                                        definition.to_diffable().into(),
-                                    );
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (domain, http_api_deployment_diff) in &diff.http_api_deployments {
-                match http_api_deployment_diff {
-                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Update(_) => {
-                        let domain = Domain(domain.clone());
-
-                        let deployment_identity =
-                            deploy_diff.staged_http_api_deployment_identity(&domain);
-
-                        let deployment = http_api_deployment_handler
-                            .get_http_api_deployment_revision_by_id(
-                                &deployment_identity.id,
-                                deployment_identity.revision,
-                            )
-                            .await?;
-
-                        match &kind {
-                            DiffKind::Server => {
-                                deploy_diff
-                                    .diffable_server_deployment
-                                    .http_api_deployments
-                                    .insert(domain.0, deployment.to_diffable().into());
-                            }
-                            DiffKind::Stage => {
-                                deploy_diff
-                                    .diffable_staged_deployment
-                                    .http_api_deployments
-                                    .insert(domain.0, deployment.to_diffable().into());
-                            }
-                        }
-                    }
-                }
+        for kind in [DiffKind::Stage, DiffKind::Server] {
+            if let Some(details) = self
+                .collect_deploy_details(kind, parallelism, limiter.clone(), &deploy_diff)
+                .await?
+            {
+                deploy_diff.add_details(kind, details)?;
             }
         }
 
@@ -977,19 +851,123 @@ impl AppCommandHandler {
             deploy_diff.diffable_staged_deployment.hash()
         );
 
-        // Update diffs with details
-        deploy_diff.diff_stage = deploy_diff
-            .diffable_staged_deployment
-            .diff_with_local(&deploy_diff.diffable_local_deployment);
-        let Some(diff) = deploy_diff
-            .diffable_server_deployment
-            .diff_with_local(&deploy_diff.diffable_local_deployment)
-        else {
-            bail!("Illegal state: empty diff between server and local deployment while adding details")
-        };
-        deploy_diff.diff = diff;
-
         Ok(deploy_diff)
+    }
+
+    async fn collect_deploy_details(
+        &self,
+        kind: DiffKind,
+        parallelism: usize,
+        limiter: Arc<tokio::sync::Semaphore>,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<Option<DeployDetails>> {
+        let diff = match kind {
+            DiffKind::Stage => match deploy_diff.diff_stage.as_ref() {
+                Some(diff) => diff,
+                None => {
+                    return Ok(None);
+                }
+            },
+            DiffKind::Server => &deploy_diff.diff,
+        };
+
+        let component_handler = self.ctx.component_handler();
+        let http_api_definition_handler = self.ctx.api_definition_handler();
+        let http_api_deployment_handler = self.ctx.api_deployment_handler();
+
+        let component_details = stream::iter(diff.components.iter().filter_map(
+            |(component_name, component_diff)| {
+                match component_diff {
+                    diff::BTreeMapDiffValue::Create => None,
+                    diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
+                        // NOTE: Unlike other entities, for components we also fetch
+                        //       details for deletes (not just for updates),
+                        //       so we can show agent type diffs too
+                        Some(component_name)
+                    }
+                }
+            },
+        ))
+        .map(|component_name| {
+            let component_name = ComponentName(component_name.clone());
+            let component_identity = deploy_diff.component_identity(kind, &component_name);
+            async {
+                let _permit = limiter.acquire().await?;
+                let component = component_handler
+                    .get_component_revision_by_id(
+                        &component_identity.id,
+                        component_identity.revision,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>((component_name, component))
+            }
+        })
+        .buffer_unordered(parallelism)
+        .try_collect::<Vec<_>>();
+
+        let http_api_definition_details = stream::iter(
+            diff.http_api_definitions.iter().filter_map(
+                |(http_api_definition_name, http_api_definition_diff)| {
+                    match http_api_definition_diff {
+                        diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => None,
+                        diff::BTreeMapDiffValue::Update(_) => Some(http_api_definition_name),
+                    }
+                },
+            ),
+        )
+        .map(|http_api_definition_name| {
+            let http_api_definition_name = HttpApiDefinitionName(http_api_definition_name.clone());
+            let definition_identity =
+                deploy_diff.http_api_definition_identity(kind, &http_api_definition_name);
+            async {
+                let _permit = limiter.acquire().await?;
+                let definition = http_api_definition_handler
+                    .get_http_api_definition_revision_by_id(
+                        &definition_identity.id,
+                        definition_identity.revision,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>((http_api_definition_name, definition))
+            }
+        })
+        .buffer_unordered(parallelism)
+        .try_collect::<Vec<_>>();
+
+        let http_api_deployment_details =
+            stream::iter(diff.http_api_deployments.iter().filter_map(
+                |(domain, http_api_deployment_diff)| match http_api_deployment_diff {
+                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => None,
+                    diff::BTreeMapDiffValue::Update(_) => Some(domain),
+                },
+            ))
+            .map(|domain| {
+                let domain = Domain(domain.clone());
+                let deployment_identity = deploy_diff.http_api_deployment_identity(kind, &domain);
+                async {
+                    let _permit = limiter.acquire().await?;
+                    let deployment = http_api_deployment_handler
+                        .get_http_api_deployment_revision_by_id(
+                            &deployment_identity.id,
+                            deployment_identity.revision,
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>((domain, deployment))
+                }
+            })
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>();
+
+        let (component, http_api_definition, http_api_deployment) = tokio::try_join!(
+            component_details,
+            http_api_definition_details,
+            http_api_deployment_details,
+        )?;
+
+        Ok(Some(DeployDetails {
+            component,
+            http_api_definition,
+            http_api_deployment,
+        }))
     }
 
     async fn apply_changes_to_stage(
