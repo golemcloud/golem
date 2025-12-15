@@ -14,7 +14,7 @@
 
 use std::fmt::Display;
 
-use crate::config::StaticComponentServiceConfig;
+use crate::config::StaticRegistryServiceConfig;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use tokio::sync::mpsc;
@@ -36,7 +36,7 @@ impl Display for ComponentIdAndRevision {
 pub struct CompilationRequest {
     pub component: ComponentIdAndRevision,
     pub environment_id: EnvironmentId,
-    pub sender: Option<StaticComponentServiceConfig>,
+    pub sender: Option<StaticRegistryServiceConfig>,
 }
 
 pub struct CompiledComponent {

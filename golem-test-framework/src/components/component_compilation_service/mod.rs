@@ -59,7 +59,7 @@ async fn env_vars(
             "GOLEM__ENGINE__ENABLE_FS_CACHE",
             enable_fs_cache.to_string(),
         )
-        .with("GOLEM__GRPC_PORT", grpc_port.to_string())
+        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("component_compilation_service", otlp)
         .build()

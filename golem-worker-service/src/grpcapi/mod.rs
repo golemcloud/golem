@@ -15,6 +15,7 @@
 mod error;
 mod worker;
 
+use crate::config::GrpcApiConfig;
 use crate::grpcapi::worker::WorkerGrpcApi;
 use crate::service::Services;
 use futures::TryFutureExt;
@@ -26,8 +27,9 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_common::model::component::ComponentFilePath;
 use golem_common::model::WorkerId;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_wasm::json::OptionallyValueAndTypeJson;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -39,13 +41,15 @@ use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
 
 pub async fn start_grpc_server(
-    addr: SocketAddr,
+    config: &GrpcApiConfig,
     services: Services,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
+    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.port);
     let listener = TcpListener::bind(addr).await?;
+
     let port = listener.local_addr()?.port();
 
     health_reporter
@@ -57,26 +61,26 @@ pub async fn start_grpc_server(
         .build_v1()
         .unwrap();
 
-    join_set.spawn(
-        async move {
-            Server::builder()
-                .layer(
-                    middleware::server::OtelGrpcLayer::default()
-                        .filter(filters::reject_healthcheck),
-                )
-                .add_service(reflection_service)
-                .add_service(health_service)
-                .add_service(
-                    WorkerServiceServer::new(WorkerGrpcApi::new(services.worker_service.clone()))
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip),
-                )
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .map_err(anyhow::Error::from)
-                .await
-        }
-        .in_current_span(),
-    );
+    join_set.spawn({
+        let mut server = Server::builder();
+
+        if let GrpcServerTlsConfig::Enabled(tls) = &config.tls {
+            server = server.tls_config(tls.to_tonic())?;
+        };
+
+        server
+            .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
+            .add_service(reflection_service)
+            .add_service(health_service)
+            .add_service(
+                WorkerServiceServer::new(WorkerGrpcApi::new(services.worker_service.clone()))
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip),
+            )
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .map_err(anyhow::Error::from)
+            .in_current_span()
+    });
 
     Ok(port)
 }

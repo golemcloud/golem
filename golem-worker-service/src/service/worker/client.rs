@@ -30,7 +30,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest,
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
-use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -45,6 +44,7 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};

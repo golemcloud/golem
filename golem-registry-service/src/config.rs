@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
-use golem_common::SafeDisplay;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
 use golem_common::model::account::AccountId;
@@ -21,7 +20,10 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
+use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::grpc::client::GrpcClientConfig;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -35,7 +37,7 @@ pub struct RegistryServiceConfig {
     pub environment: String,
     pub workspace: String,
     pub http_port: u16,
-    pub grpc_port: u16,
+    pub grpc: GrpcApiConfig,
     pub db: DbConfig,
     pub login: LoginConfig,
     pub blob_storage: BlobStorageConfig,
@@ -55,17 +57,23 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
-        let _ = writeln!(&mut result, "gRPC port: {}", self.grpc_port);
-        let _ = writeln!(&mut result, "DB:");
+
+        let _ = writeln!(&mut result, "grpc:");
+        let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
+
+        let _ = writeln!(&mut result, "db:");
         let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
+
         let _ = writeln!(&mut result, "login:");
         let _ = writeln!(&mut result, "{}", self.login.to_safe_string_indented());
+
         let _ = writeln!(&mut result, "blob storage:");
         let _ = writeln!(
             &mut result,
             "{}",
             self.blob_storage.to_safe_string_indented()
         );
+
         let _ = writeln!(&mut result, "plugin transformations:");
         let _ = writeln!(
             &mut result,
@@ -147,7 +155,7 @@ impl Default for RegistryServiceConfig {
             environment: "dev".to_string(),
             workspace: "release".to_string(),
             http_port: 8081,
-            grpc_port: 9091,
+            grpc: GrpcApiConfig::default(),
             db: DbConfig::default(),
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
@@ -157,6 +165,34 @@ impl Default for RegistryServiceConfig {
             domain_provisioner: DomainProvisionerConfig::default(),
             initial_accounts,
             initial_plans,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GrpcApiConfig {
+    pub port: u16,
+    pub tls: GrpcServerTlsConfig,
+}
+
+impl SafeDisplay for GrpcApiConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "port: {}", self.port);
+
+        let _ = writeln!(&mut result, "tls:");
+        let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
+
+        result
+    }
+}
+
+impl Default for GrpcApiConfig {
+    fn default() -> Self {
+        Self {
+            port: 9090,
+            tls: GrpcServerTlsConfig::disabled(),
         }
     }
 }
@@ -285,7 +321,7 @@ impl SafeDisplay for ComponentTransformerPluginCallerConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ComponentCompilationConfig {
-    Enabled(ComponentCompilationEnabledConfig),
+    Enabled(Box<ComponentCompilationEnabledConfig>),
     Disabled(Empty),
 }
 
@@ -307,12 +343,7 @@ impl SafeDisplay for ComponentCompilationConfig {
 
 impl Default for ComponentCompilationConfig {
     fn default() -> Self {
-        Self::Enabled(ComponentCompilationEnabledConfig {
-            host: "localhost".to_string(),
-            port: 9091,
-            retries: RetryConfig::default(),
-            connect_timeout: std::time::Duration::from_secs(10),
-        })
+        Self::Enabled(Box::default())
     }
 }
 
@@ -320,9 +351,8 @@ impl Default for ComponentCompilationConfig {
 pub struct ComponentCompilationEnabledConfig {
     pub host: String,
     pub port: u16,
-    pub retries: RetryConfig,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: std::time::Duration,
+    #[serde(flatten)]
+    pub client_config: GrpcClientConfig,
 }
 
 impl SafeDisplay for ComponentCompilationEnabledConfig {
@@ -330,21 +360,24 @@ impl SafeDisplay for ComponentCompilationEnabledConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
+    }
+}
+
+impl Default for ComponentCompilationEnabledConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9091,
+            client_config: GrpcClientConfig::default(),
+        }
     }
 }
 
 impl ComponentCompilationEnabledConfig {
     pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build ComponentCompilationService URI")
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
 }
 

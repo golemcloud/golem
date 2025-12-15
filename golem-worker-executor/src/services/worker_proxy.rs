@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::golem_config::WorkerServiceGrpcConfig;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
@@ -25,21 +26,19 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
-use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::RevertWorkerTarget;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::GrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::{Value, ValueAndType, WitValue};
-use http::Uri;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -215,7 +214,7 @@ pub struct RemoteWorkerProxy {
 }
 
 impl RemoteWorkerProxy {
-    pub fn new(endpoint: Uri, retry_config: RetryConfig, connect_timeout: Duration) -> Self {
+    pub fn new(config: &WorkerServiceGrpcConfig) -> Self {
         Self {
             worker_service_client: GrpcClient::new(
                 "worker_service",
@@ -224,11 +223,8 @@ impl RemoteWorkerProxy {
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint,
-                GrpcClientConfig {
-                    retries_on_unavailable: retry_config,
-                    connect_timeout,
-                },
+                config.uri(),
+                config.client_config.clone(),
             ),
         }
     }

@@ -70,12 +70,14 @@ use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -85,6 +87,7 @@ use log::debug;
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::net::TcpListener;
@@ -130,9 +133,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
             .build_v1()?;
 
-        let addr = golem_config.grpc_addr()?;
-
+        let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.grpc.port);
         let listener = TcpListener::bind(addr).await?;
+
         let grpc_port = listener.local_addr()?.port();
 
         let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
@@ -146,23 +149,26 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip);
 
-        join_set.spawn(
-            async move {
-                Server::builder()
-                    .layer(
-                        middleware::server::OtelGrpcLayer::default()
-                            .filter(filters::reject_healthcheck),
-                    )
-                    .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
-                    .add_service(reflection_service)
-                    .add_service(service)
-                    .add_service(health_service)
-                    .serve_with_incoming(TcpListenerStream::new(listener))
-                    .await
-                    .map_err(|err| anyhow!(err))
-            }
-            .in_current_span(),
-        );
+        join_set.spawn({
+            let mut server = Server::builder();
+
+            if let GrpcServerTlsConfig::Enabled(tls) = &golem_config.grpc.tls {
+                server = server.tls_config(tls.to_tonic())?;
+            };
+
+            server
+                .layer(
+                    middleware::server::OtelGrpcLayer::default()
+                        .filter(filters::reject_healthcheck),
+                )
+                .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
+                .add_service(reflection_service)
+                .add_service(service)
+                .add_service(health_service)
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .map_err(anyhow::Error::from)
+                .in_current_span()
+        });
 
         info!("Started worker service on ports: grpc: {grpc_port}");
 
@@ -506,11 +512,8 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let blob_store_service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
 
-    let worker_proxy: Arc<dyn WorkerProxy> = Arc::new(RemoteWorkerProxy::new(
-        golem_config.public_worker_api.uri(),
-        golem_config.public_worker_api.retries.clone(),
-        golem_config.public_worker_api.connect_timeout,
-    ));
+    let worker_proxy: Arc<dyn WorkerProxy> =
+        Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api));
 
     let rdbms_service: Arc<dyn rdbms::RdbmsService> =
         Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));

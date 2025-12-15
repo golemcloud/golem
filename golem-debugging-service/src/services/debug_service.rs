@@ -199,7 +199,7 @@ impl DebugServiceDefault {
 
         let host = gethostname().to_string_lossy().to_string();
 
-        let port = self.all.config().port;
+        let port = self.all.config().grpc.port;
 
         info!(
             "Registering worker {} with host {} and port {}",
