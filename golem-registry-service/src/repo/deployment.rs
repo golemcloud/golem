@@ -1017,6 +1017,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         AND r.deployment_revision_id = (
                             SELECT deployment_revision_id FROM deployment_registered_agent_types
                             WHERE component_id = $2 AND component_revision_id = $3
+                            ORDER BY deployment_revision_id DESC
                             LIMIT 1
                         )
                         AND (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
@@ -1052,6 +1053,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         AND r.deployment_revision_id = (
                             SELECT deployment_revision_id FROM deployment_registered_agent_types
                             WHERE component_id = $2 AND component_revision_id = $3
+                            ORDER BY deployment_revision_id DESC
                             LIMIT 1
                         )
                     ORDER BY r.agent_type_name
