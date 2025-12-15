@@ -127,6 +127,21 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: &Uuid,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
 
+    async fn get_latest_deployed_agent_type_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn list_latest_deployed_agent_types_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+
     async fn set_current_deployment(
         &self,
         user_account_id: &Uuid,
@@ -360,6 +375,51 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
+            ))
+            .await
+    }
+
+    async fn get_latest_deployed_agent_type_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .get_latest_deployed_agent_type_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision_id,
+                agent_type_name,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                component_id = %component_id,
+                component_revision_id = %component_revision_id,
+                agent_type_name = %agent_type_name,
+            ))
+            .await
+    }
+
+    async fn list_latest_deployed_agent_types_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .list_latest_deployed_agent_types_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision_id,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                component_id = %component_id,
+                component_revision_id = %component_revision_id,
             ))
             .await
     }
@@ -932,6 +992,75 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             })
         })
         .await
+    }
+
+    async fn get_latest_deployed_agent_type_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("get_latest_deployed_agent_type_by_component_revision")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.agent_wrapper_type_name,
+                        r.component_id,
+                        r.component_revision_id,
+                        r.agent_type
+                    FROM deployment_registered_agent_types r
+                    WHERE r.environment_id = $1
+                        AND r.deployment_revision_id = (
+                            SELECT deployment_revision_id FROM deployment_registered_agent_types
+                            WHERE component_id = $2 AND component_revision_id = $3
+                            LIMIT 1
+                        )
+                        AND (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
+                    ORDER BY r.agent_type_name
+                "#})
+                .bind(environment_id)
+                .bind(component_id)
+                .bind(component_revision_id)
+                .bind(agent_type_name),
+            )
+            .await
+    }
+
+    async fn list_latest_deployed_agent_types_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("get_deployed_agent_type")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.agent_wrapper_type_name,
+                        r.component_id,
+                        r.component_revision_id,
+                        r.agent_type
+                    FROM deployment_registered_agent_types r
+                    WHERE r.environment_id = $1
+                        AND r.deployment_revision_id = (
+                            SELECT deployment_revision_id FROM deployment_registered_agent_types
+                            WHERE component_id = $2 AND component_revision_id = $3
+                            LIMIT 1
+                        )
+                    ORDER BY r.agent_type_name
+                "#})
+                .bind(environment_id)
+                .bind(component_id)
+                .bind(component_revision_id),
+            )
+            .await
     }
 }
 

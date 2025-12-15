@@ -146,7 +146,7 @@ mod grpc {
             owner_environment: &EnvironmentId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
             self.client
-                .get_all_agent_types(owner_environment)
+                .get_all_agent_types(owner_environment, todo!(), todo!())
                 .await
                 .map_err(|e| {
                     WorkerExecutorError::runtime(format!("Failed to get agent types: {e}"))
@@ -158,7 +158,10 @@ mod grpc {
             owner_environment: &EnvironmentId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
-            let result = self.client.get_agent_type(owner_environment, name).await;
+            let result = self
+                .client
+                .get_agent_type(owner_environment, todo!(), todo!(), name)
+                .await;
 
             match result {
                 Ok(agent_type) => Ok(Some(agent_type)),
