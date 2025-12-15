@@ -183,7 +183,6 @@ message GetLatestComponentMetadataResponse {
 
 message GetLatestComponentMetadataSuccessResponse {
   golem.component.Component component = 1;
-  uint64 deployment_revision = 2;
 }
 
 message GetAllComponentVersionsRequest {

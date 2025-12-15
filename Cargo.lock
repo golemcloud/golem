@@ -10971,7 +10971,8 @@ dependencies = [
 [[package]]
 name = "test-r"
 version = "2.3.1"
-source = "git+https://github.com/mschuwalow/test-r.git?branch=error-formatting#5e2d2a0181910ba7274c0159adf23a873042e56f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e625ae01bded7c86830e0f101f456fca4578c3ac5f85851fd8c442c4d085fb9a"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -10982,7 +10983,8 @@ dependencies = [
 [[package]]
 name = "test-r-core"
 version = "5.0.1"
-source = "git+https://github.com/mschuwalow/test-r.git?branch=error-formatting#5e2d2a0181910ba7274c0159adf23a873042e56f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0662d87d46d255dd0d2704c2e7909d21299c6498851a24f73edf5e026c9bd902"
 dependencies = [
  "anstream",
  "anstyle",
@@ -11006,7 +11008,8 @@ dependencies = [
 [[package]]
 name = "test-r-macro"
 version = "1.3.4"
-source = "git+https://github.com/mschuwalow/test-r.git?branch=error-formatting#5e2d2a0181910ba7274c0159adf23a873042e56f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84949c16bf96298629cd3657291cce0172517cfeaa23ccd076b215e8a3ac8c5e"
 dependencies = [
  "darling 0.21.3",
  "humantime",
