@@ -643,7 +643,6 @@ impl FutureInvokeResultState {
 #[async_trait]
 impl SubscribeAny for FutureInvokeResultState {
     async fn ready(&mut self) {
-        let dbg = format!("{:?}", &*self);
         if let Self::Pending {
             handle,
             request,
@@ -651,15 +650,12 @@ impl SubscribeAny for FutureInvokeResultState {
             begin_index,
         } = self
         {
-            tracing::warn!("AWAITING RPC INVOKE IN READY");
             *self = Self::Completed {
                 result: handle.await,
                 request: request.clone(),
                 span_id: span_id.clone(),
                 begin_index: *begin_index,
             };
-        } else {
-            tracing::warn!("NOT AWAITING RPC INVOKE IN READY ({dbg})");
         }
     }
 
@@ -711,8 +707,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 .as_any_mut()
                 .downcast_mut::<FutureInvokeResultState>()
                 .unwrap();
-
-            tracing::warn!("RPC INVOKE GET {entry:?}");
 
             #[allow(clippy::type_complexity)]
             let (result, serializable_invoke_request, serializable_invoke_result, begin_index): (

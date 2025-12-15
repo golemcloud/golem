@@ -113,7 +113,7 @@ impl AgentTypesService for CachedAgentTypes {
         // it is used in RPC to find the invocation target
         let key = (
             *owner_environment,
-            component_id.clone(),
+            *component_id,
             component_revision,
             name.to_string(),
         );
