@@ -63,7 +63,7 @@ impl WorkerService {
         &self,
         worker_id: &WorkerId,
         environment_variables: HashMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<ComponentRevision> {
@@ -76,7 +76,7 @@ impl WorkerService {
             worker_id,
             component,
             environment_variables,
-            wasi_config_vars,
+            config_vars,
             ignore_already_existing,
             auth_ctx,
         )
@@ -89,7 +89,7 @@ impl WorkerService {
         worker_id: &WorkerId,
         component: ComponentDto,
         environment_variables: HashMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<ComponentRevision> {
@@ -107,9 +107,8 @@ impl WorkerService {
         self.worker_client
             .create(
                 worker_id,
-                component.revision,
                 environment_variables,
-                wasi_config_vars,
+                config_vars,
                 ignore_already_existing,
                 environment_auth_details.account_id_owning_environment,
                 component.environment_id,

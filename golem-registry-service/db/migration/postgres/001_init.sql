@@ -759,6 +759,9 @@ CREATE TABLE deployment_domain_http_api_definitions
 CREATE INDEX deployment_domain_http_api_definitions_domain_idx
     ON deployment_domain_http_api_definitions (domain);
 
+CREATE INDEX deployment_domain_http_api_definitions_http_api_definition_idx
+    ON deployment_domain_http_api_definitions (http_api_definition_id);
+
 CREATE TABLE deployment_compiled_http_api_definition_routes
 (
     environment_id         UUID    NOT NULL,
@@ -817,3 +820,6 @@ CREATE TABLE deployment_registered_agent_types
 
 CREATE UNIQUE INDEX deployment_registered_agent_types_agent_type_wrapper_idx
     ON deployment_registered_agent_types (environment_id, deployment_revision_id, agent_wrapper_type_name);
+
+CREATE INDEX deployment_registered_agent_types_components_idx
+    ON deployment_registered_agent_types (component_id, component_revision_id, deployment_revision_id DESC);

@@ -24,6 +24,7 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
     DeploymentPlan, DeploymentRevision, DeploymentSummary, DeploymentVersion,
 };
@@ -255,6 +256,51 @@ impl DeploymentService {
         let agent_types = self
             .deployment_repo
             .list_deployed_agent_types(environment_id.0)
+            .await?
+            .into_iter()
+            .map(|r| r.try_into())
+            .collect::<Result<_, _>>()?;
+
+        Ok(agent_types)
+    }
+
+    pub async fn get_latest_deployed_agent_type_by_component_revision(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+        agent_type_name: &str,
+    ) -> Result<RegisteredAgentType, DeploymentError> {
+        let agent_type = self
+            .deployment_repo
+            .get_latest_deployed_agent_type_by_component_revision(
+                &environment_id.0,
+                &component_id.0,
+                component_revision.into(),
+                agent_type_name,
+            )
+            .await?
+            .ok_or(DeploymentError::AgentTypeNotFound(
+                agent_type_name.to_string(),
+            ))?
+            .try_into()?;
+
+        Ok(agent_type)
+    }
+
+    pub async fn list_latest_deployed_agent_types_by_component_revision(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
+        let agent_types = self
+            .deployment_repo
+            .list_latest_deployed_agent_types_by_component_revision(
+                &environment_id.0,
+                &component_id.0,
+                component_revision.into(),
+            )
             .await?
             .into_iter()
             .map(|r| r.try_into())

@@ -213,6 +213,8 @@ message ResolveComponentSuccessResponse {
 
 message GetAllAgentTypesRequest {
   golem.common.EnvironmentId environment_id = 1;
+  golem.component.ComponentId component_id = 2;
+  uint64 component_revision = 3;
 }
 
 message GetAllAgentTypesResponse {
@@ -228,7 +230,9 @@ message GetAllAgentTypesSuccessResponse {
 
 message GetAgentTypeRequest {
   golem.common.EnvironmentId environment_id = 1;
-  string agentType = 2;
+  golem.component.ComponentId component_id = 2;
+  uint64 component_revision = 3;
+  string agentType = 4;
 }
 
 message GetAgentTypeResponse {

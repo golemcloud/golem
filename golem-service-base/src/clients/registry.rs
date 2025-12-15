@@ -134,11 +134,15 @@ pub trait RegistryService: Send + Sync {
     async fn get_all_agent_types(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError>;
 
     async fn get_agent_type(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         name: &str,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
@@ -560,12 +564,16 @@ impl RegistryService for GrpcRegistryService {
     async fn get_all_agent_types(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
         let response = self
             .client
             .call("get_all_agent_types", move |client| {
                 let request = GetAllAgentTypesRequest {
                     environment_id: Some(environment_id.into()),
+                    component_id: Some(component_id.into()),
+                    component_revision: component_revision.into(),
                 };
 
                 Box::pin(client.get_all_agent_types(request))
@@ -590,6 +598,8 @@ impl RegistryService for GrpcRegistryService {
     async fn get_agent_type(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         name: &str,
     ) -> Result<RegisteredAgentType, RegistryServiceError> {
         let response = self
@@ -597,6 +607,8 @@ impl RegistryService for GrpcRegistryService {
             .call("get_agent_type", move |client| {
                 let request = GetAgentTypeRequest {
                     environment_id: Some(environment_id.into()),
+                    component_id: Some(component_id.into()),
+                    component_revision: component_revision.into(),
                     agent_type: name.to_string(),
                 };
                 Box::pin(client.get_agent_type(request))

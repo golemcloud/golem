@@ -1388,7 +1388,7 @@ fn validated_worker_id<S: AsRef<str>>(
     WorkerId::from_component_metadata_and_worker_id(component_id, component_metadata, id).map_err(
         |error| {
             ApiEndpointError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Invalid worker name: {error}")],
+                errors: vec![format!("Invalid agent id: {error}")],
                 cause: None,
             }))
         },
