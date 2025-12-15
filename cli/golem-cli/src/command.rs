@@ -1267,7 +1267,6 @@ pub mod worker {
 }
 
 pub mod api {
-    use crate::command::api::certificate::ApiCertificateSubcommand;
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
     use crate::command::api::domain::ApiDomainSubcommand;
@@ -1295,11 +1294,6 @@ pub mod api {
         Domain {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
-        },
-        /// Manage API Certificates
-        Certificate {
-            #[clap(subcommand)]
-            subcommand: ApiCertificateSubcommand,
         },
     }
 
@@ -1414,39 +1408,6 @@ pub mod api {
             Delete {
                 /// Domain name
                 domain: String,
-            },
-        }
-    }
-
-    pub mod certificate {
-        use crate::model::PathBufOrStdin;
-        use clap::Subcommand;
-        use uuid::Uuid;
-
-        #[derive(Debug, Subcommand)]
-        pub enum ApiCertificateSubcommand {
-            /// Retrieves metadata about an existing certificate
-            Get {
-                /// Certificate ID
-                certificate_id: Option<Uuid>,
-            },
-            /// Create a new certificate
-            New {
-                /// Domain name
-                #[arg(short, long)]
-                domain_name: String,
-                /// Certificate
-                #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                certificate_body: PathBufOrStdin,
-                /// Certificate private key
-                #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                certificate_private_key: PathBufOrStdin,
-            },
-            /// Delete an existing certificate
-            #[command()]
-            Delete {
-                /// Certificate ID
-                certificate_id: Uuid,
             },
         }
     }

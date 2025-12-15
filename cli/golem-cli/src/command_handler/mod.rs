@@ -331,7 +331,6 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       by moving these simple factory methods into the specific handlers on demand,
 //       if the need ever arises
 pub trait Handlers {
-    // TODO: atomic: fn api_certificate_handler(&self) -> ApiCertificateCommandHandler;
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
     fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
