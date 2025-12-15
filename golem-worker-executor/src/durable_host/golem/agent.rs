@@ -35,9 +35,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
         let result = if durability.is_live() {
             let environment_id = &self.owned_worker_id.environment_id;
+            let component_revision = self.state.component_metadata.revision;
             let result = self
                 .agent_types_service()
-                .get_all(environment_id)
+                .get_all(
+                    environment_id,
+                    &self.owned_worker_id.worker_id.component_id,
+                    component_revision,
+                )
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -66,9 +71,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
         let result = if durability.is_live() {
+            let component_revision = self.state.component_metadata.revision;
             let result = self
                 .agent_types_service()
-                .get(&self.owned_worker_id.environment_id, &agent_type_name)
+                .get(
+                    &self.owned_worker_id.environment_id,
+                    &self.owned_worker_id.worker_id.component_id,
+                    component_revision,
+                    &agent_type_name,
+                )
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;

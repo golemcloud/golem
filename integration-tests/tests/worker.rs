@@ -1788,7 +1788,6 @@ async fn agent_update_constructor_signature(
         .store()
         .await?;
 
-    warn!("*** CALLING V1");
     let agent1 = user
         .start_worker(&component.id, "counter-agent(\"agent1\")")
         .await?;
@@ -1797,7 +1796,6 @@ async fn agent_update_constructor_signature(
         .await?;
     assert_eq!(result1a, vec![Value::U32(1)]);
 
-    warn!("*** CALLING V1 THROUGH RPC");
     let old_singleton = user.start_worker(&component.id, "caller()").await?;
     user.log_output(&old_singleton).await?;
 
@@ -1810,11 +1808,9 @@ async fn agent_update_constructor_signature(
         .await?;
     assert_eq!(result1b, vec![Value::U32(2)]);
 
-    warn!("*** UPDATING COMPONENT");
     user.update_component(&component.id, "it_agent_update_v2_release")
         .await?;
 
-    warn!("*** CALLING V2");
     let agent2 = user
         .start_worker(&component.id, "counter-agent(123)")
         .await?;
@@ -1823,7 +1819,6 @@ async fn agent_update_constructor_signature(
         .await?;
     assert_eq!(result2a, vec![Value::U32(1)]);
 
-    warn!("*** CALLING V2 THROUGH RPC");
     let new_singleton = user.start_worker(&component.id, "new-caller()").await?;
     let result2b = user
         .invoke_and_await(
@@ -1835,12 +1830,10 @@ async fn agent_update_constructor_signature(
     assert_eq!(result2b, vec![Value::U32(2)]);
 
     // Still able to call both agents
-    warn!("*** CALLING V1 AGAIN");
     let result3a = user
         .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
         .await?;
 
-    warn!("*** CALLING V2 AGAIN");
     let result4a = user
         .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
         .await?;
@@ -1849,7 +1842,6 @@ async fn agent_update_constructor_signature(
     assert_eq!(result4a, vec![Value::U32(3)]);
 
     // Still able to do RPC
-    warn!("*** CALLING V1 THROUGH RPC AGAIN");
     let result3b = user
         .invoke_and_await(
             &old_singleton,
@@ -1859,7 +1851,6 @@ async fn agent_update_constructor_signature(
         .await?;
     assert_eq!(result3b, vec![Value::U32(4)]);
 
-    warn!("*** CALLING V2 THROUGH RPC AGAIN");
     let result4b = user
         .invoke_and_await(
             &new_singleton,
@@ -1870,7 +1861,6 @@ async fn agent_update_constructor_signature(
     assert_eq!(result4b, vec![Value::U32(4)]);
 
     // Enumerate agents
-    warn!("*** ENUMERATING AGENTS");
     let mut cursor = ScanCursor::default();
     let mut result = HashSet::new();
     loop {
@@ -1897,7 +1887,6 @@ async fn agent_update_constructor_signature(
     );
 
     // Get their metadata
-    warn!("*** GET AGENT METADATA");
     let _metadata1 = user.get_worker_metadata(&agent1).await?;
     let _metadata2 = user.get_worker_metadata(&agent2).await?;
 
