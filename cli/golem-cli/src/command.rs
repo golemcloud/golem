@@ -782,6 +782,7 @@ pub mod shared_args {
     }
 
     impl DeployArgs {
+        // TODO: atomic: should use env args? check before atomic
         pub fn is_any_set(&self) -> bool {
             self.update_agents.is_some() || self.redeploy_agents || self.reset
         }

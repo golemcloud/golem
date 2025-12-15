@@ -43,9 +43,9 @@ pub struct ComponentFileDiff {
 impl Diffable for ComponentFile {
     type DiffResult = ComponentFileDiff;
 
-    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
-        let content_changed = local.hash != remote.hash;
-        let permissions_changed = local.permissions != remote.permissions;
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let content_changed = new.hash != current.hash;
+        let permissions_changed = new.permissions != current.permissions;
 
         if content_changed || permissions_changed {
             Some(ComponentFileDiff {
@@ -108,14 +108,14 @@ pub struct ComponentDiff {
 impl Diffable for Component {
     type DiffResult = ComponentDiff;
 
-    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
-        let metadata_changed = local.metadata != remote.metadata;
-        let wasm_changed = local.wasm_hash != remote.wasm_hash;
-        let file_changes = local
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let metadata_changed = new.metadata != current.metadata;
+        let wasm_changed = new.wasm_hash != current.wasm_hash;
+        let file_changes = new
             .files_by_path
-            .diff_with_server(&remote.files_by_path)
+            .diff_with_current(&current.files_by_path)
             .unwrap_or_default();
-        let plugins_changed = local.plugins_by_priority != remote.plugins_by_priority;
+        let plugins_changed = new.plugins_by_priority != current.plugins_by_priority;
 
         if metadata_changed || wasm_changed || !file_changes.is_empty() || plugins_changed {
             Some(ComponentDiff {
