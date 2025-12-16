@@ -61,7 +61,7 @@ mod tests {
             let value = uuid_str.parse::<uuid::Uuid>().unwrap();
             let typ = uuid::Uuid::get_type();
             let value_and_type = ValueAndType {
-                value: value.clone().into_value(),
+                value: value.into_value(),
                 typ,
             };
             let recovered = uuid::Uuid::from_value_and_type(value_and_type)
