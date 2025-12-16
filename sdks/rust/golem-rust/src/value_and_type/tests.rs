@@ -327,7 +327,7 @@ fn prop_roundtrip_duration() {
         let duration = Duration::new(secs, nanos);
         let typ = Duration::get_type();
         let value_and_type = ValueAndType {
-            value: duration.clone().into_value(),
+            value: duration.into_value(),
             typ,
         };
         let recovered = Duration::from_value_and_type(value_and_type)

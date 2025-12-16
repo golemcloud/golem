@@ -480,6 +480,34 @@ mod tests {
         }
     }
 
+    #[agent_definition]
+    trait AgentWithReservedMethods {
+        fn new(init: String) -> Self;
+
+        fn get(&self) -> String;
+
+        async fn remote_get(&mut self) -> String;
+    }
+
+    struct AgentWithGetFunctionImpl {}
+
+    #[agent_implementation]
+    impl AgentWithReservedMethods for AgentWithGetFunctionImpl {
+        fn new(_init: String) -> Self {
+            AgentWithGetFunctionImpl {}
+        }
+
+        fn get(&self) -> String {
+            "foo".to_string()
+        }
+
+        async fn remote_get(&mut self) -> String {
+            let client = AgentWithReservedMethodsClient::get_("increment".to_string());
+
+            client.get().await
+        }
+    }
+
     #[derive(Schema, MultimodalSchema)]
     enum TextOrImage {
         Text(String),
