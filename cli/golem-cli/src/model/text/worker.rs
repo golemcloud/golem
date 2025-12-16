@@ -221,6 +221,8 @@ struct WorkerMetadataTableView {
     pub component_revision: ComponentRevision,
     #[table(title = "Status", justify = "Justify::Right")]
     pub status: String,
+    #[table(title = "Pending\ninvocations", justify = "Justify::Right")]
+    pub pending_invocations: u64,
     #[table(title = "Created at")]
     pub created_at: Timestamp,
 }
@@ -234,6 +236,7 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
             status: format_status(&value.status),
             component_revision: value.component_revision,
             created_at: value.created_at,
+            pending_invocations: value.pending_invocation_count,
         }
     }
 }
