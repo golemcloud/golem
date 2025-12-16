@@ -57,7 +57,8 @@ impl Pod {
     }
 
     pub fn uri(&self, tls: bool) -> Uri {
-        grpc_uri(&self.host, self.port, tls)
+        // Note: this needs to go via ip instead of host to work correctly in k8s
+        grpc_uri(&self.ip.to_string(), self.port, tls)
     }
 
     pub fn address(&self) -> Result<vec::IntoIter<SocketAddr>, std::io::Error> {

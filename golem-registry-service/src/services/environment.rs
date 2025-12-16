@@ -38,7 +38,7 @@ pub enum EnvironmentError {
     EnvironmentWithNameAlreadyExists,
     #[error("Environment not found for id {0}")]
     EnvironmentNotFound(EnvironmentId),
-    #[error("Environment not found for name {}", 0.0)]
+    #[error("Environment not found for name {0}")]
     EnvironmentByNameNotFound(EnvironmentName),
     #[error("Application {0} not found")]
     ParentApplicationNotFound(ApplicationId),
