@@ -78,5 +78,6 @@
   "private": false,
   "dependencies": {
     "@golemcloud/golem-ts-types-core": "workspace:*"
-  }
+  },
+  "repository": "https://github.com/golemcloud/golem-agentic"
 }

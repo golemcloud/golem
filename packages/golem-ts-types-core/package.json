@@ -63,5 +63,6 @@
     "typescript-eslint": "^8.39.0",
     "vitest": "^3.2.4"
   },
-  "private": false
+  "private": false,
+  "repository": "https://github.com/golemcloud/golem-agentic"
 }

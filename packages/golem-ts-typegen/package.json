@@ -76,5 +76,6 @@
     "commander": "^14.0.0",
     "log-symbols": "^7.0.1",
     "ts-morph": "^26.0.0"
-  }
+  },
+  "repository": "https://github.com/golemcloud/golem-agentic"
 }
