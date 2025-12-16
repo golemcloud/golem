@@ -35,7 +35,7 @@ pub enum ApplicationError {
     ApplicationWithNameAlreadyExists,
     #[error("Application not found for id {0}")]
     ApplicationNotFound(ApplicationId),
-    #[error("Application not found for name {}", 0.0)]
+    #[error("Application not found for name {0}")]
     ApplicationByNameNotFound(ApplicationName),
     #[error("Parent account not found {0}")]
     ParentAccountNotFound(AccountId),
