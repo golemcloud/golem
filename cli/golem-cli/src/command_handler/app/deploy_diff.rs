@@ -761,7 +761,7 @@ impl RollbackDiff {
     pub fn unified_diffs(&self, show_sensitive: bool) -> RollbackUnifiedDiffs {
         let target_deployment = normalized_diff_deployment(
             show_sensitive,
-            &self.diffable_current_deployment,
+            &self.diffable_target_deployment,
             Some(&self.diff),
         );
 
@@ -804,7 +804,7 @@ impl RollbackDiff {
             ),
             agent_diff: {
                 let diff = diff::unified_diff(current_agents, target_agents);
-                (!diff.is_empty()).then(|| diff)
+                (!diff.is_empty()).then_some(diff)
             },
         }
     }
@@ -837,7 +837,7 @@ impl<'a, Name, Entity> RollbackEntityDetails<Name, &'a Entity> {
                 name,
             },
             diff::BTreeMapDiffValue::Update(_) => Self {
-                new: Some(get_new(&rollback_diff, &name)),
+                new: Some(get_new(rollback_diff, &name)),
                 current: Some(get_current(rollback_diff, &name)),
                 name,
             },

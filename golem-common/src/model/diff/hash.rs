@@ -191,8 +191,8 @@ impl<V: Hashable + Diffable> Diffable for HashOf<V> {
         match diff {
             Some(diff) => Some(DiffForHashOf::ValueDiff { diff }),
             None => Some(DiffForHashOf::HashDiff {
-                new_hash: new_hash,
-                current_hash: current_hash,
+                new_hash,
+                current_hash,
             }),
         }
     }

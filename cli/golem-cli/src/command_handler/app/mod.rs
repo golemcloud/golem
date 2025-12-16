@@ -1001,17 +1001,17 @@ impl AppCommandHandler {
         let rollback_quick_diff = self
             .rollback_quick_diff(environment, deployment_revision)
             .await?;
-        debug!("rollback_quick_diff: {:?}", rollback_quick_diff);
+        debug!("rollback_quick_diff: {:#?}", rollback_quick_diff);
 
         if rollback_quick_diff.is_target_same_as_current() {
             return Ok(None);
         }
 
         let rollback_diff = self.rollback_diff(rollback_quick_diff).await?;
-        debug!("rollback_diff: {:?}", rollback_diff);
+        debug!("rollback_diff: {:#?}", rollback_diff);
 
         let rollback_diff = self.detailed_rollback_diff(rollback_diff).await?;
-        debug!("detailed rollback_diff: {:?}", rollback_diff);
+        debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
         let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive());
 
@@ -1414,7 +1414,18 @@ impl AppCommandHandler {
     ) -> anyhow::Result<CurrentDeployment> {
         let clients = self.ctx.golem_clients().await?;
 
-        log_warn_action("Rollbacking", "environment to revision {}");
+        log_warn_action(
+            "Rolling back",
+            format!(
+                "environment to revision {}",
+                rollback_diff
+                    .target_deployment
+                    .deployment_revision
+                    .get()
+                    .to_string()
+                    .log_color_highlight()
+            ),
+        );
 
         let result = clients
             .environment

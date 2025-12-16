@@ -43,11 +43,11 @@ impl MessageWithFields for DeploymentNewView {
             )
             .fmt_field(
                 "Deployment Revision",
-                &self.deployment.current_revision,
+                &self.deployment.revision,
                 format_main_id,
             )
-            .fmt_field("Deploy Revision", &self.deployment.revision, format_id)
-            .fmt_field("Hash", &self.deployment.deployment_hash, format_id);
+            .fmt_field("Hash", &self.deployment.deployment_hash, format_id)
+            .field("Deploy Revision", &self.deployment.current_revision);
 
         fields.build()
     }
