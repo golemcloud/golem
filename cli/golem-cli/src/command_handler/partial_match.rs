@@ -234,11 +234,12 @@ impl ErrorHandler {
                 Ok(())
             }
             HintError::EnvironmentHasNoDeployment => {
-                logln(
+                log_error(
                     "The requested operation requires an existing deployment for the environment!",
                 );
                 logln("");
-                logln("User 'golem app deploy' for deploying, or select a different environment.");
+                logln("Use 'golem app deploy' for deploying, or select a different environment.");
+                logln("");
                 Ok(())
             }
             HintError::ShowClapHelp(help_target) => {

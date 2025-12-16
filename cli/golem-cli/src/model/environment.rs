@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::error::HintError;
-use crate::log::LogColorize;
+use crate::log::{logln, LogColorize};
 use crate::model::app_raw::Environment;
 use crate::model::text::environment::format_resolved_environment_identity;
 use crate::model::text::fmt::log_warn;
@@ -203,10 +203,13 @@ impl ResolvedEnvironmentIdentity {
         match self.current_deployment() {
             Some(deployment) => f(deployment.deployment_revision).await,
             None => {
+                logln("");
                 log_warn(format!(
                     "The current environment {} has no deployment.",
                     self.text_format()
                 ));
+                logln("Use 'golem app deploy' for deploying, or select a different environment.");
+                logln("");
                 Ok(R::default())
             }
         }
