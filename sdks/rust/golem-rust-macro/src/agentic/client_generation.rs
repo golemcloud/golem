@@ -65,7 +65,6 @@ pub fn get_remote_client(
     };
 
     let get_client_method_name = if method_names.contains_get() {
-        // TODO; Confirm the alternate name
         format_ident!("get_")
     } else {
         format_ident!("get")
