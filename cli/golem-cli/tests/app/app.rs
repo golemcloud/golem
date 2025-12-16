@@ -319,6 +319,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     );
 }
 
+// TODO: atomic: re-enable IF we will have any builtin subcommands for golem app
+#[ignore]
 #[test]
 async fn custom_app_subcommand_with_builtin_name() {
     let mut ctx = TestContext::new();
