@@ -124,29 +124,24 @@ impl DefaultWorkerEnumerationService {
                 .instrument(tracing::info_span!("get_worker_metadata"))
                 .await;
 
-            if let Some((initial_worker_metadata, last_known_status)) =
-                worker_metadata.and_then(|wm| {
-                    wm.last_known_status
-                        .map(|lks| (wm.initial_worker_metadata, lks))
-                })
-            {
+            if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
                     let last_known_status = calculate_last_known_status_for_existing_worker(
                         self,
                         &owned_worker_id,
-                        Some(last_known_status),
+                        worker_metadata.last_known_status,
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await;
 
                     WorkerMetadata {
                         last_known_status,
-                        ..initial_worker_metadata
+                        ..worker_metadata.initial_worker_metadata
                     }
                 } else {
                     WorkerMetadata {
-                        last_known_status,
-                        ..initial_worker_metadata
+                        last_known_status: worker_metadata.last_known_status.unwrap_or_default(),
+                        ..worker_metadata.initial_worker_metadata
                     }
                 };
 
