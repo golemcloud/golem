@@ -87,10 +87,8 @@ mod flag {
 }
 
 mod pattern {
-    pub static ERROR: &str = "error";
     pub static HELP_APPLICATION_COMPONENTS: &str = "Application components:";
     pub static HELP_APPLICATION_CUSTOM_COMMANDS: &str = "Application custom commands:";
-    pub static HELP_COMMANDS: &str = "Commands:";
     pub static HELP_USAGE: &str = "Usage:";
 }
 

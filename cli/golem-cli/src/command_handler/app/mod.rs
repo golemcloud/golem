@@ -421,7 +421,10 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    pub async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
+    pub async fn cmd_diagnose(
+        &self,
+        component_names: AppOptionalComponentNames,
+    ) -> anyhow::Result<()> {
         self.diagnose(
             component_names.component_name,
             &ApplicationComponentSelectMode::All,
@@ -1043,6 +1046,8 @@ impl AppCommandHandler {
             .await
             .map_service_error_not_found_as_opt()?
         else {
+            let _indent = LogIndent::stash();
+
             log_error(format!(
                 "Deployment revision {} not found",
                 deployment_revision.get().to_string().log_color_highlight(),

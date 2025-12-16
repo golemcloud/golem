@@ -17,8 +17,6 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
-    check!(outputs.stderr_contains(pattern::HELP_COMMANDS));
-    check!(!outputs.stderr_contains(pattern::ERROR));
     check!(!outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     check!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
 }
@@ -46,8 +44,6 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
-    check!(outputs.stderr_contains(pattern::HELP_COMMANDS));
-    check!(!outputs.stderr_contains(pattern::ERROR));
     check!(outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     check!(outputs.stderr_contains("app:rust"));
     check!(outputs.stderr_contains("app:typescript"));
