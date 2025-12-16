@@ -339,6 +339,14 @@ async fn postgres_create_insert_select_test(
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
+    let db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_simple_db", 1, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
+
+    let db_address = db_addresses[0].clone();
+
     let statements = vec![
         r#"
              CREATE EXTENSION IF NOT EXISTS vector;
@@ -1047,6 +1055,14 @@ async fn postgres_create_insert_select_array_test(
 ) {
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
+
+    let db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_array_db", 1, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
+
+    let db_address = db_addresses[0].clone();
 
     let statements = vec![
         r#"
@@ -3059,10 +3075,11 @@ fn test_rdbms_pool_key_masked_address() {
 async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
-    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
-        mysql.public_connection_string_to_db(&db_name)
-    })
-    .await;
+    let mut db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_db", 3, |db_name| {
+            mysql.public_connection_string_to_db(&db_name)
+        })
+        .await;
     db_addresses.push(db_address);
 
     rdbms_par_test(
@@ -3081,10 +3098,11 @@ async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefa
 async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsServiceDefault) {
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
-    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
-        postgres.public_connection_string_to_db(&db_name)
-    })
-    .await;
+    let mut db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_db", 3, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
     db_addresses.push(db_address);
 
     rdbms_par_test(
@@ -3102,6 +3120,7 @@ async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsSe
 async fn create_test_databases<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
+    db_name_prefix: &str,
     count: u8,
     to_db_address: impl Fn(String) -> String,
 ) -> Vec<String> {
@@ -3114,7 +3133,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
     let mut values: Vec<String> = Vec::with_capacity(count as usize);
 
     for i in 0..count {
-        let db_name = format!("test_db_{i}");
+        let db_name = format!("{db_name_prefix}_{i}");
 
         let r = rdbms
             .execute(
