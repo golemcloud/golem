@@ -47,6 +47,11 @@ export type ResultTypeNonExact2 =
   | { tag: 'ok'; okValue: number }
   | { tag: 'err'; errValue: string };
 
+// Result type Kind is similar looking, but it's okValue and errValue instead of val
+export type ResultTypeNonExact3 =
+  | { tag: 'ok'; okValue: void }
+  | { tag: 'err'; errValue: void };
+
 export type ResultTypeInvalid1 =
   | { tag: 'ok'; okValOpt?: number }
   | { tag: 'err'; errVal: string };

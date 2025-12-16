@@ -342,7 +342,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
       const analysedType = unionTypeMapRegistry.get(hash);
 
-      // We reuse the analysed only for anoymous types
+      // We reuse the analysed only for anonymous types
       if (analysedType && !type.name) {
 
         if (type.unionTypes.some((ut) => ut.kind === "null")) {
@@ -780,7 +780,9 @@ function convertTaggedTypesToVariant(typeName: string | undefined, taggedTypes: 
 
 function convertUserDefinedResultToWitResult(typeName: string | undefined, resultType: UserDefinedResultType): Either.Either<AnalysedType, string> {
   const okTypeResult = resultType.okType
-    ? fromTsTypeInternal(resultType.okType[1], Option.none())
+    ? isVoidType(resultType.okType[1])
+      ? undefined
+      : fromTsTypeInternal(resultType.okType[1], Option.none())
     : undefined;
 
   if (okTypeResult && Either.isLeft(okTypeResult)) {
@@ -788,7 +790,8 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
   }
 
   const errTypeResult = resultType.errType
-    ? fromTsTypeInternal(resultType.errType[1], Option.none())
+    ? isVoidType(resultType.errType[1])
+      ? undefined : fromTsTypeInternal(resultType.errType[1], Option.none())
     : undefined;
 
   if (errTypeResult && Either.isLeft(errTypeResult)) {
@@ -806,6 +809,10 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
       errTypeResult ? errTypeResult.val : undefined
     )
   );
+}
+
+function isVoidType(t: TsType): boolean {
+  return t.kind === 'void'
 }
 
 function includesUndefined(

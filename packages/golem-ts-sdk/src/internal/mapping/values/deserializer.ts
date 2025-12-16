@@ -325,7 +325,8 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
             const okType = analysedType.value.ok;
             const errType = analysedType.value.err;
 
-            // ok and err together
+            // ok type and err type exists and therefore deserialize the value
+            // explicitly using their types
             if (okName && errName && okType && errType) {
               if (value.value.ok) {
                 return {
@@ -342,6 +343,9 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               }
             }
 
+            // err type doesn't exist, but ok type exists
+            // if ok value exists, deserialize it using ok type
+            // otherwise return just tag 'err'
             if (okName && okType && !errType) {
               if (value.value.ok) {
                 return {
@@ -355,6 +359,9 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               }
             }
 
+            // ok type doesn't exist, but err type exists
+            // if err value exists, deserialize it using err type
+            // otherwise return just tag 'ok'
             if (errName && errType && !okType) {
               if (value.value.err) {
                 return {
@@ -364,6 +371,26 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               } else {
                 return {
                   tag: 'ok',
+                };
+              }
+            }
+
+            // ok value is either undefined or null, however the ok type is `void`
+            if (okName && !okType && 'ok' in value.value) {
+              if (value.value.ok === undefined || value.value.ok === null) {
+                return {
+                  tag: 'ok',
+                  [okName]: value.value.ok,
+                };
+              }
+            }
+
+            // err value is either undefined or null, however the err type is `void`
+            if (errName && !errType && 'err' in value.value) {
+              if (value.value.err === undefined || value.value.err === null) {
+                return {
+                  tag: 'err',
+                  [errName]: value.value.err,
                 };
               }
             }
