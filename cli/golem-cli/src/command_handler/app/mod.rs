@@ -439,20 +439,23 @@ impl AppCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
-        let current_deployment = environment.current_deployment_or_err()?;
 
-        let agent_types = self
-            .ctx
-            .golem_clients()
-            .await?
-            .environment
-            .list_deployment_agent_types(
-                &environment.environment_id.0,
-                current_deployment.deployment_revision.into(),
-            )
-            .await
-            .map_service_error()?
-            .values;
+        let agent_types = environment
+            .with_current_deployment_revision_or_default_warn(|current_deployment_revision| async move {
+                Ok(self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment
+                    .list_deployment_agent_types(
+                        &environment.environment_id.0,
+                        current_deployment_revision.into(),
+                    )
+                    .await
+                    .map_service_error()?
+                    .values)
+            })
+            .await?;
 
         self.ctx.log_handler().log_view(&agent_types);
 

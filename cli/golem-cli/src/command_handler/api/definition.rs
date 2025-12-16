@@ -101,19 +101,25 @@ impl ApiDefinitionCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
-        let current_deployment = environment.current_deployment_or_err()?;
 
-        let clients = self.ctx.golem_clients().await?;
-
-        let definitions = clients
-            .environment
-            .list_deployment_http_api_definitions(
-                &environment.environment_id.0,
-                current_deployment.deployment_revision.get(),
+        let definitions = environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    Ok(self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .list_deployment_http_api_definitions(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                        )
+                        .await
+                        .map_service_error()?
+                        .values)
+                },
             )
-            .await
-            .map_service_error()?
-            .values;
+            .await?;
 
         self.ctx.log_handler().log_view(&definitions);
 
@@ -359,31 +365,35 @@ impl ApiDefinitionCommandHandler {
         name: &HttpApiDefinitionName,
         revision: Option<&HttpApiDefinitionRevision>,
     ) -> anyhow::Result<Option<HttpApiDefinition>> {
-        let clients = self.ctx.golem_clients().await?;
-        let current_deployment = environment.current_deployment_or_err()?;
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    let clients = self.ctx.golem_clients().await?;
+                    let Some(definition) = clients
+                        .api_definition
+                        .get_http_api_definition_in_deployment(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                            &name.0,
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()?
+                    else {
+                        return Ok(None);
+                    };
 
-        let Some(definition) = clients
-            .api_definition
-            .get_http_api_definition_in_deployment(
-                &environment.environment_id.0,
-                current_deployment.deployment_revision.get(),
-                &name.0,
+                    let Some(revision) = revision else {
+                        return Ok(Some(definition));
+                    };
+
+                    clients
+                        .api_definition
+                        .get_http_api_definition_revision(&definition.id.0, (*revision).into())
+                        .await
+                        .map_service_error_not_found_as_opt()
+                },
             )
             .await
-            .map_service_error_not_found_as_opt()?
-        else {
-            return Ok(None);
-        };
-
-        let Some(revision) = revision else {
-            return Ok(Some(definition));
-        };
-
-        clients
-            .api_definition
-            .get_http_api_definition_revision(&definition.id.0, (*revision).into())
-            .await
-            .map_service_error_not_found_as_opt()
     }
 
     pub async fn get_http_api_definition_revision_by_id(

@@ -297,24 +297,29 @@ impl ComponentCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
-        let current_deployment = environment.current_deployment_or_err()?;
 
-        let results = self
-            .ctx
-            .golem_clients()
-            .await?
-            .component
-            .get_deployment_components(
-                &environment.environment_id.0,
-                current_deployment.deployment_revision.get(),
+        let components = environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    Ok(self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .component
+                        .get_deployment_components(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                        )
+                        .await?
+                        .values
+                        .into_iter()
+                        .map(|component| ComponentView::new_wit_style(show_sensitive, component))
+                        .collect::<Vec<_>>())
+                },
             )
-            .await?
-            .values
-            .into_iter()
-            .map(|component| ComponentView::new_wit_style(show_sensitive, component))
-            .collect::<Vec<_>>();
+            .await?;
 
-        self.ctx.log_handler().log_view(&results);
+        self.ctx.log_handler().log_view(&components);
 
         Ok(())
     }
@@ -1224,19 +1229,23 @@ impl ComponentCommandHandler {
         environment: &ResolvedEnvironmentIdentity,
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<ComponentDto>> {
-        let current_deployment = environment.current_deployment_or_err()?;
-
-        self.ctx
-            .golem_clients()
-            .await?
-            .component
-            .get_deployment_component(
-                &environment.environment_id.0,
-                current_deployment.deployment_revision.get(),
-                component_name.0.as_str(),
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    self.ctx
+                        .golem_clients()
+                        .await?
+                        .component
+                        .get_deployment_component(
+                            &environment.environment_id.0,
+                            current_deployment_revision.get(),
+                            component_name.0.as_str(),
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()
+                },
             )
             .await
-            .map_service_error_not_found_as_opt()
     }
 
     pub async fn get_component_revision_by_id(

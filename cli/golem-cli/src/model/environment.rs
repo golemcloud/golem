@@ -16,14 +16,17 @@ use crate::error::HintError;
 use crate::log::LogColorize;
 use crate::model::app_raw::Environment;
 use crate::model::text::environment::format_resolved_environment_identity;
+use crate::model::text::fmt::log_warn;
 use anyhow::bail;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{
     EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName,
 };
 use indoc::formatdoc;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::str::FromStr;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -175,11 +178,36 @@ impl ResolvedEnvironmentIdentity {
         format_resolved_environment_identity(self)
     }
 
+    pub fn current_deployment(&self) -> Option<&EnvironmentCurrentDeploymentView> {
+        self.server_environment.current_deployment.as_ref()
+    }
+
     pub fn current_deployment_or_err(&self) -> anyhow::Result<&EnvironmentCurrentDeploymentView> {
         match self.server_environment.current_deployment.as_ref() {
             Some(deployment) => Ok(deployment),
             None => {
                 bail!(HintError::EnvironmentHasNoDeployment);
+            }
+        }
+    }
+
+    pub async fn with_current_deployment_revision_or_default_warn<F, Fut, R>(
+        &self,
+        f: F,
+    ) -> anyhow::Result<R>
+    where
+        F: FnOnce(DeploymentRevision) -> Fut,
+        Fut: Future<Output = anyhow::Result<R>>,
+        R: Default,
+    {
+        match self.current_deployment() {
+            Some(deployment) => f(deployment.deployment_revision).await,
+            None => {
+                log_warn(format!(
+                    "The current environment {} has no deployment.",
+                    self.text_format()
+                ));
+                Ok(R::default())
             }
         }
     }

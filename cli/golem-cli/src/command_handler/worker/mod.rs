@@ -666,46 +666,50 @@ impl WorkerCommandHandler {
                     .environment_handler()
                     .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
-                let current_deployment = environment.current_deployment_or_err()?;
+                environment
+                    .with_current_deployment_revision_or_default_warn(
+                        |current_deployment_revision| async move {
+                            debug!("Finding agent type {}", agent_type_name);
+                            let Some(agent_type) = clients
+                                .environment
+                                .get_deployment_agent_type(
+                                    &environment.environment_id.0,
+                                    current_deployment_revision.into(),
+                                    &agent_type_name,
+                                )
+                                .await
+                                .map_service_error_not_found_as_opt()?
+                            else {
+                                log_error(format!(
+                                    "Agent type {} not found",
+                                    agent_type_name.log_color_highlight()
+                                ));
+                                bail!(NonSuccessfulExit)
+                            };
 
-                debug!("Finding agent type {}", agent_type_name);
-                let Some(agent_type) = clients
-                    .environment
-                    .get_deployment_agent_type(
-                        &environment.environment_id.0,
-                        current_deployment.revision.get(),
-                        &agent_type_name,
+                            let mut filters = filters;
+                            filters.insert(
+                                0,
+                                format!(
+                                    "name startswith {}(",
+                                    agent_type.agent_type.wrapper_type_name()
+                                ),
+                            );
+
+                            Ok((
+                                vec![
+                                    component_handler
+                                        .get_component_revision_by_id(
+                                            &agent_type.implemented_by.component_id,
+                                            agent_type.implemented_by.component_revision,
+                                        )
+                                        .await?,
+                                ],
+                                filters,
+                            ))
+                        },
                     )
-                    .await
-                    .map_service_error_not_found_as_opt()?
-                else {
-                    log_error(format!(
-                        "Agent type {} not found",
-                        agent_type_name.log_color_highlight()
-                    ));
-                    bail!(NonSuccessfulExit)
-                };
-
-                let mut filters = filters;
-                filters.insert(
-                    0,
-                    format!(
-                        "name startswith {}(",
-                        agent_type.agent_type.wrapper_type_name()
-                    ),
-                );
-
-                (
-                    vec![
-                        component_handler
-                            .get_component_revision_by_id(
-                                &agent_type.implemented_by.component_id,
-                                agent_type.implemented_by.component_revision,
-                            )
-                            .await?,
-                    ],
-                    filters,
-                )
+                    .await?
             }
             None => {
                 let selected_components = self
@@ -715,34 +719,38 @@ impl WorkerCommandHandler {
                     .await?;
 
                 let environment = &selected_components.environment;
-                let current_deployment = environment.current_deployment_or_err()?;
 
-                let mut components = Vec::with_capacity(selected_components.component_names.len());
-                for component_name in selected_components.component_names {
-                    match clients
-                        .component
-                        .get_deployment_component(
-                            &environment.environment_id.0,
-                            current_deployment.deployment_revision.get(),
-                            component_name.as_str(),
-                        )
-                        .await
-                        .map_service_error_not_found_as_opt()?
-                    {
-                        Some(component) => {
-                            components.push(component);
+                environment.with_current_deployment_revision_or_default_warn(
+                    |current_deployment_revision| async move {
+                        let mut components =
+                            Vec::with_capacity(selected_components.component_names.len());
+                        for component_name in selected_components.component_names {
+                            match clients
+                                .component
+                                .get_deployment_component(
+                                    &environment.environment_id.0,
+                                    current_deployment_revision.into(),
+                                    component_name.as_str(),
+                                )
+                                .await
+                                .map_service_error_not_found_as_opt()?
+                            {
+                                Some(component) => {
+                                    components.push(component);
+                                }
+                                None => {
+                                    log_error(format!(
+                                        "Component not found: {}",
+                                        component_name.0.log_color_error_highlight()
+                                    ));
+                                    bail!(NonSuccessfulExit)
+                                }
+                            }
                         }
-                        None => {
-                            log_error(format!(
-                                "Component not found: {}",
-                                component_name.0.log_color_error_highlight()
-                            ));
-                            bail!(NonSuccessfulExit)
-                        }
-                    }
-                }
 
-                (components, filters)
+                        Ok((components, filters))
+                    },
+                ).await?
             }
         };
 
