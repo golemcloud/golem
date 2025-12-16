@@ -333,7 +333,7 @@ impl AppCommandHandler {
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         if let Some(version) = version {
-            self.deploy_by_version(version, deploy_args).await
+            self.deploy_by_version(version, plan, deploy_args).await
         } else if let Some(revision) = revision {
             self.deploy_by_revision(revision, plan, deploy_args).await
         } else {
@@ -441,20 +441,22 @@ impl AppCommandHandler {
             .await?;
 
         let agent_types = environment
-            .with_current_deployment_revision_or_default_warn(|current_deployment_revision| async move {
-                Ok(self
-                    .ctx
-                    .golem_clients()
-                    .await?
-                    .environment
-                    .list_deployment_agent_types(
-                        &environment.environment_id.0,
-                        current_deployment_revision.into(),
-                    )
-                    .await
-                    .map_service_error()?
-                    .values)
-            })
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    Ok(self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .list_deployment_agent_types(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                        )
+                        .await
+                        .map_service_error()?
+                        .values)
+                },
+            )
             .await?;
 
         self.ctx.log_handler().log_view(&agent_types);
@@ -472,18 +474,52 @@ impl AppCommandHandler {
 
     async fn deploy_by_version(
         &self,
-        _version: String,
-        _deploy_args: DeployArgs,
+        version: String,
+        plan: bool,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        let _environment = self
+        let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        // TODO: atomic
+        let _ = environment.current_deployment_or_err()?;
 
-        Ok(())
+        let clients = self.ctx.golem_clients().await?;
+
+        let deployments = clients
+            .environment
+            .list_deployments(&environment.environment_id.0, Some(&version))
+            .await
+            .map_service_error()?
+            .values;
+
+        if deployments.len() == 0 {
+            log_error(format!(
+                "Deployment with version {} not found!",
+                version.log_color_error_highlight()
+            ));
+            self.show_available_deployments(&environment).await?;
+            bail!(NonSuccessfulExit);
+        } else if deployments.len() > 1 {
+            log_error(format!(
+                "Multiple deployment found with version {}, use deployment revision instead!",
+                version.log_color_error_highlight()
+            ));
+            self.ctx.log_handler().log_view(&deployments);
+            bail!(NonSuccessfulExit);
+        }
+
+        self.deploy_by_revision(
+            deployments
+                .first()
+                .map(|d| d.revision)
+                .expect("No deployments"),
+            plan,
+            deploy_args,
+        )
+        .await
     }
 
     async fn deploy_by_revision(
@@ -1054,7 +1090,7 @@ impl AppCommandHandler {
                 "Deployment revision {} not found",
                 deployment_revision.get().to_string().log_color_highlight(),
             ));
-            // TODO: atomic: list available deployment revisions
+            self.show_available_deployments(&environment).await?;
             bail!(NonSuccessfulExit);
         };
 
@@ -1946,6 +1982,28 @@ impl AppCommandHandler {
 
             diagnose(app_ctx.application.component(component_name).source(), None);
         }
+
+        Ok(())
+    }
+
+    async fn show_available_deployments(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<()> {
+        logln("");
+        logln("Available deployments:".log_color_help_group().to_string());
+        logln("");
+
+        let deployments = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .list_deployments(&environment.environment_id.0, None)
+            .await
+            .map_service_error()?
+            .values;
+        self.ctx.log_handler().log_view(&deployments);
 
         Ok(())
     }
