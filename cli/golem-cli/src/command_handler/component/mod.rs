@@ -912,9 +912,16 @@ impl ComponentCommandHandler {
                             deploy_args: DeployArgs::none(),
                         })
                         .await?;
+
+                    let environment = self
+                        .ctx
+                        .environment_handler()
+                        .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+                        .await?;
+
                     self.ctx
                         .component_handler()
-                        .resolve_component(environment, component_name, None)
+                        .resolve_component(&environment, component_name, None)
                         .await?
                         .ok_or_else(|| {
                             anyhow!("Component ({}) not found after deployment", component_name)
