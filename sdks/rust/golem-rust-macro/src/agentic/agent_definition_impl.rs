@@ -335,7 +335,8 @@ fn get_agent_type_with_remote_client(
     let mut constructor_prompt = String::new();
     let mut constructor_name = String::new();
 
-    let high_level_description = extract_description(&agent_definition_trait.attrs).unwrap_or_default();
+    let high_level_description =
+        extract_description(&agent_definition_trait.attrs).unwrap_or_default();
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
         constructor_description = extract_description(&ctor_fn.attrs).unwrap_or_default();
@@ -426,7 +427,7 @@ fn get_agent_type_with_remote_client(
         quote! { Some(#constructor_prompt.to_string()) }
     };
 
-   let constructor_name = if constructor_name.is_empty() {
+    let constructor_name = if constructor_name.is_empty() {
         quote! { None }
     } else {
         quote! { Some(#constructor_name.to_string()) }
@@ -445,13 +446,11 @@ fn get_agent_type_with_remote_client(
         }
     };
 
-
     let high_level_description_ident = if high_level_description.is_empty() {
         quote! { "" }
     } else {
         quote! { #high_level_description }
     };
-
 
     Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {

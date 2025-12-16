@@ -18,14 +18,15 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
     use golem_rust::agentic::{
-        Multimodal, MultimodalAdvanced, MultimodalCustom, Schema, UnstructuredBinary,
-        UnstructuredText,
+        AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
+        UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
+    use golem_rust_macro::{description, prompt};
     use std::fmt::Debug;
     use test_r::test;
 
@@ -523,6 +524,58 @@ mod tests {
     #[test] // only to verify that the agent compiles correctly
     fn test_agent_compilation() {
         assert!(true);
+    }
+
+    #[agent_definition]
+    #[description("a descriptive agent")]
+    pub trait DescriptiveAgent {
+        #[description("new constructor")]
+        #[prompt("new prompt")]
+        fn new(name: String) -> Self;
+
+        #[description("increment description")]
+        #[prompt("increment prompt")]
+        fn increment(&mut self) -> u32;
+    }
+
+    struct DescriptiveAgentImpl {}
+
+    impl DescriptiveAgent for DescriptiveAgentImpl {
+        fn new(_name: String) -> Self {
+            DescriptiveAgentImpl {}
+        }
+
+        fn increment(&mut self) -> u32 {
+            1
+        }
+    }
+
+    #[test]
+    fn test_agent_description_and_prompts() {
+        DescriptiveAgentImpl::__register_agent_type();
+
+        let agent_name = AgentTypeName("DescriptiveAgent".to_string());
+
+        let agent =
+            golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
+
+        let increment_method = agent.methods.first().expect("increment method not found");
+
+        assert_eq!(agent.description, "a descriptive agent");
+
+        assert_eq!(agent.constructor.description, "new constructor");
+
+        assert_eq!(
+            agent.constructor.prompt_hint,
+            Some("new prompt".to_string())
+        );
+
+        assert_eq!(increment_method.description, "increment description");
+
+        assert_eq!(
+            increment_method.prompt_hint,
+            Some("increment prompt".to_string())
+        );
     }
 
     #[test]
