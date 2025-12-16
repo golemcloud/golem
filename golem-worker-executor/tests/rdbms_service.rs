@@ -3218,7 +3218,19 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         let _ = rdbms.remove(&pool_key, &worker_id).await;
     }
 
-    check!(rdbms_status.pools.len() == db_addresses.len());
+    let pool_keys = db_addresses
+        .iter()
+        .map(|a| RdbmsPoolKey::from(a.as_str()))
+        .collect::<Result<Vec<RdbmsPoolKey>, String>>();
+
+    check!(pool_keys.is_ok(), "pool keys are ok");
+    check!(
+        pool_keys
+            .unwrap()
+            .iter()
+            .all(|key| rdbms_status.pools.contains_key(key)),
+        "pool keys match"
+    );
 
     for (worker_id, pool_key) in workers_pools {
         let worker_ids = rdbms_status.pools.get(&pool_key);
