@@ -51,7 +51,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -217,13 +216,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        let component_version: ComponentRevision =
-            request.component_version.try_into().map_err(|e| {
-                WorkerExecutorError::invalid_request(format!(
-                    "failed converting component versions: {e}"
-                ))
-            })?;
-
         let existing_worker = self.worker_service().get(&owned_worker_id).await;
         if existing_worker.is_some() && !request.ignore_already_existing {
             return Err(WorkerExecutorError::worker_already_exists(
@@ -250,7 +242,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ))?
                     .into(),
             ),
-            Some(component_version),
+            None,
             None,
             &InvocationContextStack::fresh(),
         )
@@ -1781,7 +1773,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "create_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
-            component_version = request.component_version
         );
 
         match self

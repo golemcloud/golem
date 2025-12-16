@@ -609,6 +609,17 @@ enum FutureInvokeResultState {
     },
 }
 
+impl Debug for FutureInvokeResultState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending { .. } => write!(f, "Pending"),
+            Self::Completed { .. } => write!(f, "Completed"),
+            Self::Deferred { .. } => write!(f, "Deferred"),
+            Self::Consumed { .. } => write!(f, "Consumed"),
+        }
+    }
+}
+
 impl FutureInvokeResultState {
     pub fn span_id(&self) -> &SpanId {
         match self {

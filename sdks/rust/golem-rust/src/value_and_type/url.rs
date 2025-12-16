@@ -20,7 +20,7 @@ impl IntoValue for url::Url {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let builder = builder.record();
         let builder = builder.item();
-        builder.string(&self.to_string()).finish()
+        builder.string(self.as_ref()).finish()
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {

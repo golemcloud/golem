@@ -782,7 +782,7 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "Disabled" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "Disabled" }
 
 script = { file = "./local-run/start.sh" }
 
@@ -797,7 +797,7 @@ condition = { env_set = [
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "OAuth2" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "OAuth2" }
 
 script = { file = "./local-run/start.sh" }
 
@@ -825,8 +825,8 @@ export RUST_BACKTRACE=1
 ./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
 
-# ./target/debug/golem-debugging-service --dump-config-default-toml > golem-debugging-service/config/debug-worker-executor.toml
-# ./target/debug/golem-debugging-service --dump-config-default-env-var > golem-debugging-service/config/debug-worker-executor.sample.env
+./target/debug/golem-debugging-service --dump-config-default-toml > golem-debugging-service/config/debug-worker-executor.toml
+./target/debug/golem-debugging-service --dump-config-default-env-var > golem-debugging-service/config/debug-worker-executor.sample.env
 '''
 
 ## ** CHECK CONFIGS **
@@ -848,8 +848,7 @@ git diff --exit-code \
     golem-worker-executor/config/worker-executor.toml \
     golem-worker-executor/config/worker-executor.sample.env \
     golem-debugging-service/config/debug-worker-executor.toml \
-    golem-debugging-service/config/debug-worker-executor.sample.env \
-
+    golem-debugging-service/config/debug-worker-executor.sample.env
 '''
 
 ## ** Elastic tasks **
