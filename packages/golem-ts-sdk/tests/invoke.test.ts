@@ -462,9 +462,17 @@ test('Invoke function that takes and returns custom result type with void', () =
 
   testInvoke(
     'fun43',
-    [['param', 'foo']],
+    [['param', { tag: 'ok', okValue: undefined }]],
     resolvedAgent,
     { tag: 'ok', okValue: undefined },
+    false,
+  );
+
+  testInvoke(
+    'fun43',
+    [['param', { tag: 'err', errValue: undefined }]],
+    resolvedAgent,
+    { tag: 'err', errValue: undefined },
     false,
   );
 });
