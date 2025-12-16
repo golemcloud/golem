@@ -82,54 +82,11 @@ impl AppCommandHandler {
 
     pub async fn handle_command(&self, subcommand: AppSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            AppSubcommand::New {
-                application_name,
-                language,
-            } => self.cmd_new(application_name, language).await,
-            AppSubcommand::Build {
-                component_name,
-                build: build_args,
-            } => self.cmd_build(component_name, build_args).await,
-            AppSubcommand::Deploy {
-                plan,
-                stage,
-                approve_staging_steps,
-                version,
-                revision,
-                force_build,
-                deploy_args,
-            } => {
-                self.cmd_deploy(
-                    plan,
-                    stage,
-                    approve_staging_steps,
-                    version,
-                    revision,
-                    force_build,
-                    deploy_args,
-                )
-                .await
-            }
-            AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
-            AppSubcommand::UpdateAgents {
-                component_name,
-                update_mode,
-                r#await,
-            } => {
-                self.cmd_update_workers(component_name.component_name, update_mode, r#await)
-                    .await
-            }
-            AppSubcommand::RedeployAgents { component_name } => {
-                self.cmd_redeploy_workers(component_name.component_name)
-                    .await
-            }
-            AppSubcommand::Diagnose { component_name } => self.cmd_diagnose(component_name).await,
-            AppSubcommand::ListAgentTypes {} => self.cmd_list_agent_types().await,
             AppSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
         }
     }
 
-    async fn cmd_new(
+    pub async fn cmd_new(
         &self,
         application_name: Option<ApplicationName>,
         languages: Vec<GuestLanguage>,
@@ -301,7 +258,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    async fn cmd_build(
+    pub async fn cmd_build(
         &self,
         component_name: AppOptionalComponentNames,
         build_args: BuildArgs,
@@ -314,7 +271,7 @@ impl AppCommandHandler {
         .await
     }
 
-    async fn cmd_clean(&self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
+    pub async fn cmd_clean(&self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
         self.clean(
             component_name.component_name,
             &ApplicationComponentSelectMode::All,
@@ -322,7 +279,7 @@ impl AppCommandHandler {
         .await
     }
 
-    async fn cmd_deploy(
+    pub async fn cmd_deploy(
         &self,
         plan: bool,
         stage: bool,
@@ -348,7 +305,7 @@ impl AppCommandHandler {
         }
     }
 
-    async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
+    pub async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
         if command.len() != 1 {
             bail!(
                 "Expected exactly one custom subcommand, got: {}",
@@ -399,7 +356,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    async fn cmd_update_workers(
+    pub async fn cmd_update_workers(
         &self,
         component_names: Vec<ComponentName>,
         update_mode: AgentUpdateMode,
@@ -417,7 +374,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    async fn cmd_redeploy_workers(
+    pub async fn cmd_redeploy_workers(
         &self,
         component_names: Vec<ComponentName>,
     ) -> anyhow::Result<()> {
@@ -433,7 +390,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
+    pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
         let environment = self
             .ctx
             .environment_handler()
@@ -464,7 +421,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
+    pub async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
         self.diagnose(
             component_names.component_name,
             &ApplicationComponentSelectMode::All,

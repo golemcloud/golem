@@ -20,7 +20,9 @@ use crate::command::environment::EnvironmentSubcommand;
 use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
-use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
+use crate::command::shared_args::{
+    AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
+};
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
@@ -28,7 +30,7 @@ use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
-use crate::model::worker::WorkerName;
+use crate::model::worker::{AgentUpdateMode, WorkerName};
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
@@ -37,7 +39,10 @@ use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::deployment::DeploymentRevision;
+use golem_templates::model::GuestLanguage;
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -413,6 +418,7 @@ impl GolemCliCommand {
                             .map(|arg| arg.as_ref())
                             .collect::<Vec<_>>();
                         match positional_args.as_slice() {
+                            [] => Some(GolemCliCommandPartialMatch::AppHelp),
                             ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
                             ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
                             ["agent"] => Some(GolemCliCommandPartialMatch::AgentHelp),
@@ -439,6 +445,7 @@ impl GolemCliCommand {
                             .map(|arg| arg.as_ref())
                             .collect::<Vec<_>>();
                         match positional_args.as_slice() {
+                            [] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
                             ["app"] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
                             ["component"] => {
                                 Some(GolemCliCommandPartialMatch::ComponentMissingSubcommandHelp)
@@ -587,8 +594,92 @@ pub enum GolemCliCommandPartialMatch {
 
 #[derive(Debug, Subcommand)]
 pub enum GolemCliSubcommand {
-    #[command(alias = "application")]
-    /// Build, deploy application
+    // App scoped root commands---------------------------------------------------------------------
+    /// Create a new application
+    New {
+        /// Application folder name where the new application should be created
+        application_name: Option<ApplicationName>,
+        /// Languages that the application should support
+        language: Vec<GuestLanguage>,
+    },
+    /// Build all or selected components in the application
+    Build {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+        #[command(flatten)]
+        build: BuildArgs,
+    },
+    /// Start Rib REPL for a selected component
+    Repl {
+        #[command(flatten)]
+        component_name: ComponentOptionalComponentName,
+        /// Optional component revision to use, defaults to latest deployed component revision
+        revision: Option<ComponentRevision>,
+        #[command(flatten)]
+        deploy_args: Option<DeployArgs>,
+        /// Optional script to run, when defined the repl will execute the script and exit
+        #[clap(long, short, conflicts_with_all = ["script_file"])]
+        script: Option<String>,
+        /// Optional script_file to run, when defined the repl will execute the script and exit
+        #[clap(long, conflicts_with_all = ["script"])]
+        script_file: Option<PathBuf>,
+        /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
+        #[clap(long)]
+        disable_stream: bool,
+    },
+    /// Deploy application
+    Deploy {
+        /// Only plan deployment, but apply no changes to the staging area or the environment
+        #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
+        plan: bool,
+        /// Only plan and stage changes, but do not apply them to the environment; used for testing
+        #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+        stage: bool,
+        /// Ask for approval for every staging step; used for testing
+        #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+        approve_staging_steps: bool,
+        /// Revert to the specified version
+        #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
+        version: Option<String>,
+        /// Revert to the specified revision
+        #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
+        revision: Option<DeploymentRevision>,
+        #[command(flatten)]
+        force_build: ForceBuildArg,
+        #[command(flatten)]
+        deploy_args: DeployArgs,
+    },
+    /// Clean all components in the application or by selection
+    Clean {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+    },
+    /// Try to automatically update all existing agents of the application to the latest version
+    UpdateAgents {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+        /// Update mode - auto or manual, defaults to "auto"
+        #[arg(long, short, default_value = "auto")]
+        update_mode: AgentUpdateMode,
+        /// Await the update to be completed
+        #[arg(long, default_value_t = false)]
+        r#await: bool,
+    },
+    /// Redeploy all agents of the application using the latest version
+    RedeployAgents {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+    },
+    /// Diagnose possible tooling problems
+    Diagnose {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+    },
+    /// List all the deployed agent types
+    ListAgentTypes {},
+
+    // Other entities ------------------------------------------------------------------------------
+    /// Run custom, application defined commands
     App {
         #[clap(subcommand)]
         subcommand: AppSubcommand,
@@ -635,24 +726,6 @@ pub enum GolemCliSubcommand {
     Cloud {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
-    },
-    /// Start Rib REPL for a selected component
-    Repl {
-        #[command(flatten)]
-        component_name: ComponentOptionalComponentName,
-        /// Optional component revision to use, defaults to latest deployed component revision
-        revision: Option<ComponentRevision>,
-        #[command(flatten)]
-        deploy_args: Option<DeployArgs>,
-        /// Optional script to run, when defined the repl will execute the script and exit
-        #[clap(long, short, conflicts_with_all = ["script_file"])]
-        script: Option<String>,
-        /// Optional script_file to run, when defined the repl will execute the script and exit
-        #[clap(long, conflicts_with_all = ["script"])]
-        script_file: Option<PathBuf>,
-        /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
-        #[clap(long)]
-        disable_stream: bool,
     },
     /// Generate shell completion
     Completion {
@@ -849,82 +922,11 @@ pub mod shared_args {
 }
 
 pub mod app {
-    use crate::command::shared_args::{
-        AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
-    };
-    use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
-    use golem_common::model::application::ApplicationName;
-    use golem_common::model::deployment::DeploymentRevision;
-    use golem_templates::model::GuestLanguage;
 
     #[derive(Debug, Subcommand)]
     pub enum AppSubcommand {
-        /// Create a new application
-        New {
-            /// Application folder name where the new application should be created
-            application_name: Option<ApplicationName>,
-            /// Languages that the application should support
-            language: Vec<GuestLanguage>,
-        },
-        /// Build all or selected components in the application
-        Build {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-            #[command(flatten)]
-            build: BuildArgs,
-        },
-        /// Deploy application
-        Deploy {
-            /// Only plan deployment, but apply no changes to the staging area or the environment
-            #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
-            plan: bool,
-            /// Only plan and stage changes, but do not apply them to the environment; used for testing
-            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
-            stage: bool,
-            /// Ask for approval for every staging step; used for testing
-            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
-            approve_staging_steps: bool,
-            /// Revert to the specified version
-            #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
-            version: Option<String>,
-            /// Revert to the specified revision
-            #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
-            revision: Option<DeploymentRevision>,
-            #[command(flatten)]
-            force_build: ForceBuildArg,
-            #[command(flatten)]
-            deploy_args: DeployArgs,
-        },
-        /// Clean all components in the application or by selection
-        Clean {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-        },
-        /// Try to automatically update all existing agents of the application to the latest version
-        UpdateAgents {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-            /// Update mode - auto or manual, defaults to "auto"
-            #[arg(long, short, default_value = "auto")]
-            update_mode: AgentUpdateMode,
-            /// Await the update to be completed
-            #[arg(long, default_value_t = false)]
-            r#await: bool,
-        },
-        /// Redeploy all agents of the application using the latest version
-        RedeployAgents {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-        },
-        /// Diagnose possible tooling problems
-        Diagnose {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-        },
-        /// List all the deployed agent types
-        ListAgentTypes {},
-        /// Run custom command
+        /// Run custom, application specified command
         #[clap(external_subcommand)]
         CustomCommand(Vec<String>),
     }
@@ -1844,7 +1846,7 @@ pub fn builtin_app_subcommands() -> BTreeSet<String> {
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
         ShowClapHelpTarget::AppNew => {
-            vec!["app", "new"]
+            vec!["new"]
         }
         ShowClapHelpTarget::ComponentNew => {
             vec!["component", "new"]

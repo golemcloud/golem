@@ -39,7 +39,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -74,7 +74,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     ctx.start_server().await;
     let plugin_transformer = TestPlugin::new().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::DEPLOY]).await;
     assert!(outputs.success());
 
     let plugin_manifest_path = "plugin.yaml";
@@ -161,7 +161,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
@@ -201,7 +201,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
@@ -247,7 +247,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
@@ -376,7 +376,7 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
     // Creating a test app
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -386,7 +386,7 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
         .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
@@ -415,7 +415,7 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;

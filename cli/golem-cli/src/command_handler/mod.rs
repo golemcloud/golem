@@ -255,6 +255,94 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
     async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
         match command.subcommand {
+            // App scoped root commands
+            GolemCliSubcommand::New {
+                application_name,
+                language,
+            } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_new(application_name, language)
+                    .await
+            }
+            GolemCliSubcommand::Build {
+                component_name,
+                build: build_args,
+            } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_build(component_name, build_args)
+                    .await
+            }
+            GolemCliSubcommand::Repl {
+                component_name,
+                revision,
+                deploy_args,
+                script,
+                script_file,
+                disable_stream,
+            } => {
+                self.ctx
+                    .rib_repl_handler()
+                    .cmd_repl(
+                        component_name.component_name,
+                        revision,
+                        deploy_args.as_ref(),
+                        script,
+                        script_file,
+                        !disable_stream,
+                    )
+                    .await
+            }
+            GolemCliSubcommand::Deploy {
+                plan,
+                stage,
+                approve_staging_steps,
+                version,
+                revision,
+                force_build,
+                deploy_args,
+            } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_deploy(
+                        plan,
+                        stage,
+                        approve_staging_steps,
+                        version,
+                        revision,
+                        force_build,
+                        deploy_args,
+                    )
+                    .await
+            }
+            GolemCliSubcommand::Clean { component_name } => {
+                self.ctx.app_handler().cmd_clean(component_name).await
+            }
+            GolemCliSubcommand::UpdateAgents {
+                component_name,
+                update_mode,
+                r#await,
+            } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_update_workers(component_name.component_name, update_mode, r#await)
+                    .await
+            }
+            GolemCliSubcommand::RedeployAgents { component_name } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_redeploy_workers(component_name.component_name)
+                    .await
+            }
+            GolemCliSubcommand::Diagnose { component_name } => {
+                self.ctx.app_handler().cmd_diagnose(component_name).await
+            }
+            GolemCliSubcommand::ListAgentTypes {} => {
+                self.ctx.app_handler().cmd_list_agent_types().await
+            }
+
+            // Other entities
             GolemCliSubcommand::App { subcommand } => {
                 self.ctx.app_handler().handle_command(subcommand).await
             }
@@ -293,26 +381,6 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             }
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
-            }
-            GolemCliSubcommand::Repl {
-                component_name,
-                revision,
-                deploy_args,
-                script,
-                script_file,
-                disable_stream,
-            } => {
-                self.ctx
-                    .rib_repl_handler()
-                    .cmd_repl(
-                        component_name.component_name,
-                        revision,
-                        deploy_args.as_ref(),
-                        script,
-                        script_file,
-                        !disable_stream,
-                    )
-                    .await
             }
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
         }
