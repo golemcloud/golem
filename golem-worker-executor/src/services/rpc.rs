@@ -49,7 +49,7 @@ pub trait Rpc: Send + Sync {
     async fn create_demand(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -62,7 +62,7 @@ pub trait Rpc: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -75,7 +75,7 @@ pub trait Rpc: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -236,7 +236,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn create_demand(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         _self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -264,7 +264,7 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -292,7 +292,7 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -625,7 +625,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             function_name
         } else if let Ok(target_component) = self
             .component_service
-            .get_metadata(&target_worker_id.worker_id.component_id, None)
+            .get_metadata(target_worker_id.worker_id.component_id, None)
             .await
         {
             enrich_function_name_by_target_information(
@@ -697,7 +697,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_demand(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -744,7 +744,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
@@ -807,7 +807,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        self_created_by: &AccountId,
+        self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,

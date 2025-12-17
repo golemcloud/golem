@@ -141,7 +141,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Environment>> {
         let environment = self
             .environment_service
-            .get_in_application(&application_id, &EnvironmentName(environment_name), &auth)
+            .get_in_application(application_id, &EnvironmentName(environment_name), &auth)
             .await?;
         Ok(Json(environment))
     }
@@ -180,7 +180,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Page<Environment>>> {
         let environments = self
             .environment_service
-            .list_in_application(&application_id, &auth)
+            .list_in_application(application_id, &auth)
             .await?;
 
         Ok(Json(Page {
@@ -256,7 +256,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Environment>> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, &auth)
+            .get(environment_id, false, &auth)
             .await?;
         Ok(Json(environment))
     }
@@ -373,7 +373,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<DeploymentPlan>> {
         let deployment_plan = self
             .deployment_service
-            .get_current_deployment_plan(&environment_id, &auth)
+            .get_current_deployment_plan(environment_id, &auth)
             .await?;
         Ok(Json(deployment_plan))
     }
@@ -414,7 +414,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<CurrentDeployment>> {
         let current_deployment = self
             .deployment_write_service
-            .rollback_environment(&environment_id, payload, &auth)
+            .rollback_environment(environment_id, payload, &auth)
             .await?;
 
         Ok(Json(current_deployment))
@@ -456,7 +456,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Page<Deployment>>> {
         let deployments = self
             .deployment_service
-            .list_deployments(&environment_id, version, &auth)
+            .list_deployments(environment_id, version, &auth)
             .await?;
         Ok(Json(Page {
             values: deployments,
@@ -499,7 +499,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<CurrentDeployment>> {
         let deployment = self
             .deployment_write_service
-            .create_deployment(&environment_id, payload, &auth)
+            .create_deployment(environment_id, payload, &auth)
             .await?;
         Ok(Json(deployment))
     }
@@ -540,7 +540,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<DeploymentSummary>> {
         let deployment_plan = self
             .deployment_service
-            .get_deployment_summary(&environment_id, deployment_id, &auth)
+            .get_deployment_summary(environment_id, deployment_id, &auth)
             .await?;
         Ok(Json(deployment_plan))
     }
@@ -581,7 +581,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
         let agent_types = self
             .deployment_service
-            .list_deployment_agent_types(&environment_id, deployment_id, &auth)
+            .list_deployment_agent_types(environment_id, deployment_id, &auth)
             .await?;
         Ok(Json(Page {
             values: agent_types,
@@ -632,7 +632,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<RegisteredAgentType>> {
         let agent_type = self
             .deployment_service
-            .get_deployment_agent_type(&environment_id, deployment_id, &agent_type_name, &auth)
+            .get_deployment_agent_type(environment_id, deployment_id, &agent_type_name, &auth)
             .await?;
         Ok(Json(agent_type))
     }

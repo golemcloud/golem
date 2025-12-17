@@ -19,7 +19,6 @@ use golem_common::model::account::AccountId;
 use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -178,7 +177,7 @@ impl ResourceLimitsGrpc {
 
         let last_known_limits = self
             .client
-            .get_resource_limits(&account_id, &AuthCtx::System)
+            .get_resource_limits(account_id)
             .await
             .map_err(|e| {
                 WorkerExecutorError::runtime(format!(
@@ -251,10 +250,7 @@ impl ResourceLimitsGrpc {
     async fn send_batch_updates(&self, updates: HashMap<AccountId, i64>) {
         tracing::debug!("Sending batch fuel updates");
 
-        let update_limits_result = self
-            .client
-            .batch_update_fuel_usage(updates.clone(), &AuthCtx::System)
-            .await;
+        let update_limits_result = self.client.batch_update_fuel_usage(updates.clone()).await;
 
         match update_limits_result {
             Ok(updated_limits) => {

@@ -51,7 +51,7 @@ pub trait WorkerProxy: Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn invoke_and_await(
@@ -64,7 +64,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError>;
 
     async fn invoke(
@@ -77,7 +77,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn update(
@@ -85,14 +85,14 @@ pub trait WorkerProxy: Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentRevision,
         mode: UpdateMode,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn resume(
         &self,
         owned_worker_id: &WorkerId,
         force: bool,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn fork_worker(
@@ -100,21 +100,21 @@ pub trait WorkerProxy: Send + Sync {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn revert(
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn complete_promise(
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError>;
 }
 
@@ -229,8 +229,8 @@ impl RemoteWorkerProxy {
         }
     }
 
-    fn get_auth_ctx(&self, account_id: &AccountId) -> AuthCtx {
-        AuthCtx::impersonated_user(*account_id)
+    fn get_auth_ctx(&self, account_id: AccountId) -> AuthCtx {
+        AuthCtx::impersonated_user(account_id)
     }
 }
 
@@ -241,7 +241,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         owned_worker_id: &OwnedWorkerId,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_worker_id=%owned_worker_id, "Starting remote worker");
 
@@ -286,7 +286,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
@@ -356,7 +356,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
@@ -407,7 +407,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentRevision,
         mode: UpdateMode,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to version {target_version} in {mode:?} mode");
 
@@ -439,7 +439,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         worker_id: &WorkerId,
         force: bool,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!("Resuming remote worker");
 
@@ -471,7 +471,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!("Forking remote worker");
 
@@ -505,7 +505,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let auth_ctx = self.get_auth_ctx(caller_account_id);
 
@@ -534,7 +534,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError> {
         let auth_ctx = self.get_auth_ctx(caller_account_id);
 

@@ -604,7 +604,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.agent_mode()
     }
 
-    fn created_by(&self) -> &AccountId {
+    fn created_by(&self) -> AccountId {
         self.durable_ctx.created_by()
     }
 

@@ -95,7 +95,7 @@ impl HttpApiDefinitionsApi {
     ) -> ApiResult<Json<HttpApiDefinition>> {
         let result = self
             .http_api_definition_service
-            .create(&environment_id, payload, &auth)
+            .create(environment_id, payload, &auth)
             .await?;
 
         Ok(Json(result))
@@ -215,7 +215,7 @@ impl HttpApiDefinitionsApi {
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.http_api_definition_service
-            .delete(&http_api_definition_id, current_revision, &auth)
+            .delete(http_api_definition_id, current_revision, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)
@@ -256,7 +256,7 @@ impl HttpApiDefinitionsApi {
     ) -> ApiResult<Json<HttpApiDefinition>> {
         let result = self
             .http_api_definition_service
-            .get_revision(&http_api_definition_id, revision, &auth)
+            .get_revision(http_api_definition_id, revision, &auth)
             .await?;
 
         Ok(Json(result))
@@ -303,7 +303,7 @@ impl HttpApiDefinitionsApi {
     ) -> ApiResult<Json<HttpApiDefinition>> {
         let http_api_definition = self
             .http_api_definition_service
-            .get_staged_by_name(&environment_id, &http_api_definition_name, &auth)
+            .get_staged_by_name(environment_id, &http_api_definition_name, &auth)
             .await?;
 
         Ok(Json(http_api_definition))
@@ -356,7 +356,7 @@ impl HttpApiDefinitionsApi {
         let http_api_definition = self
             .http_api_definition_service
             .get_in_deployment_by_name(
-                &environment_id,
+                environment_id,
                 deployment_revision,
                 &http_api_definition_name,
                 &auth,
@@ -413,7 +413,7 @@ impl HttpApiDefinitionsApi {
         let open_api_spec = self
             .deployed_routes_service
             .get_openapi_spec_for_http_api_definition(
-                &environment_id,
+                environment_id,
                 deployment_revision,
                 &http_api_definition_name,
                 &auth,
@@ -459,7 +459,7 @@ impl HttpApiDefinitionsApi {
     ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
         let values = self
             .http_api_definition_service
-            .list_staged(&environment_id, &auth)
+            .list_staged(environment_id, &auth)
             .await?;
 
         Ok(Json(Page { values }))
@@ -506,7 +506,7 @@ impl HttpApiDefinitionsApi {
     ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
         let values = self
             .http_api_definition_service
-            .list_in_deployment(&environment_id, deployment_revision, &auth)
+            .list_in_deployment(environment_id, deployment_revision, &auth)
             .await?;
 
         Ok(Json(Page { values }))

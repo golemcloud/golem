@@ -91,7 +91,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<HttpApiDeployment>> {
         let result = self
             .http_api_deployment_service
-            .create(&environment_id, payload, &auth)
+            .create(environment_id, payload, &auth)
             .await?;
 
         Ok(Json(result))
@@ -130,7 +130,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<HttpApiDeployment>> {
         let http_api_deployment = self
             .http_api_deployment_service
-            .get_staged(&http_api_deployment_id, &auth)
+            .get_staged(http_api_deployment_id, &auth)
             .await?;
 
         Ok(Json(http_api_deployment))
@@ -171,7 +171,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<HttpApiDeployment>> {
         let updated = self
             .http_api_deployment_service
-            .update(&http_api_deployment_id, payload, &auth)
+            .update(http_api_deployment_id, payload, &auth)
             .await?;
 
         Ok(Json(updated))
@@ -211,7 +211,7 @@ impl HttpApiDeploymentsApi {
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.http_api_deployment_service
-            .delete(&http_api_deployment_id, current_revision, &auth)
+            .delete(http_api_deployment_id, current_revision, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)
@@ -252,7 +252,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<HttpApiDeployment>> {
         let result = self
             .http_api_deployment_service
-            .get_revision(&http_api_deployment_id, revision, &auth)
+            .get_revision(http_api_deployment_id, revision, &auth)
             .await?;
 
         Ok(Json(result))
@@ -295,7 +295,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<HttpApiDeployment>> {
         let http_api_definition = self
             .http_api_deployment_service
-            .get_staged_by_domain(&environment_id, &domain, &auth)
+            .get_staged_by_domain(environment_id, &domain, &auth)
             .await?;
 
         Ok(Json(http_api_definition))
@@ -347,7 +347,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<HttpApiDeployment>> {
         let http_api_definition = self
             .http_api_deployment_service
-            .get_in_deployment_by_domain(&environment_id, deployment_revision, &domain, &auth)
+            .get_in_deployment_by_domain(environment_id, deployment_revision, &domain, &auth)
             .await?;
 
         Ok(Json(http_api_definition))
@@ -387,7 +387,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
         let values = self
             .http_api_deployment_service
-            .list_staged(&environment_id, &auth)
+            .list_staged(environment_id, &auth)
             .await?;
 
         Ok(Json(Page { values }))
@@ -435,7 +435,7 @@ impl HttpApiDeploymentsApi {
     ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
         let values = self
             .http_api_deployment_service
-            .list_in_deployment(&environment_id, deployment_revision, &auth)
+            .list_in_deployment(environment_id, deployment_revision, &auth)
             .await?;
 
         Ok(Json(Page { values }))

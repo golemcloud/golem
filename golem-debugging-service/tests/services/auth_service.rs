@@ -29,7 +29,7 @@ impl AuthService for TestAuthService {
     }
     async fn check_user_allowed_to_debug_in_environment(
         &self,
-        _environment_id: &EnvironmentId,
+        _environment_id: EnvironmentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), AuthServiceError> {
         Ok(())

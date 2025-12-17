@@ -81,7 +81,7 @@ impl AccountTokensApi {
     ) -> ApiResult<Json<Page<Token>>> {
         let tokens = self
             .token_service
-            .list_in_account(&account_id, &auth)
+            .list_in_account(account_id, &auth)
             .await?;
         Ok(Json(Page {
             values: tokens.into_iter().map(|t| t.without_secret()).collect(),

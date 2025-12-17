@@ -278,7 +278,7 @@ impl JrpcSession {
                         .debug_service
                         .playback(
                             &owned_worker_id,
-                            &active_session_data.account_id,
+                            active_session_data.account_id,
                             params.target_index,
                             params.overrides,
                             params.ensure_invocation_boundary.unwrap_or(true),
@@ -302,7 +302,7 @@ impl JrpcSession {
                         .debug_service
                         .rewind(
                             &owned_worker_id,
-                            &active_session_data.account_id,
+                            active_session_data.account_id,
                             params.target_index,
                             params.ensure_invocation_boundary.unwrap_or(true),
                         )
@@ -323,7 +323,7 @@ impl JrpcSession {
                     let result = self
                         .debug_service
                         .fork(
-                            &active_session_data.account_id,
+                            active_session_data.account_id,
                             &owned_worker_id,
                             &params.target_worker_id,
                             params.oplog_index_cut_off,

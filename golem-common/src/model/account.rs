@@ -23,8 +23,6 @@ impl AccountId {
     pub const SYSTEM: Self = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 }
 
-pub static SYSTEM_ACCOUNT_ID: AccountId = AccountId::SYSTEM;
-
 declare_revision!(AccountRevision);
 
 declare_structs! {

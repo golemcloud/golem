@@ -37,17 +37,15 @@ impl InitialComponentFilesService {
 
     pub async fn exists(
         &self,
-        environment_id: &EnvironmentId,
-        key: &ComponentFileContentHash,
+        environment_id: EnvironmentId,
+        key: ComponentFileContentHash,
     ) -> Result<bool, Error> {
         let metadata = self
             .blob_storage
             .get_metadata(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "exists",
-                BlobStorageNamespace::InitialComponentFiles {
-                    environment_id: *environment_id,
-                },
+                BlobStorageNamespace::InitialComponentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
@@ -58,16 +56,14 @@ impl InitialComponentFilesService {
 
     pub async fn get(
         &self,
-        environment_id: &EnvironmentId,
-        key: &ComponentFileContentHash,
+        environment_id: EnvironmentId,
+        key: ComponentFileContentHash,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.blob_storage
             .get_stream(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get",
-                BlobStorageNamespace::InitialComponentFiles {
-                    environment_id: *environment_id,
-                },
+                BlobStorageNamespace::InitialComponentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
@@ -76,7 +72,7 @@ impl InitialComponentFilesService {
 
     pub async fn put_if_not_exists(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<ComponentFileContentHash, Error> {
         let hash = data.content_hash().await?;
@@ -87,9 +83,7 @@ impl InitialComponentFilesService {
             .get_metadata(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get_metadata",
-                BlobStorageNamespace::InitialComponentFiles {
-                    environment_id: *environment_id,
-                },
+                BlobStorageNamespace::InitialComponentFiles { environment_id },
                 &key,
             )
             .await
@@ -102,9 +96,7 @@ impl InitialComponentFilesService {
                 .put_stream(
                     INITIAL_COMPONENT_FILES_LABEL,
                     "put",
-                    BlobStorageNamespace::InitialComponentFiles {
-                        environment_id: *environment_id,
-                    },
+                    BlobStorageNamespace::InitialComponentFiles { environment_id },
                     &key,
                     &data.erased(),
                 )

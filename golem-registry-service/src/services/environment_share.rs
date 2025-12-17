@@ -92,7 +92,7 @@ impl EnvironmentShareService {
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -102,13 +102,13 @@ impl EnvironmentShareService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateShare,
         )?;
 
         let id = EnvironmentShareId::new();
-        let record = EnvironmentShareRevisionRecord::creation(id, data.roles, *auth.account_id());
+        let record = EnvironmentShareRevisionRecord::creation(id, data.roles, auth.account_id());
 
         let result = self
             .environment_share_repo
@@ -126,7 +126,7 @@ impl EnvironmentShareService {
 
     pub async fn update(
         &self,
-        environment_share_id: &EnvironmentShareId,
+        environment_share_id: EnvironmentShareId,
         update: EnvironmentShareUpdate,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
@@ -135,7 +135,7 @@ impl EnvironmentShareService {
             .await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::UpdateShare,
         )?;
@@ -170,7 +170,7 @@ impl EnvironmentShareService {
 
     pub async fn delete(
         &self,
-        environment_share_id: &EnvironmentShareId,
+        environment_share_id: EnvironmentShareId,
         current_revision: EnvironmentShareRevision,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
@@ -179,7 +179,7 @@ impl EnvironmentShareService {
             .await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteShare,
         )?;
@@ -211,7 +211,7 @@ impl EnvironmentShareService {
 
     pub async fn get(
         &self,
-        environment_share_id: &EnvironmentShareId,
+        environment_share_id: EnvironmentShareId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let (environment_share, _) = self
@@ -227,7 +227,7 @@ impl EnvironmentShareService {
     ) -> Result<Vec<EnvironmentShare>, EnvironmentShareError> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -237,14 +237,14 @@ impl EnvironmentShareService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewShares,
         )?;
 
         let result = self
             .environment_share_repo
-            .get_for_environment(&environment_id.0)
+            .get_for_environment(environment_id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -255,8 +255,8 @@ impl EnvironmentShareService {
 
     pub async fn get_share_for_environment_and_grantee(
         &self,
-        environment_id: &EnvironmentId,
-        grantee_account_id: &AccountId,
+        environment_id: EnvironmentId,
+        grantee_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let environment = self
@@ -265,23 +265,23 @@ impl EnvironmentShareService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::EnvironmentShareForGranteeNotFound(*grantee_account_id)
+                    EnvironmentShareError::EnvironmentShareForGranteeNotFound(grantee_account_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewShares,
         )?;
 
         let result = self
             .environment_share_repo
-            .get_for_environment_and_grantee(&environment_id.0, &grantee_account_id.0)
+            .get_for_environment_and_grantee(environment_id.0, grantee_account_id.0)
             .await?
             .ok_or(EnvironmentShareError::EnvironmentShareForGranteeNotFound(
-                *grantee_account_id,
+                grantee_account_id,
             ))?
             .try_into()?;
 
@@ -290,35 +290,35 @@ impl EnvironmentShareService {
 
     async fn get_with_environment(
         &self,
-        environment_share_id: &EnvironmentShareId,
+        environment_share_id: EnvironmentShareId,
         auth: &AuthCtx,
     ) -> Result<(EnvironmentShare, Environment), EnvironmentShareError> {
         let environment_share: EnvironmentShare = self
             .environment_share_repo
-            .get_by_id(&environment_share_id.0)
+            .get_by_id(environment_share_id.0)
             .await?
             .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
-                *environment_share_id,
+                environment_share_id,
             ))?
             .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&environment_share.environment_id, false, auth)
+            .get(environment_share.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::EnvironmentShareNotFound(*environment_share_id)
+                    EnvironmentShareError::EnvironmentShareNotFound(environment_share_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewShares,
         )
-        .map_err(|_| EnvironmentShareError::EnvironmentShareNotFound(*environment_share_id))?;
+        .map_err(|_| EnvironmentShareError::EnvironmentShareNotFound(environment_share_id))?;
 
         Ok((environment_share, environment))
     }

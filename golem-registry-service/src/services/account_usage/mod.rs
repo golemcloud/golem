@@ -38,7 +38,7 @@ impl AccountUsageService {
 
     pub async fn ensure_application_within_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalAppCount))
@@ -51,7 +51,7 @@ impl AccountUsageService {
 
     pub async fn ensure_environment_within_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalEnvCount))
@@ -64,7 +64,7 @@ impl AccountUsageService {
 
     pub async fn ensure_new_component_within_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         component_size_bytes: u64,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self.get_account_usage(account_id, None).await?;
@@ -86,7 +86,7 @@ impl AccountUsageService {
 
     pub async fn ensure_updated_component_within_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         component_size_bytes: u64,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
@@ -108,7 +108,7 @@ impl AccountUsageService {
 
     pub async fn add_worker(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -122,7 +122,7 @@ impl AccountUsageService {
 
     pub async fn remove_worker(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -136,7 +136,7 @@ impl AccountUsageService {
 
     pub async fn add_worker_connection(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -150,7 +150,7 @@ impl AccountUsageService {
 
     pub async fn remove_worker_connection(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -173,9 +173,9 @@ impl AccountUsageService {
     ) -> Result<AccountResourceLimits, AccountUsageError> {
         let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
-            auth.authorize_account_action(&account_id, AccountAction::UpdateUsage)?;
+            auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
             match self
-                .get_account_usage(&account_id, Some(UsageType::MonthlyGasLimit))
+                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
                 .await
             {
                 Ok(mut account_usage) => {
@@ -209,7 +209,7 @@ impl AccountUsageService {
 
     pub async fn get_resouce_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<ResourceLimits, AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
@@ -223,25 +223,25 @@ impl AccountUsageService {
 
     async fn get_account_usage(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         usage_type: Option<UsageType>,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
         let usage = match usage_type {
             Some(usage_type) => {
                 self.account_usage_repo
-                    .get_for_type(&account_id.0, &SqlDateTime::now(), usage_type)
+                    .get_for_type(account_id.0, &SqlDateTime::now(), usage_type)
                     .await?
             }
             None => {
                 self.account_usage_repo
-                    .get(&account_id.0, &SqlDateTime::now())
+                    .get(account_id.0, &SqlDateTime::now())
                     .await?
             }
         };
 
         match usage {
             Some(usage) => Ok(usage),
-            None => Err(AccountUsageError::AccountNotfound(*account_id)),
+            None => Err(AccountUsageError::AccountNotfound(account_id)),
         }
     }
 

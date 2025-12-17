@@ -168,7 +168,7 @@ pub trait WorkerCtx:
     fn agent_mode(&self) -> AgentMode;
 
     /// Gets the account created this worker
-    fn created_by(&self) -> &AccountId;
+    fn created_by(&self) -> AccountId;
 
     fn component_metadata(&self) -> &ComponentDto;
 

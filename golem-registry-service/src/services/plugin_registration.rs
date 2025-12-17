@@ -106,7 +106,7 @@ impl PluginRegistrationService {
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         self.account_service
-            .get(&account_id, auth)
+            .get(account_id, auth)
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(account_id) => {
@@ -115,7 +115,7 @@ impl PluginRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(&account_id, AccountAction::RegisterPlugin)?;
+        auth.authorize_account_action(account_id, AccountAction::RegisterPlugin)?;
 
         let spec = match data.spec {
             PluginSpecDto::ComponentTransformer(inner) => PluginSpec::ComponentTransformer(inner),
@@ -130,7 +130,7 @@ impl PluginRegistrationService {
 
                 let blob_storage_key = self
                     .plugin_wasm_file_service
-                    .put_if_not_exists(&account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
+                    .put_if_not_exists(account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
                     .await?;
 
                 PluginSpec::App(AppPluginSpec {
@@ -144,7 +144,7 @@ impl PluginRegistrationService {
 
                 let blob_storage_key = self
                     .plugin_wasm_file_service
-                    .put_if_not_exists(&account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
+                    .put_if_not_exists(account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
                     .await?;
 
                 PluginSpec::Library(LibraryPluginSpec {
@@ -182,19 +182,19 @@ impl PluginRegistrationService {
 
     pub async fn unregister_plugin(
         &self,
-        plugin_id: &PluginRegistrationId,
+        plugin_id: PluginRegistrationId,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         let plugin = self.get_plugin(plugin_id, false, auth).await?;
 
-        auth.authorize_account_action(&plugin.account_id, AccountAction::DeletePlugin)?;
+        auth.authorize_account_action(plugin.account_id, AccountAction::DeletePlugin)?;
 
         let plugin = self
             .plugin_repo
-            .delete(&plugin_id.0, &auth.account_id().0)
+            .delete(plugin_id.0, auth.account_id().0)
             .await?
             .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
-                *plugin_id,
+                plugin_id,
             ))?
             .try_into()?;
 
@@ -203,28 +203,28 @@ impl PluginRegistrationService {
 
     pub async fn get_plugin(
         &self,
-        plugin_id: &PluginRegistrationId,
+        plugin_id: PluginRegistrationId,
         include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         let plugin: PluginRegistration = self
             .plugin_repo
-            .get_by_id(&plugin_id.0, include_deleted)
+            .get_by_id(plugin_id.0, include_deleted)
             .await?
             .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
-                *plugin_id,
+                plugin_id,
             ))?
             .try_into()?;
 
-        auth.authorize_account_action(&plugin.account_id, AccountAction::ViewPlugin)
-            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(*plugin_id))?;
+        auth.authorize_account_action(plugin.account_id, AccountAction::ViewPlugin)
+            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
 
         Ok(plugin)
     }
 
     pub async fn list_plugins_in_account(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PluginRegistration>, PluginRegistrationError> {
         // Optimally this is fetched together with the plugin data instead of up front
@@ -243,7 +243,7 @@ impl PluginRegistrationService {
 
         let plugins: Vec<PluginRegistration> = self
             .plugin_repo
-            .list_by_account(&account_id.0)
+            .list_by_account(account_id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -262,7 +262,7 @@ impl PluginRegistrationService {
         let component = self
             .component_service
             .get_component_revision(
-                &definition.component_id,
+                definition.component_id,
                 definition.component_revision,
                 false,
                 auth,
