@@ -32,6 +32,7 @@ clap = { workspace = true }
 futures-concurrency = { workspace = true }
 headers = { workspace = true }
 indoc = { workspace = true }
+pretty_assertions = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rlimit = { workspace = true }
