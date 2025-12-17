@@ -98,6 +98,17 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_environment_deployment_options(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            formatdoc! { "
+                To continue the current command the deployments options must be updated!
+                Do you want to apply the changes now?",
+            },
+            None,
+        )
+    }
+
     pub fn confirm_register_missing_domain(&self, domain: &Domain) -> anyhow::Result<bool> {
         self.confirm(
             true,

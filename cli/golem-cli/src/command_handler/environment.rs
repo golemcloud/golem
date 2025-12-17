@@ -16,18 +16,24 @@ use crate::command::environment::EnvironmentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
+use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
-use crate::log::{logln, LogColorize};
+use crate::log::{
+    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
+};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
+use crate::model::text::diff::log_unified_diff;
 use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::help::EnvironmentNameHelp;
 use anyhow::bail;
 use golem_client::api::EnvironmentClient;
 use golem_client::model::EnvironmentCreation;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::environment::EnvironmentName;
+use golem_common::model::diff;
+use golem_common::model::diff::Diffable;
+use golem_common::model::environment::{EnvironmentName, EnvironmentUpdate};
 use std::sync::Arc;
 
 pub struct EnvironmentCommandHandler {
@@ -39,9 +45,27 @@ impl EnvironmentCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, _subcommand: EnvironmentSubcommand) -> anyhow::Result<()> {
-        // TODO: atomic
-        todo!()
+    pub async fn handle_command(&self, subcommand: EnvironmentSubcommand) -> anyhow::Result<()> {
+        match subcommand {
+            EnvironmentSubcommand::SyncDeploymentOptions => {
+                self.cmd_sync_deployment_options().await
+            }
+        }
+    }
+
+    async fn cmd_sync_deployment_options(&self) -> anyhow::Result<()> {
+        let environment = self
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        if !self
+            .ensure_environment_deployment_options(&environment)
+            .await?
+        {
+            log_skipping_up_to_date("updating environment deployment options");
+        }
+
+        Ok(())
     }
 
     pub async fn resolve_environment(
@@ -64,12 +88,12 @@ impl EnvironmentCommandHandler {
                     match application {
                         Some(application) => {
                             let environment = self
-                                .get_or_create_server_environment(
+                                .get_or_create_server_environment_by_manifest(
                                     &application.id,
                                     &env.environment_name,
                                 )
                                 .await?;
-                            Ok(ResolvedEnvironmentIdentity::new(
+                            Ok(ResolvedEnvironmentIdentity::from_app_and_env(
                                 None,
                                 application,
                                 environment,
@@ -93,8 +117,9 @@ impl EnvironmentCommandHandler {
         }
 
         match environment_reference {
-            // NOTE: when only the env name is included in the reference,
-            //       we on-demand create the application and the env
+            // NOTE: when only the env name is included in the reference
+            //       AND that matches the manifest env name,
+            //       then we on-demand create the application and the env
             EnvironmentReference::Environment { environment_name } => {
                 let application = self
                     .ctx
@@ -105,9 +130,12 @@ impl EnvironmentCommandHandler {
                 match application {
                     Some(application) => {
                         let environment = self
-                            .get_or_create_server_environment(&application.id, environment_name)
+                            .get_or_create_server_environment_by_manifest(
+                                &application.id,
+                                environment_name,
+                            )
                             .await?;
-                        Ok(ResolvedEnvironmentIdentity::new(
+                        Ok(ResolvedEnvironmentIdentity::from_app_and_env(
                             Some(environment_reference),
                             application,
                             environment,
@@ -131,17 +159,51 @@ impl EnvironmentCommandHandler {
                 let environment = self
                     .get_server_environment_or_err(&application.id, environment_name)
                     .await?;
-                Ok(ResolvedEnvironmentIdentity::new(
+                Ok(ResolvedEnvironmentIdentity::from_app_and_env(
                     Some(environment_reference),
                     application,
                     environment,
                 ))
             }
-            EnvironmentReference::AccountApplicationEnvironment { .. } => {
-                // TODO: atomic: use search / lookup API once available
-                // TODO: this mode should be dynamic on auto-creation based on the current account id
-                //       and the use case
-                todo!()
+            EnvironmentReference::AccountApplicationEnvironment {
+                account_email,
+                application_name,
+                environment_name,
+            } => {
+                // TODO: atomic: should have either filters or a specialized lookup for this
+                let env_summaries = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment
+                    .list_visible_environments()
+                    .await
+                    .map_service_error()?
+                    .values;
+
+                match env_summaries.iter().find(|app_envs| {
+                    &app_envs.account.email == account_email
+                        && app_envs.application.name.0 == application_name.0
+                        && app_envs.environment.name.0 == environment_name.0
+                }) {
+                    Some(env_summary) => Ok(ResolvedEnvironmentIdentity::from_summary(
+                        Some(environment_reference),
+                        env_summary.clone(),
+                    )),
+                    None => {
+                        log_error(format!(
+                            "Environment {} not found",
+                            environment_reference.to_string().log_color_highlight()
+                        ));
+
+                        logln("");
+                        logln("Available environments:".log_color_help_group().to_string());
+                        logln("");
+                        self.ctx.log_handler().log_view(&env_summaries);
+
+                        bail!(NonSuccessfulExit);
+                    }
+                }
             }
         }
     }
@@ -201,7 +263,7 @@ impl EnvironmentCommandHandler {
         }
     }
 
-    async fn get_or_create_server_environment(
+    async fn get_or_create_server_environment_by_manifest(
         &self,
         application_id: &ApplicationId,
         environment_name: &EnvironmentName,
@@ -211,31 +273,97 @@ impl EnvironmentCommandHandler {
             .await?
         {
             Some(environment) => Ok(environment),
-            None => self
-                .ctx
+            None => {
+                let Some(deployment_options) = self.ctx.manifest_environment_deployment_options()
+                else {
+                    bail!(NoApplicationManifestFound)
+                };
+
+                self.ctx
+                    .golem_clients()
+                    .await?
+                    .environment
+                    .create_environment(
+                        &application_id.0,
+                        &EnvironmentCreation {
+                            name: environment_name.clone(),
+                            compatibility_check: deployment_options.compatibility_check(),
+                            version_check: deployment_options.version_check(),
+                            security_overrides: deployment_options.security_overrides(),
+                        },
+                    )
+                    .await
+                    .map_service_error()
+            }
+        }
+    }
+
+    // Returns true if the deployment options have been updated
+    pub async fn ensure_environment_deployment_options(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<bool> {
+        let Some(manifest_options) = self.ctx.manifest_environment_deployment_options() else {
+            bail!(NoApplicationManifestFound)
+        };
+
+        let diffable_manifest_options = manifest_options.to_diffable();
+        let diffable_current_options = environment.server_environment.to_diffable();
+
+        let Some(_diff) = diffable_manifest_options.diff_with_current(&diffable_current_options)
+        else {
+            return Ok(false);
+        };
+
+        let unified_diff = diffable_manifest_options.unified_yaml_diff_with_current(
+            &diffable_current_options,
+            diff::SerializeMode::ValueIfAvailable,
+        );
+
+        log_warn_action("Detected", "environment deployment option changes");
+        {
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            log_unified_diff(&unified_diff);
+        }
+        let _indent = LogIndent::new();
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_environment_deployment_options()?
+        {
+            bail!(NonSuccessfulExit);
+        };
+
+        {
+            log_warn_action("Updating", "environment deployment options");
+            self.ctx
                 .golem_clients()
                 .await?
                 .environment
-                .create_environment(
-                    &application_id.0,
-                    &EnvironmentCreation {
-                        name: environment_name.clone(),
-                        // TODO: atomic: get props from manifest
-                        compatibility_check: false,
-                        version_check: false,
-                        security_overrides: false,
+                .update_environment(
+                    &environment.environment_id.0,
+                    &EnvironmentUpdate {
+                        new_name: None,
+                        current_revision: environment.server_environment.revision,
+                        compatibility_check: Some(manifest_options.compatibility_check()),
+                        version_check: Some(manifest_options.version_check()),
+                        security_overrides: Some(manifest_options.security_overrides()),
                     },
                 )
                 .await
-                .map_service_error(),
+                .map_service_error()?;
+            log_action("Updated", "")
         }
+
+        Ok(true)
     }
 
     fn environment_is_required_error<T>(&self, mode: EnvironmentResolveMode) -> anyhow::Result<T> {
         match mode {
             EnvironmentResolveMode::ManifestOnly => {
                 log_error(
-                    "The requested command requires an environment from an application manifest.",
+                    "The requested command requires an environment defined in an application manifest.",
                 );
             }
             EnvironmentResolveMode::Any => {

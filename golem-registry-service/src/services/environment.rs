@@ -164,6 +164,15 @@ impl EnvironmentService {
         if let Some(new_name) = update.new_name {
             environment.name = new_name
         };
+        if let Some(compatibility_check) = update.compatibility_check {
+            environment.compatibility_check = compatibility_check;
+        }
+        if let Some(version_check) = update.version_check {
+            environment.version_check = version_check;
+        }
+        if let Some(security_overrides) = update.security_overrides {
+            environment.security_overrides = security_overrides;
+        }
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);

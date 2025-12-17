@@ -8137,6 +8137,12 @@ components:
           format: uint64
         newName:
           type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
     EnvironmentWithDetails:
       type: object
       title: EnvironmentWithDetails

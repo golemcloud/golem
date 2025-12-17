@@ -494,7 +494,10 @@ impl AppCommandHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        let Some(rollback_diff) = self.prepare_rollback(environment, target_revision).await? else {
+        let Some(rollback_diff) = self
+            .prepare_rollback(environment.clone(), target_revision)
+            .await?
+        else {
             if plan {
                 log_skipping_up_to_date("planning, no changes detected");
             } else {
@@ -519,6 +522,11 @@ impl AppCommandHandler {
         )? {
             return Ok(());
         }
+
+        self.ctx
+            .environment_handler()
+            .ensure_environment_deployment_options(&environment)
+            .await?;
 
         let current_deployment = self.rollback_environment(&rollback_diff).await?;
 
@@ -545,7 +553,7 @@ impl AppCommandHandler {
         )
         .await?;
 
-        let Some(deploy_diff) = self.prepare_deployment(environment).await? else {
+        let Some(deploy_diff) = self.prepare_deployment(environment.clone()).await? else {
             if config.plan {
                 log_skipping_up_to_date("planning, no changes detected");
             } else {
@@ -570,6 +578,11 @@ impl AppCommandHandler {
         )? {
             return Ok(());
         }
+
+        self.ctx
+            .environment_handler()
+            .ensure_environment_deployment_options(&environment)
+            .await?;
 
         self.apply_changes_to_stage(config.approve_staging_steps, &deploy_diff)
             .await?;

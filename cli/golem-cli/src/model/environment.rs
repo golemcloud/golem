@@ -22,7 +22,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{
-    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName,
+    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName, EnvironmentWithDetails,
 };
 use indoc::formatdoc;
 use std::fmt::{Display, Formatter};
@@ -151,7 +151,7 @@ pub struct ResolvedEnvironmentIdentity {
 }
 
 impl ResolvedEnvironmentIdentity {
-    pub fn new(
+    pub fn from_app_and_env(
         environment_reference: Option<&EnvironmentReference>,
         application: golem_client::model::Application,
         environment: golem_client::model::Environment,
@@ -167,6 +167,35 @@ impl ResolvedEnvironmentIdentity {
             environment_id: environment.id,
             environment_name: environment.name.clone(),
             server_environment: environment,
+        }
+    }
+
+    pub fn from_summary(
+        environment_reference: Option<&EnvironmentReference>,
+        summary: EnvironmentWithDetails,
+    ) -> Self {
+        Self {
+            source: match environment_reference {
+                Some(env_ref) => ResolvedEnvironmentIdentitySource::Reference(env_ref.clone()),
+                None => ResolvedEnvironmentIdentitySource::DefaultFromManifest,
+            },
+            account_id: summary.account.id,
+            application_id: summary.application.id,
+            application_name: summary.application.name,
+            environment_id: summary.environment.id,
+            environment_name: summary.environment.name.clone(),
+            server_environment: golem_common::model::environment::Environment {
+                id: summary.environment.id,
+                revision: summary.environment.revision,
+                application_id: summary.application.id,
+                name: summary.environment.name,
+                compatibility_check: summary.environment.compatibility_check,
+                version_check: summary.environment.version_check,
+                security_overrides: summary.environment.security_overrides,
+                owner_account_id: summary.account.id,
+                roles_from_active_shares: summary.environment.roles_from_active_shares,
+                current_deployment: summary.environment.current_deployment,
+            },
         }
     }
 
@@ -208,7 +237,7 @@ impl ResolvedEnvironmentIdentity {
                     "The current environment {} has no deployment.",
                     self.text_format()
                 ));
-                logln("Use 'golem app deploy' for deploying, or select a different environment.");
+                logln("Use 'golem deploy' for deploying, or select a different environment.");
                 logln("");
                 Ok(R::default())
             }

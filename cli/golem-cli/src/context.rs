@@ -29,7 +29,7 @@ use crate::model::app::{
     WithSource,
 };
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
-use crate::model::app_raw::{BuiltinServer, Environment, Marker, Server};
+use crate::model::app_raw::{BuiltinServer, DeploymentOptions, Environment, Marker, Server};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
 use crate::model::text::server::ToFormattedServerContext;
@@ -69,6 +69,7 @@ pub struct Context {
     profile: NamedProfile,
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<SelectedManifestEnvironment>,
+    manifest_environment_deployment_options: Option<DeploymentOptions>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
     http_parallelism: usize,
@@ -196,6 +197,18 @@ impl Context {
             },
         };
 
+        let manifest_environment_deployment_options = manifest_environment.as_ref().map(|env| {
+            let is_local = env.environment_name.0 == "local";
+            match env.environment.deployment.as_ref() {
+                Some(options) if is_local => options
+                    .clone()
+                    .with_defaults_from(DeploymentOptions::new_local()),
+                Some(options) => options.clone(),
+                None if is_local => DeploymentOptions::new_local(),
+                None => DeploymentOptions::new_cloud(),
+            }
+        });
+
         let use_cloud_profile_for_env = manifest_environment
             .as_ref()
             .map(|env| {
@@ -315,6 +328,7 @@ impl Context {
             auth_token_override: global_flags.auth_token,
             environment_reference,
             manifest_environment,
+            manifest_environment_deployment_options,
             yes,
             dev_mode: global_flags.dev_mode,
             show_sensitive: global_flags.show_sensitive,
@@ -394,6 +408,11 @@ impl Context {
     pub fn manifest_environment(&self) -> Option<&SelectedManifestEnvironment> {
         self.log_context_selection_once();
         self.manifest_environment.as_ref()
+    }
+
+    pub fn manifest_environment_deployment_options(&self) -> Option<&DeploymentOptions> {
+        self.log_context_selection_once();
+        self.manifest_environment_deployment_options.as_ref()
     }
 
     pub fn caches(&self) -> &Caches {

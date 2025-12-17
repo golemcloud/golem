@@ -295,7 +295,7 @@ impl ComponentCommandHandler {
         let environment = self
             .ctx
             .environment_handler()
-            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
         let components = environment

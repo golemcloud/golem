@@ -238,7 +238,7 @@ impl ErrorHandler {
                     "The requested operation requires an existing deployment for the environment!",
                 );
                 logln("");
-                logln("Use 'golem app deploy' for deploying, or select a different environment.");
+                logln("Use 'golem deploy' for deploying, or select a different environment.");
                 logln("");
                 Ok(())
             }

@@ -936,7 +936,10 @@ pub mod environment {
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
-    pub enum EnvironmentSubcommand {}
+    pub enum EnvironmentSubcommand {
+        /// Check and optionally update environment deployment options
+        SyncDeploymentOptions,
+    }
 }
 
 pub mod component {

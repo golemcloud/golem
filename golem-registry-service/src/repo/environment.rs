@@ -244,6 +244,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
@@ -315,6 +316,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
@@ -395,6 +397,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     INNER JOIN applications ap
@@ -478,6 +481,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       0 AS environment_roles_from_shares,
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
+                      NULL AS current_deployment_deployment_version,
                       NULL AS current_deployment_deployment_hash;
                 "# })
                     .bind(revision.environment_id)
@@ -499,6 +503,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                 current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash
             })
         }.boxed()).await
@@ -596,6 +601,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                     current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
@@ -696,6 +702,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                     current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
@@ -726,6 +733,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         -- Current deployment (optional)
                         cdr.revision_id AS current_deployment_revision,
                         dr.revision_id AS current_deployment_deployment_revision,
+                        dr.version AS current_deployment_deployment_version,
                         dr.hash AS current_deployment_deployment_hash,
 
                         -- Parent application
