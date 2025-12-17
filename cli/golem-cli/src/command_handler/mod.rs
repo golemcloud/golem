@@ -22,6 +22,7 @@ use crate::command::{
 use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
+use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
@@ -403,7 +404,7 @@ pub trait Handlers {
     fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
     fn api_handler(&self) -> ApiCommandHandler;
-    // TODO: atomic: fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
+    fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
     fn app_handler(&self) -> AppCommandHandler;
     // TODO: atomic: fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler;
     fn cloud_account_handler(&self) -> CloudAccountCommandHandler;
@@ -440,10 +441,9 @@ impl Handlers for Arc<Context> {
         ApiCommandHandler::new(self.clone())
     }
 
-    // TODO: atomic
-    // fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler {
-    //     ApiSecuritySchemeCommandHandler::new(self.clone())
-    // }
+    fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler {
+        ApiSecuritySchemeCommandHandler::new(self.clone())
+    }
 
     fn app_handler(&self) -> AppCommandHandler {
         AppCommandHandler::new(self.clone())

@@ -1365,14 +1365,14 @@ pub mod api {
 
     pub mod security_scheme {
         use clap::Subcommand;
-        use golem_common::model::security_scheme::Provider;
+        use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
-            /// Create API Security Scheme
+            /// Create HTTP API Security Scheme
             Create {
-                /// Security Scheme ID
-                security_scheme_id: String,
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
                 /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
                 #[arg(long)]
                 provider_type: Provider,
@@ -1390,11 +1390,14 @@ pub mod api {
                 redirect_url: String,
             },
 
-            /// Get API security
+            /// Get HTTP API Security Scheme
             Get {
-                /// Security Scheme ID
-                security_scheme_id: String,
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
             },
+
+            // List HTTP API Security Schemes
+            List
         }
     }
 

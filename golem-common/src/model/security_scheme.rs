@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::environment::EnvironmentId;
+use crate::model::validate_lower_kebab_case_identifier;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid,
 };
@@ -33,6 +34,23 @@ declare_transparent_newtypes! {
     #[derive(Display, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
     #[desert(transparent)]
     pub struct SecuritySchemeName(pub String);
+}
+
+impl TryFrom<String> for SecuritySchemeName {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        validate_lower_kebab_case_identifier("Security Scheme", &value)?;
+        Ok(SecuritySchemeName(value))
+    }
+}
+
+impl FromStr for SecuritySchemeName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.to_string())
+    }
 }
 
 declare_structs! {
