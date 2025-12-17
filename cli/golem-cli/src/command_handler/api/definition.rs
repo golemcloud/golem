@@ -19,11 +19,11 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::text::fmt::log_error;
+use crate::model::text::fmt::{log_error, log_warn};
 use crate::model::text::http_api_definition::HttpApiDefinitionGetView;
 use crate::model::{app, OpenApiDefinitionOutputFormat};
 use anyhow::{anyhow, bail};
-use golem_client::api::{EnvironmentClient, HttpApiDefinitionClient};
+use golem_client::api::{ApiDeploymentClient, EnvironmentClient, HttpApiDefinitionClient};
 use golem_client::model::{HttpApiDefinitionCreation, HttpApiDefinitionUpdate};
 use golem_common::cache::SimpleCache;
 use golem_common::model::deployment::{DeploymentPlanHttpApiDefintionEntry, DeploymentRevision};
@@ -185,6 +185,8 @@ impl ApiDefinitionCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
+        let current_deployment = environment.current_deployment_or_err()?;
+
         let mut openapi_spec = self
             .get_deployed_openapi_spec(&environment, &name, deployment_revision.as_ref())
             .await?;
@@ -192,51 +194,47 @@ impl ApiDefinitionCommandHandler {
         // Filter paths to only include methods with binding-type: default
         filter_routes(&mut openapi_spec);
 
-        // TODO: atomic
-        /*
         // Fetch deployments
-        let project_id = self
+        let deployments = self
             .ctx
-            .cloud_project_handler()
-            .selected_project_id_or_default(project.as_ref())
+            .golem_clients()
             .await?
-            .0;
-
-        let deployments = clients
             .api_deployment
-            .list_deployments(&project_id, Some(&id.0))
+            .list_http_api_deployments_in_deployment(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+            )
             .await
-            .map_service_error()?;
+            .map_service_error()?
+            .values
+            .into_iter()
+            .filter(|d| d.api_definitions.contains(&name))
+            .collect::<Vec<_>>();
 
         // Add server information if deployments exist
         if !deployments.is_empty() {
             // Initialize servers array if it doesn't exist
-            if !spec.as_object().unwrap().contains_key("servers") {
-                spec.as_object_mut()
+            if !openapi_spec.as_object().unwrap().contains_key("servers") {
+                openapi_spec
+                    .as_object_mut()
                     .unwrap()
                     .insert("servers".to_string(), serde_json::Value::Array(Vec::new()));
             }
 
             // Add servers to the spec
-            if let Some(servers) = spec.get_mut("servers") {
+            if let Some(servers) = openapi_spec.get_mut("servers") {
                 if let Some(servers) = servers.as_array_mut() {
                     // Add deployment servers with HTTP
                     for deployment in &deployments {
-                        let url = match &deployment.site.subdomain {
-                            Some(subdomain) => {
-                                format!("http://{}.{}", subdomain, deployment.site.host)
-                            }
-                            None => format!("http://{}", deployment.site.host),
-                        };
+                        // TODO: how should we know if it is HTTP or HTTPS?
                         servers.push(serde_json::json!({
-                            "url": url,
+                            "url": format!("http://{}", deployment.domain),
                             "description": "Deployed instance"
                         }));
                     }
                 }
             }
         }
-        */
 
         // Validate port
         if port == 0 {
@@ -255,23 +253,16 @@ impl ApiDefinitionCommandHandler {
             format!("Swagger UI, running at http://localhost:{}", port),
         );
         logln("");
+        if deployments.is_empty() {
+            log_warn("No deployments found - displaying API schema without server information")
+        } else {
+            logln("API is deployed at:".log_color_help_group().to_string());
+            for deployment in &deployments {
+                logln(format!("- {}", deployment.domain));
+            }
+        }
+        logln("");
         logln("Press Ctrl+C to quit");
-
-        // TODO: atomic
-        /*
-        self.ctx
-            .log_handler()
-            .log_view(&ApiDefinitionExportView(format!(
-                "Swagger UI running at http://localhost:{}\n{}",
-                port,
-                if deployments.is_empty() {
-                    "No deployments found - displaying API schema without server information"
-                        .to_string()
-                } else {
-                    format!("API is deployed at {} locations", deployments.len())
-                }
-            )));
-        */
 
         // Wait for ctrl+c
         tokio::signal::ctrl_c().await?;
