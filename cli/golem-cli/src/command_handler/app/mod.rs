@@ -455,7 +455,7 @@ impl AppCommandHandler {
             .map_service_error()?
             .values;
 
-        if deployments.len() == 0 {
+        if deployments.is_empty() {
             log_error(format!(
                 "Deployment with version {} not found!",
                 version.log_color_error_highlight()

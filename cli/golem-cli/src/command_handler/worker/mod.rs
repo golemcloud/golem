@@ -720,37 +720,39 @@ impl WorkerCommandHandler {
 
                 let environment = &selected_components.environment;
 
-                environment.with_current_deployment_revision_or_default_warn(
-                    |current_deployment_revision| async move {
-                        let mut components =
-                            Vec::with_capacity(selected_components.component_names.len());
-                        for component_name in selected_components.component_names {
-                            match clients
-                                .component
-                                .get_deployment_component(
-                                    &environment.environment_id.0,
-                                    current_deployment_revision.into(),
-                                    component_name.as_str(),
-                                )
-                                .await
-                                .map_service_error_not_found_as_opt()?
-                            {
-                                Some(component) => {
-                                    components.push(component);
-                                }
-                                None => {
-                                    log_error(format!(
-                                        "Component not found: {}",
-                                        component_name.0.log_color_error_highlight()
-                                    ));
-                                    bail!(NonSuccessfulExit)
+                environment
+                    .with_current_deployment_revision_or_default_warn(
+                        |current_deployment_revision| async move {
+                            let mut components =
+                                Vec::with_capacity(selected_components.component_names.len());
+                            for component_name in selected_components.component_names {
+                                match clients
+                                    .component
+                                    .get_deployment_component(
+                                        &environment.environment_id.0,
+                                        current_deployment_revision.into(),
+                                        component_name.as_str(),
+                                    )
+                                    .await
+                                    .map_service_error_not_found_as_opt()?
+                                {
+                                    Some(component) => {
+                                        components.push(component);
+                                    }
+                                    None => {
+                                        log_error(format!(
+                                            "Component not found: {}",
+                                            component_name.0.log_color_error_highlight()
+                                        ));
+                                        bail!(NonSuccessfulExit)
+                                    }
                                 }
                             }
-                        }
 
-                        Ok((components, filters))
-                    },
-                ).await?
+                            Ok((components, filters))
+                        },
+                    )
+                    .await?
             }
         };
 

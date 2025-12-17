@@ -176,7 +176,7 @@ impl EnvironmentCommandHandler {
                     .await?
                     .environment
                     .list_visible_environments(
-                        Some(&account_email),
+                        Some(account_email),
                         Some(&application_name.0),
                         Some(&environment_name.0),
                     )
