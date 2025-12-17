@@ -12,13 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::recursion::is_recursive;
 use heck::ToKebabCase;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Lit, LitStr, Variant};
+use syn::{Data, DeriveInput, Fields, Lit, LitStr, Type, Variant};
 
 pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> TokenStream {
+    let is_recursive = is_recursive(ast);
+
+    if is_recursive {
+        return syn::Error::new(
+            Span::call_site(),
+            "Cannot derive IntoValue for recursive types",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
@@ -368,6 +380,17 @@ pub fn derive_from_value_and_type(
     ast: &DeriveInput,
     golem_rust_crate_ident: &Ident,
 ) -> TokenStream {
+    let is_recursive = is_recursive(ast);
+
+    if is_recursive {
+        return syn::Error::new(
+            Span::call_site(),
+            "Cannot derive FromValueAndType for recursive types",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs

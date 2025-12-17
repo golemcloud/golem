@@ -598,6 +598,24 @@ impl<K: FromValueAndType + Eq + Hash, V: FromValueAndType> FromValueAndType for 
     }
 }
 
+impl<T: IntoValue> IntoValue for Box<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        (*self).add_to_builder(builder)
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder)
+    }
+}
+
+impl<T: FromValueAndType> FromValueAndType for Box<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        T::from_extractor(extractor).map(Box::new)
+    }
+}
+
 impl IntoValue for ComponentId {
     fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
         let builder = builder.record();
