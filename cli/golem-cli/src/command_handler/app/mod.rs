@@ -1537,7 +1537,10 @@ impl AppCommandHandler {
                     application_name.0.log_color_highlight()
                 ));
 
-                self.ctx.environment_handler().show_available_application_environments().await?;
+                self.ctx
+                    .environment_handler()
+                    .show_available_application_environments()
+                    .await?;
 
                 bail!(NonSuccessfulExit)
             }

@@ -424,11 +424,6 @@ pub trait Handlers {
 }
 
 impl Handlers for Arc<Context> {
-    // TODO: atomic
-    // fn api_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
-    //     ApiCloudCertificateCommandHandler::new(self.clone())
-    // }
-
     fn api_domain_handler(&self) -> ApiDomainCommandHandler {
         ApiDomainCommandHandler::new(self.clone())
     }

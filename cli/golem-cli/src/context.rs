@@ -690,8 +690,8 @@ impl Context {
             .or_else(|| global_flags.profile.clone())
             .or_else(|| global_flags.local.then(ProfileName::local))
             .or_else(|| global_flags.cloud.then(ProfileName::cloud))
-            .or_else(|| config.default_profile)
-            .unwrap_or_else(|| ProfileName::local());
+            .or(config.default_profile)
+            .unwrap_or_else(ProfileName::local);
 
         let Some(profile) = config.profiles.get(&profile_name) else {
             bail!(ContextInitHintError::ProfileNotFound {
