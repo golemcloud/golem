@@ -5832,6 +5832,7 @@ dependencies = [
  "golem-wasm-derive",
  "headers 0.4.1",
  "indoc",
+ "pretty_assertions",
  "rand 0.9.2",
  "reqwest 0.12.24",
  "rlimit",
