@@ -24,7 +24,5 @@ pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<Wi
 }
 
 pub async fn await_pollable(pollable: Pollable) {
-    wstd::runtime::AsyncPollable::new(pollable)
-        .wait_for()
-        .await;
+    wstd::runtime::AsyncPollable::new(pollable).wait_for().await;
 }
