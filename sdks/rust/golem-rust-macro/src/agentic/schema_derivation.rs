@@ -28,7 +28,7 @@ pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> Toke
         return syn::Error::new_spanned(
             &ast.ident,
             format!("Cannot derive `Schema` for recursive type `{}`\n\
-            Recursive types are not supported by `Schema` until Golem 1.5\n\
+            Recursive types are not supported by `Schema` yet\n\
             Help: Avoid direct recursion in this type (e.g. using index-based node lists) and then derive `Schema`", ast.ident
         )).to_compile_error().into();
     }
