@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wasm_rpc::golem_rpc_0_2_x::types::Pollable;
 use golem_wasm::{FutureInvokeResult, RpcError, WitValue};
+use wstd::wasi::io::poll::Pollable;
 
 pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<WitValue, RpcError> {
     let golem_wasm_pollable = invoke_result.subscribe();
@@ -24,9 +24,5 @@ pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<Wi
 }
 
 pub async fn await_pollable(pollable: Pollable) {
-    let pollable_wasi: wasi::io::poll::Pollable = unsafe { std::mem::transmute(pollable) };
-
-    wstd::runtime::AsyncPollable::new(pollable_wasi)
-        .wait_for()
-        .await;
+    wstd::runtime::AsyncPollable::new(pollable).wait_for().await;
 }

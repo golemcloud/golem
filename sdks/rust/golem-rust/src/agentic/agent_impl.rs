@@ -112,22 +112,18 @@ impl LoadSnapshotGuest for Component {
             parse_agent_id(&id).map_err(|e| e.to_string())?;
 
         with_agent_initiator(
-            |initiator| async move {
-                initiator
-                    .initiate(agent_parameters)
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                get_resolved_agent()
-                    .unwrap()
-                    .agent
-                    .borrow()
-                    .load_snapshot_base(agent_snapshot)
-                    .await
-            },
+            |initiator| async move { initiator.initiate(agent_parameters).await },
             &AgentTypeName(agent_type_name),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+        with_agent_instance_async(|resolved_agent| async move {
+            resolved_agent
+                .agent
+                .borrow_mut()
+                .load_snapshot_base(agent_snapshot)
+                .await
+        })
     }
 }
 

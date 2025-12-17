@@ -14,9 +14,9 @@
 
 use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
+use crate::golem_wasm::WitValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
-use crate::wasm_rpc::WitValue;
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 
 pub trait Schema {

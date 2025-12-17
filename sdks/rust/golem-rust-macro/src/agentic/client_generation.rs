@@ -72,8 +72,8 @@ pub fn get_remote_client(
 
     quote! {
         pub struct #remote_client_type_name {
-            agent_id: golem_rust::wasm_rpc::AgentId,
-            wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
+            agent_id: golem_rust::golem_wasm::AgentId,
+            wasm_rpc: golem_rust::golem_wasm::WasmRpc,
         }
 
         impl #remote_client_type_name {
@@ -92,9 +92,9 @@ pub fn get_remote_client(
                       None
                    ).expect("Internal Error: Failed to make agent id");
 
-                 let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+                 let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+                 let wasm_rpc = golem_rust::golem_wasm::WasmRpc::new(&agent_id);
 
                  #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
@@ -115,9 +115,9 @@ pub fn get_remote_client(
                         Some(golem_rust::Uuid::new_v4().into())
                    ).expect("Internal Error: Failed to make agent id");
 
-                 let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+                 let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+                 let wasm_rpc = golem_rust::golem_wasm::WasmRpc::new(&agent_id);
 
                  #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
@@ -138,9 +138,9 @@ pub fn get_remote_client(
                         Some(phantom_id.into())
                    ).expect("Internal Error: Failed to make agent id");
 
-                let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+                let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+                let wasm_rpc = golem_rust::golem_wasm::WasmRpc::new(&agent_id);
 
                 #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
             }
@@ -262,7 +262,7 @@ fn get_remote_agent_methods_info(
 
                   Some(quote!{
                         pub async fn #method_name(#(#inputs),*) -> #return_type {
-                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
                           let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
@@ -270,7 +270,7 @@ fn get_remote_agent_methods_info(
                             &wit_values
                           );
 
-                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = golem_rust::agentic::await_invoke_result(rpc_result_future).await;
+                          let rpc_result: Result<golem_rust::golem_wasm::WitValue, golem_rust::golem_wasm::RpcError> = golem_rust::agentic::await_invoke_result(rpc_result_future).await;
 
                           let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
@@ -280,10 +280,10 @@ fn get_remote_agent_methods_info(
                         }
 
                         pub fn #trigger_method_name(#(#inputs),*) {
-                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = self.wasm_rpc.invoke(
+                          let rpc_result: Result<(), golem_rust::golem_wasm::RpcError> = self.wasm_rpc.invoke(
                             #remote_method_name_token,
                             &wit_values
                           );
@@ -291,8 +291,8 @@ fn get_remote_agent_methods_info(
                           rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
                         }
 
-                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime) {
-                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime) {
+                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
                           self.wasm_rpc.schedule_invocation(
