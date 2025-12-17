@@ -64,6 +64,24 @@ impl FromValueAndType for Level {
     }
 }
 
+impl IntoValue for wasi::io::error::Error {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.string(&self.to_debug_string())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.string()
+    }
+}
+
+impl FromValueAndType for wasi::io::error::Error {
+    fn from_extractor<'a, 'b>(
+        _extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        Err("Not supported".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,11 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::await_promise;
 use crate::bindings::golem::api::host::PromiseId;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-pub fn await_promise_json<T: DeserializeOwned>(
+/// Awaits a promise blocking the execution of the agent. The agent is going to be
+/// suspended until the promise is completed.
+///
+/// The completed promise's payload is decoded as JSON.
+///
+/// Use `await_promise_json` for an async version of this function, allowing to interleave
+/// awaiting of the promise with other operations.
+pub fn blocking_await_promise_json<T: DeserializeOwned>(
     promise_id: &PromiseId,
 ) -> Result<T, serde_json::Error> {
     let promise = crate::bindings::golem::api::host::get_promise(promise_id);
@@ -25,6 +33,20 @@ pub fn await_promise_json<T: DeserializeOwned>(
     serde_json::from_slice(&bytes)
 }
 
+/// Awaits a promise.
+///
+/// The completed promise's payload is decoded as JSON.
+///
+/// If only promises or timeouts are awaited simultaneously, the agent is going to be
+/// suspended until any of them completes.
+pub async fn await_promise_json<T: DeserializeOwned>(
+    promise_id: &PromiseId,
+) -> Result<T, serde_json::Error> {
+    let bytes = await_promise(promise_id).await;
+    serde_json::from_slice(&bytes)
+}
+
+/// Completes a promise with a JSON payload
 pub fn complete_promise_json<T: Serialize>(
     promise_id: &PromiseId,
     value: T,
