@@ -6,25 +6,15 @@ httpApi:
       version: '0.0.1'
       routes:
         - method: GET
-          path: /component-name-api/chat/{chat-name}/history
+          path: /component-name-api/research?{topic}
           binding:
             type: default
             __cn__: componentname
             response: |
-              let name: string = request.path.chat-name;
-              let agent = chat-agent(name);
-              let response = agent.history();
-              { status: 200, body: response }
-        - method: POST
-          path: /component-name-api/chat/{chat-name}/ask
-          binding:
-            type: default
-            __cn__: componentname
-            response: |
-              let name: string = request.path.chat-name;
-              let agent = chat-agent(name);
-              let response = agent.ask(request.body);
-              { status: 200, body: response }
+              let agent = research-agent();
+              let result = agent.research(request.query.topic);
+              {status: 200, body: result, headers: {ContentType: "text/plain"}}
+
 
   deployments:
     local:
@@ -38,6 +28,13 @@ components:
 
     # golem-app-manifest-env-doc
     env:
+      # Local ollama llm model to use
+      LLM_MODEL: hf.co/unsloth/gpt-oss-20b-GGUF:Q8_0
+      # Google api key to use: https://console.cloud.google.com/apis/credentials
+      GOOGLE_API_KEY: "changeme"
+      # Google search engine id: https://programmablesearchengine.google.com/controlpanel/create
+      GOOGLE_SEARCH_ENGINE_ID: "changeme"
+
     # golem-app-manifest-dep-env-vars-doc
 
     dependencies:
