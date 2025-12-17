@@ -524,7 +524,7 @@ pub fn derive_from_value_and_type(
 
                                         quote! {
                                             #field_name: <#field_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &<#golem_rust_crate_ident::wasm_rpc::WitNodePointer as #golem_rust_crate_ident::value_and_type::WitValueExtractor>::field(&inner, #idx).ok_or_else(|| #missing_field_error.to_string())?
+                                                &<#golem_rust_crate_ident::golem_wasm::WitNodePointer as #golem_rust_crate_ident::value_and_type::WitValueExtractor>::field(&inner, #idx).ok_or_else(|| #missing_field_error.to_string())?
                                             )?
                                         }
                                     })
