@@ -683,14 +683,15 @@ impl Context {
         global_flags: &GolemCliGlobalFlags,
         force_use_cloud_profile: bool,
     ) -> anyhow::Result<NamedProfile> {
+        let config = Config::from_dir(&global_flags.config_dir())?;
+
         let profile_name = force_use_cloud_profile
             .then(ProfileName::cloud)
             .or_else(|| global_flags.profile.clone())
             .or_else(|| global_flags.local.then(ProfileName::local))
             .or_else(|| global_flags.cloud.then(ProfileName::cloud))
-            .unwrap_or_else(ProfileName::local);
-
-        let config = Config::from_dir(&global_flags.config_dir())?;
+            .or_else(|| config.default_profile)
+            .unwrap_or_else(|| ProfileName::local());
 
         let Some(profile) = config.profiles.get(&profile_name) else {
             bail!(ContextInitHintError::ProfileNotFound {
