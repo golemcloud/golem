@@ -32,22 +32,22 @@ export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
 
 export type UnionWithLiterals = 'a' | 'b' | 'c' | { n: number };
 
-// tag and `val` are exact as wit-type result
+// user defined result type, with exact shape of wit result
 export type ResultTypeExactBoth =
   | { tag: 'ok'; val: number }
   | { tag: 'err'; val: string };
 
-// Result type Kind is similar looking, but it's value instead of val
+// user defined result type, with `value` as field names
 export type ResultTypeNonExact =
   | { tag: 'ok'; value: number }
   | { tag: 'err'; value: string };
 
-// Result type Kind is similar looking, but it's okValue and errValue instead of val
+// user defined result type, with custom field names
 export type ResultTypeNonExact2 =
   | { tag: 'ok'; okValue: number }
   | { tag: 'err'; errValue: string };
 
-// Result type Kind is similar looking, but it's okValue and errValue instead of val
+// User defined result type, with void types in ok and err channels
 export type ResultTypeNonExact3 =
   | { tag: 'ok'; okValue: void }
   | { tag: 'err'; errValue: void };
