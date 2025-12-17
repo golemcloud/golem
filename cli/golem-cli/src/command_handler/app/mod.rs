@@ -80,7 +80,7 @@ impl AppCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: ExecSubcommand) -> anyhow::Result<()> {
+    pub async fn exec_custom_command(&self, subcommand: ExecSubcommand) -> anyhow::Result<()> {
         match subcommand {
             ExecSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
         }
@@ -1536,6 +1536,9 @@ impl AppCommandHandler {
                     "Application {} not found",
                     application_name.0.log_color_highlight()
                 ));
+
+                self.ctx.environment_handler().show_available_application_environments().await?;
+
                 bail!(NonSuccessfulExit)
             }
         }

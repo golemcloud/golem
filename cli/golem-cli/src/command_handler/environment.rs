@@ -196,20 +196,7 @@ impl EnvironmentCommandHandler {
                             environment_reference.to_string().log_color_highlight()
                         ));
 
-                        let env_summaries = self
-                            .ctx
-                            .golem_clients()
-                            .await?
-                            .environment
-                            .list_visible_environments(None, None, None)
-                            .await
-                            .map_service_error()?
-                            .values;
-
-                        logln("");
-                        logln("Available environments:".log_color_help_group().to_string());
-                        logln("");
-                        self.ctx.log_handler().log_view(&env_summaries);
+                        self.show_available_application_environments().await?;
 
                         bail!(NonSuccessfulExit);
                     }
@@ -268,6 +255,9 @@ impl EnvironmentCommandHandler {
                     "Environment {} not found",
                     environment_name.0.log_color_highlight()
                 ));
+
+                self.show_available_application_environments().await?;
+
                 bail!(NonSuccessfulExit);
             }
         }
@@ -383,5 +373,38 @@ impl EnvironmentCommandHandler {
         logln("");
         log_text_view(&EnvironmentNameHelp);
         bail!(NonSuccessfulExit);
+    }
+
+    pub async fn show_available_application_environments(&self) -> anyhow::Result<()> {
+        let _indent = LogIndent::stash();
+
+        logln("");
+
+        let env_summaries = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .list_visible_environments(None, None, None)
+            .await
+            .map_service_error()?
+            .values;
+
+        if env_summaries.is_empty() {
+            logln(format!(
+                "No application environments are available. Use '{}' to create one.",
+                "golem deploy".log_color_highlight()
+            ));
+        } else {
+            logln(
+                "Available application environments:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
+            logln("");
+            self.ctx.log_handler().log_view(&env_summaries);
+        }
+
+        Ok(())
     }
 }

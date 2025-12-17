@@ -341,11 +341,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::ListAgentTypes {} => {
                 self.ctx.app_handler().cmd_list_agent_types().await
             }
+            GolemCliSubcommand::Exec { subcommand } => {
+                self.ctx.app_handler().exec_custom_command(subcommand).await
+            }
 
             // Other entities
-            GolemCliSubcommand::App { subcommand } => {
-                self.ctx.app_handler().handle_command(subcommand).await
-            }
             GolemCliSubcommand::Environment { subcommand } => {
                 self.ctx
                     .environment_handler()
