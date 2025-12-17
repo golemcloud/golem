@@ -20,6 +20,7 @@ use syn::DeriveInput;
 use crate::transaction::golem_operation_impl;
 
 mod agentic;
+pub(crate) mod recursion;
 mod transaction;
 mod value;
 
