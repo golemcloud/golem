@@ -13,7 +13,7 @@ path = "src/lib.rs"
 
 chrono = "0.4.42"
 log = { workspace = true }
-golem-rust = { workspace = true }
+golem-rust = { workspace = true, features = ["chrono"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wstd = { workspace = true }
