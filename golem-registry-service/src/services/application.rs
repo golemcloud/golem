@@ -156,7 +156,7 @@ impl ApplicationService {
         };
 
         application.revision = application.revision.next()?;
-        if let Some(new_name) = update.new_name {
+        if let Some(new_name) = update.name {
             application.name = new_name
         };
 

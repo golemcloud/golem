@@ -170,31 +170,41 @@ impl EnvironmentCommandHandler {
                 application_name,
                 environment_name,
             } => {
-                // TODO: atomic: should have either filters or a specialized lookup for this
-                let env_summaries = self
+                let env_summary = self
                     .ctx
                     .golem_clients()
                     .await?
                     .environment
-                    .list_visible_environments()
+                    .list_visible_environments(
+                        Some(&account_email),
+                        Some(&application_name.0),
+                        Some(&environment_name.0),
+                    )
                     .await
                     .map_service_error()?
-                    .values;
+                    .values
+                    .pop();
 
-                match env_summaries.iter().find(|app_envs| {
-                    &app_envs.account.email == account_email
-                        && app_envs.application.name.0 == application_name.0
-                        && app_envs.environment.name.0 == environment_name.0
-                }) {
+                match env_summary {
                     Some(env_summary) => Ok(ResolvedEnvironmentIdentity::from_summary(
                         Some(environment_reference),
-                        env_summary.clone(),
+                        env_summary,
                     )),
                     None => {
                         log_error(format!(
                             "Environment {} not found",
                             environment_reference.to_string().log_color_highlight()
                         ));
+
+                        let env_summaries = self
+                            .ctx
+                            .golem_clients()
+                            .await?
+                            .environment
+                            .list_visible_environments(None, None, None)
+                            .await
+                            .map_service_error()?
+                            .values;
 
                         logln("");
                         logln("Available environments:".log_color_help_group().to_string());
@@ -344,7 +354,7 @@ impl EnvironmentCommandHandler {
                 .update_environment(
                     &environment.environment_id.0,
                     &EnvironmentUpdate {
-                        new_name: None,
+                        name: None,
                         current_revision: environment.server_environment.revision,
                         compatibility_check: Some(manifest_options.compatibility_check()),
                         version_check: Some(manifest_options.version_check()),

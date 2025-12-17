@@ -15,7 +15,7 @@
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::{Empty, RetryConfig};
@@ -110,7 +110,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129")),
                 name: "Initial User".to_string(),
-                email: "initial@user".to_string(),
+                email: AccountEmail("initial@user".to_string()),
                 token: TokenSecret::trusted(
                     "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string(),
                 ),
@@ -123,7 +123,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("0e8a0431-94b9-4644-89ca-fbf403edb6e7")),
                 name: "Marketing User".to_string(),
-                email: "marketing@user".to_string(),
+                email: AccountEmail("marketing@user".to_string()),
                 token: TokenSecret::trusted(
                     "2dwnjEdx8a_bw8TTN7r6yqcvLY2jAQuoD1N6U3uRy9I".to_string(),
                 ),
@@ -385,7 +385,7 @@ impl ComponentCompilationEnabledConfig {
 pub struct PrecreatedAccount {
     pub id: AccountId,
     pub name: String,
-    pub email: String,
+    pub email: AccountEmail,
     pub token: TokenSecret,
     pub plan_id: PlanId,
     pub role: AccountRole,

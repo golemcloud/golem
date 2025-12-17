@@ -28,7 +28,7 @@ use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
 use anyhow::anyhow;
 use applying::Apply;
 use chrono::{Duration, Utc};
-use golem_common::model::account::{AccountCreation, AccountId};
+use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
     EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
@@ -39,6 +39,7 @@ use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use std::sync::Arc;
+use tap::Pipe;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
@@ -331,10 +332,14 @@ impl OAuth2Service {
     }
 
     async fn make_account(&self, external_login: &ExternalLogin) -> Result<AccountId, OAuth2Error> {
-        let email = external_login.email.clone().ok_or(anyhow!(
-            "No user email from OAuth2 Provider for login {}",
-            external_login.external_id
-        ))?;
+        let email = external_login
+            .email
+            .clone()
+            .ok_or(anyhow!(
+                "No user email from OAuth2 Provider for login {}",
+                external_login.external_id
+            ))?
+            .pipe(AccountEmail);
 
         let name = external_login
             .name

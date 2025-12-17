@@ -120,14 +120,14 @@ async fn update_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     let share_update = EnvironmentShareUpdate {
         current_revision: share.revision,
-        new_roles: BTreeSet::from([EnvironmentRole::Viewer]),
+        roles: BTreeSet::from([EnvironmentRole::Viewer]),
     };
 
     let updated_share = client_1
         .update_environment_share(&share.id.0, &share_update)
         .await?;
 
-    assert!(updated_share.roles == share_update.new_roles);
+    assert!(updated_share.roles == share_update.roles);
 
     {
         let fetched_share = client_1.get_environment_share(&share.id.0).await?;

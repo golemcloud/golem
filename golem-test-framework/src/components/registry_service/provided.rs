@@ -15,7 +15,7 @@
 use super::RegistryService;
 use crate::components::new_reqwest_client;
 use async_trait::async_trait;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use tokio::sync::OnceCell;
@@ -27,7 +27,7 @@ pub struct ProvidedRegistryService {
     grpc_port: u16,
     base_http_client: OnceCell<reqwest::Client>,
     admin_account_id: AccountId,
-    admin_account_email: String,
+    admin_account_email: AccountEmail,
     admin_account_token: TokenSecret,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
@@ -39,7 +39,7 @@ impl ProvidedRegistryService {
         http_port: u16,
         grpc_port: u16,
         admin_account_id: AccountId,
-        admin_account_email: String,
+        admin_account_email: AccountEmail,
         admin_account_token: TokenSecret,
         default_plan_id: PlanId,
         low_fuel_plan_id: PlanId,
@@ -78,7 +78,7 @@ impl RegistryService for ProvidedRegistryService {
     fn admin_account_id(&self) -> AccountId {
         self.admin_account_id
     }
-    fn admin_account_email(&self) -> String {
+    fn admin_account_email(&self) -> AccountEmail {
         self.admin_account_email.clone()
     }
     fn admin_account_token(&self) -> TokenSecret {

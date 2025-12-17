@@ -17,7 +17,7 @@ use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::diff::Hashable;
@@ -315,7 +315,7 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
             account: AccountSummary {
                 id: AccountId(value.account_id),
                 name: value.account_name,
-                email: value.account_email,
+                email: AccountEmail(value.account_email),
             },
         })
     }

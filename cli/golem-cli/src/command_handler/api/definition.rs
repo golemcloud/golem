@@ -57,7 +57,7 @@ impl ApiDefinitionCommandHandler {
                 format,
                 output_name,
             } => {
-                self.cmd_export(name, deployment_revision, format, output_name)
+                self.cmd_openapi(name, deployment_revision, format, output_name)
                     .await
             }
             ApiDefinitionSubcommand::Swagger {
@@ -126,7 +126,7 @@ impl ApiDefinitionCommandHandler {
         Ok(())
     }
 
-    async fn cmd_export(
+    async fn cmd_openapi(
         &self,
         name: HttpApiDefinitionName,
         deployment_revision: Option<DeploymentRevision>,

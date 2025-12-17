@@ -17,6 +17,7 @@ pub mod numeric;
 
 use golem_common::{SafeDisplay, error_forwarding};
 use sqlx::error::ErrorKind;
+use sqlx::{Database, Encode, Type};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
@@ -90,5 +91,50 @@ impl<T> ResultExt<T> for RepoResult<T> {
             Err(err) if err.is_unique_violation() => Err(business_error),
             Err(err) => Err(err.into()),
         }
+    }
+}
+
+type BindFn<'q, DB, R> = Box<
+    dyn FnOnce(
+            sqlx::query::QueryAs<'q, DB, R, <DB as Database>::Arguments<'q>>,
+        ) -> sqlx::query::QueryAs<'q, DB, R, <DB as Database>::Arguments<'q>>
+        + 'q
+        + Send,
+>;
+
+pub struct BindingsStack<'q, DB: Database, R> {
+    next: usize,
+    bind_fns: Vec<BindFn<'q, DB, R>>,
+}
+
+impl<'q, DB: Database, R> BindingsStack<'q, DB, R> {
+    pub fn new(start: usize) -> Self {
+        Self {
+            next: start,
+            bind_fns: Vec::new(),
+        }
+    }
+
+    pub fn push<'bind: 'q, T: 'bind + Encode<'q, DB> + Type<DB> + Send>(
+        &mut self,
+        value: T,
+    ) -> usize {
+        let idx = self.next;
+        self.next += 1;
+
+        self.bind_fns.push(Box::new(move |q| q.bind(value)));
+
+        idx
+    }
+
+    pub fn apply(
+        self,
+        query: sqlx::query::QueryAs<'q, DB, R, <DB as Database>::Arguments<'q>>,
+    ) -> sqlx::query::QueryAs<'q, DB, R, <DB as Database>::Arguments<'q>> {
+        let mut result = query;
+        for bind_fn in self.bind_fns {
+            result = bind_fn(result);
+        }
+        result
     }
 }
