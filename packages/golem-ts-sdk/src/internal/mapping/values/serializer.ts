@@ -541,6 +541,8 @@ export function serializeDefaultTsValue(
           const errValueName = analysedType.resultType.errValueName;
 
           if (tsValue['tag'] === 'ok') {
+            // If ok type exists, we ensure that we have ok value, else return error
+            // If ok type doesn't exist, we set ok value to undefined
             if (okType) {
               if (!okValueName) {
                 return Either.left(
@@ -566,6 +568,8 @@ export function serializeDefaultTsValue(
               },
             });
           } else if (typeof tsValue === 'object' && tsValue['tag'] === 'err') {
+            // If err type exists, we ensure that we have err value, else return error
+            // If err type doesn't exist, we set err value to undefined
             if (errType) {
               if (!errValueName) {
                 return Either.left(
