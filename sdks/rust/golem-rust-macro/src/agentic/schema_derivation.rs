@@ -15,7 +15,7 @@
 use crate::recursion::is_recursive;
 use crate::value;
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span};
+use proc_macro2::Ident;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
@@ -25,15 +25,12 @@ pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> Toke
     let is_recursive = is_recursive(&ast);
 
     if is_recursive {
-        return syn::Error::new(
-            Span::call_site(),
-            "Cannot derive `Schema` for recursive types.\n\
-            Recursive types are not supported by the agentic `Schema` until Golem 1.5\n\
-            Help: Avoid recursion in this type (e.g. using index-based node lists) to use it in agent constructor or methods, \
-               and convert it to a normal recursive structure internally if needed",
-        )
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            &ast.ident,
+            format!("Cannot derive `Schema` for recursive type `{}`\n\
+            Recursive types are not supported by `Schema` until Golem 1.5\n\
+            Help: Avoid direct recursion in this type (e.g. using index-based node lists) and then derive `Schema`", ast.ident
+        )).to_compile_error().into();
     }
 
     let into_value_tokens: proc_macro2::TokenStream =
