@@ -873,6 +873,25 @@ export function getInbuiltResultType(
       const okType = typeParams[0];
       const errType = typeParams[1];
 
+      const okIsVoid = isVoidType(okType);
+      const errIsVoid = isVoidType(errType);
+
+      if (okIsVoid && errIsVoid) {
+        return Either.right(result(undefined, { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: 'void' }, undefined, undefined));
+      }
+
+      if (okIsVoid) {
+        return Either.map(fromTsTypeInternal(errType, Option.none()), (err) =>
+          result(undefined, { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: undefined }, undefined, err)
+        );
+      }
+
+      if (errIsVoid) {
+        return Either.map(fromTsTypeInternal(okType, Option.none()), (ok) =>
+          result(undefined, { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: 'void' }, ok, undefined)
+        );
+      }
+
       const okAnalysed = fromTsTypeInternal(okType, Option.none());
       const errAnalysed = fromTsTypeInternal(errType, Option.none());
 

@@ -481,10 +481,7 @@ export function serializeDefaultTsValue(
                 return Either.right({
                   kind: 'result',
                   value: {
-                    ok: {
-                      kind: 'tuple',
-                      value: [],
-                    },
+                    ok: undefined,
                   },
                 });
               }
@@ -511,10 +508,7 @@ export function serializeDefaultTsValue(
                 return Either.right({
                   kind: 'result',
                   value: {
-                    err: {
-                      kind: 'tuple',
-                      value: [],
-                    },
+                    err: undefined,
                   },
                 });
               }
