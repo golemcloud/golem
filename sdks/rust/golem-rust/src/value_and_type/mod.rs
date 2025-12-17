@@ -179,6 +179,27 @@ impl FromValueAndType for u64 {
     }
 }
 
+impl IntoValue for usize {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u64(self as u64)
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u64()
+    }
+}
+
+impl FromValueAndType for usize {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u64()
+            .map(|n| n as usize)
+            .ok_or_else(|| "Expected u64".to_string())
+    }
+}
+
 impl IntoValue for i8 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         builder.s8(self)

@@ -32,7 +32,7 @@ pub trait Tasks {
 }
 
 struct TasksImpl {
-    name: String,
+    _name: String,
     tasks: Vec<Task>,
 }
 
@@ -40,7 +40,7 @@ struct TasksImpl {
 impl Tasks for TasksImpl {
     fn new(name: String) -> Self {
         Self {
-            name,
+            _name: name,
             tasks: vec![],
         }
     }
