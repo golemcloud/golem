@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::command::app::AppSubcommand;
-use crate::command::builtin_app_subcommands;
+use crate::command::exec::ExecSubcommand;
+use crate::command::builtin_exec_subcommands;
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
@@ -80,9 +80,9 @@ impl AppCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: AppSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: ExecSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            AppSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
+            ExecSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
         }
     }
 
@@ -328,7 +328,7 @@ impl AppCommandHandler {
                     logln("");
 
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_custom_commands(
-                        builtin_app_subcommands(),
+                        builtin_exec_subcommands(),
                     ))?;
 
                     logln(
@@ -336,7 +336,7 @@ impl AppCommandHandler {
                             .log_color_help_group()
                             .to_string(),
                     );
-                    let app_subcommands = builtin_app_subcommands();
+                    let app_subcommands = builtin_exec_subcommands();
                     for subcommand in &app_subcommands {
                         logln(format!("  {}", subcommand.bold()));
                     }

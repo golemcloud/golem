@@ -61,7 +61,6 @@ mod cmd {
     pub static NO_ARGS: &[&str] = &[];
     pub static ADD_DEPENDENCY: &str = "add-dependency";
     pub static AGENT: &str = "agent";
-    // pub static APP: &str = "app";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";

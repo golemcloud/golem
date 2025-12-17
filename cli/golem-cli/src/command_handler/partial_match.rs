@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::{
-    builtin_app_subcommands, help_target_to_command, GolemCliCommandPartialMatch,
+    builtin_exec_subcommands, help_target_to_command, GolemCliCommandPartialMatch,
     GolemCliGlobalFlags,
 };
 use crate::command_handler::Handlers;
@@ -55,7 +55,7 @@ impl ErrorHandler {
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        builtin_app_subcommands(),
+                        builtin_exec_subcommands(),
                     ))?
                 }
 
@@ -72,7 +72,7 @@ impl ErrorHandler {
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        builtin_app_subcommands(),
+                        builtin_exec_subcommands(),
                     ))?
                 }
 

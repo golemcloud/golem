@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::command::api::ApiSubcommand;
-use crate::command::app::AppSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
+use crate::command::exec::ExecSubcommand;
 use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
@@ -679,10 +679,10 @@ pub enum GolemCliSubcommand {
     ListAgentTypes {},
 
     // Other entities ------------------------------------------------------------------------------
-    /// Run custom, application defined commands
+    /// Execute custom, application manifest defined commands
     App {
         #[clap(subcommand)]
-        subcommand: AppSubcommand,
+        subcommand: ExecSubcommand,
     },
     /// Manage environments
     Environment {
@@ -921,12 +921,12 @@ pub mod shared_args {
     }*/
 }
 
-pub mod app {
+pub mod exec {
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
-    pub enum AppSubcommand {
-        /// Run custom, application specified command
+    pub enum ExecSubcommand {
+        /// Execute custom, application manifest specified command
         #[clap(external_subcommand)]
         CustomCommand(Vec<String>),
     }
@@ -1837,9 +1837,9 @@ pub mod server {
     }
 }
 
-pub fn builtin_app_subcommands() -> BTreeSet<String> {
+pub fn builtin_exec_subcommands() -> BTreeSet<String> {
     GolemCliCommand::command()
-        .find_subcommand("app")
+        .find_subcommand("exec")
         .unwrap()
         .get_subcommands()
         .map(|subcommand| subcommand.get_name().to_string())
@@ -1910,7 +1910,7 @@ fn parse_instant(
 #[cfg(test)]
 mod test {
     use crate::command::{
-        builtin_app_subcommands, help_target_to_subcommand_names, GolemCliCommand,
+        builtin_exec_subcommands, help_target_to_subcommand_names, GolemCliCommand,
     };
     use crate::error::ShowClapHelpTarget;
     use assert2::assert;
@@ -2132,7 +2132,7 @@ mod test {
 
     #[test]
     fn builtin_app_subcommands_no_panic() {
-        println!("{:?}", builtin_app_subcommands())
+        println!("{:?}", builtin_exec_subcommands())
     }
 
     #[test]
