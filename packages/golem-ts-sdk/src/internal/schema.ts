@@ -1038,7 +1038,8 @@ export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
   ) {
     const parameterTypes: Type.Type[] = promiseUnwrappedType.typeParams ?? [];
 
-    if (parameterTypes.length !== 1) {
+    if (parameterTypes.length === 0) {
+      console.log("No parameter types found for UnstructuredBinary");
       return Either.right([]);
     }
 
@@ -1059,8 +1060,10 @@ export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
           }
         }),
       );
+    } else if (paramType.kind === 'string') {
+      return Either.right([]);
     } else {
-      return Either.left('unknown parameter type for UnstructuredBinary');
+      return Either.left('unknown parameter type for UnstructuredBinary' + paramType.kind);
     }
   }
 
