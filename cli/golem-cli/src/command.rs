@@ -680,7 +680,7 @@ pub enum GolemCliSubcommand {
 
     // Other entities ------------------------------------------------------------------------------
     /// Execute custom, application manifest defined commands
-    App {
+    Exec {
         #[clap(subcommand)]
         subcommand: ExecSubcommand,
     },

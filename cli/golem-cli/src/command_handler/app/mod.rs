@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::command::exec::ExecSubcommand;
 use crate::command::builtin_exec_subcommands;
+use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
