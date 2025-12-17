@@ -263,7 +263,7 @@ impl From<golem_client::model::Account> for AccountDetails {
     fn from(value: golem_client::model::Account) -> Self {
         Self {
             account_id: value.id,
-            email: value.email,
+            email: value.email.0,
         }
     }
 }

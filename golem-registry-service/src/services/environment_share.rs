@@ -147,7 +147,7 @@ impl EnvironmentShareService {
         let current_revision = environment_share.revision;
 
         environment_share.revision = current_revision.next()?;
-        environment_share.roles = update.new_roles;
+        environment_share.roles = update.roles;
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
 

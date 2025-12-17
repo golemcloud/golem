@@ -41,7 +41,7 @@ use crate::components::worker_service::WorkerService;
 use crate::config::TestDependencies;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use golem_common::tracing::directive::warn;
@@ -468,7 +468,7 @@ impl BenchmarkTestDependencies {
                         *registry_service_http_port,
                         *registry_service_grpc_port,
                         AccountId(*registry_service_admin_account_id),
-                        registry_service_admin_account_email.clone(),
+                        AccountEmail(registry_service_admin_account_email.clone()),
                         TokenSecret::trusted(registry_service_admin_account_token.clone()),
                         PlanId(*registry_service_default_plan_id),
                         PlanId(*registry_service_low_fuel_plan_id),
