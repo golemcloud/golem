@@ -502,7 +502,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .scheduler_service
-                .schedule(datetime.into(), action)
+                .schedule(
+                    chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
+                        .expect("Received invalid datetime from wasi"),
+                    action,
+                )
                 .await;
 
             let invocation =
