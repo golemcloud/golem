@@ -695,7 +695,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       }
 
       if (type.recursive) {
-        return Either.left(`Unsupported recursive type \`${customTypeName}\``);
+        return Either.left(`\`${customTypeName}\` is recursive.\nRecursive types are not supported yet. \nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.`);
       } else {
         return Either.left(`Unsupported type \`${customTypeName}\``);
       }
