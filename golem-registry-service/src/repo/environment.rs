@@ -529,6 +529,16 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             async move {
                 let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
 
+                // TODO: atomic:
+                //       should use something like:
+                //         WITH updated AS (
+                //            UPDATE..
+                //            RETURNING..
+                //         )
+                //         SELECT -- with joins...
+                //       so we avoid selecting the same tables multiple times, same goes for logical DELETE
+
+
                 // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
                     sqlx::query_as(indoc! { r#"
@@ -580,7 +590,16 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                                     ON cdr.environment_id = cd.environment_id
                                     AND cdr.revision_id = cd.current_revision_id
                                 WHERE cd.environment_id = environments.environment_id
-                            ) AS current_deployment_deployment_revision,
+                            ) AS m,
+
+                            (
+                                SELECT cdr.deployment_version
+                                FROM current_deployments cd
+                                JOIN current_deployment_revisions cdr
+                                    ON cdr.environment_id = cd.environment_id
+                                    AND cdr.revision_id = cd.current_revision_id
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_deployment_version,
 
                             (
                                 SELECT dr.hash
@@ -684,6 +703,15 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             ) AS current_deployment_deployment_revision,
 
                             (
+                                SELECT cdr.deployment_revision_id
+                                FROM current_deployments cd
+                                JOIN current_deployment_revisions cdr
+                                    ON cdr.environment_id = cd.environment_id
+                                    AND cdr.revision_id = cd.current_revision_id
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_deployment_version,
+
+                            (
                                 SELECT dr.hash
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
@@ -769,7 +797,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 cdr.revision_id AS current_deployment_revision,
                 dr.revision_id AS current_deployment_deployment_revision,
                 dr.version AS current_deployment_deployment_version,
-                        dr.hash AS current_deployment_deployment_hash,
+                dr.hash AS current_deployment_deployment_hash,
 
                 -- Parent application
                 ap.application_id,
