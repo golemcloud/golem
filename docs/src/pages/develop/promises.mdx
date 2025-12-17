@@ -95,11 +95,11 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
 
 ### Awaiting a promise
 
-To await a promise, use the async `awaitPromise` function, which returns the promise result as a byte array payload.
-Here's an example that awaits a promise, then decodes the payload from JSON format:
-
 <Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
     <Tabs.Tab>
+    To await a promise, use the async `awaitPromise` function, which returns the promise result as a byte array payload.
+   Here's an example that awaits a promise, then decodes the payload from JSON format:
+
     ```typescript
     import { awaitPromise, PromiseId } from "@golemcloud/golem-ts-sdk"
 
@@ -108,6 +108,10 @@ Here's an example that awaits a promise, then decodes the payload from JSON form
     ```
     </Tabs.Tab>
     <Tabs.Tab>
+    To await a promise, either use the blocking `blocking_await_promise` or `blocking_await_promise_json` functions, or in async context, 
+    the recommended `await_promise` or `await_promise_json` functions. The JSON variants are decoding the completed promise's payload from JSON
+    format, while the non-JSON variants are returning the raw byte array.
+
     ```rust
      use golem_rust::await_promise_json;
      use serde::{Serialize, Deserialize}
@@ -117,7 +121,10 @@ Here's an example that awaits a promise, then decodes the payload from JSON form
        id: String,
      }
 
-     const payload: MyPayload = await_promise_json(&promise_id);
+     async fn wait_for_payload() -> Result<MyPayload, String> { 
+       let payload: MyPayload = await_promise_json(&promise_id).await?;
+       Ok(payload)
+     }
      ```
      </Tabs.Tab>
 </Tabs>
@@ -143,11 +150,10 @@ Note that if an agent is only **awaiting** Golem promises (one or more), the age
     ```
     </Tabs.Tab>
         <Tabs.Tab>
-        To complete a promise from within an agent, use the `complete_promise` function.
+        To complete a promise from within an agent, use the `complete_promise` (payload is a byte array) or the `complete_promise_json` function.
 
         ```rust
-        use golem_rust::bindings::golem::api::host::{PromiseId};
-        use golem_rust::complete_promise_json;
+        use golem_rust::{PromiseId, complete_promise_json};
         use serde::Serialize;
 
         #[derive(Serialize)]

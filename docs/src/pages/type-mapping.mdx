@@ -64,6 +64,34 @@ This section describes how various types of the used programming language are ma
             | `()`                 | `unit`               | `()`                                                | Unit type |
             | `(T1, T2, T3)`      | `tuple<...>`         | `(42, "hello", true)`                               | Tuples |
             | `HashMap<K, V>`      | `list<tuple<K, V>>`  | `[("key1", 100), ("key2", -2)]`                    | |
+          
+        In addition to these, the `golem-rust` library implements `Schema` for several third-party libraries as well, behind feature flags.
+        Enable the required feature flag to use them (for example `golem-rust = { workspace = true, features = ["chrono"] }`):
+          
+        | Feature flag | Rust type |
+        |--------------|-----------|
+        | `chrono` | `chrono::DateTime<chrono::Utc>` |
+        | `chrono` | `chrono::DateTime<chrono::FixedOffset>` |
+        | `chrono` | `chrono::DateTime<chrono::Local>` |
+        | `chrono` | `chrono::NaiveDate` |
+        | `chrono` | `chrono::NaiveTime` |
+        | `chrono` | `chrono::NaiveDateTime` |
+        | `chrono` | `chrono::FixedOffset` |
+        | `chrono` | `chrono::Month` |
+        | `chrono` | `chrono::Weekday` |
+        | `uuid` | `uuid::Uuid` |
+        | `serde_json_types` | `serde_json::Value` |
+        | `url` | `url::Url` |
+        | `bytes` | `bytes::Bytes` |
+        | `mac_address` | `mac_address::MacAddress` |
+        | `bigdecimal` | `bigdecimal::BigDecimal` |
+        | `rust_decimal` | `rust_decimal::Decimal` |
+        | `num_bigint` | `num_bigint::BigInt` |
+        | `bit_vec` | `bit_vec::BitVec` |
+        | `nonempty_collections` | `nonempty_collections::NEVec<T>` |
+        | `default` | `http::Uri` |
+        | `default` | `wasi::logging::logging::Level` |
+        | `default | `wasi::io::error::Error` |
      </Tabs.Tab>
 </Tabs>
 
