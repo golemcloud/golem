@@ -8018,6 +8018,7 @@ components:
       required:
       - revision
       - deploymentRevision
+      - deploymentVersion
       - deploymentHash
       properties:
         revision:
@@ -8026,6 +8027,8 @@ components:
         deploymentRevision:
           type: integer
           format: uint64
+        deploymentVersion:
+          type: string
         deploymentHash:
           type: string
           format: hash

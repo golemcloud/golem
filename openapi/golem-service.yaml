@@ -12240,12 +12240,15 @@ components:
         deploymentRevision:
           type: integer
           format: uint64
+        deploymentVersion:
+          type: string
         deploymentHash:
           type: string
           format: hash
       required:
       - revision
       - deploymentRevision
+      - deploymentVersion
       - deploymentHash
     EnvironmentPluginGrant:
       title: EnvironmentPluginGrant
