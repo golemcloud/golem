@@ -110,7 +110,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let application = self
             .application_service
-            .get(&application_id, auth)
+            .get(application_id, auth)
             .await
             .map_err(|err| match err {
                 ApplicationError::ApplicationNotFound(application_id) => {
@@ -119,17 +119,17 @@ impl EnvironmentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(&application.account_id, AccountAction::CreateEnvironment)?;
+        auth.authorize_account_action(application.account_id, AccountAction::CreateEnvironment)?;
 
         self.account_usage_service
-            .ensure_environment_within_limits(&application.account_id)
+            .ensure_environment_within_limits(application.account_id)
             .await?;
 
-        let record = EnvironmentRevisionRecord::creation(data, *auth.account_id());
+        let record = EnvironmentRevisionRecord::creation(data, auth.account_id());
 
         let result = self
             .environment_repo
-            .create(&application_id.0, record)
+            .create(application_id.0, record)
             .await
             .map_err(|err| match err {
                 EnvironmentRepoError::EnvironmentViolatesUniqueness => {
@@ -148,10 +148,10 @@ impl EnvironmentService {
         update: EnvironmentUpdate,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let mut environment = self.get(&environment_id, false, auth).await?;
+        let mut environment = self.get(environment_id, false, auth).await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::UpdateEnvironment,
         )?;
@@ -192,10 +192,10 @@ impl EnvironmentService {
         current_revision: EnvironmentRevision,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentError> {
-        let mut environment = self.get(&environment_id, false, auth).await?;
+        let mut environment = self.get(environment_id, false, auth).await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteEnvironment,
         )?;
@@ -224,44 +224,44 @@ impl EnvironmentService {
 
     pub async fn get(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
         let environment: Environment = self
             .environment_repo
             .get_by_id(
-                &environment_id.0,
-                &auth.account_id().0,
+                environment_id.0,
+                auth.account_id().0,
                 include_deleted,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
-            .ok_or(EnvironmentError::EnvironmentNotFound(*environment_id))?
+            .ok_or(EnvironmentError::EnvironmentNotFound(environment_id))?
             .try_into()?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironment,
         )
-        .map_err(|_| EnvironmentError::EnvironmentNotFound(*environment_id))?;
+        .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
 
         Ok(environment)
     }
 
     pub async fn get_in_application(
         &self,
-        application_id: &ApplicationId,
+        application_id: ApplicationId,
         name: &EnvironmentName,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
         let result: Environment = self
             .environment_repo
             .get_by_name(
-                &application_id.0,
+                application_id.0,
                 &name.0,
-                &auth.account_id().0,
+                auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -269,7 +269,7 @@ impl EnvironmentService {
             .try_into()?;
 
         auth.authorize_environment_action(
-            &result.owner_account_id,
+            result.owner_account_id,
             &result.roles_from_active_shares,
             EnvironmentAction::ViewEnvironment,
         )
@@ -280,7 +280,7 @@ impl EnvironmentService {
 
     pub async fn list_in_application(
         &self,
-        application_id: &ApplicationId,
+        application_id: ApplicationId,
         auth: &AuthCtx,
     ) -> Result<Vec<Environment>, EnvironmentError> {
         let mut authorized_environments = Vec::new();
@@ -289,8 +289,8 @@ impl EnvironmentService {
         for record in self
             .environment_repo
             .list_by_app(
-                &application_id.0,
-                &auth.account_id().0,
+                application_id.0,
+                auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -308,7 +308,7 @@ impl EnvironmentService {
             if let Some(environment) = environment
                 && auth
                     .authorize_environment_action(
-                        &owner_account_id,
+                        owner_account_id,
                         &environment_roles_from_shares,
                         EnvironmentAction::ViewEnvironment,
                     )
@@ -326,7 +326,7 @@ impl EnvironmentService {
             (Some(application_owner_id), true) => {
                 // application exists but has no environments -> only leak existence if account-level permissions are present
                 auth.authorize_account_action(
-                    &application_owner_id,
+                    application_owner_id,
                     AccountAction::ListAllApplicationEnvironments,
                 )?;
 
@@ -334,7 +334,7 @@ impl EnvironmentService {
             }
             (None, _) => {
                 // parent application does not exist -> return notfound to prevent leakage
-                Err(EnvironmentError::ParentApplicationNotFound(*application_id))
+                Err(EnvironmentError::ParentApplicationNotFound(application_id))
             }
         }
     }
@@ -345,7 +345,7 @@ impl EnvironmentService {
     ) -> Result<Vec<EnvironmentWithDetails>, EnvironmentError> {
         // When we go for an admin ui / view, this should be extended with an optional, admin-only paramter that allows listing for a different account.
         self.environment_repo
-            .list_visible_to_account(&auth.account_id().0)
+            .list_visible_to_account(auth.account_id().0)
             .await?
             .into_iter()
             .map(EnvironmentWithDetails::try_from)
@@ -354,7 +354,7 @@ impl EnvironmentService {
             // Should not be necessary due to the repo already filtering, but check auth here to be on the safe side
             .filter(|e| {
                 auth.authorize_environment_action(
-                    &e.account.id,
+                    e.account.id,
                     &e.environment.roles_from_active_shares,
                     EnvironmentAction::ViewEnvironment,
                 )

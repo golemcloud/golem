@@ -184,7 +184,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn find_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -323,11 +323,10 @@ impl WorkerExecutorWorkerClient {
 
     async fn find_running_metadata_internal(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadataDto>> {
-        let component_id = *component_id;
         let result = self.call_worker_executor(
             AllExecutors,
             "get_running_workers_metadata",
@@ -375,7 +374,7 @@ impl WorkerExecutorWorkerClient {
 
     async fn find_metadata_internal(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -383,7 +382,6 @@ impl WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
-        let component_id = *component_id;
         let result = self
             .call_worker_executor(
                 RandomExecutor,
@@ -999,7 +997,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn find_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,

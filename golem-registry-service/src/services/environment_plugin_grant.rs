@@ -91,7 +91,7 @@ impl EnvironmentPluginGrantService {
     ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -102,7 +102,7 @@ impl EnvironmentPluginGrantService {
 
         let plugin_registration = self
             .plugin_registration_service
-            .get_plugin(&data.plugin_registration_id, false, auth)
+            .get_plugin(data.plugin_registration_id, false, auth)
             .await
             .map_err(|err| match err {
                 PluginRegistrationError::PluginRegistrationNotFound(plugin_registration_id) => {
@@ -112,7 +112,7 @@ impl EnvironmentPluginGrantService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateEnvironmentPluginGrant,
         )?;
@@ -120,7 +120,7 @@ impl EnvironmentPluginGrantService {
         let record = EnvironmentPluginGrantRecord::creation(
             environment_id,
             data.plugin_registration_id,
-            *auth.account_id(),
+            auth.account_id(),
         );
 
         let created: EnvironmentPluginGrant = self
@@ -140,7 +140,7 @@ impl EnvironmentPluginGrantService {
 
     pub async fn delete(
         &self,
-        environment_plugin_grant_id: &EnvironmentPluginGrantId,
+        environment_plugin_grant_id: EnvironmentPluginGrantId,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentPluginGrantError> {
         let (_, environment) = self
@@ -148,13 +148,13 @@ impl EnvironmentPluginGrantService {
             .await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteEnvironmentPluginGrant,
         )?;
 
         self.environment_plugin_grant_repo
-            .delete(&environment_plugin_grant_id.0, &auth.account_id().0)
+            .delete(environment_plugin_grant_id.0, auth.account_id().0)
             .await?;
 
         Ok(())
@@ -162,7 +162,7 @@ impl EnvironmentPluginGrantService {
 
     pub async fn list_in_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<Vec<EnvironmentPluginGrant>, EnvironmentPluginGrantError> {
         // Optimally this is fetched together with the grant data instead of up front
@@ -179,14 +179,14 @@ impl EnvironmentPluginGrantService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironmentPluginGrant,
         )?;
 
         let grants: Vec<EnvironmentPluginGrant> = self
             .environment_plugin_grant_repo
-            .list_by_environment(&environment_id.0)
+            .list_by_environment(environment_id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -197,7 +197,7 @@ impl EnvironmentPluginGrantService {
 
     pub async fn get_by_id(
         &self,
-        environment_plugin_grant_id: &EnvironmentPluginGrantId,
+        environment_plugin_grant_id: EnvironmentPluginGrantId,
         include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
@@ -210,34 +210,32 @@ impl EnvironmentPluginGrantService {
     // will return not found for the plugin even if it exists if it's not in the right environment
     pub async fn get_active_by_id_for_environment(
         &self,
-        environment_plugin_grant_id: &EnvironmentPluginGrantId,
+        environment_plugin_grant_id: EnvironmentPluginGrantId,
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
         let grant: EnvironmentPluginGrant = self
             .environment_plugin_grant_repo
-            .get_by_id(&environment_plugin_grant_id.0, false)
+            .get_by_id(environment_plugin_grant_id.0, false)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                *environment_plugin_grant_id,
+                environment_plugin_grant_id,
             ))?
             .try_into()?;
 
         if grant.environment_id != environment.id {
             return Err(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                *environment_plugin_grant_id,
+                environment_plugin_grant_id,
             ));
         };
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironmentPluginGrant,
         )
         .map_err(|_| {
-            EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                *environment_plugin_grant_id,
-            )
+            EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(environment_plugin_grant_id)
         })?;
 
         Ok(grant)
@@ -245,41 +243,39 @@ impl EnvironmentPluginGrantService {
 
     async fn get_by_id_with_environment(
         &self,
-        environment_plugin_grant_id: &EnvironmentPluginGrantId,
+        environment_plugin_grant_id: EnvironmentPluginGrantId,
         include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<(EnvironmentPluginGrant, Environment), EnvironmentPluginGrantError> {
         let grant: EnvironmentPluginGrant = self
             .environment_plugin_grant_repo
-            .get_by_id(&environment_plugin_grant_id.0, include_deleted)
+            .get_by_id(environment_plugin_grant_id.0, include_deleted)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                *environment_plugin_grant_id,
+                environment_plugin_grant_id,
             ))?
             .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&grant.environment_id, include_deleted, auth)
+            .get(grant.environment_id, include_deleted, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
                     EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                        *environment_plugin_grant_id,
+                        environment_plugin_grant_id,
                     )
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironmentPluginGrant,
         )
         .map_err(|_| {
-            EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                *environment_plugin_grant_id,
-            )
+            EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(environment_plugin_grant_id)
         })?;
 
         Ok((grant, environment))

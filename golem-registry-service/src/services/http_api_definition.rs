@@ -112,7 +112,7 @@ impl HttpApiDefinitionService {
 
     pub async fn create(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         data: HttpApiDefinitionCreation,
         auth: &AuthCtx,
     ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
@@ -128,7 +128,7 @@ impl HttpApiDefinitionService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateHttpApiDefinition,
         )?;
@@ -142,13 +142,13 @@ impl HttpApiDefinitionService {
             id,
             data.version,
             data.routes,
-            *auth.account_id(),
+            auth.account_id(),
         );
 
         let stored_http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
             .create(
-                &environment_id.0,
+                environment_id.0,
                 &data.name.0,
                 record,
                 environment.version_check,
@@ -177,7 +177,7 @@ impl HttpApiDefinitionService {
     ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
         let mut http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .get_staged_by_id(&http_api_definition_id.0)
+            .get_staged_by_id(http_api_definition_id.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 *http_api_definition_id,
@@ -186,7 +186,7 @@ impl HttpApiDefinitionService {
 
         let environment = self
             .environment_service
-            .get(&http_api_definition.environment_id, false, auth)
+            .get(http_api_definition.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -196,14 +196,14 @@ impl HttpApiDefinitionService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
         .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::UpdateHttpApiDefinition,
         )?;
@@ -252,39 +252,39 @@ impl HttpApiDefinitionService {
 
     pub async fn delete(
         &self,
-        http_api_definition_id: &HttpApiDefinitionId,
+        http_api_definition_id: HttpApiDefinitionId,
         current_revision: HttpApiDefinitionRevision,
         auth: &AuthCtx,
     ) -> Result<(), HttpApiDefinitionError> {
         let http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .get_staged_by_id(&http_api_definition_id.0)
+            .get_staged_by_id(http_api_definition_id.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                *http_api_definition_id,
+                http_api_definition_id,
             ))?
             .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&http_api_definition.environment_id, false, auth)
+            .get(http_api_definition.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
+                    HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
-        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
+        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id))?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteHttpApiDefinition,
         )?;
@@ -295,8 +295,8 @@ impl HttpApiDefinitionService {
 
         self.http_api_definition_repo
             .delete(
-                &auth.account_id().0,
-                &http_api_definition_id.0,
+                auth.account_id().0,
+                http_api_definition_id.0,
                 current_revision.next()?.into(),
             )
             .await
@@ -312,43 +312,43 @@ impl HttpApiDefinitionService {
 
     pub async fn get_revision(
         &self,
-        http_api_definition_id: &HttpApiDefinitionId,
+        http_api_definition_id: HttpApiDefinitionId,
         revision: HttpApiDefinitionRevision,
         auth: &AuthCtx,
     ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
         let http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .get_by_id_and_revision(&http_api_definition_id.0, revision.into())
+            .get_by_id_and_revision(http_api_definition_id.0, revision.into())
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                *http_api_definition_id,
+                http_api_definition_id,
             ))?
             .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&http_api_definition.environment_id, false, auth)
+            .get(http_api_definition.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
+                    HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
-        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
+        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id))?;
 
         Ok(http_api_definition)
     }
 
     pub async fn list_staged(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDefinition>, HttpApiDefinitionError> {
         let environment = self
@@ -371,14 +371,14 @@ impl HttpApiDefinitionService {
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDefinition>, HttpApiDefinitionError> {
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )?;
 
         let http_api_definitions: Vec<HttpApiDefinition> = self
             .http_api_definition_repo
-            .list_staged(&environment.id.0)
+            .list_staged(environment.id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -389,7 +389,7 @@ impl HttpApiDefinitionService {
 
     pub async fn list_in_deployment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDefinition>, HttpApiDefinitionError> {
@@ -408,14 +408,14 @@ impl HttpApiDefinitionService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )?;
 
         let http_api_definitions: Vec<HttpApiDefinition> = self
             .http_api_definition_repo
-            .list_by_deployment(&environment_id.0, deployment_revision.into())
+            .list_by_deployment(environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -431,7 +431,7 @@ impl HttpApiDefinitionService {
     ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
         let http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .get_staged_by_id(&http_api_definition_id.0)
+            .get_staged_by_id(http_api_definition_id.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 *http_api_definition_id,
@@ -440,7 +440,7 @@ impl HttpApiDefinitionService {
 
         let environment = self
             .environment_service
-            .get(&http_api_definition.environment_id, false, auth)
+            .get(http_api_definition.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -450,7 +450,7 @@ impl HttpApiDefinitionService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
@@ -461,7 +461,7 @@ impl HttpApiDefinitionService {
 
     pub async fn get_staged_by_name(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         http_api_definition_name: &HttpApiDefinitionName,
         auth: &AuthCtx,
     ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
@@ -478,7 +478,7 @@ impl HttpApiDefinitionService {
 
         let http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .get_staged_by_name(&environment_id.0, &http_api_definition_name.0)
+            .get_staged_by_name(environment_id.0, &http_api_definition_name.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
                 http_api_definition_name.clone(),
@@ -486,7 +486,7 @@ impl HttpApiDefinitionService {
             .try_into()?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
@@ -501,7 +501,7 @@ impl HttpApiDefinitionService {
 
     pub async fn get_in_deployment_by_name(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         http_api_definition_name: &HttpApiDefinitionName,
         auth: &AuthCtx,
@@ -521,7 +521,7 @@ impl HttpApiDefinitionService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
@@ -534,7 +534,7 @@ impl HttpApiDefinitionService {
         let http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
             .get_in_deployment_by_name(
-                &environment_id.0,
+                environment_id.0,
                 deployment_revision.into(),
                 &http_api_definition_name.0,
             )

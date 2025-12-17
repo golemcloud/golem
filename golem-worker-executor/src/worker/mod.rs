@@ -130,7 +130,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
-        account_id: &AccountId,
+        account_id: AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
@@ -158,7 +158,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
-        account_id: &AccountId,
+        account_id: AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
@@ -1462,7 +1462,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_component = this
                     .component_service()
                     .get_metadata(
-                        &component_id,
+                        component_id,
                         Some(initial_worker_metadata.last_known_status.component_revision),
                     )
                     .await?;
@@ -1525,7 +1525,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Create and initialize a new worker.
                 let component = this
                     .component_service()
-                    .get_metadata(&component_id, component_revision)
+                    .get_metadata(component_id, component_revision)
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
@@ -1959,7 +1959,7 @@ impl RunningWorker {
 
             match parent
                 .component_service()
-                .get(&parent.engine(), &component_id, component_version)
+                .get(&parent.engine(), component_id, component_version)
                 .await
             {
                 Ok((component, component_metadata)) => {
@@ -2006,7 +2006,7 @@ impl RunningWorker {
 
         let context = Ctx::create(
             worker_metadata.created_by,
-            OwnedWorkerId::new(&worker_metadata.environment_id, &worker_metadata.worker_id),
+            OwnedWorkerId::new(worker_metadata.environment_id, &worker_metadata.worker_id),
             parent.agent_id.clone(),
             parent.promise_service(),
             parent.worker_service(),

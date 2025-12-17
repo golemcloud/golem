@@ -403,7 +403,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_target_worker_id = OwnedWorkerId::new(&environment_id, &target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(environment_id, &target_worker_id);
 
         let source_worker_id_proto = request
             .source_worker_id
@@ -414,12 +414,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(&environment_id, &source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(environment_id, &source_worker_id);
 
         self.services
             .worker_fork_service()
             .fork(
-                &account_id,
+                account_id,
                 &owned_source_worker_id,
                 &owned_target_worker_id.worker_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
@@ -788,9 +788,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let worker_id = request.worker_id()?;
-        let project_id = request.environment_id()?;
+        let environment_id = request.environment_id()?;
 
-        let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
         let auth_ctx = request.auth_ctx()?;
@@ -1039,7 +1039,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = self
             .component_service()
             .get_metadata(
-                &owned_worker_id.worker_id.component_id,
+                owned_worker_id.worker_id.component_id,
                 Some(metadata.last_known_status.component_revision),
             )
             .await?;
@@ -1545,7 +1545,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &owned_worker_id.worker_id.component_id,
+                            owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_revision),
                         )
                         .await?;
@@ -1617,7 +1617,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let component_metadata = self
                 .component_service()
                 .get_metadata(
-                    &owned_worker_id.worker_id.component_id,
+                    owned_worker_id.worker_id.component_id,
                     Some(metadata.last_known_status.component_revision),
                 )
                 .await?;
@@ -2788,5 +2788,5 @@ fn extract_owned_worker_id<T>(
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
-    Ok(OwnedWorkerId::new(&environment_id, &worker_id))
+    Ok(OwnedWorkerId::new(environment_id, &worker_id))
 }

@@ -33,8 +33,8 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 pub trait ComponentCompilationService: Debug + Send + Sync {
     async fn enqueue_compilation(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_version: ComponentRevision,
     );
 
@@ -85,12 +85,10 @@ impl Debug for GrpcComponentCompilationService {
 impl ComponentCompilationService for GrpcComponentCompilationService {
     async fn enqueue_compilation(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_version: ComponentRevision,
     ) {
-        let component_id_clone = *component_id;
-        let environment_id_clone = *environment_id;
         let component_service_port = match self.own_grpc_port.load(Ordering::Acquire) {
             0 => None,
             port => Some(port as u32),
@@ -99,14 +97,12 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
         let result = self
             .client
             .call("enqueue-compilation", move |client| {
-                let component_id_clone = component_id_clone;
-                let environment_id_clone = environment_id_clone;
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
-                        component_id: Some(component_id_clone.into()),
+                        component_id: Some(component_id.into()),
                         component_version: component_version.into(),
                         component_service_port,
-                        environment_id: Some(environment_id_clone.into()),
+                        environment_id: Some(environment_id.into()),
                     };
 
                     client.enqueue_compilation(request).await
@@ -145,8 +141,8 @@ impl Debug for DisabledComponentCompilationService {
 impl ComponentCompilationService for DisabledComponentCompilationService {
     async fn enqueue_compilation(
         &self,
-        _environment_id: &EnvironmentId,
-        _component_id: &ComponentId,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
         _component_version: ComponentRevision,
     ) {
     }

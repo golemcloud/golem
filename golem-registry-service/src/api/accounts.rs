@@ -121,7 +121,7 @@ impl AccountsApi {
         account_id: AccountId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let result = self.account_service.get(&account_id, &auth).await?;
+        let result = self.account_service.get(account_id, &auth).await?;
         Ok(Json(result))
     }
 
@@ -154,7 +154,7 @@ impl AccountsApi {
         account_id: AccountId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Plan>> {
-        let account = self.account_service.get(&account_id, &auth).await?;
+        let account = self.account_service.get(account_id, &auth).await?;
         let plan = self.plan_service.get(&account.plan_id, &auth).await?;
 
         Ok(Json(plan))
@@ -192,10 +192,7 @@ impl AccountsApi {
         data: AccountUpdate,
         auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let result = self
-            .account_service
-            .update(&account_id, data, &auth)
-            .await?;
+        let result = self.account_service.update(account_id, data, &auth).await?;
         Ok(Json(result))
     }
 
@@ -232,7 +229,7 @@ impl AccountsApi {
     ) -> ApiResult<Json<Account>> {
         let result = self
             .account_service
-            .set_roles(&account_id, payload, &auth)
+            .set_roles(account_id, payload, &auth)
             .await?;
         Ok(Json(result))
     }
@@ -270,7 +267,7 @@ impl AccountsApi {
     ) -> ApiResult<Json<Account>> {
         let result = self
             .account_service
-            .set_plan(&account_id, payload, &auth)
+            .set_plan(account_id, payload, &auth)
             .await?;
         Ok(Json(result))
     }
@@ -309,7 +306,7 @@ impl AccountsApi {
         auth: AuthCtx,
     ) -> ApiResult<Json<Empty>> {
         self.account_service
-            .delete(&account_id, current_revision, &auth)
+            .delete(account_id, current_revision, &auth)
             .await?;
         Ok(Json(Empty {}))
     }
@@ -396,7 +393,7 @@ impl AccountsApi {
     ) -> ApiResult<Json<Page<PluginRegistrationDto>>> {
         let plugin_registrations = self
             .plugin_registration_service
-            .list_plugins_in_account(&account_id, &auth)
+            .list_plugins_in_account(account_id, &auth)
             .await?;
         Ok(Json(Page {
             values: plugin_registrations

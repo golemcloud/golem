@@ -20,7 +20,7 @@ use golem_common::model::environment::EnvironmentId;
 use tokio::sync::mpsc;
 use wasmtime::component::Component;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct ComponentIdAndRevision {
     pub id: ComponentId,
     pub version: ComponentRevision,

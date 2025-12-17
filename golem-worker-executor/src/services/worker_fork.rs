@@ -56,7 +56,7 @@ pub trait WorkerForkService: Send + Sync {
     // TODO: this should be restricted to targets within the same component
     async fn fork(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -65,7 +65,7 @@ pub trait WorkerForkService: Send + Sync {
     // TODO: this should be restricted to targets within the same component
     async fn fork_and_write_fork_result(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -360,7 +360,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
     async fn validate_worker_forking(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -401,7 +401,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
     async fn copy_source_oplog(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -412,7 +412,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let (owned_source_worker_id, owned_target_worker_id) = self
             .validate_worker_forking(
-                &source_worker_id.environment_id,
+                source_worker_id.environment_id,
                 &source_worker_id.worker_id,
                 target_worker_id,
                 oplog_index_cut_off,
@@ -438,7 +438,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
-            created_by: *fork_account_id,
+            created_by: fork_account_id,
             environment_id,
             env: initial_source_worker_metadata.env.clone(),
             wasi_config_vars: initial_source_worker_metadata.wasi_config_vars.clone(),
@@ -525,7 +525,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -557,7 +557,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
 
     async fn fork_and_write_fork_result(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,

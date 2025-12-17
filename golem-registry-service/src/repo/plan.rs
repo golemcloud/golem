@@ -29,7 +29,7 @@ use uuid::Uuid;
 pub trait PlanRepo: Send + Sync {
     async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()>;
 
-    async fn get_by_id(&self, plan_id: &Uuid) -> RepoResult<Option<PlanRecord>>;
+    async fn get_by_id(&self, plan_id: Uuid) -> RepoResult<Option<PlanRecord>>;
 
     async fn list(&self) -> RepoResult<Vec<PlanRecord>>;
 }
@@ -45,7 +45,7 @@ impl<Repo: PlanRepo> LoggedPlanRepo<Repo> {
         Self { repo }
     }
 
-    pub fn span_id(plan_id: &Uuid) -> Span {
+    pub fn span_id(plan_id: Uuid) -> Span {
         info_span!(SPAN_NAME, plan_id=%plan_id)
     }
 }
@@ -53,11 +53,11 @@ impl<Repo: PlanRepo> LoggedPlanRepo<Repo> {
 #[async_trait]
 impl<Repo: PlanRepo> PlanRepo for LoggedPlanRepo<Repo> {
     async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()> {
-        let span = Self::span_id(&plan.plan_id);
+        let span = Self::span_id(plan.plan_id);
         self.repo.create_or_update(plan).instrument(span).await
     }
 
-    async fn get_by_id(&self, plan_id: &Uuid) -> RepoResult<Option<PlanRecord>> {
+    async fn get_by_id(&self, plan_id: Uuid) -> RepoResult<Option<PlanRecord>> {
         self.repo
             .get_by_id(plan_id)
             .instrument(Self::span_id(plan_id))
@@ -150,7 +150,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
         .await
     }
 
-    async fn get_by_id(&self, plan_id: &Uuid) -> RepoResult<Option<PlanRecord>> {
+    async fn get_by_id(&self, plan_id: Uuid) -> RepoResult<Option<PlanRecord>> {
         let plan: Option<PlanRecord> = self
             .with_ro("get_by_id")
             .fetch_optional_as(

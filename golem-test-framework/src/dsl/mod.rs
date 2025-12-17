@@ -934,19 +934,19 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         }
         WorkerExecutorError::ComponentDownloadFailed {
             component_id,
-            component_version,
+            component_revision,
             reason,
         } => format!(
-            "Failed to download component: {:?} version {}: {}",
-            component_id, component_version, reason
+            "Failed to download component: {:?} revision {}: {}",
+            component_id, component_revision, reason
         ),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
-            component_version,
+            component_revision,
             reason,
         } => format!(
-            "Failed to parse component: {:?} version {}: {}",
-            component_id, component_version, reason
+            "Failed to parse component: {:?} revision {}: {}",
+            component_id, component_revision, reason
         ),
         WorkerExecutorError::GetLatestVersionOfComponentFailed {
             component_id,
