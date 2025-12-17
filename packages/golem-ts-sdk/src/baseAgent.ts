@@ -135,14 +135,14 @@ export class BaseAgent {
    * remoteClient.myMethod("input")
    * ```
    *
-   * The type of `remoteClient` is `WithRemoteMethods<MyAgent>` exposing more functionalities
-   * such as `trigger` and `schedule`. See `WithRemoteMethods` documentation for details.
+   * The type of `remoteClient` is `Client<MyAgent>` exposing more functionalities
+   * such as `trigger` and `schedule`. See `Client` documentation for details.
    *
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
-  ): WithRemoteMethods<InstanceType<T>> {
+  ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
     );
@@ -150,10 +150,7 @@ export class BaseAgent {
 
   static getPhantom<
     T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent,
-  >(
-    this: T,
-    ...args: ConstructorParameters<T>
-  ): WithRemoteMethods<InstanceType<T>> {
+  >(this: T, ...args: ConstructorParameters<T>): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
     );
@@ -162,7 +159,7 @@ export class BaseAgent {
   static newPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
-  ): WithRemoteMethods<InstanceType<T>> {
+  ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
     );
@@ -176,7 +173,7 @@ export class BaseAgent {
  *
  * ```ts
  *
- * const myAgent: WithRemoteMethods<MyAgent> = MyAgent.get("my-constructor-input")
+ * const myAgent: Client<MyAgent> = MyAgent.get("my-constructor-input")
  *
  * @agent()
  * class MyAgent extends BaseAgent {
@@ -186,7 +183,7 @@ export class BaseAgent {
  *    function foo(input: string): Promise<void> {}
  * }
  *
- * // The type of myAgent is `WithRemoteMethods<MyAgent>` allowing you
+ * // The type of myAgent is `Client<MyAgent>` allowing you
  * // to call extra functionalities such as the following.
  *
  * myAgent.foo("my-input"); // normal invocation
@@ -195,7 +192,7 @@ export class BaseAgent {
  *
  * ```
  */
-export type WithRemoteMethods<T> = {
+export type Client<T> = {
   [K in keyof T as T[K] extends (...args: any[]) => any
     ? K
     : never]: T[K] extends (...args: infer A) => infer R

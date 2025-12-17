@@ -30,7 +30,7 @@ export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
 
-export { WithRemoteMethods } from './baseAgent';
+export { Client } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 
