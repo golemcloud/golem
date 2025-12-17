@@ -281,7 +281,7 @@ mod tests {
             input
         }
 
-        async fn load_snapshot(&self, _bytes: Vec<u8>) -> Result<(), String> {
+        async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
             Ok(())
         }
 
