@@ -17,8 +17,9 @@ use crate::services::auth::AuthService;
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::RegisteredAgentType;
-use golem_common::model::application::ApplicationId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
     DeploymentRollback, DeploymentSummary, DeploymentVersion,
@@ -197,13 +198,16 @@ impl EnvironmentsApi {
     pub async fn list_visible_environments(
         &self,
         token: GolemSecurityScheme,
+        account_email: Query<Option<AccountEmail>>,
+        app_name: Query<Option<ApplicationName>>,
+        env_name: Query<Option<EnvironmentName>>,
     ) -> ApiResult<Json<Page<EnvironmentWithDetails>>> {
         let record = recorded_http_api_request!("list_visible_environments",);
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_visible_environments_internal(auth)
+            .list_visible_environments_internal(account_email.0, app_name.0, env_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -212,11 +216,19 @@ impl EnvironmentsApi {
 
     async fn list_visible_environments_internal(
         &self,
+        account_email: Option<AccountEmail>,
+        app_name: Option<ApplicationName>,
+        env_name: Option<EnvironmentName>,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<EnvironmentWithDetails>>> {
         let environments = self
             .environment_service
-            .list_visible_environments(&auth)
+            .list_visible_environments(
+                account_email.as_ref(),
+                app_name.as_ref(),
+                env_name.as_ref(),
+                &auth,
+            )
             .await?;
         Ok(Json(Page {
             values: environments,

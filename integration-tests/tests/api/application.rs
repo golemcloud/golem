@@ -183,7 +183,7 @@ async fn cannot_create_two_applications_with_same_name(
                 &app_2.id.0,
                 &ApplicationUpdate {
                     current_revision: app_2.revision,
-                    new_name: Some(app_1.name.clone()),
+                    name: Some(app_1.name.clone()),
                 },
             )
             .await;
@@ -222,7 +222,7 @@ async fn cannot_create_two_applications_with_same_name(
             &app_2.id.0,
             &ApplicationUpdate {
                 current_revision: app_2.revision,
-                new_name: Some(app_1.name.clone()),
+                name: Some(app_1.name.clone()),
             },
         )
         .await?;

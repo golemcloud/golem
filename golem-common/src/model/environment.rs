@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::account::AccountEmail;
 use super::account::AccountId;
 use super::application::ApplicationId;
 use super::application::ApplicationName;
@@ -71,7 +72,7 @@ declare_structs! {
 
     pub struct EnvironmentUpdate {
         pub current_revision: EnvironmentRevision,
-        pub new_name: Option<EnvironmentName>
+        pub name: Option<EnvironmentName>
     }
 
     pub struct EnvironmentCurrentDeploymentView {
@@ -116,7 +117,7 @@ declare_structs! {
     pub struct AccountSummary {
         pub id: AccountId,
         pub name: String,
-        pub email: String,
+        pub email: AccountEmail,
     }
 
     /// A cross-tenant, enriched view of an environment used specifically by the

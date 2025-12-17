@@ -139,8 +139,12 @@ impl AccountService {
 
         info!("Updating account: {}", account_id);
 
-        account.name = update.name;
-        account.email = update.email;
+        if let Some(new_name) = update.name {
+            account.name = new_name;
+        }
+        if let Some(new_email) = update.email {
+            account.email = new_email
+        }
 
         self.update_internal(account, auth).await
     }
@@ -295,7 +299,7 @@ impl AccountService {
         let record = AccountRevisionRecord::new(
             id,
             account.name,
-            account.email,
+            account.email.0,
             plan_id,
             roles,
             auth.account_id(),

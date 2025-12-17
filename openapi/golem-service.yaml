@@ -4515,6 +4515,28 @@ paths:
       - Environment
       summary: List all environments that are visible to the current user, either directly or through shares.
       operationId: list_visible_environments
+      parameters:
+      - in: query
+        name: account_email
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: app_name
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: env_name
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -11383,8 +11405,6 @@ components:
           type: string
       required:
       - currentRevision
-      - name
-      - email
     AgentConstructor:
       title: AgentConstructor
       type: object
@@ -11597,7 +11617,7 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
       required:
       - currentRevision
@@ -12305,13 +12325,13 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newRoles:
+        roles:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentRole'
       required:
       - currentRevision
-      - newRoles
+      - roles
     EnvironmentSummary:
       title: EnvironmentSummary
       type: object
@@ -12351,7 +12371,7 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
       required:
       - currentRevision
