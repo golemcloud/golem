@@ -607,7 +607,7 @@ impl WorkerApi {
         let (cursor, workers) = self
             .worker_service
             .find_metadata(
-                &component_id,
+                component_id,
                 filter,
                 cursor.unwrap_or_default(),
                 count.unwrap_or(50),
@@ -675,7 +675,7 @@ impl WorkerApi {
         let (cursor, workers) = self
             .worker_service
             .find_metadata(
-                &component_id,
+                component_id,
                 params.filter.clone(),
                 params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
@@ -928,12 +928,12 @@ impl WorkerApi {
 
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth,
             )
@@ -992,12 +992,12 @@ impl WorkerApi {
     ) -> Result<Json<ActivatePluginResponse>> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth,
             )
@@ -1278,7 +1278,7 @@ impl WorkerApi {
     ) -> Result<(WorkerId, ComponentDto)> {
         let latest_component = self
             .component_service
-            .get_latest_by_id_uncached(&component_id)
+            .get_latest_by_id_uncached(component_id)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
@@ -1308,7 +1308,7 @@ impl WorkerApi {
         // First, we try with the latest cached version to avoid the overhead of calling the component service
         let latest_cached_component = self
             .component_service
-            .get_latest_by_id_in_cache(&component_id)
+            .get_latest_by_id_in_cache(component_id)
             .await;
 
         if let Some(component) = latest_cached_component {
@@ -1324,7 +1324,7 @@ impl WorkerApi {
         // Next we try with the latest version which we have to fetch from the component service        let latest_component_version = self
         let latest_component_version = self
             .component_service
-            .get_latest_by_id_uncached(&component_id)
+            .get_latest_by_id_uncached(component_id)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
@@ -1351,7 +1351,7 @@ impl WorkerApi {
         // Fallback for previous versions
         let all_component_versions = self
             .component_service
-            .get_all_revisions(&component_id)
+            .get_all_revisions(component_id)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {

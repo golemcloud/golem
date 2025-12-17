@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use chrono::{DateTime, Utc};
 
 #[allow(unused)]
 #[rustfmt::skip]
@@ -84,7 +83,7 @@ pub mod derive {
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::wasi;
+pub use wstd::wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
@@ -99,7 +98,7 @@ pub use golem_rpc_0_2_x::types::{
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::wasi::io::poll::Pollable;
+pub use wstd::wasi::io::poll::Pollable;
 
 #[cfg(feature = "host")]
 pub use wasmtime_wasi::p2::DynPollable;
@@ -138,13 +137,6 @@ pub use golem_rpc_0_2_x::types::{
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-
-impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
-    fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
-        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
-            .expect("Received invalid datetime from wasi")
-    }
-}
 
 impl From<Uuid> for uuid::Uuid {
     fn from(value: Uuid) -> Self {

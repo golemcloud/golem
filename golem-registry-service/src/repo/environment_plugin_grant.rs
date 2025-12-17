@@ -37,19 +37,19 @@ pub trait EnvironmentPluginGrantRepo: Send + Sync {
 
     async fn delete(
         &self,
-        environment_plugin_grant_id: &Uuid,
-        actor: &Uuid,
+        environment_plugin_grant_id: Uuid,
+        actor: Uuid,
     ) -> Result<(), EnvironmentPluginGrantRepoError>;
 
     async fn get_by_id(
         &self,
-        environment_plugin_grant_id: &Uuid,
+        environment_plugin_grant_id: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 
     async fn list_by_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 }
 
@@ -64,11 +64,11 @@ impl<Repo: EnvironmentPluginGrantRepo> LoggedEnvironmentPluginGrantRepo<Repo> {
         Self { repo }
     }
 
-    fn span_id(environment_plugin_grant_id: &Uuid) -> Span {
+    fn span_id(environment_plugin_grant_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_plugin_grant_id=%environment_plugin_grant_id)
     }
 
-    fn span_environment(environment_id: &Uuid) -> Span {
+    fn span_environment(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id=%environment_id)
     }
 }
@@ -81,14 +81,14 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
         &self,
         record: EnvironmentPluginGrantRecord,
     ) -> Result<EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError> {
-        let span = Self::span_id(&record.environment_plugin_grant_id);
+        let span = Self::span_id(record.environment_plugin_grant_id);
         self.repo.create(record).instrument(span).await
     }
 
     async fn delete(
         &self,
-        environment_plugin_grant_id: &Uuid,
-        actor: &Uuid,
+        environment_plugin_grant_id: Uuid,
+        actor: Uuid,
     ) -> Result<(), EnvironmentPluginGrantRepoError> {
         let span = Self::span_id(environment_plugin_grant_id);
         self.repo
@@ -99,7 +99,7 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
 
     async fn get_by_id(
         &self,
-        environment_plugin_grant_id: &Uuid,
+        environment_plugin_grant_id: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
     {
@@ -112,7 +112,7 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
 
     async fn list_by_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
         let span = Self::span_environment(environment_id);
         self.repo
@@ -181,8 +181,8 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
 
     async fn delete(
         &self,
-        environment_plugin_grant_id: &Uuid,
-        actor: &Uuid,
+        environment_plugin_grant_id: Uuid,
+        actor: Uuid,
     ) -> Result<(), EnvironmentPluginGrantRepoError> {
         let deleted_at = SqlDateTime::now();
 
@@ -207,7 +207,7 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        environment_plugin_grant_id: &Uuid,
+        environment_plugin_grant_id: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
     {
@@ -273,7 +273,7 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
 
     async fn list_by_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
         let result = self
             .with_ro("list_by_environment")

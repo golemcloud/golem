@@ -20,6 +20,7 @@ use super::deployment::{CurrentDeploymentRevision, DeploymentRevision, Deploymen
 use super::diff::Hash;
 use crate::model::{diff, validate_lower_kebab_case_identifier};
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
@@ -31,7 +32,7 @@ newtype_uuid!(
 declare_revision!(EnvironmentRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Eq, Hash, PartialOrd, Ord)]
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
     pub struct EnvironmentName(pub String);
 }
 

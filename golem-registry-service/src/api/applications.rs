@@ -132,7 +132,7 @@ impl ApplicationsApi {
     ) -> ApiResult<Json<Application>> {
         let application = self
             .application_service
-            .get_in_account(&account_id, &application_name, &auth)
+            .get_in_account(account_id, &application_name, &auth)
             .await?;
         Ok(Json(application))
     }
@@ -171,7 +171,7 @@ impl ApplicationsApi {
     ) -> ApiResult<Json<Page<Application>>> {
         let applications = self
             .application_service
-            .list_in_account(&account_id, &auth)
+            .list_in_account(account_id, &auth)
             .await?;
         Ok(Json(Page {
             values: applications,
@@ -209,7 +209,7 @@ impl ApplicationsApi {
         application_id: ApplicationId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
-        let application = self.application_service.get(&application_id, &auth).await?;
+        let application = self.application_service.get(application_id, &auth).await?;
         Ok(Json(application))
     }
 
@@ -248,7 +248,7 @@ impl ApplicationsApi {
     ) -> ApiResult<Json<Application>> {
         let application = self
             .application_service
-            .update(&application_id, payload, &auth)
+            .update(application_id, payload, &auth)
             .await?;
         Ok(Json(application))
     }
@@ -287,7 +287,7 @@ impl ApplicationsApi {
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.application_service
-            .delete(&application_id, current_revision, &auth)
+            .delete(application_id, current_revision, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)

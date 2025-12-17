@@ -50,18 +50,18 @@ pub trait EnvironmentShareRepo: Send + Sync {
 
     async fn get_by_id(
         &self,
-        environment_share_id: &Uuid,
+        environment_share_id: Uuid,
     ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
 
     async fn get_for_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
 
     async fn get_for_environment_and_grantee(
         &self,
-        environment_id: &Uuid,
-        grantee_account_id: &Uuid,
+        environment_id: Uuid,
+        grantee_account_id: Uuid,
     ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
 }
 
@@ -76,11 +76,11 @@ impl<Repo: EnvironmentShareRepo> LoggedEnvironmentShareRepo<Repo> {
         Self { repo }
     }
 
-    fn span_environment_id(environment_id: &Uuid) -> Span {
+    fn span_environment_id(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id=%environment_id)
     }
 
-    fn span_environment_share_id(environment_share_id: &Uuid) -> Span {
+    fn span_environment_share_id(environment_share_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_share_id=%environment_share_id)
     }
 }
@@ -93,7 +93,7 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        let span = Self::span_environment_id(&environment_id);
+        let span = Self::span_environment_id(environment_id);
         self.repo
             .create(environment_id, revision, grantee_account_id)
             .instrument(span)
@@ -104,7 +104,7 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
         &self,
         revision: EnvironmentShareRevisionRecord,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        let span = Self::span_environment_share_id(&revision.environment_share_id);
+        let span = Self::span_environment_share_id(revision.environment_share_id);
         self.repo.update(revision).instrument(span).await
     }
 
@@ -112,13 +112,13 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
         &self,
         revision: EnvironmentShareRevisionRecord,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        let span = Self::span_environment_share_id(&revision.environment_share_id);
+        let span = Self::span_environment_share_id(revision.environment_share_id);
         self.repo.delete(revision).instrument(span).await
     }
 
     async fn get_by_id(
         &self,
-        environment_share_id: &Uuid,
+        environment_share_id: Uuid,
     ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
         self.repo
             .get_by_id(environment_share_id)
@@ -128,7 +128,7 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
 
     async fn get_for_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
         self.repo
             .get_for_environment(environment_id)
@@ -138,8 +138,8 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
 
     async fn get_for_environment_and_grantee(
         &self,
-        environment_id: &Uuid,
-        grantee_account_id: &Uuid,
+        environment_id: Uuid,
+        grantee_account_id: Uuid,
     ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
         self.repo
             .get_for_environment_and_grantee(environment_id, grantee_account_id)
@@ -305,7 +305,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        environment_share_id: &Uuid,
+        environment_share_id: Uuid,
     ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
         let result: Option<EnvironmentShareExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
@@ -324,7 +324,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
 
     async fn get_for_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
         let results: Vec<EnvironmentShareExtRevisionRecord> = self.with_ro("get_for_environment")
             .fetch_all_as(
@@ -343,8 +343,8 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
 
     async fn get_for_environment_and_grantee(
         &self,
-        environment_id: &Uuid,
-        grantee_account_id: &Uuid,
+        environment_id: Uuid,
+        grantee_account_id: Uuid,
     ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
         let result: Option<EnvironmentShareExtRevisionRecord> = self.with_ro("get_for_environment_and_grantee")
             .fetch_optional_as(

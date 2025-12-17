@@ -113,7 +113,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 }
             }
 
-            fn to_wit_value(self) -> Result<golem_rust::wasm_rpc::WitValue, String> {
+            fn to_wit_value(self) -> Result<golem_rust::golem_wasm::WitValue, String> {
                 match self {
                     #(#to_wit_value_match_arms),*
                 }
@@ -128,7 +128,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                  }
             }
 
-            fn from_wit_value(wit_value: (String, golem_rust::wasm_rpc::WitValue)) -> Result<Self, String> {
+            fn from_wit_value(wit_value: (String, golem_rust::golem_wasm::WitValue)) -> Result<Self, String> {
                 let (name, wit_value) = wit_value;
 
                  match name.as_str() {

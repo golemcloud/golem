@@ -149,7 +149,7 @@ impl GatewayHttpInputExecutor {
 
             RichGatewayBindingCompiled::Worker(resolved_worker_binding) => {
                 let result = self
-                    .handle_worker_binding(&mut rich_request, *resolved_worker_binding)
+                    .handle_worker_binding(&mut rich_request, *resolved_worker_binding, account_id)
                     .await;
 
                 let response = result
@@ -161,7 +161,11 @@ impl GatewayHttpInputExecutor {
 
             RichGatewayBindingCompiled::HttpHandler(http_handler_binding) => {
                 let result = self
-                    .handle_http_handler_binding(&mut rich_request, *http_handler_binding)
+                    .handle_http_handler_binding(
+                        &mut rich_request,
+                        *http_handler_binding,
+                        account_id,
+                    )
                     .await;
 
                 let response = result
@@ -176,8 +180,8 @@ impl GatewayHttpInputExecutor {
                     .handle_file_server_binding(
                         &mut rich_request,
                         *resolved_file_server_binding,
-                        &account_id,
-                        &environment_id,
+                        account_id,
+                        environment_id,
                     )
                     .await;
 
@@ -204,6 +208,7 @@ impl GatewayHttpInputExecutor {
         &self,
         request: &mut RichRequest,
         binding: WorkerBindingCompiled,
+        account_id: AccountId,
     ) -> GatewayHttpResult<RibResult> {
         let WorkerBindingCompiled {
             response_compiled,
@@ -225,7 +230,7 @@ impl GatewayHttpInputExecutor {
             )
             .await?;
 
-        self.execute_response_mapping_script(response_compiled, request, worker_detail)
+        self.execute_response_mapping_script(response_compiled, request, worker_detail, account_id)
             .await
     }
 
@@ -233,6 +238,7 @@ impl GatewayHttpInputExecutor {
         &self,
         request: &mut RichRequest,
         binding: HttpHandlerBindingCompiled,
+        account_id: AccountId,
     ) -> GatewayHttpResult<HttpHandlerBindingResult> {
         let HttpHandlerBindingCompiled {
             component_id,
@@ -261,7 +267,7 @@ impl GatewayHttpInputExecutor {
 
         let result = self
             .http_handler_binding_handler
-            .handle_http_handler_binding(&worker_detail, incoming_http_request)
+            .handle_http_handler_binding(&worker_detail, incoming_http_request, account_id)
             .await;
 
         match result {
@@ -276,8 +282,8 @@ impl GatewayHttpInputExecutor {
         &self,
         request: &mut RichRequest,
         binding: FileServerBindingCompiled,
-        account_id: &AccountId,
-        environment_id: &EnvironmentId,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
     ) -> GatewayHttpResult<FileServerBindingSuccess> {
         let FileServerBindingCompiled {
             component_id,
@@ -309,13 +315,13 @@ impl GatewayHttpInputExecutor {
             .clone();
 
         let response_script_result = self
-            .execute_response_mapping_script(response_compiled, request, worker_detail)
+            .execute_response_mapping_script(response_compiled, request, worker_detail, account_id)
             .await?;
 
         self.file_server_binding_handler
             .handle_file_server_binding_result(
                 &worker_name,
-                &component_id,
+                component_id,
                 environment_id,
                 account_id,
                 response_script_result,
@@ -551,6 +557,7 @@ impl GatewayHttpInputExecutor {
         compiled_response_mapping: ResponseMappingCompiled,
         request: &mut RichRequest,
         worker_detail: WorkerDetails,
+        account_id: AccountId,
     ) -> GatewayHttpResult<RibResult> {
         let WorkerDetails {
             invocation_context,
@@ -570,6 +577,7 @@ impl GatewayHttpInputExecutor {
             .evaluate_rib(
                 idempotency_key,
                 invocation_context,
+                account_id,
                 response_mapping_compiled,
                 rib_input,
             )

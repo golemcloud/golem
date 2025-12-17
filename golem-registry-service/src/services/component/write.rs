@@ -96,7 +96,7 @@ impl ComponentWriteService {
 
     pub async fn create(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         component_creation: ComponentCreation,
         wasm: Vec<u8>,
         files_archive: Option<NamedTempFile>,
@@ -118,14 +118,14 @@ impl ComponentWriteService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateComponent,
         )?;
 
         // Fast path check to avoid processing the component if we are going to reject it anyway
         self.component_repo
-            .get_staged_by_name(&environment_id.0, &component_creation.component_name.0)
+            .get_staged_by_name(environment_id.0, &component_creation.component_name.0)
             .await?
             .map_or(Ok(()), |_| {
                 Err(ComponentError::ComponentWithNameAlreadyExists(
@@ -135,7 +135,7 @@ impl ComponentWriteService {
 
         self.account_usage_service
             .ensure_new_component_within_limits(
-                &environment.owner_account_id,
+                environment.owner_account_id,
                 u64::try_from(wasm.len()).unwrap(),
             )
             .await?;
@@ -156,7 +156,7 @@ impl ComponentWriteService {
         let new_revision = NewComponentRevision::new(
             component_id,
             ComponentRevision::INITIAL,
-            *environment_id,
+            environment_id,
             component_creation.component_name.clone(),
             initial_component_files,
             component_creation.env,
@@ -182,7 +182,7 @@ impl ComponentWriteService {
         let stored_component: Component = self
             .component_repo
             .create(
-                &environment_id.0,
+                environment_id.0,
                 &component_creation.component_name.0,
                 record,
                 environment.version_check,
@@ -203,7 +203,7 @@ impl ComponentWriteService {
             .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         self.component_compilation
-            .enqueue_compilation(environment_id, &component_id, stored_component.revision)
+            .enqueue_compilation(environment_id, component_id, stored_component.revision)
             .await;
 
         Ok(stored_component)
@@ -211,7 +211,7 @@ impl ComponentWriteService {
 
     pub async fn update(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         component_update: ComponentUpdate,
         new_wasm: Option<Vec<u8>>,
         new_files_archive: Option<NamedTempFile>,
@@ -221,30 +221,30 @@ impl ComponentWriteService {
 
         let component_record = self
             .component_repo
-            .get_staged_by_id(&component_id.0)
+            .get_staged_by_id(component_id.0)
             .await?
-            .ok_or(ComponentError::ComponentNotFound(*component_id))?;
+            .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
         let environment = self
             .environment_service
-            .get(&EnvironmentId(component_record.environment_id), false, auth)
+            .get(EnvironmentId(component_record.environment_id), false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(*component_id)
+                    ComponentError::ComponentNotFound(component_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewComponent,
         )
-        .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
+        .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::UpdateComponent,
         )?;
@@ -264,20 +264,20 @@ impl ComponentWriteService {
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = new_wasm {
             self.account_usage_service
                 .ensure_updated_component_within_limits(
-                    &environment.owner_account_id,
+                    environment.owner_account_id,
                     u64::try_from(new_data.len()).unwrap(),
                 )
                 .await?;
 
             let (wasm_hash, wasm_object_store_key) = self
-                .upload_and_hash_component_wasm(&environment_id, new_data.clone())
+                .upload_and_hash_component_wasm(environment_id, new_data.clone())
                 .await?;
 
             (new_data, wasm_object_store_key, wasm_hash)
         } else {
             let old_data = self
                 .object_store
-                .get(&environment_id, &component.object_store_key)
+                .get(environment_id, &component.object_store_key)
                 .await?;
             (
                 Arc::from(old_data),
@@ -292,7 +292,7 @@ impl ComponentWriteService {
             environment_id,
             component.component_name,
             self.update_initial_component_files(
-                &environment_id,
+                environment_id,
                 component.files,
                 component_update.removed_files,
                 new_files_archive,
@@ -318,7 +318,7 @@ impl ComponentWriteService {
         );
 
         let finalized_revision = self
-            .finalize_new_component_revision(&environment_id, new_revision, wasm)
+            .finalize_new_component_revision(environment_id, new_revision, wasm)
             .await?;
 
         let record = ComponentRevisionRecord::from_model(finalized_revision, auth.account_id());
@@ -337,7 +337,7 @@ impl ComponentWriteService {
             .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         self.component_compilation
-            .enqueue_compilation(&environment_id, &component_id, stored_component.revision)
+            .enqueue_compilation(environment_id, component_id, stored_component.revision)
             .await;
 
         Ok(stored_component)
@@ -345,36 +345,36 @@ impl ComponentWriteService {
 
     pub async fn delete(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         current_revision: ComponentRevision,
         auth: &AuthCtx,
     ) -> Result<(), ComponentError> {
         let component_record = self
             .component_repo
-            .get_staged_by_id(&component_id.0)
+            .get_staged_by_id(component_id.0)
             .await?
-            .ok_or(ComponentError::ComponentNotFound(*component_id))?;
+            .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
         let environment = self
             .environment_service
-            .get(&EnvironmentId(component_record.environment_id), false, auth)
+            .get(EnvironmentId(component_record.environment_id), false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(*component_id)
+                    ComponentError::ComponentNotFound(component_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewComponent,
         )
-        .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
+        .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::UpdateComponent,
         )?;
@@ -388,8 +388,8 @@ impl ComponentWriteService {
 
         self.component_repo
             .delete(
-                &auth.account_id().0,
-                &component_id.0,
+                auth.account_id().0,
+                component_id.0,
                 current_revision.next()?.into(),
             )
             .await
@@ -403,7 +403,7 @@ impl ComponentWriteService {
 
     async fn upload_and_hash_component_wasm(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         data: Arc<[u8]>,
     ) -> Result<(Hash, String), ComponentError> {
         // TODO: use something like PluginWasmFilesService instead of raw object store
@@ -413,7 +413,7 @@ impl ComponentWriteService {
 
     async fn initial_component_files_for_new_component(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         files_archive: Option<NamedTempFile>,
         file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
@@ -438,7 +438,7 @@ impl ComponentWriteService {
 
     async fn update_initial_component_files(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         previous: Vec<InitialComponentFile>,
         removed_files: Vec<ComponentFilePath>,
         new_files_archive: Option<NamedTempFile>,
@@ -481,7 +481,7 @@ impl ComponentWriteService {
 
     async fn upload_component_files(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         archive: NamedTempFile,
     ) -> Result<HashMap<ComponentFilePath, ComponentFileContentHash>, ComponentError> {
         let to_upload = super::utils::prepare_component_files_for_upload(archive).await?;
@@ -526,7 +526,7 @@ impl ComponentWriteService {
             let environment_plugin_grant = self
                 .environment_plugin_grant_service
                 .get_active_by_id_for_environment(
-                    &plugin_installation.environment_plugin_grant_id,
+                    plugin_installation.environment_plugin_grant_id,
                     environment,
                     auth,
                 )
@@ -616,7 +616,7 @@ impl ComponentWriteService {
                     let environment_plugin_grant = self
                         .environment_plugin_grant_service
                         .get_active_by_id_for_environment(
-                            &inner.environment_plugin_grant_id,
+                            inner.environment_plugin_grant_id,
                             environment,
                             auth,
                         )
@@ -651,7 +651,7 @@ impl ComponentWriteService {
 
     async fn finalize_new_component_revision(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         new_revision: NewComponentRevision,
         wasm: Arc<[u8]>,
     ) -> Result<FinalizedComponentRevision, ComponentError> {
@@ -702,7 +702,7 @@ impl ComponentWriteService {
             // include deleted here as the plugin might have been deleted in the meantime, but components should keep working.
             let plugin = self
                 .plugin_registration_service
-                .get_plugin(&installation.plugin_registration_id, true, &AuthCtx::System)
+                .get_plugin(installation.plugin_registration_id, true, &AuthCtx::System)
                 .await?;
 
             match plugin.spec {
@@ -731,12 +731,7 @@ impl ComponentWriteService {
                         plugin_priority = %installation.priority,
                     );
                     data = self
-                        .apply_library_plugin(
-                            data,
-                            &plugin.account_id,
-                            installation.priority,
-                            &spec,
-                        )
+                        .apply_library_plugin(data, plugin.account_id, installation.priority, &spec)
                         .instrument(span)
                         .await?;
                 }
@@ -747,7 +742,7 @@ impl ComponentWriteService {
                         plugin_priority = %installation.priority,
                     );
                     data = self
-                        .apply_app_plugin(data, &plugin.account_id, installation.priority, &spec)
+                        .apply_app_plugin(data, plugin.account_id, installation.priority, &spec)
                         .instrument(span)
                         .await?;
                 }
@@ -793,7 +788,7 @@ impl ComponentWriteService {
 
             let key = self
                 .initial_component_files_service
-                .put_if_not_exists(&component.environment_id, content_stream)
+                .put_if_not_exists(component.environment_id, content_stream)
                 .await?;
 
             let item = InitialComponentFile {
@@ -813,7 +808,7 @@ impl ComponentWriteService {
     async fn apply_library_plugin(
         &self,
         data: Arc<[u8]>,
-        plugin_owner: &AccountId,
+        plugin_owner: AccountId,
         plugin_priority: PluginPriority,
         plugin_spec: &LibraryPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {
@@ -842,7 +837,7 @@ impl ComponentWriteService {
     async fn apply_app_plugin(
         &self,
         data: Arc<[u8]>,
-        plugin_owner: &AccountId,
+        plugin_owner: AccountId,
         plugin_priority: PluginPriority,
         plugin_spec: &AppPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {

@@ -50,7 +50,7 @@ declare_transparent_newtypes! {
 
     /// Key that can be used to identify a component file.
     /// All files with the same content will have the same key.
-    #[derive(Display, Eq, Hash)]
+    #[derive(Copy, Display, Eq, Hash)]
     pub struct ComponentFileContentHash(pub diff::Hash);
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.

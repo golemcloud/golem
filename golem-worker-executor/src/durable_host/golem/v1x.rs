@@ -511,7 +511,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<GolemApiUpdateWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let agent_id: WorkerId = worker_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.environment_id, &agent_id);
+        let owned_worker_id = OwnedWorkerId::new(self.owned_worker_id.environment_id, &agent_id);
 
         let mode = match mode {
             golem_api_1_x::host::UpdateMode::Automatic => {
@@ -590,7 +590,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = if durability.is_live() {
             let owned_worker_id =
-                OwnedWorkerId::new(&self.owned_worker_id.environment_id, &agent_id);
+                OwnedWorkerId::new(self.owned_worker_id.environment_id, &agent_id);
             let result = self.state.worker_service.get(&owned_worker_id).await;
             let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
                 let mut metadata = result.initial_worker_metadata;
@@ -873,9 +873,8 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
         self.observe_function_call("golem::api::get-oplog", "new");
 
-        let account_id = self.owned_worker_id.environment_id();
         let worker_id: WorkerId = worker_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(self.owned_worker_id.environment_id(), &worker_id);
 
         let start = OplogIndex::from_u64(start);
         let initial_component_version =
@@ -1063,9 +1062,8 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<SearchOplog>> {
         self.observe_function_call("golem::api::search-oplog", "new");
 
-        let account_id = self.owned_worker_id.environment_id();
         let worker_id: WorkerId = worker_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(self.owned_worker_id.environment_id(), &worker_id);
 
         let start = OplogIndex::INITIAL;
         let initial_component_version =

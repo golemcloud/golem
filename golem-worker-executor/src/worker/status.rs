@@ -1211,7 +1211,7 @@ mod test {
     async fn non_existing_oplog() {
         let environment_id = EnvironmentId::new();
         let owned_worker_id = OwnedWorkerId::new(
-            &environment_id,
+            environment_id,
             &WorkerId {
                 component_id: ComponentId::new(),
                 worker_name: "test-worker".to_string(),
@@ -1602,7 +1602,7 @@ mod test {
             let environment_id = EnvironmentId::new();
             let account_id = AccountId::new();
             let owned_worker_id = OwnedWorkerId::new(
-                &environment_id,
+                environment_id,
                 &WorkerId {
                     component_id: ComponentId::new(),
                     worker_name: "test-worker".to_string(),

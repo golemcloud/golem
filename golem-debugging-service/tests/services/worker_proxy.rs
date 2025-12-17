@@ -66,7 +66,7 @@ impl WorkerProxy for TestWorkerProxy {
         _owned_worker_id: &OwnedWorkerId,
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
-        _caller_account_id: &AccountId,
+        _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -85,7 +85,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
-        _caller_account_id: &AccountId,
+        _caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -104,7 +104,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
-        _caller_account_id: &AccountId,
+        _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -118,7 +118,7 @@ impl WorkerProxy for TestWorkerProxy {
         _owned_worker_id: &OwnedWorkerId,
         _target_version: ComponentRevision,
         _mode: UpdateMode,
-        _caller_account_id: &AccountId,
+        _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -131,7 +131,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         worker_id: &WorkerId,
         force: bool,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let mut retry_count = Self::RETRY_COUNT;
 
@@ -141,7 +141,7 @@ impl WorkerProxy for TestWorkerProxy {
             .await
             .unwrap();
 
-        assert!(*caller_account_id == self.test_ctx.account_id);
+        assert!(caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
@@ -187,7 +187,7 @@ impl WorkerProxy for TestWorkerProxy {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
@@ -195,7 +195,7 @@ impl WorkerProxy for TestWorkerProxy {
             .await
             .unwrap();
 
-        assert!(*caller_account_id == self.test_ctx.account_id);
+        assert!(caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
@@ -233,7 +233,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        caller_account_id: &AccountId,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
@@ -241,7 +241,7 @@ impl WorkerProxy for TestWorkerProxy {
             .await
             .unwrap();
 
-        assert!(*caller_account_id == self.test_ctx.account_id);
+        assert!(caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
@@ -277,7 +277,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _promise_id: PromiseId,
         _data: Vec<u8>,
-        _caller_account_id: &AccountId,
+        _caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError> {
         unimplemented!()
     }

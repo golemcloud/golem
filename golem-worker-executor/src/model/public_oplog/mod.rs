@@ -231,7 +231,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
-                        &owned_worker_id.worker_id.component_id,
+                        owned_worker_id.worker_id.component_id,
                         Some(component_revision),
                     )
                     .await
@@ -311,7 +311,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                 let metadata = components
                     .get_metadata(
-                        &owned_worker_id.worker_id.component_id,
+                        owned_worker_id.worker_id.component_id,
                         Some(component_revision),
                     )
                     .await
@@ -425,7 +425,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     } => {
                         let metadata = components
                             .get_metadata(
-                                &owned_worker_id.worker_id.component_id,
+                                owned_worker_id.worker_id.component_id,
                                 Some(component_revision),
                             )
                             .await
@@ -511,7 +511,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
-                        &owned_worker_id.worker_id.component_id,
+                        owned_worker_id.worker_id.component_id,
                         Some(target_revision),
                     )
                     .await
@@ -587,7 +587,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
-                        &owned_worker_id.worker_id.component_id,
+                        owned_worker_id.worker_id.component_id,
                         Some(component_revision),
                     )
                     .await
@@ -611,7 +611,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
-                        &owned_worker_id.worker_id.component_id,
+                        owned_worker_id.worker_id.component_id,
                         Some(component_revision),
                     )
                     .await
@@ -742,7 +742,7 @@ async fn try_resolve_agent_id(
     worker_id: &WorkerId,
 ) -> Option<AgentId> {
     if let Ok(component) = component_service
-        .get_metadata(&worker_id.component_id, None)
+        .get_metadata(worker_id.component_id, None)
         .await
     {
         AgentId::parse(&worker_id.worker_name, &component.metadata).ok()

@@ -120,10 +120,10 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                                 "missing oplog processor plugin component revision"
                             ))?;
 
-                        let worker_id = self.generate_worker_id_for(&plugin_component_id).await?;
+                        let worker_id = self.generate_worker_id_for(plugin_component_id).await?;
                         let plugin_component = self
                             .component_service
-                            .get_metadata(&plugin_component_id, Some(plugin_component_revision))
+                            .get_metadata(plugin_component_id, Some(plugin_component_revision))
                             .await?;
                         let owned_worker_id = OwnedWorkerId {
                             environment_id,
@@ -145,11 +145,11 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 
     async fn generate_worker_id_for(
         &self,
-        plugin_component_id: &ComponentId,
+        plugin_component_id: ComponentId,
     ) -> Result<WorkerId, WorkerExecutorError> {
         let current_assignment = self.shard_service.current_assignment()?;
         let worker_id = Self::generate_local_worker_id(
-            *plugin_component_id,
+            plugin_component_id,
             &current_assignment.shard_ids,
             current_assignment.number_of_shards,
         );
@@ -208,7 +208,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         let worker = self
             .worker_activator
             .get_or_create_running(
-                &running_plugin.account_id,
+                running_plugin.account_id,
                 &running_plugin.owned_worker_id,
                 None,
                 None,
@@ -761,7 +761,7 @@ impl ForwardingOplogState {
             let component_metadata = self
                 .components
                 .get_metadata(
-                    &metadata.owned_worker_id().component_id(),
+                    metadata.owned_worker_id().component_id(),
                     Some(metadata.last_known_status.component_revision),
                 )
                 .await?;

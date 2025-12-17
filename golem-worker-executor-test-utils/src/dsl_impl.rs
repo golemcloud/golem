@@ -114,7 +114,7 @@ impl TestDsl for TestWorkerExecutor {
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
-                    &environment_id,
+                    environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
@@ -221,7 +221,7 @@ impl TestDsl for TestWorkerExecutor {
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
-                    &latest_version.environment_id,
+                    latest_version.environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )

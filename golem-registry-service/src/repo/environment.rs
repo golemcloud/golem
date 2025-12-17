@@ -37,30 +37,30 @@ use uuid::Uuid;
 pub trait EnvironmentRepo: Send + Sync {
     async fn get_by_name(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         name: &str,
-        actor: &Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn get_by_id(
         &self,
-        environment_id: &Uuid,
-        actor: &Uuid,
+        environment_id: Uuid,
+        actor: Uuid,
         include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_by_app(
         &self,
-        application_id: &Uuid,
-        actor: &Uuid,
+        application_id: Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn create(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
 
@@ -76,7 +76,7 @@ pub trait EnvironmentRepo: Send + Sync {
 
     async fn list_visible_to_account(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError>;
 }
 
@@ -91,15 +91,15 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
         Self { repo }
     }
 
-    fn span_name(application_id: &Uuid, name: &str) -> Span {
+    fn span_name(application_id: Uuid, name: &str) -> Span {
         info_span!(SPAN_NAME, application_id = %application_id, name)
     }
 
-    fn span_env(environment_id: &Uuid) -> Span {
+    fn span_env(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
     }
 
-    fn span_app_id(application_id: &Uuid) -> Span {
+    fn span_app_id(application_id: Uuid) -> Span {
         info_span!(SPAN_NAME, application_id = %application_id)
     }
 }
@@ -108,9 +108,9 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
 impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_name(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         name: &str,
-        actor: &Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
@@ -121,8 +121,8 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
 
     async fn get_by_id(
         &self,
-        environment_id: &Uuid,
-        actor: &Uuid,
+        environment_id: Uuid,
+        actor: Uuid,
         include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
@@ -134,8 +134,8 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
 
     async fn list_by_app(
         &self,
-        application_id: &Uuid,
-        actor: &Uuid,
+        application_id: Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
@@ -146,7 +146,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
 
     async fn create(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         self.repo
@@ -159,7 +159,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let span = Self::span_env(&revision.environment_id);
+        let span = Self::span_env(revision.environment_id);
         self.repo.update(revision).instrument(span).await
     }
 
@@ -167,13 +167,13 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let span = Self::span_env(&revision.environment_id);
+        let span = Self::span_env(revision.environment_id);
         self.repo.delete(revision).instrument(span).await
     }
 
     async fn list_visible_to_account(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
         self.repo
             .list_visible_to_account(account_id)
@@ -224,9 +224,9 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
 impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_name(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         name: &str,
-        actor: &Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -296,8 +296,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        environment_id: &Uuid,
-        actor: &Uuid,
+        environment_id: Uuid,
+        actor: Uuid,
         include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
@@ -378,8 +378,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn list_by_app(
         &self,
-        application_id: &Uuid,
-        actor: &Uuid,
+        application_id: Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -449,10 +449,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn create(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let application_id = *application_id;
         // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
         self.with_tx_err("create", |tx| async move {
             let environment_record: EnvironmentExtRecord = tx.fetch_one_as(
@@ -713,7 +712,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn list_visible_to_account(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("list_visible_to_account")

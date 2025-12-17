@@ -56,8 +56,8 @@ impl UploadWorker {
         let upload_result = self
             .compiled_component_service
             .put(
-                &environment_id,
-                &component_and_version.id,
+                environment_id,
+                component_and_version.id,
                 component_and_version.version,
                 &component,
             )

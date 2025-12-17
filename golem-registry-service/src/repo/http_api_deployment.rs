@@ -35,7 +35,7 @@ use uuid::Uuid;
 pub trait HttpApiDeploymentRepo: Send + Sync {
     async fn create(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError>;
@@ -47,42 +47,42 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
 
     async fn delete(
         &self,
-        user_account_id: &Uuid,
-        http_api_deployment_id: &Uuid,
+        user_account_id: Uuid,
+        http_api_deployment_id: Uuid,
         revision_id: i64,
     ) -> Result<(), HttpApiDeploymentRepoError>;
 
     async fn get_staged_by_id(
         &self,
-        http_api_deployment_id: &Uuid,
+        http_api_deployment_id: Uuid,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_staged_by_domain(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_by_id_and_revision(
         &self,
-        http_api_deployment_id: &Uuid,
+        http_api_deployment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn list_by_deployment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_in_deployment_by_domain(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
@@ -99,23 +99,23 @@ impl<Repo: HttpApiDeploymentRepo> LoggedHttpApiDeploymentRepo<Repo> {
         Self { repo }
     }
 
-    fn span_name(environment_id: &Uuid, domain: &str) -> Span {
+    fn span_name(environment_id: Uuid, domain: &str) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, domain)
     }
 
-    fn span_env(environment_id: &Uuid) -> Span {
+    fn span_env(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
     }
 
-    fn span_env_and_deployment(environment_id: &Uuid, deployment_revision_id: i64) -> Span {
+    fn span_env_and_deployment(environment_id: Uuid, deployment_revision_id: i64) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id)
     }
 
-    fn span_id(http_api_deployment_id: &Uuid) -> Span {
+    fn span_id(http_api_deployment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, http_api_deployment_id = %http_api_deployment_id)
     }
 
-    fn span_id_and_revision(http_api_deployment_id: &Uuid, revision_id: i64) -> Span {
+    fn span_id_and_revision(http_api_deployment_id: Uuid, revision_id: i64) -> Span {
         info_span!(SPAN_NAME, http_api_deployment_id = %http_api_deployment_id, revision_id)
     }
 }
@@ -124,7 +124,7 @@ impl<Repo: HttpApiDeploymentRepo> LoggedHttpApiDeploymentRepo<Repo> {
 impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploymentRepo<Repo> {
     async fn create(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
@@ -138,14 +138,14 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         &self,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
-        let span = Self::span_id(&revision.http_api_deployment_id);
+        let span = Self::span_id(revision.http_api_deployment_id);
         self.repo.update(revision).instrument(span).await
     }
 
     async fn delete(
         &self,
-        user_account_id: &Uuid,
-        http_api_deployment_id: &Uuid,
+        user_account_id: Uuid,
+        http_api_deployment_id: Uuid,
         current_revision_id: i64,
     ) -> Result<(), HttpApiDeploymentRepoError> {
         self.repo
@@ -156,7 +156,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
 
     async fn get_staged_by_id(
         &self,
-        http_api_deployment_id: &Uuid,
+        http_api_deployment_id: Uuid,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(http_api_deployment_id)
@@ -166,7 +166,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
 
     async fn get_staged_by_domain(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
@@ -177,7 +177,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
 
     async fn get_by_id_and_revision(
         &self,
-        http_api_deployment_id: &Uuid,
+        http_api_deployment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
@@ -191,7 +191,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
 
     async fn list_staged(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .list_staged(environment_id)
@@ -201,7 +201,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
 
     async fn list_by_deployment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
@@ -215,7 +215,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
 
     async fn get_in_deployment_by_domain(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
@@ -271,7 +271,7 @@ impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
 impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
     async fn create(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
@@ -297,7 +297,6 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             return self.update(recreated_revision).await;
         }
 
-        let environment_id = *environment_id;
         let domain = domain.to_owned();
 
         self.with_tx_err("create", |tx| {
@@ -376,13 +375,10 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn delete(
         &self,
-        user_account_id: &Uuid,
-        http_api_deployment_id: &Uuid,
+        user_account_id: Uuid,
+        http_api_deployment_id: Uuid,
         revision_id: i64,
     ) -> Result<(), HttpApiDeploymentRepoError> {
-        let user_account_id = *user_account_id;
-        let http_api_deployment_id = *http_api_deployment_id;
-
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision: HttpApiDeploymentRevisionRecord = Self::insert_revision(
@@ -417,7 +413,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn get_staged_by_id(
         &self,
-        http_api_deployment_id: &Uuid,
+        http_api_deployment_id: Uuid,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
@@ -438,7 +434,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn get_staged_by_domain(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.with_ro("get_staged_by_name")
@@ -461,7 +457,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn get_by_id_and_revision(
         &self,
-        http_api_deployment_id: &Uuid,
+        http_api_deployment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.with_ro("get_by_id_and_revision")
@@ -484,7 +480,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn list_staged(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.with_ro("list_staged")
             .fetch_all_as(
@@ -506,7 +502,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn list_by_deployment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.with_ro("list_by_deployment")
@@ -532,7 +528,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn get_in_deployment_by_domain(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {

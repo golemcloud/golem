@@ -1746,12 +1746,12 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
         assert2::let_assert!(
             Err(WorkerExecutorError::ComponentParseFailed {
                 component_id,
-                component_version,
+                component_revision,
                 reason
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision::INITIAL);
+        assert!(component_revision == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
 
@@ -1803,12 +1803,12 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         assert2::let_assert!(
             Err(WorkerExecutorError::ComponentParseFailed {
                 component_id,
-                component_version,
+                component_revision,
                 reason
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision::INITIAL);
+        assert!(component_revision == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
     Ok(())
@@ -1874,12 +1874,12 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         assert2::let_assert!(
             Err(WorkerExecutorError::ComponentParseFailed {
                 component_id,
-                component_version,
+                component_revision,
                 reason
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision::INITIAL);
+        assert!(component_revision == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
 

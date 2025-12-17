@@ -100,10 +100,7 @@ impl Deps {
             .unwrap()
     }
 
-    pub async fn create_application(
-        &self,
-        owner_account_id: &Uuid,
-    ) -> ApplicationExtRevisionRecord {
+    pub async fn create_application(&self, owner_account_id: Uuid) -> ApplicationExtRevisionRecord {
         let user = self.create_account().await;
 
         self.application_repo
@@ -120,7 +117,7 @@ impl Deps {
             .unwrap()
     }
 
-    pub async fn create_env(&self, parent_application_id: &Uuid) -> EnvironmentExtRevisionRecord {
+    pub async fn create_env(&self, parent_application_id: Uuid) -> EnvironmentExtRevisionRecord {
         let user = self.create_account().await;
         self.environment_repo
             .create(

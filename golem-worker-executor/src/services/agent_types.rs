@@ -28,15 +28,15 @@ use std::time::Duration;
 pub trait AgentTypesService: Send + Sync {
     async fn get_all(
         &self,
-        owner_environment: &EnvironmentId,
-        component_id: &ComponentId,
+        owner_environment: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError>;
 
     async fn get(
         &self,
-        owner_environment: &EnvironmentId,
-        component_id: &ComponentId,
+        owner_environment: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         name: &str,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError>;
@@ -92,8 +92,8 @@ impl CachedAgentTypes {
 impl AgentTypesService for CachedAgentTypes {
     async fn get_all(
         &self,
-        owner_environment: &EnvironmentId,
-        component_id: &ComponentId,
+        owner_environment: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
         // Full agent discovery is not cached
@@ -104,16 +104,16 @@ impl AgentTypesService for CachedAgentTypes {
 
     async fn get(
         &self,
-        owner_environment: &EnvironmentId,
-        component_id: &ComponentId,
+        owner_environment: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         name: &str,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
         // Getting a particular agent type is cached with a short TTL because
         // it is used in RPC to find the invocation target
         let key = (
-            *owner_environment,
-            *component_id,
+            owner_environment,
+            component_id,
             component_revision,
             name.to_string(),
         );
@@ -168,8 +168,8 @@ mod grpc {
     impl AgentTypesService for AgentTypesServiceGrpc {
         async fn get_all(
             &self,
-            owner_environment: &EnvironmentId,
-            component_id: &ComponentId,
+            owner_environment: EnvironmentId,
+            component_id: ComponentId,
             component_revision: ComponentRevision,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
             self.client
@@ -182,8 +182,8 @@ mod grpc {
 
         async fn get(
             &self,
-            owner_environment: &EnvironmentId,
-            component_id: &ComponentId,
+            owner_environment: EnvironmentId,
+            component_id: ComponentId,
             component_revision: ComponentRevision,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
@@ -228,8 +228,8 @@ mod local {
     impl AgentTypesService for AgentTypesServiceLocal {
         async fn get_all(
             &self,
-            owner_environment: &EnvironmentId,
-            _component_id: &ComponentId,
+            owner_environment: EnvironmentId,
+            _component_id: ComponentId,
             _component_revision: ComponentRevision,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
             // NOTE: we can't filter the component metadata by component revision because in local mode we don't have a concept of components deployed together
@@ -239,7 +239,7 @@ mod local {
                 .all_cached_metadata()
                 .await
                 .iter()
-                .filter(|component| component.environment_id == *owner_environment)
+                .filter(|component| component.environment_id == owner_environment)
                 .flat_map(|component| {
                     component
                         .metadata
@@ -260,8 +260,8 @@ mod local {
 
         async fn get(
             &self,
-            owner_environment: &EnvironmentId,
-            component_id: &ComponentId,
+            owner_environment: EnvironmentId,
+            component_id: ComponentId,
             component_revision: ComponentRevision,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {

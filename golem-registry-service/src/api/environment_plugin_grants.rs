@@ -127,7 +127,7 @@ impl EnvironmentPluginGrantsApi {
     ) -> ApiResult<Json<Page<EnvironmentPluginGrant>>> {
         let grants = self
             .environment_plugin_grant_service
-            .list_in_environment(&environment_id, &auth)
+            .list_in_environment(environment_id, &auth)
             .await?;
 
         Ok(Json(Page { values: grants }))
@@ -174,7 +174,7 @@ impl EnvironmentPluginGrantsApi {
     ) -> ApiResult<Json<EnvironmentPluginGrant>> {
         let grant = self
             .environment_plugin_grant_service
-            .get_by_id(&environment_plugin_grant_id, include_deleted, &auth)
+            .get_by_id(environment_plugin_grant_id, include_deleted, &auth)
             .await?;
 
         Ok(Json(grant))
@@ -213,7 +213,7 @@ impl EnvironmentPluginGrantsApi {
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.environment_plugin_grant_service
-            .delete(&environment_plugin_grant_id, &auth)
+            .delete(environment_plugin_grant_id, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)
