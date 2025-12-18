@@ -28,7 +28,7 @@ sequential_suite!(plugins);
 
 sequential_suite!(build_and_deploy_all);
 
-tag_suite!(agents, group4);
+tag_suite!(agents, group3);
 sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
@@ -225,6 +225,7 @@ impl Output {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     fn stderr_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
         self.stderr
             .iter()
