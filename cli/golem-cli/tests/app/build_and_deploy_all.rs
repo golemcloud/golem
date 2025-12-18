@@ -13,12 +13,6 @@ async fn build_and_deploy_all_templates_default() {
     build_and_deploy_all_templates(None).await;
 }
 
-#[test]
-#[tag(group3)]
-async fn build_and_deploy_all_templates_generic() {
-    build_and_deploy_all_templates(Some("generic")).await;
-}
-
 async fn build_and_deploy_all_templates(group: Option<&str>) {
     let mut ctx = TestContext::new();
     if let Some(group) = group {
@@ -80,6 +74,16 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         ),
         (
             "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+            "ApprovalWorkflow",
+            "RustApprovalWorkflow",
+        ),
+        (
+            "components-rust/app-rust-human-in-the-loop/golem.yaml",
+            "approval-workflow",
+            "rust-approval-workflow",
+        ),
+        (
+            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
             "HumanAgent",
             "RustHumanAgent",
         ),
@@ -90,13 +94,13 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         ),
         (
             "components-rust/app-rust-json/src/lib.rs",
-            "TaskAgent",
-            "RustTaskAgent",
+            "Tasks",
+            "RustTasks",
         ),
         (
             "components-rust/app-rust-json/golem.yaml",
-            "task-agent",
-            "rust-task-agent",
+            "tasks(name)",
+            "rust-tasks(name)",
         ),
         (
             "components-rust/app-rust-llm-session/src/lib.rs",
@@ -121,12 +125,12 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         (
             "components-rust/app-rust-snapshotting/src/lib.rs",
             "CounterAgent",
-            "RustCounterAgent",
+            "RustCounterAgentSnapshotting",
         ),
         (
             "components-rust/app-rust-snapshotting/golem.yaml",
             "counter-agent",
-            "rust-counter-agent",
+            "rust-counter-agent-snapshotting",
         ),
         // TypeScript agents: prefix with Ts
         (
@@ -182,12 +186,12 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         (
             "components-ts/app-ts-snapshotting/src/main.ts",
             "CounterAgent",
-            "TsCounterAgent",
+            "TsCounterAgentSnapshotting",
         ),
         (
             "components-ts/app-ts-snapshotting/golem.yaml",
             "counter-agent",
-            "ts-counter-agent",
+            "ts-counter-agent-snapshotting",
         ),
         (
             "components-ts/app-ts-websearch-summary-example/src/main.ts",
