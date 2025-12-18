@@ -12,7 +12,7 @@ httpApi:
             __cn__: componentname
             response: |
               let name: string = request.path.name;
-              let agent = tasks(name);
+              let agent = task-agent(name);
               let new-task = agent.create-task(request.body);
               { status: 200, body: { result: new-task }, headers: { Content-Type: "application/json" } }
 
@@ -28,7 +28,7 @@ httpApi:
             __cn__: componentname
             response: |
               let name: string = request.path.name;
-              let agent = tasks(name);
+              let agent = task-agent(name);
               let tasks = agent.get-tasks();
               { status: 200, body: { result: tasks }, headers: { Content-Type: "application/json" } }
 
@@ -39,8 +39,8 @@ httpApi:
             __cn__: componentname
             response: |
               let name: string = request.path.name;
-              let taskId: u64 = request.path.taskId;
-              let agent = tasks(name);
+              let taskId: f64 = request.path.taskId;
+              let agent = task-agent(name);
               let result = agent.complete-task(taskId);
               { status: 200, body: { result: result }, headers: { Content-Type: "application/json" } }
 
