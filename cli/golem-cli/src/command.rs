@@ -420,7 +420,7 @@ impl GolemCliCommand {
                             .collect::<Vec<_>>();
                         match positional_args.as_slice() {
                             [] => Some(GolemCliCommandPartialMatch::AppHelp),
-                            ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
+                            ["exec"] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
                             ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
                             ["agent"] => Some(GolemCliCommandPartialMatch::AgentHelp),
                             _ => None,
@@ -447,7 +447,7 @@ impl GolemCliCommand {
                             .collect::<Vec<_>>();
                         match positional_args.as_slice() {
                             [] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
-                            ["app"] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
+                            ["exec"] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
                             ["component"] => {
                                 Some(GolemCliCommandPartialMatch::ComponentMissingSubcommandHelp)
                             }
