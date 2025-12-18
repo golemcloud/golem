@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::account::AccountEmail;
-use super::account::AccountId;
+use super::account::{AccountId, AccountSummary};
 use super::application::ApplicationId;
-use super::application::ApplicationName;
+use super::application::ApplicationSummary;
 use super::auth::EnvironmentRole;
 use super::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use super::diff::Hash;
@@ -107,17 +106,6 @@ declare_structs! {
         pub security_overrides: bool,
         pub roles_from_active_shares: BTreeSet<EnvironmentRole>,
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
-    }
-
-    pub struct ApplicationSummary {
-        pub id: ApplicationId,
-        pub name: ApplicationName,
-    }
-
-    pub struct AccountSummary {
-        pub id: AccountId,
-        pub name: String,
-        pub email: AccountEmail,
     }
 
     /// A cross-tenant, enriched view of an environment used specifically by the

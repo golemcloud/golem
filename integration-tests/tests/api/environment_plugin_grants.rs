@@ -101,36 +101,36 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         .await?;
 
     // both users can see the plugin grant when listing
-    {
-        let environment_plugin_grants = client_1
+    for client in [&client_1, &client_2] {
+        let grants = client
             .list_environment_plugin_grants(&shared_env.id.0)
             .await?;
-        assert!(environment_plugin_grants.values == vec![plugin_grant.clone()])
-    }
-    {
-        let environment_plugin_grants = client_2
-            .list_environment_plugin_grants(&shared_env.id.0)
-            .await?;
-        assert!(environment_plugin_grants.values == vec![plugin_grant.clone()])
+
+        assert!(grants.values.len() == 1);
+        let grant = &grants.values[0];
+
+        assert!(grant.id == plugin_grant.id);
+        assert!(grant.environment_id == shared_env.id);
+        assert!(grant.plugin.id == plugin.id);
+        assert!(grant.plugin_account.id == user_1.account_id);
     }
 
     // both users can see the plugin grant when getting by id
-    {
-        let fetched = client_1
+    for client in [&client_1, &client_2] {
+        let fetched = client
             .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
             .await?;
-        assert!(fetched == plugin_grant)
-    }
-    {
-        let fetched = client_2
-            .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
-            .await?;
-        assert!(fetched == plugin_grant)
+
+        assert!(fetched.id == plugin_grant.id);
+        assert!(fetched.environment_id == shared_env.id);
+        assert!(fetched.plugin.id == plugin.id);
+        assert!(fetched.plugin_account.id == user_1.account_id);
     }
 
     client_1
         .delete_environment_plugin_grant(&plugin_grant.id.0)
         .await?;
+
     // second delete fails with 404
     {
         let result = client_1
@@ -144,32 +144,16 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     }
 
     // both users do not see plugin grant anymore when listing
-    {
-        let environment_plugin_grants = client_1
+    for client in [&client_1, &client_2] {
+        let grants = client
             .list_environment_plugin_grants(&shared_env.id.0)
             .await?;
-        assert!(environment_plugin_grants.values == vec![])
-    }
-    {
-        let environment_plugin_grants = client_2
-            .list_environment_plugin_grants(&shared_env.id.0)
-            .await?;
-        assert!(environment_plugin_grants.values == vec![])
+        assert!(grants.values.is_empty());
     }
 
     // both users cannot get the plugin grant by id anymore
-    {
-        let result = client_1
-            .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
-            .await;
-        assert!(
-            let Err(golem_client::Error::Item(
-                RegistryServiceGetEnvironmentPluginGrantError::Error404(_)
-            )) = result
-        );
-    }
-    {
-        let result = client_2
+    for client in [&client_1, &client_2] {
+        let result = client
             .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
             .await;
         assert!(
@@ -180,17 +164,15 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     }
 
     // both users can see the plugin grant when explicitly fetching deleted
-    {
-        let fetched = client_1
+    for client in [&client_1, &client_2] {
+        let fetched = client
             .get_environment_plugin_grant(&plugin_grant.id.0, Some(true))
             .await?;
-        assert!(fetched == plugin_grant)
-    }
-    {
-        let fetched = client_2
-            .get_environment_plugin_grant(&plugin_grant.id.0, Some(true))
-            .await?;
-        assert!(fetched == plugin_grant)
+
+        assert!(fetched.id == plugin_grant.id);
+        assert!(fetched.environment_id == shared_env.id);
+        assert!(fetched.plugin.id == plugin.id);
+        assert!(fetched.plugin_account.id == user_1.account_id);
     }
 
     Ok(())
@@ -305,9 +287,9 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
         )
         .await?;
 
-    // User 2 cannot directly see plugin in user 1's account
+    // User 2 cannot directly see plugin
     {
-        let result = client_2.get_plugin_by_id(&plugin_grant.id.0).await;
+        let result = client_2.get_plugin_by_id(&plugin.id.0).await;
         assert!(
             let Err(golem_client::Error::Item(
                 RegistryServiceGetPluginByIdError::Error404(_)
@@ -315,7 +297,17 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
         );
     }
 
-    // User 2 cannot directly see component that is part of the plugin
+    // But can see it via the grant
+    {
+        let fetched = client_2
+            .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
+            .await?;
+
+        assert!(fetched.plugin.id == plugin.id);
+        assert!(fetched.plugin_account.id == user_1.account_id);
+    }
+
+    // User 2 cannot see the underlying component
     {
         let result = client_2.get_component(&plugin_component.id.0).await;
         assert!(
@@ -557,7 +549,12 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
     let result_owner = client_owner
         .list_environment_plugin_grants(&env.id.0)
         .await?;
-    assert!(result_owner.values.contains(&grant));
+    assert!(result_owner
+        .values
+        .iter()
+        .map(|epg| epg.id)
+        .collect::<Vec<_>>()
+        .contains(&grant.id));
 
     Ok(())
 }
@@ -713,6 +710,9 @@ async fn fetch_deleted_grant_with_deleted_plugin_and_account(
         .await?;
 
     assert!(fetched.id == grant.id);
+    assert!(fetched.plugin.id == plugin.id);
+    assert!(fetched.plugin_account.id == owner.account_id);
+
     Ok(())
 }
 
@@ -762,21 +762,9 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
         .delete_environment_share(&share.id.0, share.revision.into())
         .await?;
 
-    {
+    for include_deleted in [false, true] {
         let result = client_revoked
-            .get_environment_plugin_grant(&grant.id.0, Some(false))
-            .await;
-
-        assert!(
-            let Err(golem_client::Error::Item(
-                RegistryServiceGetEnvironmentPluginGrantError::Error404(_)
-            )) = result
-        );
-    }
-
-    {
-        let result = client_revoked
-            .get_environment_plugin_grant(&grant.id.0, Some(true))
+            .get_environment_plugin_grant(&grant.id.0, Some(include_deleted))
             .await;
 
         assert!(

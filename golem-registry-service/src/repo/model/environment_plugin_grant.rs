@@ -17,12 +17,12 @@ use super::datetime::SqlDateTime;
 use super::hash::SqlBlake3Hash;
 use super::plugin::PluginRecord;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, EnvironmentPluginGrantId,
+    EnvironmentPluginGrant, EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails,
 };
-use golem_common::model::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
+use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::model::plugin_registration::PluginRegistration;
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
@@ -62,12 +62,14 @@ impl EnvironmentPluginGrantRecord {
             audit: ImmutableAuditFields::new(actor.0),
         }
     }
+}
 
-    pub fn into_model(self, plugin: PluginRegistrationDto) -> EnvironmentPluginGrant {
-        EnvironmentPluginGrant {
-            id: EnvironmentPluginGrantId(self.environment_plugin_grant_id),
-            environment_id: EnvironmentId(self.environment_id),
-            plugin,
+impl From<EnvironmentPluginGrantRecord> for EnvironmentPluginGrant {
+    fn from(value: EnvironmentPluginGrantRecord) -> Self {
+        Self {
+            id: EnvironmentPluginGrantId(value.environment_plugin_grant_id),
+            environment_id: EnvironmentId(value.environment_id),
+            plugin_id: PluginRegistrationId(value.plugin_id),
         }
     }
 }
@@ -108,9 +110,13 @@ pub struct EnvironmentPluginGrantWithDetailsRecord {
     pub plugin_created_by: Uuid,
     pub plugin_deleted_at: Option<SqlDateTime>,
     pub plugin_deleted_by: Option<Uuid>,
+
+    // plugin owner account
+    pub plugin_account_name: String,
+    pub plugin_account_email: String,
 }
 
-impl TryFrom<EnvironmentPluginGrantWithDetailsRecord> for EnvironmentPluginGrant {
+impl TryFrom<EnvironmentPluginGrantWithDetailsRecord> for EnvironmentPluginGrantWithDetails {
     type Error = anyhow::Error;
     fn try_from(value: EnvironmentPluginGrantWithDetailsRecord) -> Result<Self, Self::Error> {
         let plugin_record = PluginRecord {
@@ -141,6 +147,11 @@ impl TryFrom<EnvironmentPluginGrantWithDetailsRecord> for EnvironmentPluginGrant
             id: EnvironmentPluginGrantId(value.environment_plugin_grant_id),
             environment_id: EnvironmentId(value.environment_id),
             plugin: PluginRegistration::try_from(plugin_record)?.into(),
+            plugin_account: AccountSummary {
+                id: AccountId(value.plugin_account_id),
+                name: value.plugin_account_name,
+                email: AccountEmail(value.plugin_account_email),
+            },
         })
     }
 }

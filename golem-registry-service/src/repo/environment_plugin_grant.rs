@@ -225,13 +225,14 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
 
                         p.plugin_id,
                         p.account_id AS plugin_account_id,
+                        pa.email AS plugin_account_email,
+                        par.name AS plugin_account_name,
                         p.name AS plugin_name,
                         p.version AS plugin_version,
                         p.description AS plugin_description,
                         p.icon AS plugin_icon,
                         p.homepage AS plugin_homepage,
                         p.plugin_type AS plugin_plugin_type,
-
                         p.provided_wit_package AS plugin_provided_wit_package,
                         p.json_schema AS plugin_json_schema,
                         p.validate_url AS plugin_validate_url,
@@ -252,6 +253,9 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                             ON p.plugin_id = epg.plugin_id
                         INNER JOIN accounts pa
                             ON pa.account_id = p.account_id
+                        INNER JOIN account_revisions par
+                            ON par.account_id = pa.account_id
+                            AND par.revision_id = pa.current_revision_id
                         WHERE
                             epg.environment_plugin_grant_id = $1
                             AND (
@@ -289,6 +293,8 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
 
                         p.plugin_id,
                         p.account_id AS plugin_account_id,
+                        pa.email AS plugin_account_email,
+                        par.name AS plugin_account_name,
                         p.name AS plugin_name,
                         p.version AS plugin_version,
                         p.description AS plugin_description,
@@ -315,6 +321,9 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                         ON p.plugin_id = epg.plugin_id
                     INNER JOIN accounts pa
                         ON pa.account_id = p.account_id
+                    INNER JOIN account_revisions par
+                        ON par.account_id = pa.account_id
+                        AND par.revision_id = pa.current_revision_id
                     WHERE
                         epg.environment_id = $1
                         AND epg.deleted_at IS NULL

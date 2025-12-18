@@ -33,7 +33,7 @@ use golem_common::model::environment::Environment;
 use golem_common::model::http_api_definition::{
     CorsPreflightBinding, FileServerBinding, GatewayBinding, HttpApiDefinition,
     HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpHandlerBinding,
-    WorkerGatewayBinding,
+    RouteMethod, WorkerGatewayBinding,
 };
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::{
@@ -137,14 +137,39 @@ pub enum DeployValidationError {
     HttpApiDefinitionInvalidPathPattern(String),
     #[error("Invalid rib expression: {0}")]
     InvalidRibExpr(String),
-    #[error("Failed rib compilation: {0}")]
-    RibCompilationFailed(RibCompilationError),
+    #[error(
+        r#"
+            Failed rib compilation:
+                definition: {definition}
+                method: {method}
+                path: {path}
+                field: {field}
+                error:
+                    {}
+        "#,
+        indent_string(&error.to_string(), 8)
+    )]
+    RibCompilationFailed {
+        definition: HttpApiDefinitionName,
+        method: RouteMethod,
+        path: String,
+        field: String,
+        error: RibCompilationError,
+    },
     #[error("Invalid http cors binding expression: {0}")]
     InvalidHttpCorsBindingExpr(String),
     #[error("Component {0} not found in deployment")]
     ComponentNotFound(ComponentName),
     #[error("Agent type name {0} is provided by multiple components")]
     AmbiguousAgentTypeName(String),
+}
+
+fn indent_string(text: &str, indent: usize) -> String {
+    let prefix = " ".repeat(indent);
+    text.lines()
+        .map(|line| format!("{prefix}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -549,6 +574,8 @@ impl DeploymentContext {
                             definition.id,
                             &definition.name,
                             &definition.version,
+                            route.method,
+                            &route.path,
                             &route.binding
                         ),
                         errors
@@ -581,12 +608,20 @@ impl DeploymentContext {
         http_api_definition_id: HttpApiDefinitionId,
         http_api_definition_name: &HttpApiDefinitionName,
         http_api_definition_version: &HttpApiDefinitionVersion,
+        method: RouteMethod,
+        path: &str,
         binding: &GatewayBinding,
     ) -> Result<GatewayBindingCompiled, DeployValidationError> {
         match binding {
-            GatewayBinding::Worker(inner) => self.compile_worker_binding(inner),
-            GatewayBinding::FileServer(inner) => self.compile_file_server_binding(inner),
-            GatewayBinding::HttpHandler(inner) => self.compile_http_handler_binding(inner),
+            GatewayBinding::Worker(inner) => {
+                self.compile_worker_binding(http_api_definition_name, method, path, inner)
+            }
+            GatewayBinding::FileServer(inner) => {
+                self.compile_file_server_binding(http_api_definition_name, method, path, inner)
+            }
+            GatewayBinding::HttpHandler(inner) => {
+                self.compile_http_handler_binding(http_api_definition_name, method, path, inner)
+            }
             GatewayBinding::CorsPreflight(inner) => self.compile_cors_preflight_binding(inner),
             GatewayBinding::SwaggerUi(_) => Ok(GatewayBindingCompiled::SwaggerUi(Box::new(
                 SwaggerUiBindingCompiled {
@@ -600,6 +635,9 @@ impl DeploymentContext {
 
     fn compile_worker_binding(
         &self,
+        definition: &HttpApiDefinitionName,
+        method: RouteMethod,
+        path: &str,
         binding: &WorkerGatewayBinding,
     ) -> Result<GatewayBindingCompiled, DeployValidationError> {
         let component = self.components.get(&binding.component_name).ok_or(
@@ -609,8 +647,15 @@ impl DeploymentContext {
         let idempotency_key_compiled = if let Some(expr) = &binding.idempotency_key {
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
             Some(
-                IdempotencyKeyCompiled::from_expr(&rib_expr)
-                    .map_err(DeployValidationError::RibCompilationFailed)?,
+                IdempotencyKeyCompiled::from_expr(&rib_expr).map_err(|error| {
+                    DeployValidationError::RibCompilationFailed {
+                        definition: definition.clone(),
+                        method,
+                        path: path.to_string(),
+                        field: "idempotency_key".to_string(),
+                        error,
+                    }
+                })?,
             )
         } else {
             None
@@ -619,8 +664,15 @@ impl DeploymentContext {
         let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
             Some(
-                InvocationContextCompiled::from_expr(&rib_expr)
-                    .map_err(DeployValidationError::RibCompilationFailed)?,
+                InvocationContextCompiled::from_expr(&rib_expr).map_err(|error| {
+                    DeployValidationError::RibCompilationFailed {
+                        definition: definition.clone(),
+                        method,
+                        path: path.to_string(),
+                        field: "invocation_context".to_string(),
+                        error,
+                    }
+                })?,
             )
         } else {
             None
@@ -644,8 +696,15 @@ impl DeploymentContext {
 
             let rib_expr = rib::from_string(&binding.response)
                 .map_err(DeployValidationError::InvalidRibExpr)?;
-            ResponseMappingCompiled::from_expr(&rib_expr, &component_dependencies)
-                .map_err(DeployValidationError::RibCompilationFailed)?
+            ResponseMappingCompiled::from_expr(&rib_expr, &component_dependencies).map_err(
+                |error| DeployValidationError::RibCompilationFailed {
+                    definition: definition.clone(),
+                    method,
+                    path: path.to_string(),
+                    field: "response".to_string(),
+                    error,
+                },
+            )?
         };
 
         let binding = WorkerBindingCompiled {
@@ -662,6 +721,9 @@ impl DeploymentContext {
 
     fn compile_file_server_binding(
         &self,
+        definition: &HttpApiDefinitionName,
+        method: RouteMethod,
+        path: &str,
         binding: &FileServerBinding,
     ) -> Result<GatewayBindingCompiled, DeployValidationError> {
         let component = self.components.get(&binding.component_name).ok_or(
@@ -684,15 +746,29 @@ impl DeploymentContext {
 
             let rib_expr = rib::from_string(&binding.response)
                 .map_err(DeployValidationError::InvalidRibExpr)?;
-            ResponseMappingCompiled::from_expr(&rib_expr, &[component_dependency])
-                .map_err(DeployValidationError::RibCompilationFailed)?
+            ResponseMappingCompiled::from_expr(&rib_expr, &[component_dependency]).map_err(
+                |error| DeployValidationError::RibCompilationFailed {
+                    definition: definition.clone(),
+                    method,
+                    path: path.to_string(),
+                    field: "response".to_string(),
+                    error,
+                },
+            )?
         };
 
         let worker_name_compiled = {
             let rib_expr = rib::from_string(&binding.worker_name)
                 .map_err(DeployValidationError::InvalidRibExpr)?;
-            WorkerNameCompiled::from_expr(&rib_expr)
-                .map_err(DeployValidationError::RibCompilationFailed)?
+            WorkerNameCompiled::from_expr(&rib_expr).map_err(|error| {
+                DeployValidationError::RibCompilationFailed {
+                    definition: definition.clone(),
+                    method,
+                    path: path.to_string(),
+                    field: "worker_name".to_string(),
+                    error,
+                }
+            })?
         };
 
         let binding = FileServerBindingCompiled {
@@ -708,6 +784,9 @@ impl DeploymentContext {
 
     fn compile_http_handler_binding(
         &self,
+        definition: &HttpApiDefinitionName,
+        method: RouteMethod,
+        path: &str,
         binding: &HttpHandlerBinding,
     ) -> Result<GatewayBindingCompiled, DeployValidationError> {
         let component = self.components.get(&binding.component_name).ok_or(
@@ -717,15 +796,29 @@ impl DeploymentContext {
         let worker_name_compiled = {
             let rib_expr = rib::from_string(&binding.worker_name)
                 .map_err(DeployValidationError::InvalidRibExpr)?;
-            WorkerNameCompiled::from_expr(&rib_expr)
-                .map_err(DeployValidationError::RibCompilationFailed)?
+            WorkerNameCompiled::from_expr(&rib_expr).map_err(|error| {
+                DeployValidationError::RibCompilationFailed {
+                    definition: definition.clone(),
+                    method,
+                    path: path.to_string(),
+                    field: "worker_name".to_string(),
+                    error,
+                }
+            })?
         };
 
         let idempotency_key_compiled = if let Some(expr) = &binding.idempotency_key {
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
             Some(
-                IdempotencyKeyCompiled::from_expr(&rib_expr)
-                    .map_err(DeployValidationError::RibCompilationFailed)?,
+                IdempotencyKeyCompiled::from_expr(&rib_expr).map_err(|error| {
+                    DeployValidationError::RibCompilationFailed {
+                        definition: definition.clone(),
+                        method,
+                        path: path.to_string(),
+                        field: "idempotency_key".to_string(),
+                        error,
+                    }
+                })?,
             )
         } else {
             None
@@ -734,8 +827,15 @@ impl DeploymentContext {
         let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
             Some(
-                InvocationContextCompiled::from_expr(&rib_expr)
-                    .map_err(DeployValidationError::RibCompilationFailed)?,
+                InvocationContextCompiled::from_expr(&rib_expr).map_err(|error| {
+                    DeployValidationError::RibCompilationFailed {
+                        definition: definition.clone(),
+                        method,
+                        path: path.to_string(),
+                        field: "invocation_context".to_string(),
+                        error,
+                    }
+                })?,
             )
         } else {
             None
