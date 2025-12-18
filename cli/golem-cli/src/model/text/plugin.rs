@@ -17,11 +17,8 @@ use crate::model::text::fmt::{
     MessageWithFields, TextView,
 };
 use cli_table::Table;
-use golem_common::model::component::PluginInstallation;
-use golem_common::model::plugin_registration::{
-    ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginRegistrationDto, PluginSpecDto,
-};
-use itertools::Itertools;
+use golem_common::model::plugin_registration::PluginRegistrationDto;
+use serde_derive::Serialize;
 
 #[derive(Table)]
 struct PluginRegistrationTableView {
@@ -55,47 +52,71 @@ impl TextView for Vec<PluginRegistrationDto> {
     }
 }
 
-impl MessageWithFields for PluginRegistrationDto {
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginRegistrationRegisterView(pub PluginRegistrationDto);
+
+impl MessageWithFields for PluginRegistrationRegisterView {
     fn message(&self) -> String {
         format!(
-            "Got metadata for plugin {} version {}",
-            format_message_highlight(&self.name),
-            format_message_highlight(&self.version),
+            "Registered new plugin {} version {}",
+            format_message_highlight(&self.0.name),
+            format_message_highlight(&self.0.version),
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        let mut fields = FieldsBuilder::new();
-
-        fields
-            .fmt_field("Name", &self.name, format_main_id)
-            .fmt_field("Version", &self.version, format_main_id)
-            .field("Description", &self.description)
-            .field("Homepage", &self.homepage)
-            .field("Type", &self.typ_as_str())
-            .fmt_field_option(
-                "Validate URL",
-                &self.component_transformer_validate_url(),
-                |u| u.to_string(),
-            )
-            .fmt_field_option(
-                "Transform URL",
-                &self.component_transformer_validate_url(),
-                |u| u.to_string(),
-            )
-            .fmt_field_option(
-                "Component ID",
-                &self.oplog_processor_component_id(),
-                format_id,
-            )
-            .fmt_field_option(
-                "Component Version",
-                &self.oplog_processor_component_revision(),
-                format_id,
-            );
-
-        fields.build()
+        plugin_registration_fields(&self.0)
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginRegistrationGetView(pub PluginRegistrationDto);
+
+impl MessageWithFields for PluginRegistrationGetView {
+    fn message(&self) -> String {
+        format!(
+            "Got metadata for plugin {} version {}",
+            format_message_highlight(&self.0.name),
+            format_message_highlight(&self.0.version),
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        plugin_registration_fields(&self.0)
+    }
+}
+
+fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, String)> {
+    let mut fields = FieldsBuilder::new();
+
+    fields
+        .fmt_field("Name", &plugin.name, format_main_id)
+        .fmt_field("Version", &plugin.version, format_main_id)
+        .field("Description", &plugin.description)
+        .field("Homepage", &plugin.homepage)
+        .field("Type", &plugin.typ_as_str())
+        .fmt_field_option(
+            "Validate URL",
+            &plugin.component_transformer_validate_url(),
+            |u| u.to_string(),
+        )
+        .fmt_field_option(
+            "Transform URL",
+            &plugin.component_transformer_validate_url(),
+            |u| u.to_string(),
+        )
+        .fmt_field_option(
+            "Component ID",
+            &plugin.oplog_processor_component_id(),
+            format_id,
+        )
+        .fmt_field_option(
+            "Component Version",
+            &plugin.oplog_processor_component_revision(),
+            format_id,
+        );
+
+    fields.build()
 }
 
 // TODO: atomic

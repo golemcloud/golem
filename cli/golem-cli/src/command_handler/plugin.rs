@@ -18,18 +18,16 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
+use crate::model::text::plugin::{PluginRegistrationGetView, PluginRegistrationRegisterView};
 use crate::model::PathBufOrStdin;
 use anyhow::{anyhow, Context as AnyhowContext};
-use golem_client::api::{ComponentClient, PluginClient};
+use golem_client::api::PluginClient;
 use golem_client::model::PluginRegistrationCreation;
-use golem_common::model::component::ComponentName;
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::base64::Base64;
 use golem_common::model::plugin_registration::{
     ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginSpecDto,
 };
 use golem_common::model::Empty;
-use heck::ToKebabCase;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
@@ -77,26 +75,20 @@ impl PluginCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&result);
+        self.ctx
+            .log_handler()
+            .log_view(&PluginRegistrationGetView(result));
         Ok(())
     }
 
     async fn cmd_register(&self, manifest: PathBufOrStdin) -> anyhow::Result<()> {
-        enum Specs {
-            ComponentTransformer(ComponentTransformerPluginSpec),
-            OplogProcessor(OplogProcessorPluginSpec),
-            App(PathBuf),
-            Library(PathBuf),
-        }
-
-        let clients = self.ctx.golem_clients().await?;
-
         let manifest = manifest.read_to_string()?;
         let manifest: PluginManifest = serde_yaml::from_str(&manifest)
             .with_context(|| anyhow!("Failed to decode plugin manifest"))?;
 
-        let icon = std::fs::read(&manifest.icon)
-            .with_context(|| anyhow!("Failed to read plugin icon: {}", &manifest.icon.display()))?;
+        let icon: Base64 = std::fs::read(&manifest.icon)
+            .with_context(|| anyhow!("Failed to read plugin icon: {}", &manifest.icon.display()))?
+            .into();
 
         {
             log_action(
@@ -127,6 +119,22 @@ impl PluginCommandHandler {
                 }
                 PluginTypeSpecificManifest::App(_) => PluginSpecDto::App(Empty {}),
                 PluginTypeSpecificManifest::Library(_) => PluginSpecDto::Library(Empty {}),
+            };
+
+            let wasm = {
+                let wasm_path = match &manifest.specs {
+                    PluginTypeSpecificManifest::ComponentTransformer(_) => None,
+                    PluginTypeSpecificManifest::OplogProcessor(_) => None,
+                    PluginTypeSpecificManifest::App(spec) => Some(spec.component.clone()),
+                    PluginTypeSpecificManifest::Library(spec) => Some(spec.component.clone()),
+                };
+
+                match wasm_path {
+                    Some(wasm_path) => Some(File::open(&wasm_path).await.with_context(|| {
+                        anyhow!("Failed to open plugin component: {}", wasm_path.display())
+                    })?),
+                    None => None,
+                }
             };
             /*
             Specs::ComponentTransformer(spec) => clients
@@ -216,6 +224,29 @@ impl PluginCommandHandler {
                     .map(|_| ())
                     .map_service_error()?
             }*/
+
+            let clients = self.ctx.golem_clients().await?;
+
+            let result = clients
+                .plugin
+                .create_plugin(
+                    &self.ctx.account_id().await?.0,
+                    &PluginRegistrationCreation {
+                        name: manifest.name,
+                        version: manifest.version,
+                        description: manifest.description,
+                        icon,
+                        homepage: manifest.homepage,
+                        spec,
+                    },
+                    wasm,
+                )
+                .await
+                .map_service_error()?;
+
+            self.ctx
+                .log_handler()
+                .log_view(&PluginRegistrationRegisterView(result));
 
             Ok(())
         }

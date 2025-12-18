@@ -33,6 +33,7 @@ use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::partial_match::ErrorHandler;
+use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::rib_repl::RibReplHandler;
@@ -51,7 +52,6 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{debug, Level};
-use crate::command_handler::plugin::PluginCommandHandler;
 
 mod api;
 mod app;
@@ -366,12 +366,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::Api { subcommand } => {
                 self.ctx.api_handler().handle_command(subcommand).await
             }
-            // TODO: atomic
-            /*
             GolemCliSubcommand::Plugin { subcommand } => {
                 self.ctx.plugin_handler().handle_command(subcommand).await
             }
-            */
             GolemCliSubcommand::Profile { subcommand } => {
                 self.ctx.profile_handler().handle_command(subcommand).await
             }
@@ -502,12 +499,9 @@ impl Handlers for Arc<Context> {
     }
     */
 
-    // TODO: atomic
-    /*
     fn plugin_handler(&self) -> PluginCommandHandler {
         PluginCommandHandler::new(self.clone())
     }
-    */
 
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler {
         ProfileConfigCommandHandler::new(self.clone())

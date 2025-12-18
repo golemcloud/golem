@@ -32,7 +32,6 @@ pub mod worker;
 use crate::command::shared_args::ComponentTemplateName;
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
-use crate::log::LogColorize;
 use anyhow::{anyhow, Context};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -49,7 +48,6 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
 use url::Url;
-
 
 // TODO: move non generic entities into mods
 
@@ -199,7 +197,6 @@ impl From<golem_client::model::Account> for AccountDetails {
         }
     }
 }
-
 
 pub struct NewInteractiveApp {
     pub app_name: ApplicationName,
