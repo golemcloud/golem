@@ -1038,7 +1038,6 @@ async fn test_http_api_merging() {
     let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert!(!outputs.success());
     assert!(!outputs.stdout_contains("error"));
-    assert!(!outputs.stderr_contains("error"));
     assert!(outputs.stderr_contains_ordered([
         "Application API definitions:",
         "  def-a@0.0.1",

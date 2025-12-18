@@ -1396,8 +1396,8 @@ pub mod api {
                 security_scheme_name: SecuritySchemeName,
             },
 
-            // List HTTP API Security Schemes
-            List
+            /// List HTTP API Security Schemes
+            List,
         }
     }
 

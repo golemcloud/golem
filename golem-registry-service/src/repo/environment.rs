@@ -590,14 +590,17 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                                     ON cdr.environment_id = cd.environment_id
                                     AND cdr.revision_id = cd.current_revision_id
                                 WHERE cd.environment_id = environments.environment_id
-                            ) AS m,
+                            ) AS current_deployment_deployment_revision,
 
                             (
-                                SELECT cdr.deployment_version
+                                SELECT dr.version
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
                                     ON cdr.environment_id = cd.environment_id
                                     AND cdr.revision_id = cd.current_revision_id
+                                JOIN deployment_revisions dr
+                                    ON dr.environment_id = cdr.environment_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
                                 WHERE cd.environment_id = environments.environment_id
                             ) AS current_deployment_deployment_version,
 
@@ -703,11 +706,14 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             ) AS current_deployment_deployment_revision,
 
                             (
-                                SELECT cdr.deployment_revision_id
+                                SELECT dr.version
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
                                     ON cdr.environment_id = cd.environment_id
                                     AND cdr.revision_id = cd.current_revision_id
+                                JOIN deployment_revisions dr
+                                    ON dr.environment_id = cdr.environment_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
                                 WHERE cd.environment_id = environments.environment_id
                             ) AS current_deployment_deployment_version,
 
