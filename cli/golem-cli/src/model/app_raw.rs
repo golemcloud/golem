@@ -550,6 +550,8 @@ pub struct Dependency {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginInstallation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub name: String,
     pub version: String,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

@@ -50,6 +50,8 @@ impl EnvironmentCommandHandler {
             EnvironmentSubcommand::SyncDeploymentOptions => {
                 self.cmd_sync_deployment_options().await
             }
+
+            EnvironmentSubcommand::List => self.cmd_list().await,
         }
     }
 
@@ -63,6 +65,29 @@ impl EnvironmentCommandHandler {
             .await?
         {
             log_skipping_up_to_date("updating environment deployment options");
+        }
+
+        Ok(())
+    }
+
+    async fn cmd_list(&self) -> anyhow::Result<()> {
+        let env_summaries = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .list_visible_environments(None, None, None)
+            .await
+            .map_service_error()?
+            .values;
+
+        if env_summaries.is_empty() {
+            logln(format!(
+                "No application environments are available. Use '{}' to create one.",
+                "golem deploy".log_color_highlight()
+            ));
+        } else {
+            self.ctx.log_handler().log_view(&env_summaries);
         }
 
         Ok(())

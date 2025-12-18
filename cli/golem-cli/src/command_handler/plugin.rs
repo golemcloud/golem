@@ -28,7 +28,6 @@ use golem_common::model::plugin_registration::{
     ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginSpecDto,
 };
 use golem_common::model::Empty;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
 use uuid::Uuid;

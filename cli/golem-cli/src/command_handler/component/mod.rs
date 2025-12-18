@@ -129,7 +129,7 @@ impl ComponentCommandHandler {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
-            ComponentSubcommand::Plugin { subcommand } => {
+            ComponentSubcommand::Plugin { subcommand: _subcommand } => {
                 /*self.ctx
                     .component_plugin_handler()
                     .handle_command(subcommand)

@@ -17,6 +17,7 @@ use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
@@ -704,13 +705,10 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ApiSubcommand,
     },
-    // TODO: atomic /// Manage plugins
-    /*
     Plugin {
         #[clap(subcommand)]
         subcommand: PluginSubcommand,
     },
-    */
     /// Manage global CLI profiles
     Profile {
         #[clap(subcommand)]
@@ -939,6 +937,8 @@ pub mod environment {
     pub enum EnvironmentSubcommand {
         /// Check and optionally update environment deployment options
         SyncDeploymentOptions,
+        /// List application environments on the current server
+        List,
     }
 }
 
