@@ -1685,7 +1685,7 @@ impl Default for BindingMapping {
             BindingMappingEntry {
                 module_path: vec![
                     "golem_rust".to_string(),
-                    "wasm_rpc".to_string(),
+                    "golem_wasm".to_string(),
                     "wasi".to_string(),
                     "io".to_string(),
                     "poll".to_string(),
@@ -1704,7 +1704,7 @@ impl Default for BindingMapping {
             BindingMappingEntry {
                 module_path: vec![
                     "golem_rust".to_string(),
-                    "wasm_rpc".to_string(),
+                    "golem_wasm".to_string(),
                     "wasi".to_string(),
                     "clocks".to_string(),
                     "wall_clock".to_string(),
@@ -1723,7 +1723,7 @@ impl Default for BindingMapping {
             BindingMappingEntry {
                 module_path: vec![
                     "golem_rust".to_string(),
-                    "wasm_rpc".to_string(),
+                    "golem_wasm".to_string(),
                     "golem_rpc_0_2_x".to_string(),
                     "types".to_string(),
                 ],
