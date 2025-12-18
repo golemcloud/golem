@@ -1036,16 +1036,18 @@ export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
     promiseUnwrappedType.name === 'UnstructuredBinary' &&
     promiseUnwrappedType.kind === 'union'
   ) {
-    const parameterTypes: Type.Type[] = promiseUnwrappedType.typeParams ?? [];
+    const unstructuredBinaryTypeParameters: Type.Type[] =
+      promiseUnwrappedType.typeParams ?? [];
 
-    if (parameterTypes.length === 0) {
+    if (unstructuredBinaryTypeParameters.length === 0) {
       return Either.right([]);
     }
 
-    const paramType: Type.Type = parameterTypes[0];
+    const unstructuredBinaryTypeParameter: Type.Type =
+      unstructuredBinaryTypeParameters[0];
 
-    if (paramType.kind === 'tuple') {
-      const elem = paramType.elements;
+    if (unstructuredBinaryTypeParameter.kind === 'tuple') {
+      const elem = unstructuredBinaryTypeParameter.elements;
 
       return Either.all(
         elem.map((v) => {
@@ -1059,11 +1061,14 @@ export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
           }
         }),
       );
-    } else if (paramType.kind === 'string') {
+    } else if (unstructuredBinaryTypeParameter.kind === 'string') {
+      // If the type parameter is of `type` string, it implies, we return an empty set of mime-types,
+      // and the absence of restrictions would result in allowing any mime type
       return Either.right([]);
     } else {
       return Either.left(
-        'unknown parameter type for UnstructuredBinary' + paramType.kind,
+        'unknown parameter type for UnstructuredBinary' +
+          unstructuredBinaryTypeParameter.kind,
       );
     }
   }
