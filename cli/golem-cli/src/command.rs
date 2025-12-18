@@ -1423,38 +1423,29 @@ pub mod api {
 }
 
 pub mod plugin {
-    // TODO: atomic
-    /*
+
     use crate::model::PathBufOrStdin;
     use clap::Subcommand;
+    use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
     pub enum PluginSubcommand {
-        /// List component for the select scope
-        List {
-            /// The scope to list components from
-            #[command(flatten)]
-            scope: PluginScopeArgs,
-        },
-        /// Get information about a registered plugin
+        /// List account components
+        List,
+        /// Get
         Get {
-            #[clap(flatten)]
-            plugin: PluginArg,
+            id: Uuid, // TODO: atomic: missing method for looking up by name
         },
-        /// Register a new plugin
+        /// Register a new plugin for the account
         Register {
-            #[command(flatten)]
-            scope: PluginScopeArgs,
             /// Path to the plugin manifest JSON or '-' to use STDIN
             manifest: PathBufOrStdin,
         },
         /// Unregister a plugin
         Unregister {
-            #[clap(flatten)]
-            plugin: PluginArg,
+            id: Uuid, // TODO: atomic: missing method for deleting by name
         },
     }
-    */
 }
 
 pub mod profile {

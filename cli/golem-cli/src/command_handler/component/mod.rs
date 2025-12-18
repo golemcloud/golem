@@ -68,9 +68,8 @@ use std::sync::Arc;
 use url::Url;
 
 pub mod ifs;
-mod staging;
 // TODO: atomic: pub mod plugin;
-// TODO: atomic: pub mod plugin_installation;
+mod staging;
 
 pub struct ComponentCommandHandler {
     ctx: Arc<Context>,
@@ -130,15 +129,11 @@ impl ComponentCommandHandler {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
-            ComponentSubcommand::Plugin { subcommand: _ } => {
-                // TODO: atomic
-                /*
+            ComponentSubcommand::Plugin { subcommand } => {
                 self.ctx
                     .component_plugin_handler()
                     .handle_command(subcommand)
                     .await
-                */
-                todo!()
             }
             ComponentSubcommand::Diagnose { component_name } => {
                 self.cmd_diagnose(component_name).await

@@ -64,18 +64,36 @@ declare_structs! {
 }
 
 impl PluginRegistrationDto {
-    pub fn oplog_processor_component_id(&self) -> Option<ComponentId> {
+    fn component_transformer(&self) -> Option<&ComponentTransformerPluginSpec> {
         match &self.spec {
-            PluginSpecDto::OplogProcessor(inner) => Some(inner.component_id),
+            PluginSpecDto::ComponentTransformer(inner) => Some(inner),
             _ => None,
         }
     }
 
-    pub fn oplog_processor_component_revision(&self) -> Option<ComponentRevision> {
+    fn oplog_processor(&self) -> Option<&OplogProcessorPluginSpec> {
         match &self.spec {
-            PluginSpecDto::OplogProcessor(inner) => Some(inner.component_revision),
+            PluginSpecDto::OplogProcessor(inner) => Some(inner),
             _ => None,
         }
+    }
+
+    pub fn component_transformer_validate_url(&self) -> Option<&str> {
+        self.component_transformer()
+            .map(|inner| inner.validate_url.as_str())
+    }
+
+    pub fn component_transformer_transform_url(&self) -> Option<&str> {
+        self.component_transformer()
+            .map(|inner| inner.transform_url.as_str())
+    }
+
+    pub fn oplog_processor_component_id(&self) -> Option<ComponentId> {
+        self.oplog_processor().map(|inner| inner.component_id)
+    }
+
+    pub fn oplog_processor_component_revision(&self) -> Option<ComponentRevision> {
+        self.oplog_processor().map(|inner| inner.component_revision)
     }
 }
 

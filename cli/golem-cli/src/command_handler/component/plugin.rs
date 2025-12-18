@@ -20,9 +20,8 @@ use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_error_action, log_warn_action, LogIndent};
 use crate::model::text::fmt::log_warn;
 use anyhow::bail;
-use golem_common::base_model::PluginInstallationId;
-use std::sync::Arc;
 use golem_common::model::component::ComponentName;
+use std::sync::Arc;
 
 pub struct ComponentPluginCommandHandler {
     ctx: Arc<Context>,

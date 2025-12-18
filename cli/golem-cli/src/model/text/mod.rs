@@ -24,7 +24,7 @@ pub mod http_api_definition;
 pub mod http_api_deployment;
 pub mod http_api_domain;
 pub mod http_api_security;
-// TODO: atomic pub mod plugin;
+pub mod plugin;
 pub mod profile;
 pub mod server;
 pub mod template;

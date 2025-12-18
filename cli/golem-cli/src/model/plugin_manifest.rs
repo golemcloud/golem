@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::model::{
-    PluginDefinitionCreation, PluginTypeSpecificCreation, PluginTypeSpecificDefinition,
-};
-use golem_common::model::plugin::PluginScope;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -33,7 +29,7 @@ pub enum PluginTypeSpecificManifest {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentTransformerManifest {
     pub provided_wit_package: Option<String>,
-    pub json_schema: Option<String>,
+    pub json_schema: Option<serde_json::Value>,
     pub validate_url: String,
     pub transform_url: String,
 }
