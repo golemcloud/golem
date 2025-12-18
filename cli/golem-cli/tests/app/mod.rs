@@ -58,9 +58,9 @@ use tracing::info;
 use url::Url;
 
 mod cmd {
+    pub static NO_ARGS: &[&str] = &[];
     pub static ADD_DEPENDENCY: &str = "add-dependency";
     pub static AGENT: &str = "agent";
-    pub static APP: &str = "app";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
@@ -86,10 +86,8 @@ mod flag {
 }
 
 mod pattern {
-    pub static ERROR: &str = "error";
     pub static HELP_APPLICATION_COMPONENTS: &str = "Application components:";
     pub static HELP_APPLICATION_CUSTOM_COMMANDS: &str = "Application custom commands:";
-    pub static HELP_COMMANDS: &str = "Commands:";
     pub static HELP_USAGE: &str = "Usage:";
 }
 

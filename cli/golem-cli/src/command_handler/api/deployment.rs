@@ -78,16 +78,26 @@ impl ApiDeploymentCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let clients = self.ctx.golem_clients().await?;
+        let deployments = environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    Ok(self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .api_deployment
+                        .list_http_api_deployments_in_deployment(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                        )
+                        .await
+                        .map_service_error()?
+                        .values)
+                },
+            )
+            .await?;
 
-        let result = clients
-            .api_deployment
-            .list_http_api_deployments_in_environment(&environment.environment_id.0)
-            .await
-            .map_service_error()?
-            .values;
-
-        self.ctx.log_handler().log_view(&result);
+        self.ctx.log_handler().log_view(&deployments);
 
         Ok(())
     }
@@ -98,26 +108,36 @@ impl ApiDeploymentCommandHandler {
         domain: &Domain,
         revision: Option<&HttpApiDeploymentRevision>,
     ) -> anyhow::Result<Option<HttpApiDeployment>> {
-        let clients = self.ctx.golem_clients().await?;
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    let clients = self.ctx.golem_clients().await?;
 
-        let Some(deployment) = clients
-            .api_deployment
-            .get_http_api_deployment_in_environment(&environment.environment_id.0, &domain.0)
+                    let Some(deployment) = clients
+                        .api_deployment
+                        .get_http_api_deployment_in_deployment(
+                            &environment.environment_id.0,
+                            current_deployment_revision.get(),
+                            &domain.0,
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()?
+                    else {
+                        return Ok(None);
+                    };
+
+                    let Some(revision) = revision else {
+                        return Ok(Some(deployment));
+                    };
+
+                    clients
+                        .api_deployment
+                        .get_http_api_deployment_revision(&deployment.id.0, (*revision).into())
+                        .await
+                        .map_service_error_not_found_as_opt()
+                },
+            )
             .await
-            .map_service_error_not_found_as_opt()?
-        else {
-            return Ok(None);
-        };
-
-        let Some(revision) = revision else {
-            return Ok(Some(deployment));
-        };
-
-        clients
-            .api_deployment
-            .get_http_api_deployment_revision(&deployment.id.0, (*revision).into())
-            .await
-            .map_service_error_not_found_as_opt()
     }
 
     pub async fn deployable_manifest_api_deployments(

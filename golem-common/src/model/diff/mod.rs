@@ -37,46 +37,45 @@ use std::collections::{BTreeMap, BTreeSet};
 pub trait Diffable {
     type DiffResult: Serialize;
 
-    fn diff_with_local(&self, local: &Self) -> Option<Self::DiffResult> {
-        Self::diff(local, self)
+    fn diff_with_new(&self, new: &Self) -> Option<Self::DiffResult> {
+        Self::diff(new, self)
     }
 
-    fn diff_with_server(&self, server: &Self) -> Option<Self::DiffResult> {
-        Self::diff(self, server)
+    fn diff_with_current(&self, current: &Self) -> Option<Self::DiffResult> {
+        Self::diff(self, current)
     }
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult>;
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult>;
 
-    fn unified_yaml_diff_with_local(&self, local: &Self, mode: SerializeMode) -> String
+    fn unified_yaml_diff_with_new(&self, new: &Self, mode: SerializeMode) -> String
     where
         Self: Serialize,
     {
-        Self::unified_yaml_diff(local, self, mode)
+        Self::unified_yaml_diff(new, self, mode)
     }
 
-    fn unified_yaml_diff_with_server(&self, server: &Self, mode: SerializeMode) -> String
+    fn unified_yaml_diff_with_current(&self, current: &Self, mode: SerializeMode) -> String
     where
         Self: Serialize,
     {
-        Self::unified_yaml_diff(self, server, mode)
+        Self::unified_yaml_diff(self, current, mode)
     }
 
-    fn unified_yaml_diff(local: &Self, server: &Self, mode: SerializeMode) -> String
+    fn unified_yaml_diff(new: &Self, current: &Self, mode: SerializeMode) -> String
     where
         Self: Serialize,
     {
         unified_diff(
-            to_yaml_with_mode(&server, mode).expect("failed to serialize server"),
-            to_yaml_with_mode(&local, mode).expect("failed to serialize server"),
+            to_yaml_with_mode(&current, mode).expect("failed to serialize current"),
+            to_yaml_with_mode(&new, mode).expect("failed to serialize current"),
         )
     }
 }
 
-pub fn unified_diff(server: impl AsRef<str>, local: impl AsRef<str>) -> String {
-    TextDiff::from_lines(server.as_ref(), local.as_ref())
+pub fn unified_diff(current: impl AsRef<str>, new: impl AsRef<str>) -> String {
+    TextDiff::from_lines(current.as_ref(), new.as_ref())
         .unified_diff()
         .context_radius(4)
-        .header("server", "local")
         .to_string()
 }
 
@@ -110,15 +109,15 @@ where
 {
     type DiffResult = BTreeMapDiff<K, V>;
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
         let mut diff = BTreeMap::new();
 
-        let keys = local.keys().chain(server.keys()).collect::<BTreeSet<_>>();
+        let keys = new.keys().chain(current.keys()).collect::<BTreeSet<_>>();
 
         for key in keys {
-            match (local.get(key), server.get(key)) {
-                (Some(local), Some(server)) => {
-                    if let Some(value_diff) = local.diff_with_server(server) {
+            match (new.get(key), current.get(key)) {
+                (Some(new), Some(current)) => {
+                    if let Some(value_diff) = new.diff_with_current(current) {
                         diff.insert(key.clone(), BTreeMapDiffValue::Update(value_diff));
                     }
                 }
@@ -129,7 +128,7 @@ where
                     diff.insert(key.clone(), BTreeMapDiffValue::Delete);
                 }
                 (None, None) => {
-                    unreachable!("key must be present either in local or server");
+                    unreachable!("key must be present either in new or current");
                 }
             }
         }
@@ -157,13 +156,13 @@ where
 {
     type DiffResult = BTreeSetDiff<K>;
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
         let mut diff = BTreeMap::new();
 
-        let keys = local.iter().chain(server.iter()).collect::<BTreeSet<_>>();
+        let keys = new.iter().chain(current.iter()).collect::<BTreeSet<_>>();
 
         for key in keys {
-            match (local.contains(key), server.contains(key)) {
+            match (new.contains(key), current.contains(key)) {
                 (true, true) => {
                     // NOP, same
                 }

@@ -366,6 +366,7 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
                 == Some(EnvironmentCurrentDeploymentView {
                     revision: deployment_2.current_revision,
                     deployment_revision: deployment_2.revision,
+                    deployment_version: deployment_2.version,
                     deployment_hash: deployment_2.deployment_hash
                 })
         )
@@ -396,6 +397,7 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
                 == Some(EnvironmentCurrentDeploymentView {
                     revision: expected_revision,
                     deployment_revision: deployment_1.revision,
+                    deployment_version: deployment_1.version,
                     deployment_hash: deployment_1.deployment_hash
                 })
         )

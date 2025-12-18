@@ -13,11 +13,9 @@ inherit_test_dep!(Tracing);
 #[test]
 async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
-    check!(outputs.stderr_contains(pattern::HELP_COMMANDS));
-    check!(!outputs.stderr_contains(pattern::ERROR));
     check!(!outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     check!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
 }
@@ -27,9 +25,7 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx
-        .cli([cmd::APP, cmd::NEW, app_name, "typescript", "rust"])
-        .await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "typescript", "rust"]).await;
     assert2::assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -44,11 +40,9 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
         .await;
     assert2::assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
-    check!(outputs.stderr_contains(pattern::HELP_COMMANDS));
-    check!(!outputs.stderr_contains(pattern::ERROR));
     check!(outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     check!(outputs.stderr_contains("app:rust"));
     check!(outputs.stderr_contains("app:typescript"));
@@ -62,7 +56,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert2::assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -73,7 +67,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     assert2::assert!(outputs.success());
 
     // First build
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
@@ -86,35 +80,35 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     );
 
     // Rebuild - 1
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 2
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD, flag::FORCE_BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD, flag::FORCE_BUILD]).await;
     assert2::assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stdout_contains("Finished `dev` profile"));
 
     // Rebuild - 4
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Clean
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
 
     // Rebuild - 5
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
@@ -123,7 +117,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 #[test]
 async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, "dummy-app-name"]).await;
+    let outputs = ctx.cli([cmd::NEW, "dummy-app-name"]).await;
     assert2::assert!(!outputs.success());
     check!(outputs.stdout_contains("Available languages:"));
 
@@ -163,7 +157,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert2::assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -199,7 +193,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
     check!(outputs.stdout_contains_ordered([
         "+      /Cargo.toml:",
@@ -234,7 +228,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
     check!(outputs.stdout_contains_ordered([
         "     filesByPath:",
@@ -253,19 +247,21 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         "      - permissions",
     ]));
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
     assert2::assert!(
         outputs.stdout_contains("Skipping deployment, no changes detected, UP-TO-DATE")
     );
 }
 
+// TODO: atomic: re-enable IF we will have any builtin subcommands for golem app
+#[ignore]
 #[test]
 async fn custom_app_subcommand_with_builtin_name() {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert2::assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -287,11 +283,11 @@ async fn custom_app_subcommand_with_builtin_name() {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     check!(outputs.stderr_contains(":new"));
 
-    let outputs = ctx.cli([cmd::APP, ":new"]).await;
+    let outputs = ctx.cli([":new"]).await;
     assert2::assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }
@@ -305,7 +301,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     let app_name = "test-app-name";
 
     // Setup app
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert2::assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -321,7 +317,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     assert2::assert!(outputs.success());
 
     // Build app
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
 
     // Add wasm-rpc dependencies
@@ -367,7 +363,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
         .await;
     assert2::assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     assert2::assert!(outputs.stderr_contains_ordered([
         "Application components:",
@@ -381,7 +377,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with dynamic deps
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     assert2::assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -392,7 +388,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build again with dynamic deps, now it should skip
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     assert2::assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -445,7 +441,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
         .await;
     assert2::assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     assert2::assert!(outputs.stderr_contains_ordered([
         "Application components:",
@@ -459,7 +455,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with static deps
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     assert2::assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -470,7 +466,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with static deps again, should skip
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     assert2::assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -523,7 +519,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
         .await;
     assert2::assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert2::assert!(!outputs.success());
     assert2::assert!(outputs.stderr_contains_ordered([
         "Application components:",
@@ -537,7 +533,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with dynamic deps, should not skip
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     assert2::assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -548,7 +544,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build again with dynamic deps, now it should skip again
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     assert2::assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",

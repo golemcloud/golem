@@ -257,6 +257,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
@@ -328,6 +329,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
@@ -408,6 +410,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     INNER JOIN applications ap
@@ -490,6 +493,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       0 AS environment_roles_from_shares,
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
+                      NULL AS current_deployment_deployment_version,
                       NULL AS current_deployment_deployment_hash;
                 "# })
                     .bind(revision.environment_id)
@@ -511,6 +515,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                 current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash
             })
         }.boxed()).await
@@ -523,6 +528,16 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         self.with_tx_err("update", |tx| {
             async move {
                 let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
+
+                // TODO: atomic:
+                //       should use something like:
+                //         WITH updated AS (
+                //            UPDATE..
+                //            RETURNING..
+                //         )
+                //         SELECT -- with joins...
+                //       so we avoid selecting the same tables multiple times, same goes for logical DELETE
+
 
                 // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
@@ -578,6 +593,18 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             ) AS current_deployment_deployment_revision,
 
                             (
+                                SELECT dr.version
+                                FROM current_deployments cd
+                                JOIN current_deployment_revisions cdr
+                                    ON cdr.environment_id = cd.environment_id
+                                    AND cdr.revision_id = cd.current_revision_id
+                                JOIN deployment_revisions dr
+                                    ON dr.environment_id = cdr.environment_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_deployment_version,
+
+                            (
                                 SELECT dr.hash
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
@@ -608,6 +635,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                     current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
@@ -678,6 +706,18 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             ) AS current_deployment_deployment_revision,
 
                             (
+                                SELECT dr.version
+                                FROM current_deployments cd
+                                JOIN current_deployment_revisions cdr
+                                    ON cdr.environment_id = cd.environment_id
+                                    AND cdr.revision_id = cd.current_revision_id
+                                JOIN deployment_revisions dr
+                                    ON dr.environment_id = cdr.environment_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_deployment_version,
+
+                            (
                                 SELECT dr.hash
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
@@ -708,6 +748,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                     current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
@@ -761,6 +802,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 -- Current deployment (optional)
                 cdr.revision_id AS current_deployment_revision,
                 dr.revision_id AS current_deployment_deployment_revision,
+                dr.version AS current_deployment_deployment_version,
                 dr.hash AS current_deployment_deployment_hash,
 
                 -- Parent application

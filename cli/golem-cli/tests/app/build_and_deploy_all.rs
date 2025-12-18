@@ -45,7 +45,7 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
 
     println!("{templates:#?}");
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -207,11 +207,11 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         replace_strings_in_file(ctx.cwd_path_join(path), &[(from, to)]).unwrap()
     }
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 }
