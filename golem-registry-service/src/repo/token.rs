@@ -158,7 +158,7 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
     }
 
     async fn get_by_secret(&self, secret: &str) -> RepoResult<Option<TokenRecord>> {
-        self.with_ro("get_by_id")
+        self.with_ro("get_by_secret")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at
