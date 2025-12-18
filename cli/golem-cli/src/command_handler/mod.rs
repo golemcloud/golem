@@ -51,6 +51,7 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{debug, Level};
+use crate::command_handler::plugin::PluginCommandHandler;
 
 mod api;
 mod app;
@@ -411,7 +412,7 @@ pub trait Handlers {
     fn cloud_handler(&self) -> CloudCommandHandler;
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
-    fn component_plugin_handler(&self) -> ComponentPluginCommandHandler;
+    // TODO: atomic: fn component_plugin_handler(&self) -> ComponentPluginCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;

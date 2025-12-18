@@ -130,10 +130,13 @@ impl ComponentCommandHandler {
                     .await
             }
             ComponentSubcommand::Plugin { subcommand } => {
-                self.ctx
+                /*self.ctx
                     .component_plugin_handler()
                     .handle_command(subcommand)
                     .await
+                 */
+                // TODO: atomic
+                todo!()
             }
             ComponentSubcommand::Diagnose { component_name } => {
                 self.cmd_diagnose(component_name).await

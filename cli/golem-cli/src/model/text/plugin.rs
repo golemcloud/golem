@@ -44,7 +44,7 @@ impl From<&PluginRegistrationDto> for PluginRegistrationTableView {
             version: value.version.clone(),
             description: value.description.clone(),
             homepage: value.homepage.clone(),
-            typ: value.typ(),
+            typ: value.typ_as_str().to_string(),
         }
     }
 }
@@ -72,7 +72,7 @@ impl MessageWithFields for PluginRegistrationDto {
             .fmt_field("Version", &self.version, format_main_id)
             .field("Description", &self.description)
             .field("Homepage", &self.homepage)
-            .field("Type", &self.typ())
+            .field("Type", &self.typ_as_str())
             .fmt_field_option(
                 "Validate URL",
                 &self.component_transformer_validate_url(),

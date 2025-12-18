@@ -58,7 +58,7 @@ impl PluginCommandHandler {
 
         let plugin_definitions = clients
             .plugin
-            .get_account_plugins(self.ctx.account_id())
+            .get_account_plugins(&self.ctx.account_id().await?.0)
             .await
             .map_service_error()?
             .values;
@@ -98,93 +98,6 @@ impl PluginCommandHandler {
         let icon = std::fs::read(&manifest.icon)
             .with_context(|| anyhow!("Failed to read plugin icon: {}", &manifest.icon.display()))?;
 
-        let specs = match &manifest.specs {
-            PluginTypeSpecificManifest::ComponentTransformer(spec) => {
-                Specs::ComponentTransformer(ComponentTransformerPluginSpec {
-                    provided_wit_package: spec.provided_wit_package.clone(),
-                    json_schema: spec.json_schema.clone(),
-                    validate_url: spec.validate_url.clone(),
-                    transform_url: spec.transform_url.clone(),
-                })
-            }
-            PluginTypeSpecificManifest::OplogProcessor(spec) => {
-                let component_file = File::open(&spec.component).await.with_context(|| {
-                    anyhow!(
-                        "Failed to open plugin component WASM at {}",
-                        &spec.component.display().to_string().log_color_highlight()
-                    )
-                })?;
-
-                let component_metadata = ComponentMetadata::analyse_component(
-                    &std::fs::read(&spec.component).with_context(|| {
-                        anyhow!(
-                            "Failed to read plugin component WASM from {}",
-                            &spec.component.display().to_string().log_color_highlight()
-                        )
-                    })?,
-                    HashMap::new(),
-                    vec![],
-                )?;
-
-                let component_name =
-                    if let Some(package_name) = component_metadata.root_package_name() {
-                        ComponentName(package_name.clone())
-                    } else {
-                        ComponentName(format!("oplog-processor:{}", manifest.name.to_kebab_case()))
-                    };
-
-                let component = {
-                    log_action(
-                        "Uploading",
-                        format!("oplog processor component: {component_name}"),
-                    );
-                    let _indent = LogIndent::new();
-
-                    let clients = self.ctx.golem_clients().await?;
-
-                    // TODO: already existing is not handled here, let's do that when we make it part of the manifest
-                    let component = clients
-                        .component
-                        .create_component(
-                            &ComponentQuery {
-                                project_id: scope_project.as_ref().map(|p| p.project_id.0),
-                                component_name: component_name.0.clone(),
-                            },
-                            component_file,
-                            None,
-                            None::<File>,
-                            None,
-                            None, // TODO: component env
-                            None,
-                        )
-                        .await
-                        .map(Component::from)
-                        .map_service_error()?;
-
-                    log_action(
-                        "Uploaded",
-                        format!(
-                            "oplog processor component {} as {}/{}",
-                            component_name.0.log_color_highlight(),
-                            component.versioned_component_id.component_id,
-                            component.versioned_component_id.version
-                        ),
-                    );
-
-                    component
-                };
-
-                Specs::ComponentTransformerOrOplogProcessor(
-                    PluginTypeSpecificCreation::OplogProcessor(OplogProcessorDefinition {
-                        component_id: component.versioned_component_id.component_id,
-                        component_version: component.versioned_component_id.version,
-                    }),
-                )
-            }
-            PluginTypeSpecificManifest::App(specs) => Specs::App(specs.component.clone()),
-            PluginTypeSpecificManifest::Library(specs) => Specs::Library(specs.component.clone()),
-        };
-
         {
             log_action(
                 "Registering",
@@ -197,8 +110,67 @@ impl PluginCommandHandler {
 
             let _indent = LogIndent::new();
 
-            match specs {
-                Specs::ComponentTransformer(spec) => clients
+            let spec = match &manifest.specs {
+                PluginTypeSpecificManifest::ComponentTransformer(spec) => {
+                    PluginSpecDto::ComponentTransformer(ComponentTransformerPluginSpec {
+                        provided_wit_package: spec.provided_wit_package.clone(),
+                        json_schema: spec.json_schema.clone(),
+                        validate_url: spec.validate_url.clone(),
+                        transform_url: spec.transform_url.clone(),
+                    })
+                }
+                PluginTypeSpecificManifest::OplogProcessor(spec) => {
+                    PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                        component_id: spec.component_id.into(),
+                        component_revision: spec.component_revision.clone(),
+                    })
+                }
+                PluginTypeSpecificManifest::App(_) => PluginSpecDto::App(Empty {}),
+                PluginTypeSpecificManifest::Library(_) => PluginSpecDto::Library(Empty {}),
+            };
+            /*
+            Specs::ComponentTransformer(spec) => clients
+                .plugin
+                .create_plugin(
+                    &self.ctx.account_id().await?.0,
+                    &PluginRegistrationCreation {
+                        name: manifest.name,
+                        version: manifest.version,
+                        description: manifest.description,
+                        icon: icon.into(),
+                        homepage: manifest.homepage,
+                        spec: PluginSpecDto::ComponentTransformer(spec),
+                    },
+                    None::<&[u8]>,
+                )
+                .await
+                .map(|_| ())
+                .map_service_error()?,
+            Specs::OplogProcessor(spec) => clients
+                .plugin
+                .create_plugin(
+                    &self.ctx.account_id().await?.0,
+                    &PluginRegistrationCreation {
+                        name: manifest.name,
+                        version: manifest.version,
+                        description: manifest.description,
+                        icon: icon.into(),
+                        homepage: manifest.homepage,
+                        spec: PluginSpecDto::OplogProcessor(spec),
+                    },
+                    None::<&[u8]>,
+                )
+                .await
+                .map(|_| ())
+                .map_service_error()?,
+            Specs::App(wasm) => {
+                let wasm = File::open(&wasm).await.with_context(|| {
+                    anyhow!("Failed to open app plugin component: {}", wasm.display())
+                })?;
+
+                let clients = self.ctx.golem_clients().await?;
+
+                clients
                     .plugin
                     .create_plugin(
                         self.ctx.account_id(),
@@ -206,89 +178,47 @@ impl PluginCommandHandler {
                             name: manifest.name,
                             version: manifest.version,
                             description: manifest.description,
-                            icon,
+                            icon: icon.into(),
                             homepage: manifest.homepage,
-                            spec: PluginSpecDto::ComponentTransformer(spec),
+                            spec: PluginSpecDto::App(Empty {}),
                         },
-                        None::<&[u8]>,
+                        Some(wasm),
                     )
                     .await
                     .map(|_| ())
-                    .map_service_error()?,
-                Specs::OplogProcessor(spec) => clients
-                    .plugin
-                    .create_plugin(
-                        self.ctx.account_id(),
-                        &PluginRegistrationCreation {
-                            name: manifest.name,
-                            version: manifest.version,
-                            description: manifest.description,
-                            icon,
-                            homepage: manifest.homepage,
-                            spec: PluginSpecDto::OplogProcessor(spec),
-                        },
-                        None::<&[u8]>,
-                    )
-                    .await
-                    .map(|_| ())
-                    .map_service_error()?,
-                Specs::App(wasm) => {
-                    let wasm = File::open(&wasm).await.with_context(|| {
-                        anyhow!("Failed to open app plugin component: {}", wasm.display())
-                    })?;
-
-                    let clients = self.ctx.golem_clients().await?;
-
-                    clients
-                        .plugin
-                        .create_plugin(
-                            self.ctx.account_id(),
-                            &PluginRegistrationCreation {
-                                name: manifest.name,
-                                version: manifest.version,
-                                description: manifest.description,
-                                icon,
-                                homepage: manifest.homepage,
-                                spec: PluginSpecDto::App(Empty {}),
-                            },
-                            wasm,
-                        )
-                        .await
-                        .map(|_| ())
-                        .map_service_error()?
-                }
-                Specs::Library(wasm) => {
-                    let wasm = File::open(&wasm).await.with_context(|| {
-                        anyhow!(
-                            "Failed to open library plugin component: {}",
-                            wasm.display()
-                        )
-                    })?;
-
-                    let clients = self.ctx.golem_clients().await?;
-
-                    clients
-                        .plugin
-                        .create_plugin(
-                            self.ctx.account_id(),
-                            &PluginRegistrationCreation {
-                                name: manifest.name,
-                                version: manifest.version,
-                                description: manifest.description,
-                                icon,
-                                homepage: manifest.homepage,
-                                spec: PluginSpecDto::Library(Empty {}),
-                            },
-                            wasm,
-                        )
-                        .await
-                        .map(|_| ())
-                        .map_service_error()?
-                }
+                    .map_service_error()?
             }
-        }
+            Specs::Library(wasm) => {
+                let wasm = File::open(&wasm).await.with_context(|| {
+                    anyhow!(
+                        "Failed to open library plugin component: {}",
+                        wasm.display()
+                    )
+                })?;
 
-        Ok(())
+                let clients = self.ctx.golem_clients().await?;
+
+                clients
+                    .plugin
+                    .create_plugin(
+                        self.ctx.account_id(),
+                        &PluginRegistrationCreation {
+                            name: manifest.name,
+                            version: manifest.version,
+                            description: manifest.description,
+                            icon,
+                            homepage: manifest.homepage,
+                            spec: PluginSpecDto::Library(Empty {}),
+                        },
+                        wasm,
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?
+            }*/
+
+            Ok(())
+        }
     }
 
     async fn cmd_unregister(&self, id: Uuid) -> anyhow::Result<()> {

@@ -200,43 +200,6 @@ impl From<golem_client::model::Account> for AccountDetails {
     }
 }
 
-impl From<golem_client::model::PluginDefinition> for PluginDefinition {
-    fn from(value: golem_client::model::PluginDefinition) -> Self {
-        let mut plugin_definition = Self {
-            name: value.name,
-            version: value.version,
-            description: value.description,
-            homepage: value.homepage,
-            scope: value.scope.to_string(),
-            typ: "".to_string(),
-            component_transformer_validate_url: None,
-            component_transformer_transform_url: None,
-            oplog_processor_component_id: None,
-            oplog_processor_component_version: None,
-        };
-
-        match value.specs {
-            PluginTypeSpecificDefinition::ComponentTransformer(specs) => {
-                plugin_definition.typ = "Component Transformer".to_string();
-                plugin_definition.component_transformer_validate_url = Some(specs.validate_url);
-                plugin_definition.component_transformer_transform_url = Some(specs.transform_url);
-            }
-            PluginTypeSpecificDefinition::OplogProcessor(specs) => {
-                plugin_definition.typ = "Oplog Processor".to_string();
-                plugin_definition.oplog_processor_component_id =
-                    Some(specs.component_id.to_string());
-                plugin_definition.oplog_processor_component_version = Some(specs.component_version);
-            }
-            PluginTypeSpecificDefinition::Library(_) => {
-                plugin_definition.typ = "Library".to_string();
-            }
-            PluginTypeSpecificDefinition::App(_) => plugin_definition.typ = "App".to_string(),
-        };
-
-        plugin_definition
-    }
-}
-
 
 pub struct NewInteractiveApp {
     pub app_name: ApplicationName,

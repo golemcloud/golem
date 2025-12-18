@@ -29,6 +29,12 @@ use std::ops::{Deref, DerefMut};
 #[desert(transparent)]
 pub struct Base64(pub Vec<u8>);
 
+impl From<Vec<u8>> for Base64 {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
 impl Deref for Base64 {
     type Target = Vec<u8>;
 

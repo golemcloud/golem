@@ -95,6 +95,15 @@ impl PluginRegistrationDto {
     pub fn oplog_processor_component_revision(&self) -> Option<ComponentRevision> {
         self.oplog_processor().map(|inner| inner.component_revision)
     }
+
+    pub fn typ_as_str(&self) -> &'static str {
+        match &self.spec {
+            PluginSpecDto::ComponentTransformer(_) => "component transformer",
+            PluginSpecDto::OplogProcessor(_) => "oplog processor",
+            PluginSpecDto::App(_) => "app",
+            PluginSpecDto::Library(_) => "library",
+        }
+    }
 }
 
 declare_unions! {
