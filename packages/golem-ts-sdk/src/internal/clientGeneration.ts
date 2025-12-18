@@ -38,7 +38,6 @@ import { AgentConstructorParamRegistry } from './registry/agentConstructorParamR
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { deserialize } from './mapping/values/deserializer';
 import {
-  matchesType,
   serializeBinaryReferenceTsValue,
   serializeDefaultTsValue,
   serializeTextReferenceTsValue,
@@ -49,11 +48,12 @@ import { TypeInfoInternal } from './registry/typeInfoInternal';
 import {
   createSingleElementTupleDataValue,
   deserializeDataValue,
-  ParameterDetail,
+  ParameterDetail, serializeToDataValue,
 } from './mapping/values/dataValue';
 import { randomUuid } from '../host/hostapi';
 import { convertAgentMethodNameToKebab } from './mapping/types/stringFormat';
 import { AgentId } from '../agentId';
+import * as util from 'node:util';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
@@ -181,6 +181,27 @@ class WasmRpxProxyHandlerShared {
 
   constructAgentId(args: any[], phantomId?: Uuid): wasmRpc.AgentId {
     const registeredAgentType = this.getRegisteredAgentType();
+
+    if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
+        const dataValueEither = serializeToDataValue(args[0], this.constructorParamTypes[0]);
+
+        if (Either.isLeft(dataValueEither)) {
+          throw new Error(
+            `Failed to serialize multimodal constructor argument: ${dataValueEither.val}. Input is ${util.format(args)}`,
+          );
+        }
+
+        const agentId = makeAgentId(
+          this.agentClassName.value,
+          dataValueEither.val,
+          phantomId,
+        );
+
+      return {
+        componentId: registeredAgentType.implementedBy,
+        agentId: agentId,
+      };
+    }
 
     const elementValues: ElementValue[] = [];
     for (const [index, arg] of args.entries()) {

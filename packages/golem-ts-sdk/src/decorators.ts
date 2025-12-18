@@ -313,6 +313,8 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
+        instance.getId = () => agentId;
+
         const resolvedAgent = new ResolvedAgent(
           instance,
           agentClassName,
