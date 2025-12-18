@@ -2,7 +2,6 @@ use crate::app::{check_component_metadata, cmd, flag, pattern, TestContext};
 use crate::Tracing;
 use assert2::check;
 use golem_cli::fs;
-use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_templates::model::GuestLanguage;
 use indoc::indoc;
 use std::path::Path;

@@ -225,6 +225,7 @@ impl Output {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     fn stderr_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
         self.stderr
             .iter()
