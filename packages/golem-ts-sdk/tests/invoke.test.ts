@@ -561,7 +561,7 @@ test('Invoke function that takes and returns inbuilt result type with undefined'
   );
 });
 
-test('Invoke function that takes and returns multimodal', () => {
+test('Invoke function that takes and returns multimodal default', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);

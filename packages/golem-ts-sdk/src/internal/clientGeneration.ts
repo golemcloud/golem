@@ -590,7 +590,7 @@ function deserializeRpcResult(
       )[0];
 
     case 'multimodal':
-      const multimodalParamInfo: ParameterDetail[] = typeInfoInternal.types;
+      const multimodalParamsInfo: ParameterDetail[] = typeInfoInternal.types;
 
       switch (rpcResult.kind) {
         // A multimodal value is always a list
@@ -602,7 +602,7 @@ function deserializeRpcResult(
               switch (value.kind) {
                 case 'variant':
                   const caseIdx = value.caseIdx;
-                  const paramDetail = multimodalParamInfo[caseIdx];
+                  const paramDetail = multimodalParamsInfo[caseIdx];
                   const caseValue = value.caseValue;
 
                   if (!caseValue) {
@@ -632,7 +632,12 @@ function deserializeRpcResult(
           };
 
           return Either.getOrThrowWith(
-            deserializeDataValue(dataValue, multimodalParamInfo),
+            deserializeDataValue(dataValue, [
+              {
+                name: 'return-value',
+                type: typeInfoInternal,
+              },
+            ]),
             (err) =>
               new Error(
                 `Failed to deserialize multimodal return value: ${err}`,
