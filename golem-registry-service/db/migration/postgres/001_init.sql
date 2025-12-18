@@ -115,7 +115,7 @@ CREATE INDEX oauth2_tokens_account_idx
 CREATE TABLE oauth2_web_flow_states
 (
     state_id   UUID      NOT NULL,
-    metadata   BYTEA     NOT NULL,
+    metadata   JSONB     NOT NULL,
     token_id   UUID      NULL,
     created_at TIMESTAMP NOT NULL,
     CONSTRAINT oauth2_web_flow_states_pk PRIMARY KEY (state_id),
