@@ -54,7 +54,7 @@ impl DomainRegistrationsApi {
 
     /// Create a new domain registration in the environment
     #[oai(
-        path = "/:environment_id/domain-registrations",
+        path = "/envs/:environment_id/domain-registrations",
         method = "post",
         operation_id = "create_domain_registration",
         tag = ApiTags::Environment,
@@ -96,7 +96,7 @@ impl DomainRegistrationsApi {
 
     /// List all domain registrations in the environment
     #[oai(
-        path = "/:environment_id/domain-registrations",
+        path = "/envs/:environment_id/domain-registrations",
         method = "get",
         operation_id = "list_environment_domain_registrations",
         tag = ApiTags::Environment,
