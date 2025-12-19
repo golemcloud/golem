@@ -444,7 +444,8 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
         rpcResult.tag === 'err'
           ? (() => {
               throw new Error(
-                'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
+                'Remote agent returned error result: ' +
+                  JSON.stringify(rpcResult.val),
               );
             })()
           : rpcResult.val;
