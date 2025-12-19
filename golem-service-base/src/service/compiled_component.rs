@@ -31,15 +31,15 @@ use wasmtime::component::Component;
 pub trait CompiledComponentService: Send + Sync {
     async fn get(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_version: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError>;
     async fn put(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_version: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError>;
@@ -106,7 +106,7 @@ impl DefaultCompiledComponentService {
         Self { blob_storage }
     }
 
-    fn key(component_id: &ComponentId, component_version: ComponentRevision) -> PathBuf {
+    fn key(component_id: ComponentId, component_version: ComponentRevision) -> PathBuf {
         Path::new(&component_id.to_string()).join(format!("{component_version}.cwasm"))
     }
 }
@@ -115,8 +115,8 @@ impl DefaultCompiledComponentService {
 impl CompiledComponentService for DefaultCompiledComponentService {
     async fn get(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_version: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
@@ -125,9 +125,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .get_raw(
                 "compiled_component",
                 "get",
-                BlobStorageNamespace::CompilationCache {
-                    environment_id: *environment_id,
-                },
+                BlobStorageNamespace::CompilationCache { environment_id },
                 &Self::key(component_id, component_version),
             )
             .await
@@ -142,7 +140,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                     let component = unsafe {
                         Component::deserialize(engine, &bytes).map_err(|err| {
                             WorkerExecutorError::component_download_failed(
-                                *component_id,
+                                component_id,
                                 component_version,
                                 format!("Could not deserialize compiled component: {err}"),
                             )
@@ -162,7 +160,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 Ok(Some(component))
             }
             Err(err) => Err(WorkerExecutorError::component_download_failed(
-                *component_id,
+                component_id,
                 component_version,
                 format!("Could not download compiled component: {err}"),
             )),
@@ -171,8 +169,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
 
     async fn put(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_version: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError> {
@@ -183,16 +181,14 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .put_raw(
                 "compiled_component",
                 "put",
-                BlobStorageNamespace::CompilationCache {
-                    environment_id: *environment_id,
-                },
+                BlobStorageNamespace::CompilationCache { environment_id },
                 &Self::key(component_id, component_version),
                 &bytes,
             )
             .await
             .map_err(|err| {
                 WorkerExecutorError::component_download_failed(
-                    *component_id,
+                    component_id,
                     component_version,
                     format!("Could not store compiled component: {err}"),
                 )
@@ -218,8 +214,8 @@ impl CompiledComponentServiceDisabled {
 impl CompiledComponentService for CompiledComponentServiceDisabled {
     async fn get(
         &self,
-        _environment_id: &EnvironmentId,
-        _component_id: &ComponentId,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
         _component_version: ComponentRevision,
         _engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
@@ -228,8 +224,8 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
 
     async fn put(
         &self,
-        _environment_id: &EnvironmentId,
-        _component_id: &ComponentId,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
         _component_version: ComponentRevision,
         _component: &Component,
     ) -> Result<(), WorkerExecutorError> {

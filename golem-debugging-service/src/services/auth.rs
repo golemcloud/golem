@@ -20,14 +20,13 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
 use std::sync::Arc;
-use tracing::error;
 
 #[async_trait]
 pub trait AuthService: Send + Sync {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
     async fn check_user_allowed_to_debug_in_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<(), AuthServiceError>;
 }
@@ -80,7 +79,7 @@ impl AuthService for GrpcAuthService {
 
     async fn check_user_allowed_to_debug_in_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<(), AuthServiceError> {
         let auth_details = self
@@ -94,7 +93,7 @@ impl AuthService for GrpcAuthService {
 
         auth_ctx
             .authorize_environment_action(
-                &auth_details.account_id_owning_environment,
+                auth_details.account_id_owning_environment,
                 &auth_details.environment_roles_from_shares,
                 EnvironmentAction::DebugWorker,
             )

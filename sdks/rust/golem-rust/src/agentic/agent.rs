@@ -39,7 +39,7 @@ pub trait Agent {
         phantom_id.map(|id| id.into())
     }
 
-    async fn load_snapshot_base(&self, bytes: Vec<u8>) -> Result<(), String>;
+    async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String>;
 
     async fn save_snapshot_base(&self) -> Result<Vec<u8>, String>;
 }

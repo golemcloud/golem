@@ -14,8 +14,6 @@ import "golem/component/component.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
 import "golem/component/dynamic_linked_instance.proto";
-import "golem/component/plugin_installation.proto";
-import "golem/component/plugin_registration.proto";
 import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
@@ -34,14 +32,11 @@ service RegistryService {
   rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
   rpc BatchUpdateFuelUsage (BatchUpdateFuelUsageRequest) returns (BatchUpdateFuelUsageResponse);
 
-  // plugins api
-  rpc GetPluginRegistrationById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
-
   // components api
   rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
   rpc GetComponentMetadata(GetComponentMetadataRequest) returns (GetComponentMetadataResponse);
-  rpc GetLatestComponentMetadata (GetLatestComponentMetadataRequest) returns (GetLatestComponentMetadataResponse);
-  rpc GetAllComponentVersions (GetAllComponentVersionsRequest) returns (GetAllComponentVersionsResponse);
+  rpc GetDeployedComponentMetadata (GetDeployedComponentMetadataRequest) returns (GetDeployedComponentMetadataResponse);
+  rpc GetAllDeployedComponentRevisions (GetAllDeployedComponentRevisionsRequest) returns (GetAllDeployedComponentRevisionsResponse);
   rpc ResolveComponent (ResolveComponentRequest) returns (ResolveComponentResponse);
 
   // agent types api
@@ -86,7 +81,6 @@ message GetAuthDetailsForEnvironmentSuccessResponse {
 
 message GetResourceLimitsRequest {
   golem.common.AccountId accountId = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message GetResourceLimitsResponse {
@@ -104,7 +98,6 @@ message UpdateWorkerLimitRequest {
   golem.common.AccountId accountId = 1;
   golem.worker.WorkerId workerId = 2;
   bool added = 3;
-  golem.auth.AuthCtx auth_ctx = 4;
 }
 
 message UpdateWorkerLimitResponse {
@@ -118,7 +111,6 @@ message UpdateWorkerConnectionLimitRequest {
   golem.common.AccountId accountId = 1;
   golem.worker.WorkerId workerId = 2;
   bool added = 3;
-  golem.auth.AuthCtx auth_ctx = 4;
 }
 
 message UpdateWorkerConnectionLimitResponse {
@@ -130,7 +122,6 @@ message UpdateWorkerConnectionLimitResponse {
 
 message BatchUpdateFuelUsageRequest {
   repeated golem.registry.FuelUsageUpdate updates = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message BatchUpdateFuelUsageResponse {
@@ -144,26 +135,9 @@ message BatchUpdateFuelUsageSuccessResponse {
   golem.common.AccountResourceLimits account_resource_limits = 1;
 }
 
-message GetPluginRegistrationByIdRequest {
-  golem.component.PluginRegistrationId id = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
-}
-
-message GetPluginRegistrationByIdResponse {
-  oneof result {
-    GetPluginRegistrationByIdSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message GetPluginRegistrationByIdSuccessResponse {
-  golem.component.PluginRegistration plugin = 1;
-}
-
 message DownloadComponentRequest {
   golem.component.ComponentId componentId = 1;
   uint64 version = 2;
-  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message DownloadComponentResponse {
@@ -176,7 +150,6 @@ message DownloadComponentResponse {
 message GetComponentMetadataRequest {
   golem.component.ComponentId componentId = 1;
   uint64 version = 2;
-  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message GetComponentMetadataResponse {
@@ -190,35 +163,33 @@ message GetComponentMetadataSuccessResponse {
   golem.component.Component component = 1;
 }
 
-message GetLatestComponentMetadataRequest {
+message GetDeployedComponentMetadataRequest {
   golem.component.ComponentId componentId = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
 }
 
-message GetLatestComponentMetadataResponse {
+message GetDeployedComponentMetadataResponse {
   oneof result {
-    GetLatestComponentMetadataSuccessResponse success = 1;
+    GetDeployedComponentMetadataSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
 }
 
-message GetLatestComponentMetadataSuccessResponse {
+message GetDeployedComponentMetadataSuccessResponse {
   golem.component.Component component = 1;
 }
 
-message GetAllComponentVersionsRequest {
+message GetAllDeployedComponentRevisionsRequest {
   golem.component.ComponentId componentId = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
 }
 
-message GetAllComponentVersionsResponse {
+message GetAllDeployedComponentRevisionsResponse {
   oneof result {
-    GetAllComponentVersionsSuccessResponse success = 1;
+    GetAllDeployedComponentRevisionsSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
 }
 
-message GetAllComponentVersionsSuccessResponse {
+message GetAllDeployedComponentRevisionsSuccessResponse {
   repeated golem.component.Component components = 1;
 }
 
@@ -227,7 +198,6 @@ message ResolveComponentRequest {
   golem.common.ApplicationId resolving_application_id = 2;
   golem.common.EnvironmentId resolving_environment_id = 3;
   string component_slug = 4;
-  golem.auth.AuthCtx auth_ctx = 5;
 }
 
 message ResolveComponentResponse {
@@ -243,6 +213,8 @@ message ResolveComponentSuccessResponse {
 
 message GetAllAgentTypesRequest {
   golem.common.EnvironmentId environment_id = 1;
+  golem.component.ComponentId component_id = 2;
+  uint64 component_revision = 3;
 }
 
 message GetAllAgentTypesResponse {
@@ -258,7 +230,9 @@ message GetAllAgentTypesSuccessResponse {
 
 message GetAgentTypeRequest {
   golem.common.EnvironmentId environment_id = 1;
-  string agentType = 2;
+  golem.component.ComponentId component_id = 2;
+  uint64 component_revision = 3;
+  string agentType = 4;
 }
 
 message GetAgentTypeResponse {

@@ -28,7 +28,7 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
     HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
-    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
     HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
@@ -130,9 +130,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
-        account_id: &AccountId,
+        account_id: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_revision: Option<ComponentRevision>,
@@ -147,7 +146,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 deps,
                 owned_worker_id,
                 account_id,
-                worker_args,
                 worker_env,
                 worker_wasi_config_vars,
                 component_revision,
@@ -160,9 +158,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
-        account_id: &AccountId,
+        account_id: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -176,7 +173,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             account_id,
             owned_worker_id,
-            worker_args,
             worker_env,
             worker_wasi_config_vars,
             component_version,
@@ -220,7 +216,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         account_id: &AccountId,
         owned_worker_id: OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -238,7 +233,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             account_id,
             &owned_worker_id,
             component_version,
-            worker_args,
             worker_env,
             worker_config,
             parent,
@@ -1443,7 +1437,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         component_revision: Option<ComponentRevision>,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         parent: Option<WorkerId>,
@@ -1469,7 +1462,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_component = this
                     .component_service()
                     .get_metadata(
-                        &component_id,
+                        component_id,
                         Some(initial_worker_metadata.last_known_status.component_revision),
                     )
                     .await?;
@@ -1532,7 +1525,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Create and initialize a new worker.
                 let component = this
                     .component_service()
-                    .get_metadata(&component_id, component_revision)
+                    .get_metadata(component_id, component_revision)
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
@@ -1591,7 +1584,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
-                    args: worker_args.unwrap_or_default(),
                     env: worker_env,
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
                     environment_id: owned_worker_id.environment_id(),
@@ -1608,7 +1600,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.worker_id.clone(),
                     initial_worker_metadata.last_known_status.component_revision,
-                    initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
                     initial_worker_metadata.environment_id,
                     initial_worker_metadata.created_by,
@@ -1968,7 +1959,7 @@ impl RunningWorker {
 
             match parent
                 .component_service()
-                .get(&parent.engine(), &component_id, component_version)
+                .get(&parent.engine(), component_id, component_version)
                 .await
             {
                 Ok((component, component_metadata)) => {
@@ -2015,7 +2006,7 @@ impl RunningWorker {
 
         let context = Ctx::create(
             worker_metadata.created_by,
-            OwnedWorkerId::new(&worker_metadata.environment_id, &worker_metadata.worker_id),
+            OwnedWorkerId::new(worker_metadata.environment_id, &worker_metadata.worker_id),
             parent.agent_id.clone(),
             parent.promise_service(),
             parent.worker_service(),
@@ -2035,7 +2026,6 @@ impl RunningWorker {
             parent.extra_deps(),
             parent.config(),
             WorkerConfig::new(
-                worker_metadata.args.clone(),
                 worker_metadata.last_known_status.skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
@@ -2044,7 +2034,6 @@ impl RunningWorker {
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
-            parent.plugins(),
             parent.worker_fork_service(),
             parent.resource_limits(),
             parent.agent_types(),
@@ -2056,35 +2045,22 @@ impl RunningWorker {
 
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
+
         store.set_epoch_deadline(parent.config().limits.epoch_ticks);
-        let worker_id_clone = worker_metadata.worker_id.clone();
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
-            if store.data().is_out_of_fuel(current_level as i64) {
-                debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                store.data_mut().borrow_fuel_sync(current_level as i64);
-            }
-            // If we are still out of fuel after borrowing it means we exceeded the limits for the account
-            // and cannot borrow more. Only thing to do is suspend and try later.
-            if store.data().is_out_of_fuel(current_level as i64) {
-                debug!("{worker_id_clone} could not borrow more fuel, suspending");
-
-                // TODO: The following edge case should be improved. If there are no other workers for the account
-                // of the worker and the resource limits are updated in the cloud service (end of month, plan change)
-                // the current resource limits logic will not pick that up. It will still be picked up after a few attempts
-                // at resuming the worker (after the first usage update is sent) or an instance restart, but we should have better ux here.
+            let data_mut = store.data_mut();
+            if !data_mut.borrow_fuel(current_level) {
+                warn!("Could not borrow more fuel, suspending");
                 return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
 
-            match store.data_mut().check_interrupt() {
+            match data_mut.check_interrupt() {
                 Some(kind) => Err(kind.into()),
                 None => Ok(UpdateDeadline::Yield(1)),
             }
         });
-
-        let initial_fuel_level = i64::MAX;
-        store.set_fuel(initial_fuel_level as u64)?;
-        store.data_mut().borrow_fuel(initial_fuel_level).await?; // Borrowing fuel for initialization and also to make sure account is in cache
+        store.set_fuel(u64::MAX)?;
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 

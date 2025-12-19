@@ -49,14 +49,14 @@ pub struct DeploymentDiff {
 impl Diffable for Deployment {
     type DiffResult = DeploymentDiff;
 
-    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
-        let components = local.components.diff_with_server(&remote.components);
-        let http_api_definitions = local
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let components = new.components.diff_with_current(&current.components);
+        let http_api_definitions = new
             .http_api_definitions
-            .diff_with_server(&remote.http_api_definitions);
-        let http_api_deployments = local
+            .diff_with_current(&current.http_api_definitions);
+        let http_api_deployments = new
             .http_api_deployments
-            .diff_with_server(&remote.http_api_deployments);
+            .diff_with_current(&current.http_api_deployments);
 
         if components.is_some() || http_api_definitions.is_some() || http_api_deployments.is_some()
         {

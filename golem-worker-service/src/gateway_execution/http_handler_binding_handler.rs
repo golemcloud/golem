@@ -15,6 +15,7 @@
 use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetails};
 use bytes::Bytes;
+use golem_common::model::account::AccountId;
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_common::{virtual_exports, widen_infallible};
 use golem_wasm::ValueAndType;
@@ -39,6 +40,7 @@ impl HttpHandlerBindingHandler {
         &self,
         worker_detail: &WorkerDetails,
         incoming_http_request: IncomingHttpRequest,
+        account_id: AccountId,
     ) -> HttpHandlerBindingResult {
         let type_annotated_param = ValueAndType::new(
             incoming_http_request.to_value(),
@@ -61,7 +63,10 @@ impl HttpHandlerBindingHandler {
             invocation_context: worker_detail.invocation_context.clone(),
         };
 
-        let response = self.worker_request_executor.execute(resolved_request).await;
+        let response = self
+            .worker_request_executor
+            .execute(resolved_request, account_id)
+            .await;
 
         match response {
             Ok(_) => {

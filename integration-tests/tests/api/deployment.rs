@@ -56,7 +56,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
+                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -76,7 +76,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     // Summary of the deployed deployment is the same as the original plan
     {
         let fetched_deployment = client
-            .get_deployment_summary(&env.id.0, deployment.revision.0)
+            .get_deployment_summary(&env.id.0, deployment.revision.into())
             .await?;
         assert!(fetched_deployment.deployment_hash == plan.deployment_hash);
         assert!(fetched_deployment.components == plan.components);
@@ -133,7 +133,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
+                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -165,7 +165,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: Some(deployment_1.current_revision),
                 expected_deployment_hash:
-                    "cbb574e689f0dddb384a5a412c51e0bd6a2d3012c0b49fe44fee03417aaeaf31".parse()?,
+                    "358099fef347618289be7f61eb52e4f230fd9f282f525fa89e1ba197bee93a40".parse()?,
                 version: DeploymentVersion("0.0.2".to_string()),
             },
         )
@@ -175,7 +175,7 @@ async fn get_component_version_from_previous_deployment(
         let fetched_component = client
             .get_deployment_component(
                 &env.id.0,
-                deployment_1.revision.0,
+                deployment_1.revision.into(),
                 &component.component_name.0,
             )
             .await?;
@@ -186,7 +186,7 @@ async fn get_component_version_from_previous_deployment(
         let fetched_component = client
             .get_deployment_component(
                 &env.id.0,
-                deployment_2.revision.0,
+                deployment_2.revision.into(),
                 &component.component_name.0,
             )
             .await?;
@@ -258,38 +258,39 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let expected_hash =
-        Hash::from_str("d8a9303765bdee53aa7f17d0d6f634d4714fa42d4984862e7f0d24101ef863c8")?;
-    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+        Hash::from_str("8ea5f5a111eb829d2f2d61583ae3fc0fc7723c22605726b3a14ac4c2ef4f2a35")?;
+
+    let expected_plan = DeploymentPlan {
+        current_revision: None,
+        deployment_hash: expected_hash,
+        components: vec![DeploymentPlanComponentEntry {
+            id: component.id,
+            revision: component.revision,
+            name: ComponentName("shopping-cart".to_string()),
+            hash: Hash::from_str(
+                "fcab9dc7f8e5be5db26315871aadc09ece50cade095b6b9a503b967e37f72e6a",
+            )?,
+        }],
+        http_api_definitions: vec![DeploymentPlanHttpApiDefintionEntry {
+            id: http_api_definition.id,
+            revision: http_api_definition.revision,
+            name: HttpApiDefinitionName("test-api".to_string()),
+            hash: Hash::from_str(
+                "ee3396fc64ad11ea4a927caf90c211e0608c194e7130bc3c3e8bab01e46ad0d9",
+            )?,
+        }],
+        http_api_deployments: vec![DeploymentPlanHttpApiDeploymentEntry {
+            id: http_api_deployment.id,
+            revision: http_api_deployment.revision,
+            domain: domain.clone(),
+            hash: Hash::from_str(
+                "f376d6d81bf72819175679739e3803cc918277fdb44ccd1976bec197e627677a",
+            )?,
+        }],
+    };
 
     {
-        let expected_plan = DeploymentPlan {
-            current_revision: None,
-            deployment_hash: expected_hash,
-            components: vec![DeploymentPlanComponentEntry {
-                id: component.id,
-                revision: component.revision,
-                name: ComponentName("shopping-cart".to_string()),
-                hash: Hash::from_str(
-                    "59d26b6aaed3804f3441381ea35256c56df22577133adada054889b33ecd7855",
-                )?,
-            }],
-            http_api_definitions: vec![DeploymentPlanHttpApiDefintionEntry {
-                id: http_api_definition.id,
-                revision: http_api_definition.revision,
-                name: HttpApiDefinitionName("test-api".to_string()),
-                hash: Hash::from_str(
-                    "ee3396fc64ad11ea4a927caf90c211e0608c194e7130bc3c3e8bab01e46ad0d9",
-                )?,
-            }],
-            http_api_deployments: vec![DeploymentPlanHttpApiDeploymentEntry {
-                id: http_api_deployment.id,
-                revision: http_api_deployment.revision,
-                domain: domain.clone(),
-                hash: Hash::from_str(
-                    "f376d6d81bf72819175679739e3803cc918277fdb44ccd1976bec197e627677a",
-                )?,
-            }],
-        };
+        let plan = client.get_environment_deployment_plan(&env.id.0).await?;
         assert!(plan == expected_plan);
     }
 
@@ -303,8 +304,18 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             },
         )
         .await?;
-
     assert!(deployment.deployment_hash == expected_hash);
+
+    {
+        let deployment = client
+            .get_deployment_summary(&env.id.0, deployment.revision.into())
+            .await?;
+
+        assert!(deployment.deployment_hash == expected_hash);
+        assert!(deployment.components == expected_plan.components);
+        assert!(deployment.http_api_definitions == expected_plan.http_api_definitions);
+        assert!(deployment.http_api_deployments == expected_plan.http_api_deployments);
+    }
 
     Ok(())
 }
@@ -355,6 +366,7 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
                 == Some(EnvironmentCurrentDeploymentView {
                     revision: deployment_2.current_revision,
                     deployment_revision: deployment_2.revision,
+                    deployment_version: deployment_2.version,
                     deployment_hash: deployment_2.deployment_hash
                 })
         )
@@ -385,6 +397,7 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
                 == Some(EnvironmentCurrentDeploymentView {
                     revision: expected_revision,
                     deployment_revision: deployment_1.revision,
+                    deployment_version: deployment_1.version,
                     deployment_hash: deployment_1.deployment_hash
                 })
         )

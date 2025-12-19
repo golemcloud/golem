@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{RegistryServiceConfig, StaticComponentServiceConfig};
+use crate::config::{RegistryServiceConfig, StaticRegistryServiceConfig};
 use crate::service::ComponentCompilationService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
@@ -22,10 +22,10 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_error, component_compilation_response, ComponentCompilationError,
     ComponentCompilationRequest, ComponentCompilationResponse,
 };
-use golem_common::grpc::proto_component_id_string;
 use golem_common::metrics::api::ApiErrorDetails;
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentId;
 use golem_common::recorded_grpc_api_request;
+use golem_service_base::grpc::proto_component_id_string;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -71,7 +71,7 @@ impl GrpcCompilationServer for CompileGrpcService {
             component_service_port,
         ) {
             (RegistryServiceConfig::Dynamic(_), Some(addr), Some(port)) => {
-                Some(StaticComponentServiceConfig {
+                Some(StaticRegistryServiceConfig {
                     host: addr.ip().to_string(),
                     port: port as u16,
                 })
@@ -101,10 +101,13 @@ impl CompileGrpcService {
     async fn enqueue_compilation_impl(
         &self,
         request: ComponentCompilationRequest,
-        sender: Option<StaticComponentServiceConfig>,
+        sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
-        let component_version = ComponentRevision(request.component_version);
+        let component_version = request
+            .component_version
+            .try_into()
+            .map_err(|e| bad_request_error(format!("missing component version: {e}")))?;
         let environment_id = make_environment_id(request.environment_id)?;
         self.service
             .enqueue_compilation(component_id, component_version, environment_id, sender)

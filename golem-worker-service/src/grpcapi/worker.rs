@@ -28,15 +28,15 @@ use golem_api_grpc::proto::golem::worker::v1::{
     WorkerError as GrpcWorkerError,
 };
 use golem_api_grpc::proto::golem::worker::InvokeResultTyped;
-use golem_common::grpc::{
-    proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
-};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::WorkerId;
 use golem_common::recorded_grpc_api_request;
+use golem_service_base::grpc::{
+    proto_component_id_string, proto_idempotency_key_string,
+    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
+};
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok((worker_id, component_version)) => record.succeed(
                 launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
                     worker_id: Some(worker_id.into()),
-                    component_version: component_version.0,
+                    component_version: component_version.into(),
                 }),
             ),
             Err(error) => record.fail(
@@ -311,7 +311,6 @@ impl WorkerGrpcApi {
             .worker_service
             .create(
                 &worker_id,
-                request.args,
                 request.env,
                 wasi_config_vars,
                 request.ignore_already_existing,
@@ -431,7 +430,10 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-        let target_version = ComponentRevision(request.target_version);
+        let target_version: ComponentRevision = request
+            .target_version
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting target_version: {e}")))?;
 
         self.worker_service
             .update(&worker_id, worker_update_mode, target_version, auth)

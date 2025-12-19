@@ -17,7 +17,7 @@ use crate::components::component_compilation_service::ComponentCompilationServic
 use crate::components::rdb::Rdb;
 use crate::components::{new_reqwest_client, ChildProcessLogger};
 use async_trait::async_trait;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use std::path::Path;
@@ -36,7 +36,7 @@ pub struct SpawnedRegistryService {
     _logger: ChildProcessLogger,
     base_http_client: OnceCell<reqwest::Client>,
     admin_account_id: AccountId,
-    admin_account_email: String,
+    admin_account_email: AccountEmail,
     admin_account_token: TokenSecret,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
@@ -63,7 +63,7 @@ impl SpawnedRegistryService {
 
         let admin_plan_id = PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"));
         let admin_account_id = AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129"));
-        let admin_account_email = "admin@golem.cloud".to_string();
+        let admin_account_email = AccountEmail("admin@golem.cloud".to_string());
         let admin_account_token =
             TokenSecret::trusted("lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string());
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
@@ -138,7 +138,7 @@ impl RegistryService for SpawnedRegistryService {
     fn admin_account_id(&self) -> AccountId {
         self.admin_account_id
     }
-    fn admin_account_email(&self) -> String {
+    fn admin_account_email(&self) -> AccountEmail {
         self.admin_account_email.clone()
     }
     fn admin_account_token(&self) -> TokenSecret {
@@ -160,7 +160,7 @@ impl RegistryService for SpawnedRegistryService {
     }
 
     async fn kill(&self) {
-        info!("Stopping golem-component-service");
+        info!("Stopping golem-registry-service");
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
         }
@@ -169,7 +169,7 @@ impl RegistryService for SpawnedRegistryService {
 
 impl Drop for SpawnedRegistryService {
     fn drop(&mut self) {
-        info!("Stopping golem-component-service");
+        info!("Stopping golem-registry-service");
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
         }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::account::AccountId;
+use crate::model::validate_lower_kebab_case_identifier;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
 use std::str::FromStr;
@@ -33,7 +34,7 @@ impl TryFrom<String> for ApplicationName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: Add validations
+        validate_lower_kebab_case_identifier("Application", &value)?;
         Ok(ApplicationName(value))
     }
 }
@@ -60,6 +61,6 @@ declare_structs! {
 
     pub struct ApplicationUpdate {
         pub current_revision: ApplicationRevision,
-        pub new_name: Option<ApplicationName>,
+        pub name: Option<ApplicationName>,
     }
 }

@@ -168,31 +168,31 @@ impl<V: Hashable> PartialEq for HashOf<V> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiffForHashOf<V: Diffable> {
-    HashDiff { local_hash: Hash, remote_hash: Hash },
+    HashDiff { new_hash: Hash, current_hash: Hash },
     ValueDiff { diff: V::DiffResult },
 }
 
 impl<V: Hashable + Diffable> Diffable for HashOf<V> {
     type DiffResult = DiffForHashOf<V>;
 
-    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
-        if local == remote {
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        if new == current {
             return None;
         }
 
-        let local_hash = local.hash();
-        let remote_hash = remote.hash();
+        let new_hash = new.hash();
+        let current_hash = current.hash();
 
-        let diff = match (local.as_value(), remote.as_value()) {
-            (Some(local), Some(remote)) => local.diff_with_server(remote),
+        let diff = match (new.as_value(), current.as_value()) {
+            (Some(new), Some(current)) => new.diff_with_current(current),
             _ => None,
         };
 
         match diff {
             Some(diff) => Some(DiffForHashOf::ValueDiff { diff }),
             None => Some(DiffForHashOf::HashDiff {
-                local_hash,
-                remote_hash,
+                new_hash,
+                current_hash,
             }),
         }
     }
@@ -205,12 +205,12 @@ impl<V: Diffable> Serialize for DiffForHashOf<V> {
     {
         match self {
             DiffForHashOf::HashDiff {
-                local_hash,
-                remote_hash,
+                new_hash,
+                current_hash,
             } => {
                 let mut s = serializer.serialize_struct("DiffForHashOfByHashes", 2)?;
-                s.serialize_field("localHash", local_hash)?;
-                s.serialize_field("remoteHash", remote_hash)?;
+                s.serialize_field("newHash", new_hash)?;
+                s.serialize_field("currentHash", current_hash)?;
                 s.end()
             }
             DiffForHashOf::ValueDiff { diff } => diff.serialize(serializer),

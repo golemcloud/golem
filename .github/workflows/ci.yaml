@@ -264,9 +264,7 @@ jobs:
           - name: cli-integration-tests-group3
             description: "CLI tests #3"
             runner: blacksmith-16vcpu-ubuntu-2204
-          - name: cli-integration-tests-group4
-            description: "CLI tests #4"
-            runner: blacksmith-16vcpu-ubuntu-2204
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -541,20 +539,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Extract metadata (tags, labels) for cloud service
-        id: meta-cloud-service
-        uses: docker/metadata-action@v5
-        with:
-          images: golemservices/cloud-service
-      - name: Build and push cloud-service
-        uses: useblacksmith/build-push-action@v1
-        with:
-          context: .
-          file: ./cloud-service/docker/Dockerfile
-          push: true
-          platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-cloud-service.outputs.tags }}
-          labels: ${{ steps.meta-cloud-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for worker executor
         id: meta-worker-executor
         uses: docker/metadata-action@v5
@@ -569,6 +554,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem debugging service
         id: meta-golem-debugging-service
         uses: docker/metadata-action@v5
@@ -583,6 +569,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-debugging-service.outputs.tags }}
           labels: ${{ steps.meta-golem-debugging-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for shard manager
         id: meta-shard-manager
         uses: docker/metadata-action@v5
@@ -646,20 +633,22 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Extract metadata (tags, labels) for golem component service
-        id: meta-golem-component-service
+
+      - name: Extract metadata (tags, labels) for registry service
+        id: meta-registry-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-component-service
-      - name: Build and push golem component service image
+          images: golemservices/registry-service
+      - name: Build and push registry-service
         uses: useblacksmith/build-push-action@v1
         with:
           context: .
-          file: ./golem-component-service/docker/Dockerfile
+          file: ./golem-registry-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-component-service.outputs.tags }}
-          labels: ${{ steps.meta-golem-component-service.outputs.labels }}
+          tags: ${{ steps.meta-registry-service.outputs.tags }}
+          labels: ${{ steps.meta-registry-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem worker service
         id: meta-golem-worker-service
         uses: docker/metadata-action@v5
@@ -674,6 +663,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-worker-service.outputs.tags }}
           labels: ${{ steps.meta-golem-worker-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem component compilation service
         id: meta-golem-component-compilation-service
         uses: docker/metadata-action@v5

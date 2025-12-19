@@ -16,8 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    AgentIdArgs, DeployArgs, NewWorkerArgument, StreamArgs, WorkerFunctionArgument,
-    WorkerFunctionName,
+    AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::worker::stream::WorkerConnection;
@@ -34,24 +33,24 @@ use crate::model::component::{
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{
-    format_export, format_worker_name_match, log_error, log_fuzzy_match, log_text_view, log_warn,
-};
+use crate::model::text::fmt::{format_export, log_error, log_fuzzy_match, log_text_view, log_warn};
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
     AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
 };
 use crate::model::text::worker::{
-    format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+    format_timestamp, format_worker_name_match, FileNodeView, WorkerCreateView, WorkerFilesView,
+    WorkerGetView,
 };
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::worker::{
-    fuzzy_match_function_name, AgentUpdateMode, WorkerMetadata, WorkerName, WorkerNameMatch,
+    fuzzy_match_function_name, AgentUpdateMode, WorkerMetadata, WorkerMetadataView, WorkerName,
+    WorkerNameMatch, WorkersMetadataResponseView,
 };
-use golem_client::api::WorkerClient;
+use golem_client::api::{ComponentClient, EnvironmentClient, WorkerClient};
 use golem_client::model::{
     ComponentDto, InvokeParameters, RevertWorkerTarget, UpdateWorkerRequest, WorkerCreationRequest,
 };
@@ -80,6 +79,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
+use tracing::debug;
 use uuid::Uuid;
 
 pub struct WorkerCommandHandler {
@@ -95,9 +95,8 @@ impl WorkerCommandHandler {
         match subcommand {
             AgentSubcommand::New {
                 agent_id: worker_name,
-                arguments,
                 env,
-            } => self.cmd_new(worker_name, arguments, env).await,
+            } => self.cmd_new(worker_name, env).await,
             AgentSubcommand::Invoke {
                 agent_id: worker_name,
                 function_name,
@@ -127,16 +126,16 @@ impl WorkerCommandHandler {
                 agent_id: worker_name,
             } => self.cmd_delete(worker_name).await,
             AgentSubcommand::List {
-                component_name,
                 agent_type_name,
+                component_name,
                 filter: filters,
                 scan_cursor,
                 max_count,
                 precise,
             } => {
                 self.cmd_list(
-                    component_name.component_name,
-                    agent_type_name.agent_type_name,
+                    agent_type_name,
+                    component_name,
                     filters,
                     scan_cursor,
                     max_count,
@@ -203,7 +202,6 @@ impl WorkerCommandHandler {
     async fn cmd_new(
         &self,
         worker_name: AgentIdArgs,
-        arguments: Vec<NewWorkerArgument>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -232,7 +230,6 @@ impl WorkerCommandHandler {
         self.new_worker(
             component.id.0,
             worker_name_match.worker_name.0.clone(),
-            arguments,
             env.into_iter().collect(),
         )
         .await?;
@@ -652,62 +649,119 @@ impl WorkerCommandHandler {
 
     async fn cmd_list(
         &self,
-        _component_name: Option<ComponentName>,
-        _agent_type_name: Option<String>,
-        mut _filters: Vec<String>,
-        _scan_cursor: Option<ScanCursor>,
-        _max_count: Option<u64>,
-        _precise: bool,
+        agent_type_name: Option<String>,
+        component_name: Option<ComponentName>,
+        filters: Vec<String>,
+        scan_cursor: Option<ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
     ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
-        let mut selected_components = self
-            .ctx
-            .component_handler()
-            .must_select_components_by_app_dir_or_name(component_name.as_ref())
-            .await?;
+        let clients = self.ctx.golem_clients().await?;
+        let component_handler = self.ctx.component_handler();
 
-        if let Some(agent_type_name) = agent_type_name {
-            let clients = self.ctx.golem_clients().await?;
+        let (components, filters) = match agent_type_name {
+            Some(agent_type_name) => {
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await?;
+                environment
+                    .with_current_deployment_revision_or_default_warn(
+                        |current_deployment_revision| async move {
+                            debug!("Finding agent type {}", agent_type_name);
+                            let Some(agent_type) = clients
+                                .environment
+                                .get_deployment_agent_type(
+                                    &environment.environment_id.0,
+                                    current_deployment_revision.into(),
+                                    &agent_type_name,
+                                )
+                                .await
+                                .map_service_error_not_found_as_opt()?
+                            else {
+                                log_error(format!(
+                                    "Agent type {} not found",
+                                    agent_type_name.log_color_highlight()
+                                ));
+                                bail!(NonSuccessfulExit)
+                            };
 
-            debug!("Finding agent type {}", agent_type_name);
-            let response = clients
-                .agent_types
-                .get_agent_type(
-                    &agent_type_name,
-                    selected_components
-                        .project
-                        .as_ref()
-                        .map(|p| &p.project_id.0),
-                )
-                .await?;
+                            let mut filters = filters;
+                            filters.insert(
+                                0,
+                                format!(
+                                    "name startswith {}(",
+                                    agent_type.agent_type.wrapper_type_name()
+                                ),
+                            );
 
-            debug!(
-                "Fetching component metadata for {}",
-                response.implemented_by.0
-            );
-            let component_metadata = clients
-                .component
-                .get_latest_component_metadata(&response.implemented_by.0)
-                .await?;
+                            Ok((
+                                vec![
+                                    component_handler
+                                        .get_component_revision_by_id(
+                                            &agent_type.implemented_by.component_id,
+                                            agent_type.implemented_by.component_revision,
+                                        )
+                                        .await?,
+                                ],
+                                filters,
+                            ))
+                        },
+                    )
+                    .await?
+            }
+            None => {
+                let selected_components = self
+                    .ctx
+                    .component_handler()
+                    .must_select_components_by_app_dir_or_name(component_name.as_ref())
+                    .await?;
 
-            logln(format!(
-                "Agent type {} is implemented by component {}\n",
-                agent_type_name.log_color_highlight(),
-                component_metadata.component_name.log_color_highlight()
-            ));
-            selected_components.component_names =
-                vec![ComponentName(component_metadata.component_name)];
+                let environment = &selected_components.environment;
 
-            filters.insert(0, format!("name startswith {agent_type_name}("));
-        }
+                environment
+                    .with_current_deployment_revision_or_default_warn(
+                        |current_deployment_revision| async move {
+                            let mut components =
+                                Vec::with_capacity(selected_components.component_names.len());
+                            for component_name in selected_components.component_names {
+                                match clients
+                                    .component
+                                    .get_deployment_component(
+                                        &environment.environment_id.0,
+                                        current_deployment_revision.into(),
+                                        component_name.as_str(),
+                                    )
+                                    .await
+                                    .map_service_error_not_found_as_opt()?
+                                {
+                                    Some(component) => {
+                                        components.push(component);
+                                    }
+                                    None => {
+                                        log_error(format!(
+                                            "Component not found: {}",
+                                            component_name.0.log_color_error_highlight()
+                                        ));
+                                        bail!(NonSuccessfulExit)
+                                    }
+                                }
+                            }
 
-        if scan_cursor.is_some() && selected_components.component_names.len() != 1 {
+                            Ok((components, filters))
+                        },
+                    )
+                    .await?
+            }
+        };
+
+        if scan_cursor.is_some() && components.len() != 1 {
             log_error(format!(
                 "Cursor cannot be used with multiple components selected! ({})",
-                selected_components
-                    .component_names
+                components
                     .iter()
+                    .map(|component| &component.component_name)
                     .map(|cn| cn.0.log_color_highlight())
                     .join(", ")
             ));
@@ -719,52 +773,31 @@ impl WorkerCommandHandler {
 
         let mut view = WorkersMetadataResponseView::default();
 
-        for component_name in &selected_components.component_names {
-            match self
-                .ctx
-                .component_handler()
-                .component(
-                    selected_components.project.as_ref(),
-                    component_name.into(),
-                    None,
+        for component in &components {
+            let (workers, scan_cursor) = self
+                .list_component_workers(
+                    &component.component_name,
+                    &component.id,
+                    Some(filters.as_slice()),
+                    scan_cursor.as_ref(),
+                    max_count,
+                    precise,
                 )
-                .await?
-            {
-                Some(component) => {
-                    let (workers, scan_cursor) = self
-                        .list_component_workers(
-                            component_name,
-                            component.versioned_component_id.component_id,
-                            Some(filters.as_slice()),
-                            scan_cursor.as_ref(),
-                            max_count,
-                            precise,
-                        )
-                        .await?;
+                .await?;
 
-                    view.workers
-                        .extend(workers.into_iter().map(WorkerMetadataView::from));
-                    scan_cursor.into_iter().for_each(|scan_cursor| {
-                        view.cursors.insert(
-                            component_name.to_string(),
-                            scan_cursor_to_string(&scan_cursor),
-                        );
-                    });
-                }
-                None => {
-                    log_warn(format!(
-                        "Component not found: {}",
-                        component_name.0.log_color_error_highlight()
-                    ));
-                }
-            }
+            view.workers
+                .extend(workers.into_iter().map(WorkerMetadataView::from));
+            scan_cursor.into_iter().for_each(|scan_cursor| {
+                view.cursors.insert(
+                    component.component_name.to_string(),
+                    scan_cursor_to_string(&scan_cursor),
+                );
+            });
         }
 
         self.ctx.log_handler().log_view(&view);
 
         Ok(())
-         */
-        todo!()
     }
 
     async fn cmd_interrupt(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
@@ -814,26 +847,29 @@ impl WorkerCommandHandler {
 
     async fn cmd_update(
         &self,
-        _worker_name: AgentIdArgs,
-        _mode: AgentUpdateMode,
-        _target_revision: Option<ComponentRevision>, // TODO: atomic ComponentRevision
-        _await_update: bool,
+        worker_name: AgentIdArgs,
+        mode: AgentUpdateMode,
+        target_revision: Option<ComponentRevision>,
+        await_update: bool,
     ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
+        let environment = &worker_name_match.environment;
+
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
 
-        let target_version = match target_version {
+        let target_revision = match target_revision {
             Some(target_version) => target_version,
             None => {
-                let Some(latest_version) = self
+                let Some(current_deployed_revision) = self
                     .ctx
                     .component_handler()
-                    .latest_component_version_by_id(component.versioned_component_id.component_id.0)
+                    .get_current_deployed_server_component_by_name(
+                        environment,
+                        &component.component_name,
+                    )
                     .await?
                 else {
                     bail!(
@@ -842,31 +878,29 @@ impl WorkerCommandHandler {
                     );
                 };
 
-                if !self.ctx.interactive_handler().confirm_update_to_latest(
+                if !self.ctx.interactive_handler().confirm_update_to_current(
                     &component.component_name,
                     &worker_name,
-                    latest_version,
+                    current_deployed_revision.revision,
                 )? {
                     bail!(NonSuccessfulExit)
                 }
 
-                latest_version
+                current_deployed_revision.revision
             }
         };
 
         self.update_worker(
             &component.component_name,
-            component.versioned_component_id.component_id.0,
+            &component.id,
             &worker_name.0,
             mode,
-            target_version.0,
+            target_revision,
             await_update,
         )
         .await?;
 
         Ok(())
-         */
-        todo!()
     }
 
     async fn cmd_get(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
@@ -927,7 +961,7 @@ impl WorkerCommandHandler {
         log_action(
             "Listing files",
             format!(
-                "for worker {} at path {}",
+                "for agent {} at path {}",
                 format_worker_name_match(&worker_name_match),
                 path.log_color_highlight()
             ),
@@ -945,7 +979,7 @@ impl WorkerCommandHandler {
                 log_warn_action(
                     "Failed to list files",
                     format!(
-                        "for worker {} at path {}: {e}",
+                        "for agent {} at path {}: {e}",
                         format_worker_name_match(&worker_name_match),
                         path.log_color_error_highlight()
                     ),
@@ -978,7 +1012,7 @@ impl WorkerCommandHandler {
         log_action(
             "Listed files",
             format!(
-                "for worker {} at path {}",
+                "for agent {} at path {}",
                 format_worker_name_match(&worker_name_match),
                 path.log_color_highlight()
             ),
@@ -1002,7 +1036,7 @@ impl WorkerCommandHandler {
         log_action(
             "Downloading file",
             format!(
-                "from worker {} at path {}",
+                "from agent {} at path {}",
                 format_worker_name_match(&worker_name_match),
                 path.log_color_highlight()
             ),
@@ -1020,7 +1054,7 @@ impl WorkerCommandHandler {
                 log_warn_action(
                     "Failed to download file",
                     format!(
-                        "from worker {} at path {}: {e}",
+                        "from agent {} at path {}: {e}",
                         format_worker_name_match(&worker_name_match),
                         path.log_color_error_highlight()
                     ),
@@ -1072,7 +1106,6 @@ impl WorkerCommandHandler {
         &self,
         component_id: Uuid,
         worker_name: String,
-        args: Vec<String>,
         env: HashMap<String, String>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
@@ -1083,9 +1116,8 @@ impl WorkerCommandHandler {
                 &component_id,
                 &WorkerCreationRequest {
                     name: worker_name,
-                    args,
                     env,
-                    wasi_config_vars: WasiConfigVars::default(),
+                    config_vars: WasiConfigVars::default(),
                 },
             )
             .await
@@ -1239,7 +1271,7 @@ impl WorkerCommandHandler {
             let result = self
                 .update_worker(
                     component_name,
-                    worker.worker_id.component_id.0,
+                    &worker.worker_id.component_id,
                     &worker.worker_id.worker_name,
                     update_mode,
                     target_revision,
@@ -1271,7 +1303,7 @@ impl WorkerCommandHandler {
             for worker in workers {
                 let _ = self
                     .await_update_result(
-                        &worker.worker_id.component_id.0,
+                        &worker.worker_id.component_id,
                         &worker.worker_id.worker_name,
                         target_revision,
                     )
@@ -1285,7 +1317,7 @@ impl WorkerCommandHandler {
     async fn update_worker(
         &self,
         component_name: &ComponentName,
-        component_id: Uuid,
+        component_id: &ComponentId,
         worker_name: &str,
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
@@ -1307,7 +1339,7 @@ impl WorkerCommandHandler {
         let result = clients
             .worker
             .update_worker(
-                &component_id,
+                &component_id.0,
                 worker_name,
                 &UpdateWorkerRequest {
                     mode: match update_mode {
@@ -1316,7 +1348,7 @@ impl WorkerCommandHandler {
                         }
                         AgentUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
                     },
-                    target_revision: target_revision.0,
+                    target_revision: target_revision.into(),
                 },
             )
             .await
@@ -1328,7 +1360,7 @@ impl WorkerCommandHandler {
                 log_action("Triggered update", "");
 
                 if await_update {
-                    self.await_update_result(&component_id, worker_name, target_revision)
+                    self.await_update_result(component_id, worker_name, target_revision)
                         .await?;
                 }
 
@@ -1345,7 +1377,7 @@ impl WorkerCommandHandler {
 
     async fn await_update_result(
         &self,
-        component_id: &Uuid,
+        component_id: &ComponentId,
         worker_name: &str,
         target_version: ComponentRevision,
     ) -> anyhow::Result<()> {
@@ -1353,7 +1385,7 @@ impl WorkerCommandHandler {
         loop {
             let metadata = clients
                 .worker
-                .get_worker_metadata(component_id, worker_name)
+                .get_worker_metadata(&component_id.0, worker_name)
                 .await?;
             for update_record in metadata.updates {
                 let mut latest_success = None;
@@ -1444,7 +1476,7 @@ impl WorkerCommandHandler {
         if workers.is_empty() {
             log_warn_action(
                 "Skipping",
-                format!("redeploying agents for component {component_name}, no workers found"),
+                format!("redeploying agents for component {component_name}, no agent found"),
             );
             return Ok(());
         }
@@ -1488,7 +1520,7 @@ impl WorkerCommandHandler {
             if show_skip {
                 log_warn_action(
                     "Skipping",
-                    format!("deleting agents for component {component_name}, no workers found"),
+                    format!("deleting agents for component {component_name}, no agent found"),
                 );
             }
             return Ok(0);
@@ -1547,7 +1579,6 @@ impl WorkerCommandHandler {
         self.new_worker(
             worker_metadata.worker_id.component_id.0,
             worker_metadata.worker_id.worker_name,
-            worker_metadata.args,
             worker_metadata.env,
         )
         .await?;
@@ -1723,13 +1754,13 @@ impl WorkerCommandHandler {
                         if selected_component_names.len() != 1 {
                             logln("");
                             log_error(
-                                format!("Multiple components were selected based on the current directory: {}",
-                                        selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
-                            );
+                            format!("Multiple components were selected based on the current directory: {}",
+                                    selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
+                        );
                             logln("");
                             logln(
-                                "Switch to a different directory with only one component or specify the full or partial component name as part of the agent name!",
-                            );
+                            "Switch to a different directory with only one component or specify the full or partial component name as part of the agent name!",
+                        );
                             logln("");
                             log_text_view(&WorkerNameHelp);
                             logln("");
@@ -1898,9 +1929,9 @@ impl WorkerCommandHandler {
                                 } => {
                                     logln("");
                                     log_error(format!(
-                                        "The requested application component name ({}) is ambiguous.",
-                                        component_name.0.log_color_error_highlight()
-                                    ));
+                                    "The requested application component name ({}) is ambiguous.",
+                                    component_name.0.log_color_error_highlight()
+                                ));
                                     logln("");
                                     logln("Did you mean one of");
                                     for option in highlighted_options {
@@ -2010,6 +2041,7 @@ impl WorkerCommandHandler {
                     component_name: component.component_name.0.clone(),
                     constructors: show_exported_agent_constructors(
                         component.metadata.agent_types(),
+                        true,
                     ),
                 });
 

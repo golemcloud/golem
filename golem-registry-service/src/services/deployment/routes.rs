@@ -77,7 +77,7 @@ impl DeployedRoutesService {
 
     pub async fn get_openapi_spec_for_http_api_definition(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         http_api_definition_name: &HttpApiDefinitionName,
         auth: &AuthCtx,
@@ -104,7 +104,7 @@ impl DeployedRoutesService {
 
     pub async fn get_compiled_routes_for_http_api_definition(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         http_api_definition_name: &HttpApiDefinitionName,
         auth: &AuthCtx,
@@ -128,7 +128,7 @@ impl DeployedRoutesService {
         let routes: Vec<CompiledRouteWithSecuritySchemeDetails> = self
             .deployment_repo
             .list_compiled_http_api_routes_for_http_api_definition(
-                &environment_id.0,
+                environment_id.0,
                 deployment_revision.into(),
                 &http_api_definition_name.0,
             )

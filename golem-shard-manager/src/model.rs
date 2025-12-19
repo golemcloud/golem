@@ -17,6 +17,7 @@ use crate::rebalancing::Rebalance;
 use core::cmp::Ordering;
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
+use golem_common::grpc_uri;
 use golem_common::model::ShardId;
 use http::Uri;
 use itertools::Itertools;
@@ -51,17 +52,13 @@ impl Pod {
         }
     }
 
-    pub fn endpoint(&self) -> Endpoint {
-        Endpoint::from(self.uri())
+    pub fn endpoint(&self, tls: bool) -> Endpoint {
+        Endpoint::from(self.uri(tls))
     }
 
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.ip, self.port).as_str())
-            .path_and_query("")
-            .build()
-            .expect("Failed to build URI")
+    pub fn uri(&self, tls: bool) -> Uri {
+        // Note: this needs to go via ip instead of host to work correctly in k8s
+        grpc_uri(&self.ip.to_string(), self.port, tls)
     }
 
     pub fn address(&self) -> Result<vec::IntoIter<SocketAddr>, std::io::Error> {

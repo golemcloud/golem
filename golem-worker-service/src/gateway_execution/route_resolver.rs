@@ -91,7 +91,9 @@ impl RouteResolver {
             .await
             .map_err(|_| GatewayBindingResolverError::CouldNotBuildRouter)?;
 
-        let path_segments: Vec<&str> = RouterPattern::split(request.uri().path()).collect();
+        let decoded_path = urlencoding::decode(request.uri().path())
+            .map_err(|_| GatewayBindingResolverError::NoMatchingRoute)?;
+        let path_segments: Vec<&str> = RouterPattern::split(&decoded_path).collect();
 
         let route_entry = router
             .check_path(request.method(), &path_segments)

@@ -86,7 +86,7 @@ impl DefaultWorkerService {
         let value: Vec<OwnedWorkerId> = self
             .key_value_storage
             .with_entity("worker", "enum", "worker_id")
-            .members_of_set(KeyValueStorageNamespace::Worker, key)
+            .members_of_set(KeyValueStorageNamespace::RunningWorkers, key)
             .await
             .unwrap_or_else(|err| panic!("failed to get worker ids from KV storage: {err}"));
 
@@ -124,7 +124,7 @@ impl WorkerService for DefaultWorkerService {
             .into_iter()
             .next();
 
-        tracing::debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
+        debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
 
         match initial_oplog_entry {
             None => None,
@@ -133,7 +133,6 @@ impl WorkerService for DefaultWorkerService {
                 OplogEntry::Create {
                     worker_id,
                     component_revision,
-                    args,
                     env,
                     environment_id,
                     created_by,
@@ -148,7 +147,6 @@ impl WorkerService for DefaultWorkerService {
             )) => {
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id,
-                    args,
                     env,
                     wasi_config_vars,
                     environment_id,
@@ -170,7 +168,7 @@ impl WorkerService for DefaultWorkerService {
                     .key_value_storage
                     .with_entity("worker", "get", "worker_status")
                     .get_attempt_deserialize(
-                        KeyValueStorageNamespace::Worker,
+                        KeyValueStorageNamespace::Worker { worker_id: owned_worker_id.worker_id.clone() },
                         &Self::status_key(&owned_worker_id.worker_id),
                     )
                     .await
@@ -180,7 +178,7 @@ impl WorkerService for DefaultWorkerService {
 
                 let last_known_status = match status_value {
                     Some(Ok(status)) => Some(status),
-                    // We had a status, but it was written in a previous format and is not longer valid -> recompute
+                    // We had a status, but it was written in a previous format and is no longer valid -> recompute
                     Some(Err(_)) => {
                         let last_known_status = calculate_last_known_status_for_existing_worker(
                             self,
@@ -241,7 +239,7 @@ impl WorkerService for DefaultWorkerService {
         self
             .key_value_storage
             .with_entity("worker", "remove", "worker_id")
-            .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+            .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_worker_id)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -256,7 +254,9 @@ impl WorkerService for DefaultWorkerService {
         self.key_value_storage
             .with("worker", "remove")
             .del(
-                KeyValueStorageNamespace::Worker,
+                KeyValueStorageNamespace::Worker {
+                    worker_id: owned_worker_id.worker_id(),
+                },
                 &Self::status_key(&owned_worker_id.worker_id),
             )
             .await
@@ -279,7 +279,9 @@ impl WorkerService for DefaultWorkerService {
             self.key_value_storage
                 .with_entity("worker", "update_status", "worker_status")
                 .set(
-                    KeyValueStorageNamespace::Worker,
+                    KeyValueStorageNamespace::Worker {
+                        worker_id: owned_worker_id.worker_id(),
+                    },
                     &Self::status_key(&owned_worker_id.worker_id),
                     status_value,
                 )
@@ -302,7 +304,7 @@ impl WorkerService for DefaultWorkerService {
                 self
                     .key_value_storage
                     .with_entity("worker", "add", "worker_id")
-                    .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+                    .add_to_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_worker_id)
                     .await
                     .unwrap_or_else(|err| {
                         panic!(
@@ -315,7 +317,7 @@ impl WorkerService for DefaultWorkerService {
                 self
                     .key_value_storage
                     .with_entity("worker", "remove", "worker_id")
-                    .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+                    .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_worker_id)
                     .await
                     .unwrap_or_else(|err| {
                         panic!(

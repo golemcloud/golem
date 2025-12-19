@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use super::{diff, WorkerResourceDescription, WorkerWasiConfigVarsFilter};
-use crate::model::component::{
-    ComponentFileContentHash, ComponentFilePath, ComponentRevision, InitialComponentFile,
-};
+use crate::model::component::{ComponentFileContentHash, ComponentFilePath, InitialComponentFile};
 use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{
     ComponentFilePermissions, FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod,
@@ -216,7 +214,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => {
                     Ok(WorkerFilter::new_version(
                         filter.comparator.try_into()?,
-                        ComponentRevision(filter.value),
+                        filter.value.try_into()?,
                     ))
                 }
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(filter) => {
@@ -292,7 +290,7 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(
                     golem_api_grpc::proto::golem::worker::WorkerVersionFilter {
                         comparator: comparator.into(),
-                        value: value.0,
+                        value: value.into(),
                     },
                 )
             }

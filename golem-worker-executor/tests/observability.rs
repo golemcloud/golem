@@ -380,7 +380,7 @@ async fn invocation_context_test(
         .await?;
 
     let worker_id = executor
-        .start_worker_with(&component.id, "w1", vec![], env.clone(), vec![])
+        .start_worker_with(&component.id, "w1", env.clone(), vec![])
         .await?;
 
     let result = executor

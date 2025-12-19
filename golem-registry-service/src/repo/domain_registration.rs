@@ -34,24 +34,24 @@ pub trait DomainRegistrationRepo: Send + Sync {
 
     async fn delete(
         &self,
-        domain_registration_id: &Uuid,
-        actor: &Uuid,
+        domain_registration_id: Uuid,
+        actor: Uuid,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError>;
 
     async fn get_by_id(
         &self,
-        domain_registration_id: &Uuid,
+        domain_registration_id: Uuid,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError>;
 
     async fn get_in_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError>;
 
     async fn list_by_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<DomainRegistrationRecord>, DomainRegistrationRepoError>;
 }
 
@@ -66,11 +66,11 @@ impl<Repo: DomainRegistrationRepo> LoggedDomainRegistrationRepo<Repo> {
         Self { repo }
     }
 
-    fn span_id(domain_registration_id: &Uuid) -> Span {
+    fn span_id(domain_registration_id: Uuid) -> Span {
         info_span!(SPAN_NAME, domain_registration_id=%domain_registration_id)
     }
 
-    fn span_environment(environment_id: &Uuid) -> Span {
+    fn span_environment(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id=%environment_id)
     }
 }
@@ -81,14 +81,14 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
         &self,
         record: DomainRegistrationRecord,
     ) -> Result<DomainRegistrationRecord, DomainRegistrationRepoError> {
-        let span = Self::span_id(&record.domain_registration_id);
+        let span = Self::span_id(record.domain_registration_id);
         self.repo.create(record).instrument(span).await
     }
 
     async fn delete(
         &self,
-        domain_registration_id: &Uuid,
-        actor: &Uuid,
+        domain_registration_id: Uuid,
+        actor: Uuid,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let span = Self::span_id(domain_registration_id);
         self.repo
@@ -99,7 +99,7 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
 
     async fn get_by_id(
         &self,
-        domain_registration_id: &Uuid,
+        domain_registration_id: Uuid,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let span = Self::span_id(domain_registration_id);
         self.repo
@@ -110,7 +110,7 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
 
     async fn get_in_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let span = Self::span_environment(environment_id);
@@ -122,7 +122,7 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
 
     async fn list_by_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let span = Self::span_environment(environment_id);
         self.repo
@@ -189,8 +189,8 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
 
     async fn delete(
         &self,
-        domain_registration_id: &Uuid,
-        actor: &Uuid,
+        domain_registration_id: Uuid,
+        actor: Uuid,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let deleted_at = SqlDateTime::now();
 
@@ -219,7 +219,7 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        domain_registration_id: &Uuid,
+        domain_registration_id: Uuid,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let result = self
             .with_ro("get_by_id")
@@ -242,7 +242,7 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
 
     async fn get_in_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         domain: &str,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let result = self
@@ -268,7 +268,7 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
 
     async fn list_by_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let result = self
             .with_ro("list_by_environment")

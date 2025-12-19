@@ -455,7 +455,7 @@ cargo-test-r run --package integration-tests --test integration -- --nocapture -
 [tasks.integration-tests-group2]
 description = "Runs integration tests (group 2/4)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB"="sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
 cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
@@ -485,12 +485,11 @@ dependencies = [
     "cli-integration-tests-group1",
     "cli-integration-tests-group2",
     "cli-integration-tests-group3",
-    "cli-integration-tests-group4",
 ]
 
 [tasks.cli-integration-tests-group1]
 dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (1/4)"
+description = "Run CLI integration tests (1/3)"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
@@ -499,7 +498,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 
 [tasks.cli-integration-tests-group2]
 dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (2/4)"
+description = "Run CLI integration tests (2/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -508,20 +507,11 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 
 [tasks.cli-integration-tests-group3]
 dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (3/4)"
+description = "Run CLI integration tests (3/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group4]
-dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (4/4)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group4 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.sharding-tests-debug]
@@ -622,7 +612,7 @@ description = "Generates openapi spec from the code and saves it to the openapi 
 
 [tasks.generate-registry-service-openapi]
 description = "Generates openapi spec for registry service"
-dependencies = ["build-registry-service"]
+dependencies = ["build-registry-service-non-ci"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -744,11 +734,10 @@ command = "tar"
 args = [
     "-cvf",
     "${PLATFORM_TARGET}.tar",
-    "${PLATFORM_TARGET}/release/cloud-service",
+    "${PLATFORM_TARGET}/release/golem-registry-service",
     "${PLATFORM_TARGET}/release/golem-shard-manager",
     "${PLATFORM_TARGET}/release/worker-executor",
     "${PLATFORM_TARGET}/release/golem-debugging-service",
-    "${PLATFORM_TARGET}/release/golem-component-service",
     "${PLATFORM_TARGET}/release/golem-worker-service",
     "${PLATFORM_TARGET}/release/golem-component-compilation-service",
 ]
@@ -783,7 +772,7 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "Disabled" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "Disabled" }
 
 script = { file = "./local-run/start.sh" }
 
@@ -798,14 +787,14 @@ condition = { env_set = [
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "OAuth2" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "OAuth2" }
 
 script = { file = "./local-run/start.sh" }
 
 ## ** GENERATE CONFIGS **
 
 [tasks.generate-configs]
-description = "Generates default and exmaple config files"
+description = "Generates default and example config files"
 dependencies = ["build-bins-non-ci"]
 
 script = '''
@@ -826,8 +815,8 @@ export RUST_BACKTRACE=1
 ./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
 
-# ./target/debug/golem-debugging-service --dump-config-default-toml > golem-debugging-service/config/debug-worker-executor.toml
-# ./target/debug/golem-debugging-service --dump-config-default-env-var > golem-debugging-service/config/debug-worker-executor.sample.env
+./target/debug/golem-debugging-service --dump-config-default-toml > golem-debugging-service/config/debug-worker-executor.toml
+./target/debug/golem-debugging-service --dump-config-default-env-var > golem-debugging-service/config/debug-worker-executor.sample.env
 '''
 
 ## ** CHECK CONFIGS **
@@ -839,21 +828,17 @@ dependencies = ["generate-configs"]
 script = '''
 git diff --exit-code \
     golem-registry-service/config/registry-service.toml \
-    golem-registry-service/config/registry-service.sample.env
-    # golem-shard-manager/config/shard-manager.toml \
-    # golem-shard-manager/config/shard-manager.sample.env \
-    # golem-component-compilation-service/config/component-compilation-service.toml \
-    # golem-component-compilation-service/config/component-compilation-service.sample.env \
-    # golem-component-service/config/component-service.toml \
-    # golem-component-service/config/component-service.sample.env \
-    # golem-worker-service/config/worker-service.toml \
-    # golem-worker-service/config/worker-service.sample.env \
-    # golem-worker-executor/config/worker-executor.toml \
-    # golem-worker-executor/config/worker-executor.sample.env \
-    # golem-debugging-service/config/debug-worker-executor.toml \
-    # golem-debugging-service/config/debug-worker-executor.sample.env \
-    # cloud-service/config/cloud-service.toml \
-    # cloud-service/config/cloud-service.sample.env
+    golem-registry-service/config/registry-service.sample.env \
+    golem-shard-manager/config/shard-manager.toml \
+    golem-shard-manager/config/shard-manager.sample.env \
+    golem-component-compilation-service/config/component-compilation-service.toml \
+    golem-component-compilation-service/config/component-compilation-service.sample.env \
+    golem-worker-service/config/worker-service.toml \
+    golem-worker-service/config/worker-service.sample.env \
+    golem-worker-executor/config/worker-executor.toml \
+    golem-worker-executor/config/worker-executor.sample.env \
+    golem-debugging-service/config/debug-worker-executor.toml \
+    golem-debugging-service/config/debug-worker-executor.sample.env
 '''
 
 ## ** Elastic tasks **

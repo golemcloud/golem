@@ -23,8 +23,8 @@ use crate::services::http_api_definition::{HttpApiDefinitionError, HttpApiDefini
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::run_cpu_bound_work;
 use futures::TryFutureExt;
-use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{RegisteredAgentType, RegisteredAgentTypeImplementer};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff::{self, HashOf, Hashable};
@@ -188,7 +188,7 @@ impl DeploymentWriteService {
 
     pub async fn create_deployment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         data: DeploymentCreation,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
@@ -204,7 +204,7 @@ impl DeploymentWriteService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeployEnvironment,
         )?;
@@ -304,7 +304,7 @@ impl DeploymentWriteService {
 
         let deployment: CurrentDeployment = self
             .deployment_repo
-            .deploy(&auth.account_id().0, record, environment.version_check)
+            .deploy(auth.account_id().0, record, environment.version_check)
             .await
             .map_err(|err| match err {
                 DeployRepoError::ConcurrentModification => {
@@ -315,14 +315,14 @@ impl DeploymentWriteService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(deployment)
     }
 
     pub async fn rollback_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         payload: DeploymentRollback,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
@@ -338,7 +338,7 @@ impl DeploymentWriteService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeployEnvironment,
         )?;
@@ -358,18 +358,18 @@ impl DeploymentWriteService {
 
         let target_deployment: Deployment = self
             .deployment_repo
-            .get_deployment_revision(&environment_id.0, payload.deployment_revision.into())
+            .get_deployment_revision(environment_id.0, payload.deployment_revision.into())
             .await?
             .ok_or(DeploymentWriteError::DeploymentNotFound(
                 payload.deployment_revision,
             ))?
-            .into();
+            .try_into()?;
 
         let current_deployment: CurrentDeployment = self
             .deployment_repo
             .set_current_deployment(
-                &auth.account_id().0,
-                &environment_id.0,
+                auth.account_id().0,
+                environment_id.0,
                 payload.deployment_revision.into(),
             )
             .await
@@ -379,7 +379,7 @@ impl DeploymentWriteService {
                 }
                 other => other.into(),
             })?
-            .into_model(target_deployment.version, target_deployment.deployment_hash);
+            .into_model(target_deployment.version, target_deployment.deployment_hash)?;
 
         Ok(current_deployment)
     }
@@ -390,16 +390,17 @@ impl DeploymentWriteService {
         auth: &AuthCtx,
     ) -> Result<Option<Deployment>, DeploymentWriteError> {
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeployment,
         )?;
 
         let deployment: Option<Deployment> = self
             .deployment_repo
-            .get_latest_revision(&environment.id.0)
+            .get_latest_revision(environment.id.0)
             .await?
-            .map(|r| r.into());
+            .map(|r| r.try_into())
+            .transpose()?;
 
         Ok(deployment)
     }
@@ -470,7 +471,10 @@ impl DeploymentContext {
                 }
                 agent_types.push(RegisteredAgentType {
                     agent_type: agent_type.clone(),
-                    implemented_by: component.id,
+                    implemented_by: RegisteredAgentTypeImplementer {
+                        component_id: component.id,
+                        component_revision: component.revision,
+                    },
                 });
             }
         }
@@ -625,7 +629,7 @@ impl DeploymentContext {
         let response_compiled = {
             let component_dependency_key = ComponentDependencyKey {
                 component_id: component.id.0,
-                component_revision: component.revision.0,
+                component_revision: component.revision.into(),
                 component_name: component.component_name.0.clone(),
                 root_package_name: component.metadata.root_package_name().clone(),
                 root_package_version: component.metadata.root_package_version().clone(),
@@ -667,7 +671,7 @@ impl DeploymentContext {
         let response_compiled = {
             let component_dependency_key = ComponentDependencyKey {
                 component_id: component.id.0,
-                component_revision: component.revision.0,
+                component_revision: component.revision.into(),
                 component_name: component.component_name.0.clone(),
                 root_package_name: component.metadata.root_package_name().clone(),
                 root_package_version: component.metadata.root_package_version().clone(),

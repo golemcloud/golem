@@ -58,8 +58,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         &self,
         deps: &T,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
-        worker_args: Option<Vec<String>>,
+        account_id: AccountId,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -72,7 +71,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let worker_id = owned_worker_id.worker_id();
 
         let owned_worker_id = owned_worker_id.clone();
-        let account_id = *account_id;
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
         self.workers
@@ -83,7 +81,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             &deps,
                             &account_id,
                             owned_worker_id,
-                            worker_args,
                             worker_env,
                             worker_wasi_config_vars,
                             component_version,

@@ -14,7 +14,8 @@
 
 use super::plan::PlanId;
 use crate::model::auth::AccountRole;
-use crate::{declare_revision, declare_structs, newtype_uuid};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 use uuid::uuid;
 
 newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
@@ -23,29 +24,32 @@ impl AccountId {
     pub const SYSTEM: Self = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 }
 
-pub static SYSTEM_ACCOUNT_ID: AccountId = AccountId::SYSTEM;
-
 declare_revision!(AccountRevision);
+
+declare_transparent_newtypes! {
+    #[derive(Display)]
+    pub struct AccountEmail(pub String);
+}
 
 declare_structs! {
     pub struct Account {
         pub id: AccountId,
         pub revision: AccountRevision,
         pub name: String,
-        pub email: String,
+        pub email: AccountEmail,
         pub plan_id: PlanId,
         pub roles: Vec<AccountRole>
     }
 
     pub struct AccountCreation {
         pub name: String,
-        pub email: String,
+        pub email: AccountEmail,
     }
 
     pub struct AccountUpdate {
         pub current_revision: AccountRevision,
-        pub name: String,
-        pub email: String,
+        pub name: Option<String>,
+        pub email: Option<AccountEmail>,
     }
 
     pub struct AccountSetRoles {

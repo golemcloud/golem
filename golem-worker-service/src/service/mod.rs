@@ -16,7 +16,6 @@ pub mod auth;
 pub mod component;
 pub mod limit;
 pub mod worker;
-// pub mod user_auth_resolver;
 
 use self::auth::{AuthService, RemoteAuthService};
 use self::component::RemoteComponentService;
@@ -42,17 +41,15 @@ use crate::gateway_security::DefaultIdentityProvider;
 use crate::service::component::ComponentService;
 use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
-use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
-use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 
 #[derive(Clone)]
@@ -151,22 +148,12 @@ impl Services {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            GrpcClientConfig {
-                // TODO
-                retries_on_unavailable: RetryConfig {
-                    max_attempts: 0, // we want to invalidate the routing table asap
-                    min_delay: Duration::from_millis(100),
-                    max_delay: Duration::from_secs(2),
-                    multiplier: 2.0,
-                    max_jitter_factor: Some(0.15),
-                },
-                connect_timeout: Duration::from_secs(10),
-            },
+            config.worker_executor.client.clone(),
         );
 
         let worker_client: Arc<dyn WorkerClient> = Arc::new(WorkerExecutorWorkerClient::new(
             worker_executor_clients.clone(),
-            config.worker_executor_retries.clone(),
+            config.worker_executor.retries.clone(),
             routing_table_service.clone(),
         ));
 

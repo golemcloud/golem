@@ -192,7 +192,7 @@ fn build_match_arms(
 
             let fn_output_info = FunctionOutputInfo::from_signature(&method.sig);
 
-            let post_method_param_extraction_logic = match fn_output_info.future_or_immediate {
+            let post_method_param_extraction_logic = match fn_output_info.async_ness {
                 Asyncness::Future if !fn_output_info.is_unit => quote! {
                     let result = self.#ident(#(#param_idents),*).await;
                     <_ as golem_rust::agentic::Schema>::to_structured_value(result).map_err(|e| {
@@ -342,7 +342,7 @@ fn generate_base_agent_impl(
                     .expect("Agent definition not found")
             }
 
-            async fn load_snapshot_base(&self, bytes: Vec<u8>) -> Result<(), String> {
+            async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String> {
                 self.load_snapshot(bytes).await
             }
 

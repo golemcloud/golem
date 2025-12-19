@@ -97,7 +97,7 @@ pub trait PromiseService: Send + Sync {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: &AccountId,
+        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError>;
 
     // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
@@ -138,7 +138,7 @@ impl PromiseService for LazyPromiseService {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: &AccountId,
+        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -221,7 +221,9 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
         self.key_value_storage
             .with("promise", "complete")
             .exists(
-                KeyValueStorageNamespace::Promise,
+                KeyValueStorageNamespace::Promise {
+                    worker_id: promise_id.worker_id.clone(),
+                },
                 &get_promise_redis_key(promise_id),
             )
             .await
@@ -244,7 +246,9 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         self.key_value_storage
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
-                KeyValueStorageNamespace::Promise,
+                KeyValueStorageNamespace::Promise {
+                    worker_id: worker_id.clone(),
+                },
                 &key,
                 &RedisPromiseState::Pending,
             )
@@ -282,7 +286,9 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .key_value_storage
             .with_entity("promise", "poll", "promise")
             .get(
-                KeyValueStorageNamespace::Promise,
+                KeyValueStorageNamespace::Promise {
+                    worker_id: promise_id.worker_id.clone(),
+                },
                 &get_promise_result_redis_key(&promise_id),
             )
             .await
@@ -298,7 +304,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: &AccountId,
+        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
@@ -310,7 +316,9 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .key_value_storage
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
-                KeyValueStorageNamespace::Promise,
+                KeyValueStorageNamespace::Promise {
+                    worker_id: promise_id.worker_id.clone(),
+                },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
             )
@@ -332,7 +340,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             let component_metdata = self
                 .services
                 .component_service
-                .get_metadata(&worker_id.component_id, None)
+                .get_metadata(worker_id.component_id, None)
                 .await?;
 
             let owned_worker_id = OwnedWorkerId {
@@ -366,7 +374,6 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
                     &self.services,
                     completed_by,
                     &owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -440,7 +447,7 @@ impl PromiseService for PromiseServiceMock {
         &self,
         promise_id: PromiseId,
         _data: Vec<u8>,
-        _completed_by: &AccountId,
+        _completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         self.completed.lock().await.insert(promise_id);
         Ok(true)

@@ -38,7 +38,7 @@ impl AccountUsageService {
 
     pub async fn ensure_application_within_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalAppCount))
@@ -51,7 +51,7 @@ impl AccountUsageService {
 
     pub async fn ensure_environment_within_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalEnvCount))
@@ -64,16 +64,21 @@ impl AccountUsageService {
 
     pub async fn ensure_new_component_within_limits(
         &self,
-        account_id: &AccountId,
-        component_size_bytes: i64,
+        account_id: AccountId,
+        component_size_bytes: u64,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self.get_account_usage(account_id, None).await?;
 
         self.add_checked(&mut account_usage, UsageType::TotalComponentCount, 1)?;
+
+        if component_size_bytes > i64::MAX as u64 {
+            return Err(AccountUsageError::ComponentTooLarge(component_size_bytes));
+        }
+
         self.add_checked(
             &mut account_usage,
             UsageType::TotalComponentStorageBytes,
-            component_size_bytes,
+            component_size_bytes as i64,
         )?;
 
         Ok(())
@@ -81,17 +86,21 @@ impl AccountUsageService {
 
     pub async fn ensure_updated_component_within_limits(
         &self,
-        account_id: &AccountId,
-        component_size_bytes: i64,
+        account_id: AccountId,
+        component_size_bytes: u64,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalComponentStorageBytes))
             .await?;
 
+        if component_size_bytes > i64::MAX as u64 {
+            return Err(AccountUsageError::ComponentTooLarge(component_size_bytes));
+        }
+
         self.add_checked(
             &mut account_usage,
             UsageType::TotalComponentStorageBytes,
-            component_size_bytes,
+            component_size_bytes as i64,
         )?;
 
         Ok(())
@@ -99,7 +108,7 @@ impl AccountUsageService {
 
     pub async fn add_worker(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -113,7 +122,7 @@ impl AccountUsageService {
 
     pub async fn remove_worker(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -127,7 +136,7 @@ impl AccountUsageService {
 
     pub async fn add_worker_connection(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -141,7 +150,7 @@ impl AccountUsageService {
 
     pub async fn remove_worker_connection(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
@@ -164,33 +173,43 @@ impl AccountUsageService {
     ) -> Result<AccountResourceLimits, AccountUsageError> {
         let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
-            auth.authorize_account_action(&account_id, AccountAction::UpdateUsage)?;
-
-            let mut account_usage = match self
-                .get_account_usage(&account_id, Some(UsageType::MonthlyGasLimit))
+            auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+            match self
+                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
                 .await
             {
-                Ok(value) => value,
-                Err(AccountUsageError::AccountNotfound(_)) => continue,
+                Ok(mut account_usage) => {
+                    // fuel usage is allowed to exceeded the montly limit slightly.
+                    // The worker executor will stop the worker at the next opportunity.
+                    account_usage.add_change(UsageType::MonthlyGasLimit, update);
+
+                    tracing::debug!(
+                        "Updating monthly fuel consumption for account {account_id}: {update}"
+                    );
+
+                    self.account_usage_repo.add(&account_usage).await?;
+                    limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
+                }
+                Err(AccountUsageError::AccountNotfound(_)) => {
+                    // we received an update for a deleted account
+                    // return an empty set of limits to fence the executor more quickly
+                    limits_of_updates_accounts.insert(
+                        account_id,
+                        ResourceLimits {
+                            available_fuel: 0,
+                            max_memory_per_worker: 0,
+                        },
+                    );
+                }
                 Err(other) => return Err(other),
             };
-
-            // fuel usage is allowed to exceeded the montly limit slightly.
-            // The worker executor will stop the worker at the next opportunity.
-            account_usage.add_change(UsageType::MonthlyGasLimit, update);
-
-            tracing::debug!("Updating monthly fuel consumption for account {account_id}: {update}");
-
-            self.account_usage_repo.add(&account_usage).await?;
-
-            limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
         }
         Ok(AccountResourceLimits(limits_of_updates_accounts))
     }
 
     pub async fn get_resouce_limits(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<ResourceLimits, AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
@@ -204,25 +223,25 @@ impl AccountUsageService {
 
     async fn get_account_usage(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         usage_type: Option<UsageType>,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
         let usage = match usage_type {
             Some(usage_type) => {
                 self.account_usage_repo
-                    .get_for_type(&account_id.0, &SqlDateTime::now(), usage_type)
+                    .get_for_type(account_id.0, &SqlDateTime::now(), usage_type)
                     .await?
             }
             None => {
                 self.account_usage_repo
-                    .get(&account_id.0, &SqlDateTime::now())
+                    .get(account_id.0, &SqlDateTime::now())
                     .await?
             }
         };
 
         match usage {
             Some(usage) => Ok(usage),
-            None => Err(AccountUsageError::AccountNotfound(*account_id)),
+            None => Err(AccountUsageError::AccountNotfound(account_id)),
         }
     }
 

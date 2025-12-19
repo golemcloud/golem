@@ -29,7 +29,7 @@ use crate::model::app::{
     WithSource,
 };
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
-use crate::model::app_raw::{BuiltinServer, Environment, Marker, Server};
+use crate::model::app_raw::{BuiltinServer, DeploymentOptions, Environment, Marker, Server};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
 use crate::model::text::server::ToFormattedServerContext;
@@ -69,8 +69,10 @@ pub struct Context {
     profile: NamedProfile,
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<SelectedManifestEnvironment>,
+    manifest_environment_deployment_options: Option<DeploymentOptions>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
+    http_parallelism: usize,
     auth_token_override: Option<String>,
     client_config: ClientConfig,
     yes: bool,
@@ -195,6 +197,18 @@ impl Context {
             },
         };
 
+        let manifest_environment_deployment_options = manifest_environment.as_ref().map(|env| {
+            let is_local = env.environment_name.0 == "local";
+            match env.environment.deployment.as_ref() {
+                Some(options) if is_local => options
+                    .clone()
+                    .with_defaults_from(DeploymentOptions::new_local()),
+                Some(options) => options.clone(),
+                None if is_local => DeploymentOptions::new_local(),
+                None => DeploymentOptions::new_cloud(),
+            }
+        });
+
         let use_cloud_profile_for_env = manifest_environment
             .as_ref()
             .map(|env| {
@@ -309,10 +323,12 @@ impl Context {
             deploy_args,
             profile,
             app_context_config,
-            http_batch_size: global_flags.http_batch_size.unwrap_or(50),
+            http_batch_size: global_flags.http_batch_size(),
+            http_parallelism: global_flags.http_parallelism(),
             auth_token_override: global_flags.auth_token,
             environment_reference,
             manifest_environment,
+            manifest_environment_deployment_options,
             yes,
             dev_mode: global_flags.dev_mode,
             show_sensitive: global_flags.show_sensitive,
@@ -394,12 +410,21 @@ impl Context {
         self.manifest_environment.as_ref()
     }
 
+    pub fn manifest_environment_deployment_options(&self) -> Option<&DeploymentOptions> {
+        self.log_context_selection_once();
+        self.manifest_environment_deployment_options.as_ref()
+    }
+
     pub fn caches(&self) -> &Caches {
         &self.caches
     }
 
     pub fn http_batch_size(&self) -> u64 {
         self.http_batch_size
+    }
+
+    pub fn http_parallelism(&self) -> usize {
+        self.http_parallelism
     }
 
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
@@ -658,14 +683,15 @@ impl Context {
         global_flags: &GolemCliGlobalFlags,
         force_use_cloud_profile: bool,
     ) -> anyhow::Result<NamedProfile> {
+        let config = Config::from_dir(&global_flags.config_dir())?;
+
         let profile_name = force_use_cloud_profile
             .then(ProfileName::cloud)
             .or_else(|| global_flags.profile.clone())
             .or_else(|| global_flags.local.then(ProfileName::local))
             .or_else(|| global_flags.cloud.then(ProfileName::cloud))
+            .or(config.default_profile)
             .unwrap_or_else(ProfileName::local);
-
-        let config = Config::from_dir(&global_flags.config_dir())?;
 
         let Some(profile) = config.profiles.get(&profile_name) else {
             bail!(ContextInitHintError::ProfileNotFound {

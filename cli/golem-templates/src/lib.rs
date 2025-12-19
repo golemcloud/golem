@@ -46,8 +46,8 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 "};
 
-static GOLEM_RUST_VERSION: &str = "1.10.0";
-static GOLEM_TS_VERSION: &str = "0.0.67";
+static GOLEM_RUST_VERSION: &str = "1.10.3";
+static GOLEM_TS_VERSION: &str = "0.0.72";
 static GOLEM_AI_VERSION: &str = "v0.4.0-dev.1";
 static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
 
@@ -427,7 +427,7 @@ fn transform(
             .replace("    # golem-app-manifest-dep-env-vars-doc", dep_env_vars_doc())
             .replace("    # golem-app-manifest-deps-doc", deps_doc())
             .replace("    # golem-app-manifest-env-presets",
-                     "    # TODO: atomic\n"
+                     "", // "    # TODO: atomic\n"
             )
     };
 

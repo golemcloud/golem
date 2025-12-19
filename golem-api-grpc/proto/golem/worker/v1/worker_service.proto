@@ -38,7 +38,6 @@ service WorkerService {
 message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
   string name = 2;
-  repeated string args = 3;
   map<string, string> env = 4;
   golem.worker.WasiConfigVars wasi_config_vars = 5;
   bool ignore_already_existing = 6;

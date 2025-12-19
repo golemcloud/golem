@@ -103,6 +103,8 @@ static WORKER_ID_MAX_LENGTH: usize = 512;
     Debug,
     Eq,
     PartialEq,
+    Ord,
+    PartialOrd,
     Hash,
     BinaryCodec,
     serde::Serialize,

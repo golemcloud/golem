@@ -1,17 +1,17 @@
 CREATE TABLE plans
 (
-    plan_id                              UUID   NOT NULL,
-    name                                 TEXT   NOT NULL,
+    plan_id                              UUID    NOT NULL,
+    name                                 TEXT    NOT NULL,
 
-    max_memory_per_worker                BIGINT NOT NULL,
-    total_app_count                      BIGINT NOT NULL,
-    total_env_count                      BIGINT NOT NULL,
-    total_component_count                BIGINT NOT NULL,
-    total_worker_count                   BIGINT NOT NULL,
-    total_worker_connection_count        BIGINT NOT NULL,
-    total_component_storage_bytes        BIGINT NOT NULL,
-    monthly_gas_limit                    BIGINT NOT NULL,
-    monthly_component_upload_limit_bytes BIGINT NOT NULL,
+    max_memory_per_worker                NUMERIC NOT NULL,
+    total_app_count                      NUMERIC NOT NULL,
+    total_env_count                      NUMERIC NOT NULL,
+    total_component_count                NUMERIC NOT NULL,
+    total_worker_count                   NUMERIC NOT NULL,
+    total_worker_connection_count        NUMERIC NOT NULL,
+    total_component_storage_bytes        NUMERIC NOT NULL,
+    monthly_gas_limit                    NUMERIC NOT NULL,
+    monthly_component_upload_limit_bytes NUMERIC NOT NULL,
 
     CONSTRAINT plans_pk
         PRIMARY KEY (plan_id)
@@ -50,6 +50,8 @@ CREATE TABLE accounts
 CREATE UNIQUE INDEX accounts_email_uk
     ON accounts (email)
     WHERE deleted_at IS NULL;
+
+CREATE INDEX accounts_deleted_at_idx ON accounts (deleted_at);
 
 CREATE TABLE account_revisions
 (
@@ -128,7 +130,7 @@ CREATE TABLE account_usage_stats
     account_id UUID      NOT NULL,
     usage_type INT       NOT NULL,
     usage_key  TEXT      NOT NULL,
-    value      BIGINT    NOT NULL,
+    value      NUMERIC   NOT NULL,
     updated_at TIMESTAMP NOT NULL,
     CONSTRAINT account_usage_stats_pk
         PRIMARY KEY (account_id, usage_type, usage_key),
@@ -162,6 +164,8 @@ CREATE TABLE applications
 CREATE UNIQUE INDEX applications_name_uk
     ON applications (account_id, name)
     WHERE deleted_at IS NULL;
+
+CREATE INDEX applications_account_id_idx ON applications (account_id);
 
 CREATE TABLE application_revisions
 (
@@ -203,6 +207,8 @@ CREATE TABLE environments
 CREATE UNIQUE INDEX environments_app_name_uk
     ON environments (application_id, name)
     WHERE deleted_at IS NULL;
+
+CREATE INDEX environments_application_id_idx ON environments (application_id);
 
 CREATE TABLE environment_revisions
 (
@@ -263,7 +269,7 @@ CREATE TABLE component_revisions
     created_by                   UUID      NOT NULL,
     deleted                      BOOLEAN   NOT NULL,
 
-    size                         INTEGER   NOT NULL,
+    size                         NUMERIC   NOT NULL,
     metadata                     BYTEA     NOT NULL,
     original_env                 JSONB     NOT NULL,
     env                          JSONB     NOT NULL,
@@ -557,28 +563,6 @@ CREATE UNIQUE INDEX plugins_name_version_uk ON plugins (account_id, name, versio
 
 CREATE INDEX plugins_component_idx ON plugins (component_id, component_revision_id);
 
-CREATE TABLE component_plugin_installations
-(
-    component_id UUID      NOT NULL,
-    revision_id  BIGINT    NOT NULL,
-    priority     INT       NOT NULL,
-
-    created_at   TIMESTAMP NOT NULL,
-    created_by   UUID      NOT NULL,
-
-    plugin_id    UUID      NOT NULL,
-    parameters   JSONB     NOT NULL,
-
-    CONSTRAINT component_plugin_installations_pk
-        PRIMARY KEY (component_id, revision_id, priority),
-    CONSTRAINT component_plugin_installations_components_fk
-        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions,
-    CONSTRAINT component_plugin_installations_plugins_fk
-        FOREIGN KEY (plugin_id) REFERENCES plugins
-);
-
-CREATE INDEX component_plugin_installations_plugin_idx ON component_plugin_installations (plugin_id);
-
 CREATE TABLE environment_shares
 (
     environment_share_id UUID      NOT NULL,
@@ -653,6 +637,26 @@ CREATE UNIQUE INDEX environment_plugin_grants_environment_plugin_uk
 
 CREATE INDEX environment_plugin_grants_environment_id_idx ON environment_plugin_grants (environment_id);
 CREATE INDEX environment_plugin_grants_plugin_id_idx ON environment_plugin_grants (plugin_id);
+
+CREATE TABLE component_plugin_installations
+(
+    component_id                UUID      NOT NULL,
+    revision_id                 BIGINT    NOT NULL,
+    priority                    INT       NOT NULL,
+
+    created_at                  TIMESTAMP NOT NULL,
+    created_by                  UUID      NOT NULL,
+
+    environment_plugin_grant_id UUID      NOT NULL,
+    parameters                  JSONB     NOT NULL,
+
+    CONSTRAINT component_plugin_installations_pk
+        PRIMARY KEY (component_id, revision_id, priority),
+    CONSTRAINT component_plugin_installations_components_fk
+        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions,
+    CONSTRAINT component_plugin_installations_environment_plugin_grant_id_fk
+        FOREIGN KEY (environment_plugin_grant_id) REFERENCES environment_plugin_grants
+);
 
 CREATE TABLE domain_registrations
 (
@@ -755,6 +759,9 @@ CREATE TABLE deployment_domain_http_api_definitions
 CREATE INDEX deployment_domain_http_api_definitions_domain_idx
     ON deployment_domain_http_api_definitions (domain);
 
+CREATE INDEX deployment_domain_http_api_definitions_http_api_definition_idx
+    ON deployment_domain_http_api_definitions (http_api_definition_id);
+
 CREATE TABLE deployment_compiled_http_api_definition_routes
 (
     environment_id         UUID    NOT NULL,
@@ -786,12 +793,14 @@ CREATE INDEX deployment_routes_routes_def_idx
 
 CREATE TABLE deployment_registered_agent_types
 (
-    environment_id         UUID   NOT NULL,
-    deployment_revision_id BIGINT NOT NULL,
-    agent_type_name        TEXT   NOT NULL,
+    environment_id          UUID   NOT NULL,
+    deployment_revision_id  BIGINT NOT NULL,
+    agent_type_name         TEXT   NOT NULL,
+    agent_wrapper_type_name TEXT   NOT NULL,
 
-    component_id           UUID   NOT NULL, -- compoenent implementing agent type in this deployment
-    agent_type             BYTEA  NOT NULL, -- full agent type as blob
+    component_id            UUID   NOT NULL, -- component id implementing agent-type in this deployment
+    component_revision_id   BIGINT NOT NULL, -- component revision id implementing agent-type in this deployment
+    agent_type              BYTEA  NOT NULL, -- full agent type as blob
 
     CONSTRAINT deployment_registered_agent_types_pk
         PRIMARY KEY (environment_id, deployment_revision_id, agent_type_name),
@@ -801,13 +810,16 @@ CREATE TABLE deployment_registered_agent_types
             REFERENCES environments (environment_id),
 
     CONSTRAINT deployment_registered_agent_types_components_fk
-        FOREIGN KEY (component_id)
-            REFERENCES components (component_id),
+        FOREIGN KEY (component_id, component_revision_id)
+            REFERENCES component_revisions (component_id, revision_id),
 
     CONSTRAINT deployment_registered_agent_types_deployment_revisions_fk
         FOREIGN KEY (environment_id, deployment_revision_id)
             REFERENCES deployment_revisions (environment_id, revision_id)
 );
 
-CREATE INDEX deployment_registered_agent_types_agent_type_idx
-    ON deployment_registered_agent_types (environment_id, deployment_revision_id, agent_type_name);
+CREATE UNIQUE INDEX deployment_registered_agent_types_agent_type_wrapper_idx
+    ON deployment_registered_agent_types (environment_id, deployment_revision_id, agent_wrapper_type_name);
+
+CREATE INDEX deployment_registered_agent_types_components_idx
+    ON deployment_registered_agent_types (component_id, component_revision_id, deployment_revision_id DESC);

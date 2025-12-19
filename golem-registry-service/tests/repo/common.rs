@@ -31,8 +31,7 @@ use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, ImmutableAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
-    ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRepoError,
-    ComponentRevisionRecord,
+    ComponentFileRecord, ComponentRepoError, ComponentRevisionRecord,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
@@ -81,7 +80,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
 
     let requested_account = deps
         .account_repo
-        .get_by_id(&account.account_id)
+        .get_by_id(account.account_id)
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
@@ -133,7 +132,7 @@ pub async fn test_application_create(deps: &Deps) {
 
     let app = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name)
+        .get_by_name(owner.revision.account_id, &app_name)
         .await
         .unwrap();
     assert!(app.is_none());
@@ -141,7 +140,7 @@ pub async fn test_application_create(deps: &Deps) {
     let app = deps
         .application_repo
         .create(
-            &owner.revision.account_id,
+            owner.revision.account_id,
             ApplicationRevisionRecord {
                 application_id: new_repo_uuid(),
                 revision_id: 0,
@@ -161,7 +160,7 @@ pub async fn test_application_create(deps: &Deps) {
 
     let app_2 = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name)
+        .get_by_name(owner.revision.account_id, &app_name)
         .await
         .unwrap();
     let_assert!(Some(app_2) = app_2);
@@ -180,7 +179,7 @@ pub async fn test_application_create_concurrent(deps: &Deps) {
             .map(|_| async {
                 deps.application_repo
                     .create(
-                        &owner.revision.account_id,
+                        owner.revision.account_id,
                         ApplicationRevisionRecord {
                             application_id: new_repo_uuid(),
                             revision_id: 0,
@@ -211,7 +210,7 @@ pub async fn test_application_create_concurrent(deps: &Deps) {
 
 pub async fn test_application_delete(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
 
     let deleted_app = ApplicationRevisionRecord {
         revision_id: app.revision.revision_id + 1,
@@ -225,13 +224,13 @@ pub async fn test_application_delete(deps: &Deps) {
 
     let get_by_id = deps
         .application_repo
-        .get_by_id(&app.revision.application_id)
+        .get_by_id(app.revision.application_id)
         .await
         .unwrap();
     assert!(get_by_id.is_none());
     let get_by_name = deps
         .application_repo
-        .get_by_name(&user.revision.account_id, &app.revision.name)
+        .get_by_name(user.revision.account_id, &app.revision.name)
         .await
         .unwrap();
     assert!(get_by_name.is_none());
@@ -245,7 +244,7 @@ pub async fn test_application_delete(deps: &Deps) {
     let new_app_with_same_name = deps
         .application_repo
         .create(
-            &user.revision.account_id,
+            user.revision.account_id,
             ApplicationRevisionRecord {
                 application_id: new_repo_uuid(),
                 revision_id: 0,
@@ -262,16 +261,16 @@ pub async fn test_application_delete(deps: &Deps) {
 
 pub async fn test_environment_create(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
 
     let env_name = "local";
 
     assert!(
         deps.environment_repo
             .get_by_name(
-                &app.revision.application_id,
+                app.revision.application_id,
                 env_name,
-                &user.revision.account_id,
+                user.revision.account_id,
                 false,
             )
             .await
@@ -293,7 +292,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env = deps
         .environment_repo
-        .create(&app.revision.application_id, revision_0.clone())
+        .create(app.revision.application_id, revision_0.clone())
         .await
         .unwrap();
 
@@ -303,9 +302,9 @@ pub async fn test_environment_create(deps: &Deps) {
     let env_by_name = deps
         .environment_repo
         .get_by_name(
-            &app.revision.application_id,
+            app.revision.application_id,
             env_name,
-            &user.revision.account_id,
+            user.revision.account_id,
             false,
         )
         .await
@@ -316,8 +315,8 @@ pub async fn test_environment_create(deps: &Deps) {
     let env_by_id = deps
         .environment_repo
         .get_by_id(
-            &env.revision.environment_id,
-            &user.revision.account_id,
+            env.revision.environment_id,
+            user.revision.account_id,
             false,
             false,
         )
@@ -329,7 +328,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
     let concurrency = 20;
 
     let results = join_all(
@@ -337,7 +336,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
             .map(|_| async move {
                 deps.environment_repo
                     .create(
-                        &app.revision.application_id,
+                        app.revision.application_id,
                         EnvironmentRevisionRecord {
                             environment_id: new_repo_uuid(),
                             revision_id: 0,
@@ -372,8 +371,8 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
 
 pub async fn test_environment_update(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
-    let env_rev_0 = deps.create_env(&app.revision.application_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env_rev_0 = deps.create_env(app.revision.application_id).await;
 
     let env_rev_1 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
@@ -404,9 +403,9 @@ pub async fn test_environment_update(deps: &Deps) {
     let rev_1_by_name = deps
         .environment_repo
         .get_by_name(
-            &env_rev_0.application_id,
+            env_rev_0.application_id,
             &env_rev_0.revision.name,
-            &user.revision.account_id,
+            user.revision.account_id,
             false,
         )
         .await
@@ -419,8 +418,8 @@ pub async fn test_environment_update(deps: &Deps) {
     let rev_1_by_id = deps
         .environment_repo
         .get_by_id(
-            &env_rev_1.environment_id,
-            &user.revision.account_id,
+            env_rev_1.environment_id,
+            user.revision.account_id,
             false,
             false,
         )
@@ -462,9 +461,9 @@ pub async fn test_environment_update(deps: &Deps) {
     let rev_2_by_name = deps
         .environment_repo
         .get_by_name(
-            &env_rev_0.application_id,
+            env_rev_0.application_id,
             &env_rev_0.revision.name,
-            &user.revision.account_id,
+            user.revision.account_id,
             false,
         )
         .await
@@ -477,8 +476,8 @@ pub async fn test_environment_update(deps: &Deps) {
     let rev_2_by_id = deps
         .environment_repo
         .get_by_id(
-            &env_rev_2.environment_id,
-            &user.revision.account_id,
+            env_rev_2.environment_id,
+            user.revision.account_id,
             false,
             false,
         )
@@ -492,8 +491,8 @@ pub async fn test_environment_update(deps: &Deps) {
 
 pub async fn test_environment_update_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
-    let env_rev_0 = deps.create_env(&app.revision.application_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env_rev_0 = deps.create_env(app.revision.application_id).await;
     let concurrency = 20;
 
     let results = join_all(
@@ -528,19 +527,18 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
-    let env = deps.create_env(&app.revision.application_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
     let app = deps
         .application_repo
-        .get_by_id(&env.application_id)
+        .get_by_id(env.application_id)
         .await
         .unwrap()
         .unwrap();
     let component_name = "test-component";
     let component_id = new_repo_uuid();
 
-    let plugin_a = deps
-        .plugin_repo
+    deps.plugin_repo
         .create(PluginRecord {
             plugin_id: new_repo_uuid(),
             account_id: app.account_id,
@@ -563,8 +561,7 @@ pub async fn test_component_stage(deps: &Deps) {
         .unwrap()
         .unwrap();
 
-    let plugin_b = deps
-        .plugin_repo
+    deps.plugin_repo
         .create(PluginRecord {
             plugin_id: new_repo_uuid(),
             account_id: app.account_id,
@@ -593,7 +590,7 @@ pub async fn test_component_stage(deps: &Deps) {
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        size: 10,
+        size: 10.into(),
         metadata: Blob::new(ComponentMetadata::from_parts(
             vec![],
             vec![],
@@ -615,28 +612,7 @@ pub async fn test_component_stage(deps: &Deps) {
             audit: RevisionAuditFields::new(user.revision.account_id),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
-        plugins: vec![
-            ComponentPluginInstallationRecord {
-                component_id,
-                revision_id: 0,
-                priority: 1,
-                audit: RevisionAuditFields::new(user.revision.account_id),
-                plugin_id: plugin_a.plugin_id,
-                plugin_name: plugin_a.name.clone(),
-                plugin_version: plugin_a.version.clone(),
-                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
-            },
-            ComponentPluginInstallationRecord {
-                component_id,
-                revision_id: 0,
-                priority: 2,
-                audit: RevisionAuditFields::new(user.revision.account_id),
-                plugin_id: plugin_b.plugin_id,
-                plugin_name: plugin_b.name.clone(),
-                plugin_version: plugin_b.version.clone(),
-                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
-            },
-        ],
+        plugins: vec![],
         files: vec![ComponentFileRecord {
             component_id,
             revision_id: 0,
@@ -651,7 +627,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let created_revision_0 = deps
         .component_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             component_name,
             revision_0.clone(),
             true,
@@ -666,7 +642,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let recreate = deps
         .component_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             component_name,
             revision_0.clone(),
             true,
@@ -676,7 +652,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let get_revision_0 = deps
         .component_repo
-        .get_staged_by_id(&component_id)
+        .get_staged_by_id(component_id)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
@@ -686,7 +662,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let get_revision_0 = deps
         .component_repo
-        .get_staged_by_name(&env.revision.environment_id, component_name)
+        .get_staged_by_name(env.revision.environment_id, component_name)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
@@ -696,7 +672,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let components = deps
         .component_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
     assert!(components.len() == 1);
@@ -706,7 +682,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let revision_1 = ComponentRevisionRecord {
         revision_id: 1,
-        size: 12345,
+        size: 12345.into(),
         env: Default::default(),
         binary_hash: SqlBlake3Hash::empty(),
         transformed_object_store_key: "xys-transformed".to_string(),
@@ -716,14 +692,6 @@ pub async fn test_component_stage(deps: &Deps) {
             .map(|file| ComponentFileRecord {
                 revision_id: 1,
                 ..file.clone()
-            })
-            .collect(),
-        plugins: revision_0
-            .plugins
-            .iter()
-            .map(|plugin| ComponentPluginInstallationRecord {
-                revision_id: 1,
-                ..plugin.clone()
             })
             .collect(),
         files: revision_0
@@ -753,7 +721,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let components = deps
         .component_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
     assert!(components.len() == 1);
@@ -773,7 +741,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let created_other_component_0 = deps
         .component_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             other_component_name,
             other_component_revision_0.clone(),
             true,
@@ -784,7 +752,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let components = deps
         .component_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
 
@@ -794,18 +762,18 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .component_repo
-        .delete(&user.revision.account_id, &component_id, 1)
+        .delete(user.revision.account_id, component_id, 1)
         .await;
     let_assert!(Err(ComponentRepoError::ConcurrentModification) = delete_with_old_revision);
 
     deps.component_repo
-        .delete(&user.revision.account_id, &component_id, 2)
+        .delete(user.revision.account_id, component_id, 2)
         .await
         .unwrap();
 
     let components = deps
         .component_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
 
@@ -822,7 +790,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let created_after_delete = deps
         .component_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             component_name,
             revision_after_delete.clone(),
             true,
@@ -841,8 +809,8 @@ pub async fn test_component_stage(deps: &Deps) {
 
 pub async fn test_http_api_definition_stage(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
-    let env = deps.create_env(&app.revision.application_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
     let definition_name = "test-api-definition";
     let definition_id = new_repo_uuid();
 
@@ -859,7 +827,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     let created_revision_0 = deps
         .http_api_definition_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             definition_name,
             revision_0.clone(),
             true,
@@ -874,7 +842,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     let recreate = deps
         .http_api_definition_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             definition_name,
             revision_0.clone(),
             true,
@@ -884,7 +852,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let get_revision_0 = deps
         .http_api_definition_repo
-        .get_staged_by_id(&definition_id)
+        .get_staged_by_id(definition_id)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
@@ -894,7 +862,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let get_revision_0 = deps
         .http_api_definition_repo
-        .get_staged_by_name(&env.revision.environment_id, definition_name)
+        .get_staged_by_name(env.revision.environment_id, definition_name)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
@@ -904,7 +872,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let definitions = deps
         .http_api_definition_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
     assert!(definitions.len() == 1);
@@ -939,7 +907,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let definitions = deps
         .http_api_definition_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
     assert!(definitions.len() == 1);
@@ -955,7 +923,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     let created_other_definition_0 = deps
         .http_api_definition_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             other_definition_name,
             other_definition_revision_0.clone(),
             true,
@@ -966,7 +934,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let definitions = deps
         .http_api_definition_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
 
@@ -976,18 +944,18 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .http_api_definition_repo
-        .delete(&user.revision.account_id, &definition_id, 1)
+        .delete(user.revision.account_id, definition_id, 1)
         .await;
     let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = delete_with_old_revision);
 
     deps.http_api_definition_repo
-        .delete(&user.revision.account_id, &definition_id, 2)
+        .delete(user.revision.account_id, definition_id, 2)
         .await
         .unwrap();
 
     let definitions = deps
         .http_api_definition_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
 
@@ -1001,7 +969,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     let created_after_delete = deps
         .http_api_definition_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             definition_name,
             revision_after_delete.clone(),
             true,
@@ -1018,8 +986,8 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
 pub async fn test_http_api_deployment_stage(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application(&user.revision.account_id).await;
-    let env = deps.create_env(&app.revision.application_id).await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
     let domain = "test-host-1.com";
     let deployment_id = new_repo_uuid();
 
@@ -1037,7 +1005,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     let created_definition = deps
         .http_api_definition_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             definition_name,
             definition_revision.clone(),
             true,
@@ -1058,7 +1026,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let created_revision_0 = deps
         .http_api_deployment_repo
-        .create(&env.revision.environment_id, domain, revision_0.clone())
+        .create(env.revision.environment_id, domain, revision_0.clone())
         .await
         .unwrap();
 
@@ -1068,14 +1036,14 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let recreate = deps
         .http_api_deployment_repo
-        .create(&env.revision.environment_id, domain, revision_0.clone())
+        .create(env.revision.environment_id, domain, revision_0.clone())
         .await;
 
     let_assert!(Err(HttpApiDeploymentRepoError::ApiDeploymentViolatesUniqueness) = recreate);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
-        .get_staged_by_id(&deployment_id)
+        .get_staged_by_id(deployment_id)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
@@ -1085,7 +1053,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let get_revision_0 = deps
         .http_api_deployment_repo
-        .get_staged_by_domain(&env.revision.environment_id, domain)
+        .get_staged_by_domain(env.revision.environment_id, domain)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
@@ -1095,7 +1063,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let deployments = deps
         .http_api_deployment_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
     assert!(deployments.len() == 1);
@@ -1129,7 +1097,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let deployments = deps
         .http_api_deployment_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
 
@@ -1147,7 +1115,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     let created_other_deployment_0 = deps
         .http_api_deployment_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             other_domain,
             other_deployment_revision_0.clone(),
         )
@@ -1157,7 +1125,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let deployments = deps
         .http_api_deployment_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
 
@@ -1167,19 +1135,19 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .http_api_deployment_repo
-        .delete(&user.revision.account_id, &deployment_id, 1)
+        .delete(user.revision.account_id, deployment_id, 1)
         .await;
 
     let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
 
     deps.http_api_deployment_repo
-        .delete(&user.revision.account_id, &deployment_id, 2)
+        .delete(user.revision.account_id, deployment_id, 2)
         .await
         .unwrap();
 
     let deployments = deps
         .http_api_deployment_repo
-        .list_staged(&env.revision.environment_id)
+        .list_staged(env.revision.environment_id)
         .await
         .unwrap();
 
@@ -1193,7 +1161,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     let created_after_delete = deps
         .http_api_deployment_repo
         .create(
-            &env.revision.environment_id,
+            env.revision.environment_id,
             domain,
             revision_after_delete.clone(),
         )
@@ -1213,13 +1181,13 @@ pub async fn test_account_usage(deps: &Deps) {
 
     let mut usage = deps
         .account_usage_repo
-        .get(&user.revision.account_id, &now)
+        .get(user.revision.account_id, &now)
         .await
         .unwrap()
         .unwrap();
 
     for usage_type in UsageType::iter() {
-        let limit: i64 = match usage_type {
+        let limit: u64 = match usage_type {
             UsageType::TotalAppCount => 3,
             UsageType::TotalEnvCount => 10,
             UsageType::TotalComponentCount => 15,
@@ -1243,7 +1211,7 @@ pub async fn test_account_usage(deps: &Deps) {
         deps.account_usage_repo.add(&increased_usage).await.unwrap();
         let usage = deps
             .account_usage_repo
-            .get(&user.revision.account_id, &now)
+            .get(user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1262,7 +1230,7 @@ pub async fn test_account_usage(deps: &Deps) {
         deps.account_usage_repo.add(&increased_usage).await.unwrap();
         let usage = deps
             .account_usage_repo
-            .get(&user.revision.account_id, &now)
+            .get(user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1280,7 +1248,7 @@ pub async fn test_account_usage(deps: &Deps) {
     {
         let mut usage = deps
             .account_usage_repo
-            .get(&user.revision.account_id, &now)
+            .get(user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1294,7 +1262,7 @@ pub async fn test_account_usage(deps: &Deps) {
         let app = deps
             .application_repo
             .create(
-                &user.revision.account_id,
+                user.revision.account_id,
                 ApplicationRevisionRecord {
                     application_id: new_repo_uuid(),
                     revision_id: 0,
@@ -1308,7 +1276,7 @@ pub async fn test_account_usage(deps: &Deps) {
         let env = deps
             .environment_repo
             .create(
-                &app.revision.application_id,
+                app.revision.application_id,
                 EnvironmentRevisionRecord {
                     environment_id: new_repo_uuid(),
                     revision_id: 0,
@@ -1325,7 +1293,7 @@ pub async fn test_account_usage(deps: &Deps) {
         let _component = deps
             .component_repo
             .create(
-                &env.revision.environment_id,
+                env.revision.environment_id,
                 "component",
                 ComponentRevisionRecord {
                     component_id: Default::default(),
@@ -1333,7 +1301,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     version: "".to_string(),
                     hash: SqlBlake3Hash::empty(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                    size: 0,
+                    size: 0.into(),
                     metadata: Blob::new(ComponentMetadata::from_parts(
                         vec![],
                         vec![],
@@ -1358,7 +1326,7 @@ pub async fn test_account_usage(deps: &Deps) {
 
         let usage = deps
             .account_usage_repo
-            .get(&user.revision.account_id, &now)
+            .get(user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();

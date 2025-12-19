@@ -1,8 +1,6 @@
 ## Generated from default config
-grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 http_port = 8082
-port = 9000
 tracing_file_name_with_port = true
 
 [active_workers]
@@ -34,6 +32,14 @@ time_to_idle = "12h"
 
 [engine]
 enable_fs_cache = false
+
+[grpc]
+port = 9093
+
+[grpc.tls]
+type = "Disabled"
+
+[grpc.tls.config]
 
 [indexed_storage]
 type = "KVStoreRedis"
@@ -89,20 +95,22 @@ max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
 
-[plugin_service]
-plugin_cache_size = 1024
-
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
 port = 9007
 
-[public_worker_api.retries]
+[public_worker_api.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[public_worker_api.tls]
+type = "Disabled"
+
+[public_worker_api.tls.config]
 
 [rdbms.pool]
 acquire_timeout = "3s"
@@ -119,12 +127,17 @@ host = "localhost"
 max_message_size = 52428800
 port = 8080
 
-[registry_service.retries]
+[registry_service.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[registry_service.tls]
+type = "Disabled"
+
+[registry_service.tls.config]
 
 [resource_limits]
 type = "Grpc"
@@ -146,6 +159,7 @@ refresh_interval = "2s"
 type = "Grpc"
 
 [shard_manager_service.config]
+connect_timeout = "10s"
 host = "localhost"
 port = 9002
 
@@ -155,6 +169,18 @@ max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[shard_manager_service.config.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[shard_manager_service.config.tls]
+type = "Disabled"
+
+[shard_manager_service.config.tls.config]
 
 [suspend]
 suspend_after = "10s"
@@ -209,10 +235,8 @@ without_time = false
 
 
 ## Generated from example config: with redis indexed_storage, s3 blob storage, single shard manager service
-# grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
-# port = 9000
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -260,6 +284,14 @@ without_time = false
 # 
 # [engine]
 # enable_fs_cache = false
+# 
+# [grpc]
+# port = 9093
+# 
+# [grpc.tls]
+# type = "Disabled"
+# 
+# [grpc.tls.config]
 # 
 # [indexed_storage]
 # type = "Redis"
@@ -315,20 +347,22 @@ without_time = false
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
 # 
-# [plugin_service]
-# plugin_cache_size = 1024
-# 
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
 # port = 9007
 # 
-# [public_worker_api.retries]
+# [public_worker_api.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [public_worker_api.tls]
+# type = "Disabled"
+# 
+# [public_worker_api.tls.config]
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"
@@ -345,12 +379,17 @@ without_time = false
 # max_message_size = 52428800
 # port = 8080
 # 
-# [registry_service.retries]
+# [registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [registry_service.tls]
+# type = "Disabled"
+# 
+# [registry_service.tls.config]
 # 
 # [resource_limits]
 # type = "Grpc"
@@ -425,10 +464,8 @@ without_time = false
 # without_time = false
 
 ## Generated from example config: with in-memory key value storage, indexed storage and blob storage
-# grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
-# port = 9000
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -459,6 +496,14 @@ without_time = false
 # 
 # [engine]
 # enable_fs_cache = false
+# 
+# [grpc]
+# port = 9093
+# 
+# [grpc.tls]
+# type = "Disabled"
+# 
+# [grpc.tls.config]
 # 
 # [indexed_storage]
 # type = "InMemory"
@@ -501,20 +546,22 @@ without_time = false
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
 # 
-# [plugin_service]
-# plugin_cache_size = 1024
-# 
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
 # port = 9007
 # 
-# [public_worker_api.retries]
+# [public_worker_api.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [public_worker_api.tls]
+# type = "Disabled"
+# 
+# [public_worker_api.tls.config]
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"
@@ -531,12 +578,17 @@ without_time = false
 # max_message_size = 52428800
 # port = 8080
 # 
-# [registry_service.retries]
+# [registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [registry_service.tls]
+# type = "Disabled"
+# 
+# [registry_service.tls.config]
 # 
 # [resource_limits]
 # type = "Grpc"
@@ -558,6 +610,7 @@ without_time = false
 # type = "Grpc"
 # 
 # [shard_manager_service.config]
+# connect_timeout = "10s"
 # host = "localhost"
 # port = 9002
 # 
@@ -567,6 +620,18 @@ without_time = false
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [shard_manager_service.config.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [shard_manager_service.config.tls]
+# type = "Disabled"
+# 
+# [shard_manager_service.config.tls.config]
 # 
 # [suspend]
 # suspend_after = "10s"

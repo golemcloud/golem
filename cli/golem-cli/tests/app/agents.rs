@@ -15,7 +15,7 @@ async fn test_rust_counter() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -48,7 +48,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
 
     assert!(outputs.success());
 
@@ -102,10 +102,10 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::DEPLOY]).await;
     assert!(outputs.success());
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
@@ -448,7 +448,7 @@ async fn test_ts_counter() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -486,7 +486,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
 
     assert!(outputs.success());
 
@@ -538,10 +538,10 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
@@ -565,7 +565,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function optional (that has null, defined as union)
     run_and_assert(
         &ctx,
-        "fun-optional",
+        "ts:agent/foo-agent.{fun-optional}",
         &[
             "some(case1(\"foo\"))",
             "{a: some(\"foo\")}",
@@ -577,6 +577,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         ],
     )
     .await;
+
+    run_and_assert(&ctx, "fun-optional-q-mark", &["x", "none", r#"some("y")"#]).await;
 
     // function with a simple object
     run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
@@ -730,9 +732,9 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 #[test]
 async fn test_common_dep_plugs_errors() {
     let mut ctx = TestContext::new();
-    let app_name = "common_dep_plug_errors";
+    let app_name = "common-dep-plug-errors";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -742,7 +744,7 @@ async fn test_common_dep_plugs_errors() {
         .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
     let component_manifest_path = ctx.cwd_path_join(
@@ -777,7 +779,7 @@ async fn test_common_dep_plugs_errors() {
     )
         .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(!outputs.success());
     assert2::assert!(outputs.stderr_contains_ordered(
         [
@@ -803,7 +805,7 @@ async fn test_common_dep_plugs_errors() {
     )
         .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
     fs::write_str(
@@ -840,7 +842,7 @@ async fn test_common_dep_plugs_errors() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
     let outputs = ctx
@@ -861,9 +863,9 @@ async fn test_common_dep_plugs_errors() {
 #[test]
 async fn test_component_env_var_substitution() {
     let mut ctx = TestContext::new();
-    let app_name = "env_var_substitution";
+    let app_name = "env-var-substitution";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -897,12 +899,12 @@ async fn test_component_env_var_substitution() {
     ctx.start_server().await;
 
     // Building is okay, as that does not resolve env vars
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
     // But deploying will do so, so it should fail
     let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY, flag::YES])
+        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
         .await;
     assert!(!outputs.success());
 
@@ -921,7 +923,7 @@ async fn test_component_env_var_substitution() {
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_3", "456");
 
     let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY, flag::YES])
+        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
         .await;
     assert!(outputs.success());
 
@@ -937,9 +939,9 @@ async fn test_component_env_var_substitution() {
 #[test]
 async fn test_http_api_merging() {
     let mut ctx = TestContext::new();
-    let app_name = "http_api_merging";
+    let app_name = "http-api-merging";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -1033,10 +1035,9 @@ async fn test_http_api_merging() {
     .unwrap();
 
     // Check that the merged manifest is loadable
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert!(!outputs.success());
     assert!(!outputs.stdout_contains("error"));
-    assert!(!outputs.stderr_contains("error"));
     assert!(outputs.stderr_contains_ordered([
         "Application API definitions:",
         "  def-a@0.0.1",
@@ -1078,7 +1079,7 @@ async fn test_http_api_merging() {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP]).await;
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains(
         "error: HTTP API Deployment local - http_api_merging.localhost:9006 - def-a is defined in multiple sources"
@@ -1116,7 +1117,7 @@ async fn test_http_api_merging() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "+httpApiDeployments:",
@@ -1133,9 +1134,9 @@ async fn test_http_api_merging() {
 #[test]
 async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     let mut ctx = TestContext::new();
-    let app_name = "common_dep_plug_errors";
+    let app_name = "common-dep-plug-errors";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -1143,7 +1144,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
     let component_golem_yaml = ctx.cwd_path_join(
@@ -1233,11 +1234,11 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
 #[test]
 async fn test_naming_extremes() {
     let mut ctx = TestContext::new();
-    let app_name = "test_naming_extremes";
+    let app_name = "test-naming-extremes";
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);

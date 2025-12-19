@@ -15,7 +15,7 @@
 use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_common::error_forwarding;
-use golem_common::model::account::{Account, AccountId, AccountRevision};
+use golem_common::model::account::{Account, AccountEmail, AccountId, AccountRevision};
 use golem_common::model::auth::AccountRole;
 use golem_common::model::plan::PlanId;
 use golem_service_base::repo::RepoError;
@@ -87,7 +87,7 @@ impl AccountRevisionRecord {
             account_id: value.id.0,
             revision_id: value.revision.into(),
             name: value.name,
-            email: value.email,
+            email: value.email.0,
             plan_id: value.plan_id.0,
             roles: roles_to_bit_vector(&value.roles),
             audit,
@@ -108,9 +108,9 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
     fn try_from(value: AccountExtRevisionRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             id: AccountId(value.revision.account_id),
-            revision: value.revision.revision_id.into(),
+            revision: value.revision.revision_id.try_into()?,
             name: value.revision.name,
-            email: value.revision.email,
+            email: AccountEmail(value.revision.email),
             plan_id: PlanId(value.revision.plan_id),
             roles: roles_from_bit_vector(value.revision.roles),
         })

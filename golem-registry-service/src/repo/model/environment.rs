@@ -17,7 +17,7 @@ use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::diff::Hashable;
@@ -58,6 +58,7 @@ pub struct EnvironmentExtRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -91,7 +92,7 @@ impl EnvironmentRevisionRecord {
     pub fn from_model(environment: Environment, audit: DeletableRevisionAuditFields) -> Self {
         Self {
             environment_id: environment.id.0,
-            revision_id: environment.revision.0 as i64,
+            revision_id: environment.revision.into(),
             name: environment.name.0,
             hash: SqlBlake3Hash::empty(),
             compatibility_check: environment.compatibility_check,
@@ -131,14 +132,16 @@ pub struct EnvironmentExtRevisionRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
-impl From<EnvironmentExtRevisionRecord> for Environment {
-    fn from(value: EnvironmentExtRevisionRecord) -> Self {
-        Self {
+impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
+    type Error = EnvironmentRepoError;
+    fn try_from(value: EnvironmentExtRevisionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: EnvironmentId(value.revision.environment_id),
-            revision: value.revision.revision_id.into(),
+            revision: value.revision.revision_id.try_into()?,
             application_id: ApplicationId(value.application_id),
             name: EnvironmentName(value.revision.name),
             compatibility_check: value.revision.compatibility_check,
@@ -153,18 +156,23 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
             current_deployment: match (
                 value.current_deployment_revision,
                 value.current_deployment_deployment_revision,
+                value.current_deployment_deployment_version,
                 value.current_deployment_deployment_hash,
             ) {
-                (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
-                    Some(EnvironmentCurrentDeploymentView {
-                        revision: revision.into(),
-                        deployment_revision: deployment_revision.into(),
-                        deployment_hash: deployment_hash.into_blake3_hash().into(),
-                    })
-                }
+                (
+                    Some(revision),
+                    Some(deployment_revision),
+                    Some(deployment_version),
+                    Some(deployment_hash),
+                ) => Some(EnvironmentCurrentDeploymentView {
+                    revision: revision.try_into()?,
+                    deployment_revision: deployment_revision.try_into()?,
+                    deployment_version: deployment_version.into(),
+                    deployment_hash: deployment_hash.into_blake3_hash().into(),
+                }),
                 _ => None,
             },
-        }
+        })
     }
 }
 
@@ -189,6 +197,7 @@ pub struct OptionalEnvironmentExtRevisionRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -234,6 +243,7 @@ impl OptionalEnvironmentExtRevisionRecord {
 
             current_deployment_revision: self.current_deployment_revision,
             current_deployment_deployment_revision: self.current_deployment_deployment_revision,
+            current_deployment_deployment_version: self.current_deployment_deployment_version,
             current_deployment_deployment_hash: self.current_deployment_deployment_hash,
         })
     }
@@ -253,6 +263,7 @@ pub struct EnvironmentWithDetailsRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 
     pub application_id: Uuid,
@@ -263,12 +274,13 @@ pub struct EnvironmentWithDetailsRecord {
     pub account_email: String,
 }
 
-impl From<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
-    fn from(value: EnvironmentWithDetailsRecord) -> Self {
-        EnvironmentWithDetails {
+impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
+    type Error = EnvironmentRepoError;
+    fn try_from(value: EnvironmentWithDetailsRecord) -> Result<Self, Self::Error> {
+        Ok(EnvironmentWithDetails {
             environment: EnvironmentSummary {
                 id: EnvironmentId(value.environment_id),
-                revision: value.environment_revision_id.into(),
+                revision: value.environment_revision_id.try_into()?,
                 name: EnvironmentName(value.environment_name),
                 compatibility_check: value.environment_compatibility_check,
                 version_check: value.environment_version_check,
@@ -279,15 +291,20 @@ impl From<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
                 current_deployment: match (
                     value.current_deployment_revision,
                     value.current_deployment_deployment_revision,
+                    value.current_deployment_deployment_version,
                     value.current_deployment_deployment_hash,
                 ) {
-                    (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
-                        Some(EnvironmentCurrentDeploymentView {
-                            revision: revision.into(),
-                            deployment_revision: deployment_revision.into(),
-                            deployment_hash: deployment_hash.into_blake3_hash().into(),
-                        })
-                    }
+                    (
+                        Some(revision),
+                        Some(deployment_revision),
+                        Some(deployment_version),
+                        Some(deployment_hash),
+                    ) => Some(EnvironmentCurrentDeploymentView {
+                        revision: revision.try_into()?,
+                        deployment_revision: deployment_revision.try_into()?,
+                        deployment_version: deployment_version.into(),
+                        deployment_hash: deployment_hash.into_blake3_hash().into(),
+                    }),
                     _ => None,
                 },
             },
@@ -298,8 +315,8 @@ impl From<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
             account: AccountSummary {
                 id: AccountId(value.account_id),
                 name: value.account_name,
-                email: value.account_email,
+                email: AccountEmail(value.account_email),
             },
-        }
+        })
     }
 }

@@ -38,14 +38,14 @@ pub struct ApplicationWithSource {
 
 impl ApplicationWithSource {
     pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-        Self::from_yaml_string(file.clone(), fs::read_to_string(file.clone())?)
+        Self::from_yaml_string(file.clone(), &fs::read_to_string(file.clone())?)
             .with_context(|| anyhow!("Failed to load source {}", file.log_color_highlight()))
     }
 
-    pub fn from_yaml_string(source: PathBuf, string: String) -> serde_yaml::Result<Self> {
+    pub fn from_yaml_string(source: PathBuf, string: &str) -> serde_yaml::Result<Self> {
         Ok(Self {
             source,
-            application: Application::from_yaml_str(string.as_str())?,
+            application: Application::from_yaml_str(string)?,
         })
     }
 
@@ -256,7 +256,60 @@ pub struct CliOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeploymentOptions {
-    // TODO: atomic
+    pub compatibility_check: Option<bool>,
+    pub version_check: Option<bool>,
+    pub security_overrides: Option<bool>,
+}
+
+impl DeploymentOptions {
+    pub fn new_local() -> Self {
+        Self {
+            compatibility_check: Some(false),
+            version_check: Some(false),
+            security_overrides: Some(true),
+        }
+    }
+
+    pub fn new_cloud() -> Self {
+        Self {
+            compatibility_check: None,
+            version_check: None,
+            security_overrides: None,
+        }
+    }
+
+    pub fn with_defaults_from(mut self, other: Self) -> Self {
+        if self.compatibility_check.is_none() {
+            self.compatibility_check = other.compatibility_check;
+        }
+        if self.version_check.is_none() {
+            self.version_check = other.version_check;
+        }
+        if self.security_overrides.is_none() {
+            self.security_overrides = other.security_overrides;
+        }
+        self
+    }
+
+    pub fn compatibility_check(&self) -> bool {
+        self.compatibility_check.unwrap_or(true)
+    }
+
+    pub fn version_check(&self) -> bool {
+        self.version_check.unwrap_or(true)
+    }
+
+    pub fn security_overrides(&self) -> bool {
+        self.security_overrides.unwrap_or(false)
+    }
+
+    pub fn to_diffable(&self) -> diff::Environment {
+        diff::Environment {
+            compatibility_check: self.compatibility_check(),
+            version_check: self.version_check(),
+            security_overrides: self.security_overrides(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

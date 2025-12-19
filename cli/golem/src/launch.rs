@@ -17,7 +17,7 @@ use crate::StartedComponents;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::Empty;
@@ -28,6 +28,7 @@ use golem_registry_service::config::{
 use golem_registry_service::RegistryService;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
+use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
 };
@@ -35,9 +36,9 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, PluginServiceConfig,
-    ResourceLimitsConfig, ResourceLimitsGrpcConfig, ShardManagerServiceConfig,
-    ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
+    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
+    ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::config::{RouteResolverConfig, WorkerServiceConfig};
 use golem_worker_service::WorkerService;
@@ -153,7 +154,10 @@ fn registry_service_config(
 
     RegistryServiceConfig {
         http_port: 0,
-        grpc_port: 0,
+        grpc: golem_registry_service::config::GrpcApiConfig {
+            port: 0,
+            ..Default::default()
+        },
         db: DbConfig::Sqlite(DbSqliteConfig {
             database: args
                 .data_dir
@@ -166,12 +170,11 @@ fn registry_service_config(
         login: LoginConfig::Disabled(Empty {}),
         cors_origin_regex: ".*".to_string(),
         component_compilation: golem_registry_service::config::ComponentCompilationConfig::Enabled(
-            ComponentCompilationEnabledConfig {
+            Box::new(ComponentCompilationEnabledConfig {
                 host: args.router_addr.clone(),
                 port: component_compilation_service.grpc_port,
-                retries: Default::default(),
-                connect_timeout: Default::default(),
-            },
+                ..Default::default()
+            }),
         ),
         blob_storage: blob_storage_config(args),
         initial_plans: {
@@ -181,14 +184,14 @@ fn registry_service_config(
                 PrecreatedPlan {
                     plan_id,
                     plan_name,
-                    app_limit: i64::MAX,
-                    env_limit: i64::MAX,
-                    component_limit: i64::MAX,
-                    worker_limit: i64::MAX,
-                    worker_connection_limit: i64::MAX,
-                    storage_limit: i64::MAX,
-                    monthly_gas_limit: i64::MAX,
-                    monthly_upload_limit: i64::MAX,
+                    app_limit: u64::MAX,
+                    env_limit: u64::MAX,
+                    component_limit: u64::MAX,
+                    worker_limit: u64::MAX,
+                    worker_connection_limit: u64::MAX,
+                    storage_limit: u64::MAX,
+                    monthly_gas_limit: u64::MAX,
+                    monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
                 },
             );
@@ -201,7 +204,7 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("51de7d7d-f286-49aa-b79a-96022f7e2df9")),
                     name: "Initial User".to_string(),
-                    email: "initial@user".to_string(),
+                    email: AccountEmail("initial@user".to_string()),
                     token: TokenSecret::trusted(ADMIN_TOKEN.to_string()),
                     plan_id,
                     role: AccountRole::Admin,
@@ -219,8 +222,11 @@ fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
     };
 
     ShardManagerConfig {
-        grpc_port: 0,
         http_port: 0,
+        grpc: golem_shard_manager::shard_manager_config::GrpcApiConfig {
+            port: 0,
+            ..Default::default()
+        },
         persistence: PersistenceConfig::FileSystem(FileSystemPersistenceConfig {
             path: args.data_dir.join("sharding.bin"),
         }),
@@ -242,8 +248,11 @@ fn component_compilation_service_config(
             CompiledComponentServiceEnabledConfig {},
         ),
         blob_storage: blob_storage_config(args),
-        grpc_port: 0,
         http_port: 0,
+        grpc: golem_component_compilation_service::config::GrpcApiConfig {
+            port: 0,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -255,37 +264,31 @@ fn worker_executor_config(
     worker_service_run_details: &golem_worker_service::TrafficReadyEndpoints,
 ) -> WorkerExecutorConfig {
     let mut config = WorkerExecutorConfig {
-        port: 0,
         http_port: 0,
-        key_value_storage:
-        KeyValueStorageConfig::Sqlite(
-            DbSqliteConfig {
-                database: args
-                    .data_dir
-                    .join("kv-store.db")
-                    .to_string_lossy()
-                    .to_string(),
-                max_connections: 4,
-                foreign_keys: false,
-            },
-        ),
-        indexed_storage:
-        IndexedStorageConfig::KVStoreSqlite(
-            IndexedStorageKVStoreSqliteConfig {},
-        ),
-        blob_storage: blob_storage_config(args),
-        compiled_component_service: golem_service_base::service::compiled_component::CompiledComponentServiceConfig::Enabled(
-            golem_service_base::service::compiled_component::CompiledComponentServiceEnabledConfig {},
-        ),
-        shard_manager_service: ShardManagerServiceConfig::Grpc(ShardManagerServiceGrpcConfig {
-            host: args.router_addr.clone(),
-            port: shard_manager_run_details.grpc_port,
-            ..ShardManagerServiceGrpcConfig::default()
-        }),
-        plugin_service: PluginServiceConfig {
+        grpc: golem_worker_executor::services::golem_config::GrpcApiConfig {
+            port: 0,
             ..Default::default()
         },
-        registry_service: golem_service_base::clients::RegistryServiceConfig {
+        key_value_storage: KeyValueStorageConfig::MultiSqlite(KeyValueStorageMultiSqliteConfig {
+            root_dir: args.data_dir.join("kv-store"),
+            max_connections: 4,
+            foreign_keys: false,
+        }),
+        indexed_storage: IndexedStorageConfig::KVStoreMultiSqlite(
+            IndexedStorageKVStoreMultiSqliteConfig {},
+        ),
+        blob_storage: blob_storage_config(args),
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
+        ),
+        shard_manager_service: ShardManagerServiceConfig::Grpc(Box::new(
+            ShardManagerServiceGrpcConfig {
+                host: args.router_addr.clone(),
+                port: shard_manager_run_details.grpc_port,
+                ..ShardManagerServiceGrpcConfig::default()
+            },
+        )),
+        registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
             host: args.router_addr.clone(),
             port: registry_service_run_details.grpc_port,
             ..Default::default()
@@ -301,8 +304,7 @@ fn worker_executor_config(
         public_worker_api: WorkerServiceGrpcConfig {
             host: args.router_addr.clone(),
             port: worker_service_run_details.grpc_port,
-            retries: Default::default(),
-            connect_timeout: Default::default(),
+            client_config: GrpcClientConfig::default(),
         },
         ..Default::default()
     };
@@ -318,8 +320,11 @@ fn worker_service_config(
 ) -> WorkerServiceConfig {
     WorkerServiceConfig {
         port: 0,
-        worker_grpc_port: 0,
         custom_request_port: args.custom_request_port,
+        grpc: golem_worker_service::config::GrpcApiConfig {
+            port: 0,
+            ..Default::default()
+        },
         gateway_session_storage: golem_worker_service::config::GatewaySessionStorageConfig::Sqlite(
             DbSqliteConfig {
                 database: args
@@ -337,7 +342,7 @@ fn worker_service_config(
             port: shard_manager_run_details.grpc_port,
             ..RoutingTableConfig::default()
         },
-        registry_service: golem_service_base::clients::RegistryServiceConfig {
+        registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
             host: args.router_addr.clone(),
             port: registry_service_run_details.grpc_port,
             ..Default::default()

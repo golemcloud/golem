@@ -31,7 +31,7 @@ use golem_client::api::{
 use golem_client::model::{
     CompleteParameters, InvokeParameters, UpdateWorkerRequest, WorkersMetadataRequest,
 };
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
@@ -68,7 +68,7 @@ use uuid::Uuid;
 pub struct TestUserContext<Deps> {
     pub deps: Deps,
     pub account_id: AccountId,
-    pub account_email: String,
+    pub account_email: AccountEmail,
     pub token: TokenSecret,
     pub auto_deploy_enabled: bool,
 }
@@ -193,18 +193,30 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
-        let component_directy = self.deps.component_directory();
+        let component_directory = self.deps.component_directory();
+        let client = self.deps.registry_service().client(&self.token).await;
 
         let updated_wasm = if let Some(wasm_name) = wasm_name {
-            let source_path: PathBuf = component_directy.join(format!("{wasm_name}.wasm"));
-            Some(File::open(source_path).await?)
+            let source_path: PathBuf = component_directory.join(format!("{wasm_name}.wasm"));
+
+            let component = client.get_component(&component_id.0).await?;
+
+            let source_path = rename_component_if_needed(
+                self.deps.borrow().temp_directory(),
+                &source_path,
+                &component.component_name.0,
+            )?;
+
+            let agent_types = extract_agent_types(&source_path, false, true).await?;
+
+            Some((File::open(source_path).await?, agent_types))
         } else {
             None
         };
 
         let (_tmp_dir, maybe_new_files_archive) = if !new_files.is_empty() {
             let (tmp_dir, new_files_archive) =
-                build_ifs_archive(component_directy, &new_files).await?;
+                build_ifs_archive(component_directory, &new_files).await?;
             (Some(tmp_dir), Some(File::open(new_files_archive).await?))
         } else {
             (None, None)
@@ -222,8 +234,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             })
             .apply(BTreeMap::from_iter);
 
-        let client = self.deps.registry_service().client(&self.token).await;
-
         let component = client
             .update_component(
                 &component_id.0,
@@ -233,10 +243,12 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     removed_files,
                     dynamic_linking,
                     env,
-                    agent_types: None,
+                    agent_types: updated_wasm
+                        .as_ref()
+                        .map(|(_wasm, agent_types)| agent_types.clone()),
                     plugin_updates: Vec::new(),
                 },
-                updated_wasm,
+                updated_wasm.map(|(wasm, _agent_types)| wasm),
                 maybe_new_files_archive,
             )
             .await?;
@@ -253,7 +265,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
@@ -268,9 +279,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &component_id.0,
                 &WorkerCreationRequest {
                     name: name.to_string(),
-                    args,
                     env,
-                    wasi_config_vars: wasi_config_vars.into(),
+                    config_vars: wasi_config_vars.into(),
                 },
             )
             .await?;
@@ -282,11 +292,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
-        self.try_start_worker_with(component_id, name, args, env, wasi_config_vars)
+        self.try_start_worker_with(component_id, name, env, wasi_config_vars)
             .await
     }
 
@@ -558,7 +567,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &worker_id.worker_name,
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Automatic,
-                    target_revision: target_revision.0,
+                    target_revision: target_revision.into(),
                 },
             )
             .await?;
@@ -581,7 +590,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &worker_id.worker_name,
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Manual,
-                    target_revision: target_revision.0,
+                    target_revision: target_revision.into(),
                 },
             )
             .await?;

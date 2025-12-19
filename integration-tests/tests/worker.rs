@@ -449,13 +449,7 @@ async fn auction_example_1(
     );
 
     let registry_worker_id = user
-        .start_worker_with(
-            &registry_component.id,
-            "auction-registry-1",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&registry_component.id, "auction-registry-1", env, vec![])
         .await?;
 
     user.log_output(&registry_worker_id).await?;
@@ -662,7 +656,6 @@ async fn get_running_workers(
             .start_worker_with(
                 &component.id,
                 &format!("worker-http-client-{i}"),
-                vec![],
                 env.clone(),
                 vec![],
             )
@@ -1214,13 +1207,7 @@ async fn worker_use_initial_files(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = user
-        .start_worker_with(
-            &component.id,
-            "initial-file-read-write-1",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "initial-file-read-write-1", env, vec![])
         .await?;
 
     let result = user.invoke_and_await(&worker_id, "run", vec![]).await?;
@@ -1399,13 +1386,7 @@ async fn worker_read_files(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = user
-        .start_worker_with(
-            &component.id,
-            "initial-file-read-write-3",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "initial-file-read-write-3", env, vec![])
         .await?;
 
     // run the worker so it can update the files.
@@ -1727,7 +1708,7 @@ async fn worker_suspends_when_running_out_of_fuel(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = user
-        .start_worker_with(&component.id, "http-client-1", vec![], env, vec![])
+        .start_worker_with(&component.id, "http-client-1", env, vec![])
         .await?;
 
     let invoker_task = tokio::spawn({
@@ -1788,6 +1769,126 @@ async fn agent_await_parallel_rpc_calls(
         vec![20f64.into_value_and_type()],
     )
     .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn agent_update_constructor_signature(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .name("it:agent-update")
+        .store()
+        .await?;
+
+    let agent1 = user
+        .start_worker(&component.id, "counter-agent(\"agent1\")")
+        .await?;
+    let result1a = user
+        .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
+        .await?;
+    assert_eq!(result1a, vec![Value::U32(1)]);
+
+    let old_singleton = user.start_worker(&component.id, "caller()").await?;
+    user.log_output(&old_singleton).await?;
+
+    let result1b = user
+        .invoke_and_await(
+            &old_singleton,
+            "it:agent-update/caller.{call}",
+            vec!["agent1".into_value_and_type()],
+        )
+        .await?;
+    assert_eq!(result1b, vec![Value::U32(2)]);
+
+    user.update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    let agent2 = user
+        .start_worker(&component.id, "counter-agent(123)")
+        .await?;
+    let result2a = user
+        .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
+        .await?;
+    assert_eq!(result2a, vec![Value::U32(1)]);
+
+    let new_singleton = user.start_worker(&component.id, "new-caller()").await?;
+    let result2b = user
+        .invoke_and_await(
+            &new_singleton,
+            "it:agent-update/new-caller.{call}",
+            vec![123u64.into_value_and_type()],
+        )
+        .await?;
+    assert_eq!(result2b, vec![Value::U32(2)]);
+
+    // Still able to call both agents
+    let result3a = user
+        .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
+        .await?;
+
+    let result4a = user
+        .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
+        .await?;
+
+    assert_eq!(result3a, vec![Value::U32(3)]);
+    assert_eq!(result4a, vec![Value::U32(3)]);
+
+    // Still able to do RPC
+    let result3b = user
+        .invoke_and_await(
+            &old_singleton,
+            "it:agent-update/caller.{call}",
+            vec!["agent1".into_value_and_type()],
+        )
+        .await?;
+    assert_eq!(result3b, vec![Value::U32(4)]);
+
+    let result4b = user
+        .invoke_and_await(
+            &new_singleton,
+            "it:agent-update/new-caller.{call}",
+            vec![123u64.into_value_and_type()],
+        )
+        .await?;
+    assert_eq!(result4b, vec![Value::U32(4)]);
+
+    // Enumerate agents
+    let mut cursor = ScanCursor::default();
+    let mut result = HashSet::new();
+    loop {
+        let (next_cursor, page) = user
+            .get_workers_metadata(&component.id, None, cursor, 2, true)
+            .await?;
+        if let Some(next_cursor) = next_cursor {
+            cursor = next_cursor;
+            result.extend(page.into_iter().map(|agent| agent.worker_id.worker_name));
+            continue;
+        } else {
+            break;
+        }
+    }
+
+    assert_eq!(
+        result,
+        HashSet::from_iter(vec![
+            "counter-agent(\"agent1\")".to_string(),
+            "counter-agent(123)".to_string(),
+            "new-caller()".to_string(),
+            "caller()".to_string()
+        ])
+    );
+
+    // Get their metadata
+    let _metadata1 = user.get_worker_metadata(&agent1).await?;
+    let _metadata2 = user.get_worker_metadata(&agent2).await?;
 
     Ok(())
 }

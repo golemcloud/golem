@@ -17,8 +17,9 @@ use crate::services::auth::AuthService;
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::RegisteredAgentType;
-use golem_common::model::application::ApplicationId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
     DeploymentRollback, DeploymentSummary, DeploymentVersion,
@@ -141,7 +142,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Environment>> {
         let environment = self
             .environment_service
-            .get_in_application(&application_id, &EnvironmentName(environment_name), &auth)
+            .get_in_application(application_id, &EnvironmentName(environment_name), &auth)
             .await?;
         Ok(Json(environment))
     }
@@ -180,7 +181,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Page<Environment>>> {
         let environments = self
             .environment_service
-            .list_in_application(&application_id, &auth)
+            .list_in_application(application_id, &auth)
             .await?;
 
         Ok(Json(Page {
@@ -197,13 +198,16 @@ impl EnvironmentsApi {
     pub async fn list_visible_environments(
         &self,
         token: GolemSecurityScheme,
+        account_email: Query<Option<AccountEmail>>,
+        app_name: Query<Option<ApplicationName>>,
+        env_name: Query<Option<EnvironmentName>>,
     ) -> ApiResult<Json<Page<EnvironmentWithDetails>>> {
         let record = recorded_http_api_request!("list_visible_environments",);
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_visible_environments_internal(auth)
+            .list_visible_environments_internal(account_email.0, app_name.0, env_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -212,11 +216,19 @@ impl EnvironmentsApi {
 
     async fn list_visible_environments_internal(
         &self,
+        account_email: Option<AccountEmail>,
+        app_name: Option<ApplicationName>,
+        env_name: Option<EnvironmentName>,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<EnvironmentWithDetails>>> {
         let environments = self
             .environment_service
-            .list_visible_environments(&auth)
+            .list_visible_environments(
+                account_email.as_ref(),
+                app_name.as_ref(),
+                env_name.as_ref(),
+                &auth,
+            )
             .await?;
         Ok(Json(Page {
             values: environments,
@@ -256,7 +268,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Environment>> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, &auth)
+            .get(environment_id, false, &auth)
             .await?;
         Ok(Json(environment))
     }
@@ -373,7 +385,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<DeploymentPlan>> {
         let deployment_plan = self
             .deployment_service
-            .get_current_deployment_plan(&environment_id, &auth)
+            .get_current_deployment_plan(environment_id, &auth)
             .await?;
         Ok(Json(deployment_plan))
     }
@@ -414,7 +426,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<CurrentDeployment>> {
         let current_deployment = self
             .deployment_write_service
-            .rollback_environment(&environment_id, payload, &auth)
+            .rollback_environment(environment_id, payload, &auth)
             .await?;
 
         Ok(Json(current_deployment))
@@ -456,7 +468,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Page<Deployment>>> {
         let deployments = self
             .deployment_service
-            .list_deployments(&environment_id, version, &auth)
+            .list_deployments(environment_id, version, &auth)
             .await?;
         Ok(Json(Page {
             values: deployments,
@@ -499,7 +511,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<CurrentDeployment>> {
         let deployment = self
             .deployment_write_service
-            .create_deployment(&environment_id, payload, &auth)
+            .create_deployment(environment_id, payload, &auth)
             .await?;
         Ok(Json(deployment))
     }
@@ -540,7 +552,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<DeploymentSummary>> {
         let deployment_plan = self
             .deployment_service
-            .get_deployment_summary(&environment_id, deployment_id, &auth)
+            .get_deployment_summary(environment_id, deployment_id, &auth)
             .await?;
         Ok(Json(deployment_plan))
     }
@@ -581,10 +593,59 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
         let agent_types = self
             .deployment_service
-            .list_deployment_agent_types(&environment_id, deployment_id, &auth)
+            .list_deployment_agent_types(environment_id, deployment_id, &auth)
             .await?;
         Ok(Json(Page {
             values: agent_types,
         }))
+    }
+
+    /// Get a registered agent type in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/agent-types/:agent_type_name",
+        method = "get",
+        operation_id = "get_deployment_agent_type"
+    )]
+    async fn get_deployment_agent_type(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        agent_type_name: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<RegisteredAgentType>> {
+        let record = recorded_http_api_request!(
+            "get_deployment_agent_type",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+            agent_type_name = agent_type_name.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_deployment_agent_type_internal(
+                environment_id.0,
+                deployment_id.0,
+                agent_type_name.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_deployment_agent_type_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_id: DeploymentRevision,
+        agent_type_name: String,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<RegisteredAgentType>> {
+        let agent_type = self
+            .deployment_service
+            .get_deployment_agent_type(environment_id, deployment_id, &agent_type_name, &auth)
+            .await?;
+        Ok(Json(agent_type))
     }
 }

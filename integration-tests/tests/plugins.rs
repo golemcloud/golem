@@ -413,7 +413,6 @@ async fn component_transformer_env_var(deps: &EnvBasedTestDependencies) -> anyho
         .start_worker_with(
             &component.id,
             "worker1",
-            vec![],
             HashMap::from_iter(vec![("TEST_ENV_VAR_3".to_string(), "value_3".to_string())]),
             vec![],
         )

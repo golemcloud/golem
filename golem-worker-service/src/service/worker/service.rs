@@ -62,23 +62,21 @@ impl WorkerService {
     pub async fn create(
         &self,
         worker_id: &WorkerId,
-        arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<ComponentRevision> {
         let component = self
             .component_service
-            .get_latest_by_id_uncached(&worker_id.component_id)
+            .get_latest_by_id_uncached(worker_id.component_id)
             .await?;
 
         self.create_with_component(
             worker_id,
             component,
-            arguments,
             environment_variables,
-            wasi_config_vars,
+            config_vars,
             ignore_already_existing,
             auth_ctx,
         )
@@ -90,17 +88,17 @@ impl WorkerService {
         &self,
         worker_id: &WorkerId,
         component: ComponentDto,
-        arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<ComponentRevision> {
         assert!(component.id == worker_id.component_id);
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::CreateWorker,
                 &auth_ctx,
             )
@@ -109,19 +107,21 @@ impl WorkerService {
         self.worker_client
             .create(
                 worker_id,
-                component.revision,
-                arguments,
                 environment_variables,
-                wasi_config_vars,
+                config_vars,
                 ignore_already_existing,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 component.environment_id,
                 auth_ctx,
             )
             .await?;
 
         self.limit_service
-            .update_worker_limit(&component.account_id, worker_id, true)
+            .update_worker_limit(
+                environment_auth_details.account_id_owning_environment,
+                worker_id,
+                true,
+            )
             .await?;
 
         Ok(component.revision)
@@ -134,12 +134,13 @@ impl WorkerService {
     ) -> WorkerResult<ConnectWorkerStream> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth_ctx,
             )
@@ -150,19 +151,23 @@ impl WorkerService {
             .connect(
                 worker_id,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
 
         self.limit_service
-            .update_worker_connection_limit(&component.account_id, worker_id, true)
+            .update_worker_connection_limit(
+                environment_auth_details.account_id_owning_environment,
+                worker_id,
+                true,
+            )
             .await?;
 
         Ok(ConnectWorkerStream::new(
             stream,
             worker_id.clone(),
-            component.account_id,
+            environment_auth_details.account_id_owning_environment,
             self.limit_service.clone(),
         ))
     }
@@ -170,12 +175,13 @@ impl WorkerService {
     pub async fn delete(&self, worker_id: &WorkerId, auth_ctx: AuthCtx) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::DeleteWorker,
                 &auth_ctx,
             )
@@ -186,7 +192,11 @@ impl WorkerService {
             .await?;
 
         self.limit_service
-            .update_worker_limit(&component.account_id, worker_id, false)
+            .update_worker_limit(
+                environment_auth_details.account_id_owning_environment,
+                worker_id,
+                false,
+            )
             .await?;
 
         Ok(())
@@ -212,12 +222,13 @@ impl WorkerService {
     ) -> WorkerResult<Option<ValueAndType>> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -232,7 +243,7 @@ impl WorkerService {
                 params,
                 invocation_context,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
@@ -272,12 +283,13 @@ impl WorkerService {
     ) -> WorkerResult<Option<ValueAndType>> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -292,7 +304,7 @@ impl WorkerService {
                 params,
                 invocation_context,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
@@ -311,12 +323,13 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -330,7 +343,7 @@ impl WorkerService {
                 params,
                 invocation_context,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
@@ -370,12 +383,13 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -389,7 +403,7 @@ impl WorkerService {
                 params,
                 invocation_context,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
@@ -406,12 +420,12 @@ impl WorkerService {
     ) -> WorkerResult<bool> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -439,12 +453,12 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -469,12 +483,12 @@ impl WorkerService {
     ) -> WorkerResult<WorkerMetadataDto> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth_ctx,
             )
@@ -490,7 +504,7 @@ impl WorkerService {
 
     pub async fn find_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -504,7 +518,7 @@ impl WorkerService {
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth_ctx,
             )
@@ -534,12 +548,12 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -561,12 +575,12 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -595,12 +609,12 @@ impl WorkerService {
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth_ctx,
             )
@@ -631,12 +645,12 @@ impl WorkerService {
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth_ctx,
             )
@@ -665,12 +679,13 @@ impl WorkerService {
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth_ctx,
             )
@@ -682,7 +697,7 @@ impl WorkerService {
                 worker_id,
                 path,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
@@ -698,12 +713,13 @@ impl WorkerService {
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::ViewWorker,
                 &auth_ctx,
             )
@@ -715,7 +731,7 @@ impl WorkerService {
                 worker_id,
                 path,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
@@ -731,12 +747,12 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -762,12 +778,12 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -794,12 +810,13 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&source_worker_id.component_id)
+            .get_latest_by_id(source_worker_id.component_id)
             .await?;
 
-        self.auth_service
+        let environment_auth_details = self
+            .auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -811,7 +828,7 @@ impl WorkerService {
                 target_worker_id,
                 oplog_index_cut_off,
                 component.environment_id,
-                component.account_id,
+                environment_auth_details.account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
@@ -827,12 +844,12 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -853,12 +870,12 @@ impl WorkerService {
     ) -> WorkerResult<bool> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id)
+            .get_latest_by_id(worker_id.component_id)
             .await?;
 
         self.auth_service
             .authorize_environment_actions(
-                &component.environment_id,
+                component.environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )

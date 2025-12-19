@@ -27,7 +27,7 @@ use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use colored::Colorize;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::IdempotencyKey;
 use golem_rib_repl::{
@@ -112,7 +112,7 @@ impl RibReplHandler {
         let component_dependency_key = ComponentDependencyKey {
             component_name: component.component_name.0.clone(),
             component_id: component.id.0,
-            component_revision: component.revision.0,
+            component_revision: component.revision.into(),
             root_package_name: component.metadata.root_package_name().clone(),
             root_package_version: component.metadata.root_package_version().clone(),
         };
@@ -324,13 +324,28 @@ impl WorkerFunctionInvoke for RibReplHandler {
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let worker_name: WorkerName = AgentId::parse(
-            worker_name,
-            &self.ctx.get_rib_repl_component_metadata().await,
-        )
-        .map_err(|err| anyhow!(err))?
-        .to_string()
-        .into();
+        let component_metadata = self.ctx.get_rib_repl_component_metadata().await;
+
+        let agent_id =
+            AgentId::parse(worker_name, &component_metadata).map_err(|err| anyhow!(err))?;
+
+        let worker_name: WorkerName = if component_metadata.is_agent() {
+            let agent_type_name =
+                AgentId::parse_agent_type_name(worker_name).map_err(|err| anyhow!(err))?;
+            let agent_type = component_metadata
+                .find_agent_type_by_wrapper_name(agent_type_name)
+                .map_err(|err| anyhow!(err))?
+                .ok_or_else(|| anyhow!("Agent type not found"))?;
+
+            if agent_type.mode == AgentMode::Ephemeral {
+                let phantom_agent_id = agent_id.with_phantom_id(Some(Uuid::new_v4()));
+                phantom_agent_id.to_string().into()
+            } else {
+                agent_id.to_string().into()
+            }
+        } else {
+            agent_id.to_string().into()
+        };
 
         let component_name = ComponentName(component_name.to_string());
 

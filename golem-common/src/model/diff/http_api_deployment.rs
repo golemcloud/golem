@@ -30,7 +30,7 @@ impl Hashable for HttpApiDeployment {
 impl Diffable for HttpApiDeployment {
     type DiffResult = BTreeSetDiff<String>;
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
-        local.apis.diff_with_server(&server.apis)
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        new.apis.diff_with_current(&current.apis)
     }
 }

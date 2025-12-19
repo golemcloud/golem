@@ -120,7 +120,7 @@ impl HttpApiDeploymentRevisionRecord {
         http_api_deployment_id: Uuid,
         revision_id: i64,
     ) -> Result<Self, HttpApiDeploymentRepoError> {
-        let revision: HttpApiDeploymentRevision = revision_id.into();
+        let revision: HttpApiDeploymentRevision = revision_id.try_into()?;
         let next_revision_id = revision.next()?.into();
 
         self.http_api_deployment_id = http_api_deployment_id;
@@ -203,17 +203,18 @@ pub struct HttpApiDeploymentExtRevisionRecord {
     pub revision: HttpApiDeploymentRevisionRecord,
 }
 
-impl From<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
-    fn from(value: HttpApiDeploymentExtRevisionRecord) -> Self {
-        Self {
+impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
+    type Error = HttpApiDeploymentRepoError;
+    fn try_from(value: HttpApiDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: HttpApiDeploymentId(value.revision.http_api_deployment_id),
-            revision: value.revision.revision_id.into(),
+            revision: value.revision.revision_id.try_into()?,
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
             api_definitions: value.revision.http_api_definitions.0,
             created_at: value.entity_created_at.into(),
-        }
+        })
     }
 }
 
@@ -225,13 +226,14 @@ pub struct HttpApiDeploymentRevisionIdentityRecord {
     pub hash: SqlBlake3Hash,
 }
 
-impl From<HttpApiDeploymentRevisionIdentityRecord> for DeploymentPlanHttpApiDeploymentEntry {
-    fn from(value: HttpApiDeploymentRevisionIdentityRecord) -> Self {
-        Self {
+impl TryFrom<HttpApiDeploymentRevisionIdentityRecord> for DeploymentPlanHttpApiDeploymentEntry {
+    type Error = RepoError;
+    fn try_from(value: HttpApiDeploymentRevisionIdentityRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: HttpApiDeploymentId(value.http_api_deployment_id),
-            revision: value.revision_id.into(),
+            revision: value.revision_id.try_into()?,
             domain: Domain(value.domain),
             hash: value.hash.into(),
-        }
+        })
     }
 }

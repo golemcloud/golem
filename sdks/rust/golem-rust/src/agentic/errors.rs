@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bindings::golem::agent::common::ValueAndType;
 use crate::golem_agentic::golem::agent::common::AgentError;
-use crate::wasm_rpc::analysis::analysed_type::str;
-use crate::wasm_rpc::{Value, ValueAndType};
+use crate::value_and_type::IntoValue;
 
 pub fn custom_error(msg: impl ToString) -> AgentError {
-    AgentError::CustomError(ValueAndType::new(Value::String(msg.to_string()), str()).into())
+    AgentError::CustomError(ValueAndType {
+        value: msg.to_string().into_value(),
+        typ: String::get_type(),
+    })
 }
 
 pub fn internal_error(msg: impl ToString) -> AgentError {

@@ -25,7 +25,7 @@ use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use golem_client::api::AccountClient;
 use golem_client::model::{Account, AccountCreation, AccountUpdate};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use std::sync::Arc;
 
 pub struct CloudAccountCommandHandler {
@@ -95,8 +95,8 @@ impl CloudAccountCommandHandler {
                 &account.id.0,
                 &AccountUpdate {
                     current_revision: account.revision,
-                    name: account_name.unwrap_or(account.name),
-                    email: account_email.unwrap_or(account.email),
+                    name: account_name,
+                    email: account_email.map(AccountEmail),
                 },
             )
             .await
@@ -115,7 +115,7 @@ impl CloudAccountCommandHandler {
             .account
             .create_account(&AccountCreation {
                 name: account_name,
-                email: account_email,
+                email: AccountEmail(account_email),
             })
             .await
             .map_service_error()?;
@@ -139,7 +139,7 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .delete_account(&account.id.0, account.revision.0)
+            .delete_account(&account.id.0, account.revision.into())
             .await
             .map_service_error()?;
 

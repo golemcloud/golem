@@ -47,7 +47,6 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
-use crate::services::plugins::PluginsService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -60,21 +59,25 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{rdbms, shard_manager, All, HasConfig};
+use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -84,6 +87,7 @@ use log::debug;
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::net::TcpListener;
@@ -129,9 +133,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
             .build_v1()?;
 
-        let addr = golem_config.grpc_addr()?;
-
+        let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.grpc.port);
         let listener = TcpListener::bind(addr).await?;
+
         let grpc_port = listener.local_addr()?.port();
 
         let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
@@ -145,34 +149,31 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip);
 
-        join_set.spawn(
-            async move {
-                Server::builder()
-                    .layer(
-                        middleware::server::OtelGrpcLayer::default()
-                            .filter(filters::reject_healthcheck),
-                    )
-                    .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
-                    .add_service(reflection_service)
-                    .add_service(service)
-                    .add_service(health_service)
-                    .serve_with_incoming(TcpListenerStream::new(listener))
-                    .await
-                    .map_err(|err| anyhow!(err))
-            }
-            .in_current_span(),
-        );
+        join_set.spawn({
+            let mut server = Server::builder();
+
+            if let GrpcServerTlsConfig::Enabled(tls) = &golem_config.grpc.tls {
+                server = server.tls_config(tls.to_tonic())?;
+            };
+
+            server
+                .layer(
+                    middleware::server::OtelGrpcLayer::default()
+                        .filter(filters::reject_healthcheck),
+                )
+                .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
+                .add_service(reflection_service)
+                .add_service(service)
+                .add_service(health_service)
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .map_err(anyhow::Error::from)
+                .in_current_span()
+        });
 
         info!("Started worker service on ports: grpc: {grpc_port}");
 
         Ok(grpc_port)
     }
-
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-        registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn PluginsService>;
 
     fn create_component_service(
         &self,
@@ -208,7 +209,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
         registry_service: Arc<dyn RegistryService>,
@@ -322,6 +322,15 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             );
             (None, Some(pool), key_value_storage)
         }
+        KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(MultiSqliteKeyValueStorage::new(
+                    &multi_sqlite.root_dir,
+                    multi_sqlite.max_connections,
+                    multi_sqlite.foreign_keys,
+                ));
+            (None, None, key_value_storage)
+        }
     };
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
@@ -345,6 +354,17 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
                     .map_err(|err| anyhow!(err))?,
             )
         }
+        IndexedStorageConfig::KVStoreMultiSqlite(_) => {
+            match &golem_config.key_value_storage {
+                KeyValueStorageConfig::MultiSqlite(multi_sqlite) =>
+                    Arc::new(MultiSqliteIndexedStorage::new(
+                        &multi_sqlite.root_dir,
+                        multi_sqlite.max_connections,
+                        multi_sqlite.foreign_keys,
+                    )),
+                _ => panic!("Invalid configuration: multi-sqlite must be used as key-value storage when using KVStoreMultiSqlite")
+            }
+        }
         IndexedStorageConfig::Sqlite(sqlite) => {
             let pool = SqlitePool::configured(sqlite)
                 .await
@@ -354,6 +374,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
                     .await
                     .map_err(|err| anyhow!(err))?,
             )
+        }
+        IndexedStorageConfig::MultiSqlite(multi_sqlite) => {
+            Arc::new(MultiSqliteIndexedStorage::new(
+                &multi_sqlite.root_dir,
+                multi_sqlite.max_connections,
+                multi_sqlite.foreign_keys,
+            ))
         }
         IndexedStorageConfig::InMemory(_) => {
             Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())
@@ -395,8 +422,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
 
     let registry_service = Arc::new(GrpcRegistryService::new(&golem_config.registry_service));
-
-    let plugins = bootstrap.create_plugins(&golem_config, registry_service.clone());
 
     let component_service = bootstrap.create_component_service(
         &golem_config,
@@ -487,11 +512,8 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let blob_store_service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
 
-    let worker_proxy: Arc<dyn WorkerProxy> = Arc::new(RemoteWorkerProxy::new(
-        golem_config.public_worker_api.uri(),
-        golem_config.public_worker_api.retries.clone(),
-        golem_config.public_worker_api.connect_timeout,
-    ));
+    let worker_proxy: Arc<dyn WorkerProxy> =
+        Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api));
 
     let rdbms_service: Arc<dyn rdbms::RdbmsService> =
         Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));
@@ -504,14 +526,12 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         component_service.clone(),
         shard_service.clone(),
         lazy_worker_activator.clone(),
-        plugins.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
-        plugins.clone(),
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
@@ -561,7 +581,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             worker_proxy,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             agent_type_service,
             registry_service,

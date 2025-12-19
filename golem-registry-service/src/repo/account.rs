@@ -48,7 +48,7 @@ pub trait AccountRepo: Send + Sync {
 
     async fn get_by_id(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
 
     async fn get_by_email(
@@ -73,7 +73,7 @@ impl<Repo: AccountRepo> LoggedAccountRepo<Repo> {
         Self { repo }
     }
 
-    fn span_account_id(account_id: &Uuid) -> Span {
+    fn span_account_id(account_id: Uuid) -> Span {
         info_span!(SPAN_NAME, account_id=%account_id)
     }
 
@@ -88,7 +88,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
         &self,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        let span = Self::span_account_id(&revision.account_id);
+        let span = Self::span_account_id(revision.account_id);
         self.repo.create(revision).instrument(span).await
     }
 
@@ -96,7 +96,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
         &self,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        let span = Self::span_account_id(&revision.account_id);
+        let span = Self::span_account_id(revision.account_id);
         self.repo.update(revision).instrument(span).await
     }
 
@@ -104,13 +104,13 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
         &self,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        let span = Self::span_account_id(&revision.account_id);
+        let span = Self::span_account_id(revision.account_id);
         self.repo.delete(revision).instrument(span).await
     }
 
     async fn get_by_id(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         self.repo
             .get_by_id(account_id)
@@ -292,7 +292,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(

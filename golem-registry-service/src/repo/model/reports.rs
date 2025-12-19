@@ -16,6 +16,7 @@ use super::datetime::SqlDateTime;
 use crate::repo::model::audit::AuditFields;
 use golem_common::model::account::AccountId;
 use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
+use golem_service_base::repo::numeric::NumericU64;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -38,8 +39,8 @@ pub struct AccountSummaryRecord {
     pub email: String,
     pub created_at: SqlDateTime,
     pub name: String,
-    pub components_count: i64,
-    pub workers_count: i64,
+    pub components_count: NumericU64,
+    pub workers_count: NumericU64,
 }
 
 impl From<AccountSummaryRecord> for AccountSummaryReport {
@@ -48,8 +49,8 @@ impl From<AccountSummaryRecord> for AccountSummaryReport {
             id: AccountId(value.account_id),
             name: value.name,
             email: value.email,
-            components_count: value.components_count,
-            workers_count: value.workers_count,
+            components_count: value.components_count.get(),
+            workers_count: value.workers_count.get(),
             created_at: value.created_at.into(),
         }
     }
@@ -57,17 +58,17 @@ impl From<AccountSummaryRecord> for AccountSummaryReport {
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountCountsRecord {
-    pub total_accounts: i64,
-    pub total_active_accounts: i64,
-    pub total_deleted_accounts: i64,
+    pub total_accounts: NumericU64,
+    pub total_active_accounts: NumericU64,
+    pub total_deleted_accounts: NumericU64,
 }
 
 impl From<AccountCountsRecord> for AccountCountsReport {
     fn from(value: AccountCountsRecord) -> Self {
         Self {
-            total_accounts: value.total_accounts,
-            total_active_accounts: value.total_active_accounts,
-            total_deleted_accounts: value.total_deleted_accounts,
+            total_accounts: value.total_accounts.get(),
+            total_active_accounts: value.total_active_accounts.get(),
+            total_deleted_accounts: value.total_deleted_accounts.get(),
         }
     }
 }

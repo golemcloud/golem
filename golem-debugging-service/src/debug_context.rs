@@ -47,7 +47,6 @@ use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
-use golem_worker_executor::services::plugins::PluginsService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
@@ -90,18 +89,12 @@ impl DurableWorkerCtxView<DebugContext> for DebugContext {
 
 #[async_trait]
 impl FuelManagement for DebugContext {
-    fn is_out_of_fuel(&self, _current_level: i64) -> bool {
-        false
+    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+        true
     }
 
-    async fn borrow_fuel(&mut self, _current_level: i64) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
-    fn borrow_fuel_sync(&mut self, _current_level: i64) {}
-
-    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
-        Ok(0)
+    fn return_fuel(&mut self, _current_level: u64) -> u64 {
+        0
     }
 }
 
@@ -222,7 +215,7 @@ impl InvocationHooks for DebugContext {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
@@ -539,7 +532,6 @@ impl WorkerCtx for DebugContext {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
@@ -568,7 +560,6 @@ impl WorkerCtx for DebugContext {
             worker_config,
             execution_status,
             file_loader,
-            plugins,
             worker_fork,
             agent_types_service,
             shard_service,
@@ -613,7 +604,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.agent_mode()
     }
 
-    fn created_by(&self) -> &AccountId {
+    fn created_by(&self) -> AccountId {
         self.durable_ctx.created_by()
     }
 

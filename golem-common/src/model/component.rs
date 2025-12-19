@@ -17,10 +17,10 @@ use crate::model::agent::AgentType;
 use crate::model::application::ApplicationId;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
-use crate::model::diff;
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::plugin_registration::PluginRegistrationId;
+use crate::model::{diff, validate_lower_kebab_case_identifier};
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -50,7 +50,7 @@ declare_transparent_newtypes! {
 
     /// Key that can be used to identify a component file.
     /// All files with the same content will have the same key.
-    #[derive(Display, Eq, Hash)]
+    #[derive(Copy, Display, Eq, Hash)]
     pub struct ComponentFileContentHash(pub diff::Hash);
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
@@ -72,8 +72,23 @@ impl TryFrom<String> for ComponentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: atomic: Add validations (non-empty, no "/", no " ", ...)
-        Ok(ComponentName(value.to_string()))
+        if value.is_empty() {
+            return Err("Component name cannot be empty".to_string());
+        }
+
+        if value.contains('@') {
+            return Err("Component name cannot contain version suffix (@version)".to_string());
+        }
+
+        let parts: Vec<&str> = value.split(':').collect();
+        if parts.len() != 2 {
+            return Err("Component name must follow the format 'namespace:name'".to_string());
+        }
+
+        validate_lower_kebab_case_identifier("Namespace", parts[0])?;
+        validate_lower_kebab_case_identifier("Name", parts[1])?;
+
+        Ok(ComponentName(value))
     }
 }
 
@@ -88,6 +103,12 @@ impl FromStr for ComponentName {
 impl ComponentName {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl AsRef<str> for ComponentName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -153,13 +174,20 @@ declare_structs! {
     }
 
     pub struct InstalledPlugin {
-        pub plugin_registration_id: PluginRegistrationId,
+        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         pub priority: PluginPriority,
         pub parameters: BTreeMap<String, String>,
+
+        pub plugin_registration_id: PluginRegistrationId,
+        pub plugin_name: String,
+        pub plugin_version: String,
+
+        // oplog processor only
+        pub oplog_processor_component_id: Option<ComponentId>,
+        pub oplog_processor_component_revision: Option<ComponentRevision>,
     }
 
     pub struct PluginInstallation {
-        // TODO: change this to be plugin registration id
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         /// Plugins will be applied in order of increasing priority
         pub priority: PluginPriority,
@@ -189,7 +217,7 @@ impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
         diff::Component {
             metadata: diff::ComponentMetadata {
-                version: Some("TODO".to_string()), // TODO: atomic
+                version: Some("".to_string()), // TODO: atomic
                 env: self
                     .env
                     .iter()
@@ -381,9 +409,18 @@ mod protobuf {
     impl From<InstalledPlugin> for golem_api_grpc::proto::golem::component::PluginInstallation {
         fn from(value: InstalledPlugin) -> Self {
             Self {
-                plugin_registration_id: Some(value.plugin_registration_id.into()),
+                environment_plugin_grant_id: Some(value.environment_plugin_grant_id.into()),
                 priority: value.priority.0,
                 parameters: value.parameters.into_iter().collect(),
+
+                plugin_registration_id: Some(value.plugin_registration_id.into()),
+                plugin_name: value.plugin_name,
+                plugin_version: value.plugin_version,
+
+                oplog_processor_component_id: value.oplog_processor_component_id.map(|v| v.into()),
+                oplog_processor_component_version: value
+                    .oplog_processor_component_revision
+                    .map(|v| v.0),
             }
         }
     }
@@ -394,12 +431,27 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::component::PluginInstallation,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
+                environment_plugin_grant_id: value
+                    .environment_plugin_grant_id
+                    .ok_or("Missing environment_plugin_grant_id")?
+                    .try_into()?,
+                priority: PluginPriority(value.priority),
+                parameters: value.parameters.into_iter().collect(),
+
                 plugin_registration_id: value
                     .plugin_registration_id
                     .ok_or("Missing plugin_registration_id")?
                     .try_into()?,
-                priority: PluginPriority(value.priority),
-                parameters: value.parameters.into_iter().collect(),
+                plugin_name: value.plugin_name,
+                plugin_version: value.plugin_version,
+
+                oplog_processor_component_id: value
+                    .oplog_processor_component_id
+                    .map(|v| v.try_into())
+                    .transpose()?,
+                oplog_processor_component_revision: value
+                    .oplog_processor_component_version
+                    .map(ComponentRevision),
             })
         }
     }

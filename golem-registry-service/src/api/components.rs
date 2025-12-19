@@ -103,7 +103,7 @@ impl ComponentsApi {
         let component: ComponentDto = self
             .component_write_service
             .create(
-                &environment_id,
+                environment_id,
                 payload.metadata.0,
                 data,
                 files_archive,
@@ -149,7 +149,7 @@ impl ComponentsApi {
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let components: Vec<ComponentDto> = self
             .component_service
-            .list_staged_components(&environment_id, &auth)
+            .list_staged_components(environment_id, &auth)
             .await?
             .into_iter()
             .map(ComponentDto::from)
@@ -195,7 +195,7 @@ impl ComponentsApi {
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
-            .get_staged_component_by_name(&environment_id, &component_name, &auth)
+            .get_staged_component_by_name(environment_id, &component_name, &auth)
             .await?
             .into();
 
@@ -219,7 +219,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_deployment_components",
             environment_id = environment_id.0.to_string(),
-            deployment_revision = deployment_revision.0.0,
+            deployment_revision = deployment_revision.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -240,7 +240,7 @@ impl ComponentsApi {
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let components: Vec<ComponentDto> = self
             .component_service
-            .list_deployment_components(&environment_id, deployment_revision, &auth)
+            .list_deployment_components(environment_id, deployment_revision, &auth)
             .await?
             .into_iter()
             .map(ComponentDto::from)
@@ -267,7 +267,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_deployment_component",
             environment_id = environment_id.0.to_string(),
-            deployment_revision = deployment_revision.0.0,
+            deployment_revision = deployment_revision.0.to_string(),
             component_name = component_name.0.to_string()
         );
 
@@ -296,7 +296,7 @@ impl ComponentsApi {
         let component: ComponentDto = self
             .component_service
             .get_deployment_component_by_name(
-                &environment_id,
+                environment_id,
                 deployment_revision,
                 &component_name,
                 &auth,
@@ -338,7 +338,7 @@ impl ComponentsApi {
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
-            .get_staged_component(&component_id, &auth)
+            .get_staged_component(component_id, &auth)
             .await?
             .into();
         Ok(Json(component))
@@ -359,7 +359,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_component_revision",
             component_id = component_id.0.to_string(),
-            revision = revision.0.0
+            revision = revision.0.to_string()
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -380,7 +380,7 @@ impl ComponentsApi {
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
-            .get_component_revision(&component_id, revision, false, &auth)
+            .get_component_revision(component_id, revision, false, &auth)
             .await?
             .into();
 
@@ -402,7 +402,7 @@ impl ComponentsApi {
         let record = recorded_http_api_request!(
             "get_component_wasm",
             component_id = component_id.0.to_string(),
-            revision = revision.0.0
+            revision = revision.0.to_string()
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -423,7 +423,7 @@ impl ComponentsApi {
     ) -> ApiResult<Binary<Body>> {
         let result = self
             .component_service
-            .download_component_wasm(&component_id, revision, false, &auth)
+            .download_component_wasm(component_id, revision, false, &auth)
             .await?;
         let body =
             Body::from_bytes_stream(result.map_err(|e| std::io::Error::other(e.to_string())));
@@ -476,7 +476,7 @@ impl ComponentsApi {
         let component: ComponentDto = self
             .component_write_service
             .update(
-                &component_id,
+                component_id,
                 payload.metadata.0,
                 data,
                 new_files_archive,
@@ -522,7 +522,7 @@ impl ComponentsApi {
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.component_write_service
-            .delete(&component_id, current_revision, &auth)
+            .delete(component_id, current_revision, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)

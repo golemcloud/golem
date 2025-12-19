@@ -1,5 +1,0 @@
-{
-  "description": "Example: a stateful Golem worker representing a todo list, implemented in Rust",
-  "appComponentGroup": "generic",
-  "devOnly": true
-}

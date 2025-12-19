@@ -24,8 +24,7 @@ use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRe
 use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentType, RegisteredAgentType};
-use golem_common::model::component::ComponentId;
+use golem_common::model::agent::{AgentType, RegisteredAgentType, RegisteredAgentTypeImplementer};
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -70,14 +69,14 @@ impl CurrentDeploymentRevisionRecord {
         self,
         version: DeploymentVersion,
         deployment_hash: Hash,
-    ) -> CurrentDeployment {
-        CurrentDeployment {
+    ) -> Result<CurrentDeployment, DeployRepoError> {
+        Ok(CurrentDeployment {
             environment_id: EnvironmentId(self.environment_id),
-            revision: self.deployment_revision_id.into(),
+            revision: self.deployment_revision_id.try_into()?,
             version,
             deployment_hash,
-            current_revision: self.revision_id.into(),
-        }
+            current_revision: self.revision_id.try_into()?,
+        })
     }
 }
 
@@ -90,8 +89,9 @@ pub struct CurrentDeploymentExtRevisionRecord {
     pub deployment_hash: SqlBlake3Hash,
 }
 
-impl From<CurrentDeploymentExtRevisionRecord> for CurrentDeployment {
-    fn from(value: CurrentDeploymentExtRevisionRecord) -> Self {
+impl TryFrom<CurrentDeploymentExtRevisionRecord> for CurrentDeployment {
+    type Error = DeployRepoError;
+    fn try_from(value: CurrentDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {
         value.revision.into_model(
             DeploymentVersion(value.deployment_version),
             Hash::new(value.deployment_hash.into_blake3_hash()),
@@ -115,14 +115,15 @@ pub struct DeploymentRevisionRecord {
     pub audit: RevisionAuditFields,
 }
 
-impl From<DeploymentRevisionRecord> for Deployment {
-    fn from(value: DeploymentRevisionRecord) -> Self {
-        Self {
+impl TryFrom<DeploymentRevisionRecord> for Deployment {
+    type Error = DeployRepoError;
+    fn try_from(value: DeploymentRevisionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             environment_id: EnvironmentId(value.environment_id),
-            revision: value.revision_id.into(),
+            revision: value.revision_id.try_into()?,
             version: DeploymentVersion(value.version),
             deployment_hash: Hash::new(value.hash.into_blake3_hash()),
-        }
+        })
     }
 }
 
@@ -136,7 +137,7 @@ pub struct DeploymentComponentRevisionRecord {
 
 impl DeploymentComponentRevisionRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         component: Component,
     ) -> Self {
@@ -159,7 +160,7 @@ pub struct DeploymentHttpApiDefinitionRevisionRecord {
 
 impl DeploymentHttpApiDefinitionRevisionRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         http_api_definition: HttpApiDefinition,
     ) -> Self {
@@ -182,7 +183,7 @@ pub struct DeploymentHttpApiDeploymentRevisionRecord {
 
 impl DeploymentHttpApiDeploymentRevisionRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         http_api_deployment: HttpApiDeployment,
     ) -> Self {
@@ -207,22 +208,29 @@ pub struct DeploymentIdentity {
 }
 
 impl DeploymentIdentity {
-    pub fn into_plan(self, current_revision: Option<CurrentDeploymentRevision>) -> DeploymentPlan {
-        DeploymentPlan {
+    pub fn into_plan(
+        self,
+        current_revision: Option<CurrentDeploymentRevision>,
+    ) -> Result<DeploymentPlan, DeployRepoError> {
+        Ok(DeploymentPlan {
             current_revision,
             deployment_hash: self.to_diffable().hash(),
-            components: self.components.into_iter().map(|c| c.into()).collect(),
+            components: self
+                .components
+                .into_iter()
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_definitions: self
                 .http_api_definitions
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_deployments: self
                 .http_api_deployments
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
-        }
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -268,30 +276,31 @@ pub struct DeployedDeploymentIdentity {
     pub identity: DeploymentIdentity,
 }
 
-impl From<DeployedDeploymentIdentity> for DeploymentSummary {
-    fn from(value: DeployedDeploymentIdentity) -> Self {
-        Self {
-            deployment_revision: value.deployment_revision.revision_id.into(),
+impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
+    type Error = DeployRepoError;
+    fn try_from(value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+        Ok(Self {
+            deployment_revision: value.deployment_revision.revision_id.try_into()?,
             deployment_hash: value.deployment_revision.hash.into(),
             components: value
                 .identity
                 .components
                 .into_iter()
-                .map(|c| c.into())
-                .collect(),
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_definitions: value
                 .identity
                 .http_api_definitions
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
             http_api_deployments: value
                 .identity
                 .http_api_deployments
                 .into_iter()
-                .map(|had| had.into())
-                .collect(),
-        }
+                .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -305,7 +314,7 @@ pub struct DeploymentDomainHttpApiDefinitionRecord {
 
 impl DeploymentDomainHttpApiDefinitionRecord {
     pub fn new(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         domain: Domain,
         http_api_definition_id: HttpApiDefinitionId,
@@ -332,7 +341,7 @@ pub struct DeploymentCompiledHttpApiDefinitionRouteRecord {
 
 impl DeploymentCompiledHttpApiDefinitionRouteRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         id: i32,
         compiled_route: CompiledRouteWithContext,
@@ -353,14 +362,16 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub agent_type_name: String,
+    pub agent_wrapper_type_name: String,
 
     pub component_id: Uuid,
+    pub component_revision_id: i64,
     pub agent_type: Blob<AgentType>,
 }
 
 impl DeploymentRegisteredAgentTypeRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         registered_agent_type: RegisteredAgentType,
     ) -> Self {
@@ -368,18 +379,27 @@ impl DeploymentRegisteredAgentTypeRecord {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
             agent_type_name: registered_agent_type.agent_type.type_name.clone(),
-            component_id: registered_agent_type.implemented_by.0,
+            agent_wrapper_type_name: registered_agent_type.agent_type.wrapper_type_name(),
+            component_id: registered_agent_type.implemented_by.component_id.0,
+            component_revision_id: registered_agent_type
+                .implemented_by
+                .component_revision
+                .into(),
             agent_type: Blob::new(registered_agent_type.agent_type),
         }
     }
 }
 
-impl From<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
-    fn from(value: DeploymentRegisteredAgentTypeRecord) -> Self {
-        Self {
-            implemented_by: ComponentId(value.component_id),
+impl TryFrom<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
+    type Error = DeployRepoError;
+    fn try_from(value: DeploymentRegisteredAgentTypeRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: value.component_id.into(),
+                component_revision: value.component_revision_id.try_into()?,
+            },
             agent_type: value.agent_type.into_value(),
-        }
+        })
     }
 }
 
@@ -400,7 +420,7 @@ pub struct DeploymentRevisionCreationRecord {
 
 impl DeploymentRevisionCreationRecord {
     pub fn from_model(
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         version: DeploymentVersion,
         hash: diff::Hash,
@@ -558,7 +578,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
         Ok(Self {
             account_id: AccountId(value.account_id),
             environment_id: EnvironmentId(value.environment_id),
-            deployment_revision: value.deployment_revision_id.into(),
+            deployment_revision: value.deployment_revision_id.try_into()?,
             http_api_definition_id: HttpApiDefinitionId(value.http_api_definition_id),
             security_scheme_missing: value.security_scheme_missing,
             security_scheme,

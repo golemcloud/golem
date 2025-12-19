@@ -21,6 +21,8 @@ pub mod base64;
 pub mod certificate;
 pub mod component;
 pub mod component_constraint;
+#[allow(unused_assignments)]
+// NOTE: from rust 1.92, a `value assigned to `cache` is never read` warning is emitted, most likely from the derived BinaryCodec. To be fixed in desert
 pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
@@ -55,7 +57,7 @@ use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
-use crate::{declare_structs, SafeDisplay};
+use crate::{declare_structs, grpc_uri, SafeDisplay};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -247,9 +249,9 @@ pub struct OwnedWorkerId {
 }
 
 impl OwnedWorkerId {
-    pub fn new(environment_id: &EnvironmentId, worker_id: &WorkerId) -> Self {
+    pub fn new(environment_id: EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            environment_id: *environment_id,
+            environment_id,
             worker_id: worker_id.clone(),
         }
     }
@@ -321,7 +323,7 @@ impl ScheduledAction {
                 environment_id,
                 promise_id,
                 ..
-            } => OwnedWorkerId::new(environment_id, &promise_id.worker_id),
+            } => OwnedWorkerId::new(*environment_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
@@ -375,13 +377,14 @@ pub struct Pod {
 }
 
 impl Pod {
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build URI")
+    pub fn uri(&self, use_tls: bool) -> Uri {
+        grpc_uri(&self.host, self.port, use_tls)
+    }
+}
+
+impl Display for Pod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
     }
 }
 
@@ -572,7 +575,6 @@ impl FromStr for IdempotencyKey {
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
@@ -591,7 +593,6 @@ impl WorkerMetadata {
     ) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
-            args: vec![],
             env: vec![],
             environment_id,
             created_by,
@@ -604,7 +605,7 @@ impl WorkerMetadata {
     }
 
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(&self.environment_id, &self.worker_id)
+        OwnedWorkerId::new(self.environment_id, &self.worker_id)
     }
 }
 
@@ -690,14 +691,14 @@ impl Default for WorkerStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
-            component_revision: ComponentRevision(0),
+            component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
-            component_revision_for_replay: ComponentRevision(0),
+            component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_count: HashMap::new(),
         }
     }
@@ -1813,4 +1814,44 @@ impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
     }
+}
+
+fn validate_lower_kebab_case_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
+    if identifier.is_empty() {
+        return Err(format!("{} cannot be empty", field_name));
+    }
+
+    let first = identifier.chars().next().unwrap();
+    if !first.is_ascii_lowercase() {
+        return Err(format!(
+            "{} must start with a lowercase ASCII letter (a-z), but got '{}'",
+            field_name, first
+        ));
+    }
+
+    if !identifier
+        .chars()
+        .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+    {
+        return Err(format!(
+            "{} may contain only lowercase ASCII letters (a-z), digits (0-9), and hyphens (-)",
+            field_name
+        ));
+    }
+
+    if identifier.starts_with('-') || identifier.ends_with('-') {
+        return Err(format!(
+            "{} must not start or end with a hyphen",
+            field_name
+        ));
+    }
+
+    if identifier.contains("--") {
+        return Err(format!(
+            "{} must not contain consecutive hyphens",
+            field_name
+        ));
+    }
+
+    Ok(())
 }

@@ -111,7 +111,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     let mut env_vars = HashMap::new();
     env_vars.insert("PORT".to_string(), host_http_port.to_string());
 
-    user.start_worker_with(&component.id, "w1", vec![], env_vars, vec![])
+    user.start_worker_with(&component.id, "w1", env_vars, vec![])
         .await?;
 
     let http_api_definition_creation = HttpApiDefinitionCreation {

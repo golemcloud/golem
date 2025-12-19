@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::config::{CompileWorkerConfig, RegistryServiceConfig, StaticComponentServiceConfig};
+use crate::config::{CompileWorkerConfig, RegistryServiceConfig, StaticRegistryServiceConfig};
 use crate::model::*;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -57,7 +57,7 @@ impl ComponentCompilationService {
         component_id: ComponentId,
         component_version: ComponentRevision,
         environment_id: EnvironmentId,
-        sender: Option<StaticComponentServiceConfig>,
+        sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
             component_id = component_id.to_string(),

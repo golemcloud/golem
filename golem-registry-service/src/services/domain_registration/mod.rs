@@ -33,7 +33,6 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DomainRegistrationError {
@@ -100,7 +99,7 @@ impl DomainRegistrationService {
     ) -> Result<DomainRegistration, DomainRegistrationError> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -110,7 +109,7 @@ impl DomainRegistrationService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateEnvironmentPluginGrant,
         )?;
@@ -157,7 +156,7 @@ impl DomainRegistrationService {
 
     pub async fn delete(
         &self,
-        domain_registration_id: &DomainRegistrationId,
+        domain_registration_id: DomainRegistrationId,
         auth: &AuthCtx,
     ) -> Result<DomainRegistration, DomainRegistrationError> {
         let (_, environment) = self
@@ -165,17 +164,17 @@ impl DomainRegistrationService {
             .await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteDomainRegistration,
         )?;
 
         let deleted: DomainRegistration = self
             .domain_registration_repo
-            .delete(&domain_registration_id.0, &auth.account_id().0)
+            .delete(domain_registration_id.0, auth.account_id().0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
-                *domain_registration_id,
+                domain_registration_id,
             ))?
             .into();
 
@@ -189,7 +188,7 @@ impl DomainRegistrationService {
 
     pub async fn get_by_id(
         &self,
-        domain_registration_id: &DomainRegistrationId,
+        domain_registration_id: DomainRegistrationId,
         auth: &AuthCtx,
     ) -> Result<DomainRegistration, DomainRegistrationError> {
         Ok(self
@@ -205,7 +204,7 @@ impl DomainRegistrationService {
         auth: &AuthCtx,
     ) -> Result<DomainRegistration, DomainRegistrationError> {
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewDomainRegistration,
         )
@@ -213,7 +212,7 @@ impl DomainRegistrationService {
 
         let domain_registration: DomainRegistration = self
             .domain_registration_repo
-            .get_in_environment(&environment.id.0, &domain.0)
+            .get_in_environment(environment.id.0, &domain.0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationByDomainNotFound(
                 domain.clone(),
@@ -225,7 +224,7 @@ impl DomainRegistrationService {
 
     pub async fn list_in_environment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<Vec<DomainRegistration>, DomainRegistrationError> {
         // Optimally this is fetched together with the grant data instead of up front
@@ -242,14 +241,14 @@ impl DomainRegistrationService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewDomainRegistration,
         )?;
 
         let domain_registrations: Vec<DomainRegistration> = self
             .domain_registration_repo
-            .list_by_environment(&environment_id.0)
+            .list_by_environment(environment_id.0)
             .await?
             .into_iter()
             .map(|r| r.into())
@@ -260,37 +259,35 @@ impl DomainRegistrationService {
 
     async fn get_by_id_with_environment(
         &self,
-        domain_registration_id: &DomainRegistrationId,
+        domain_registration_id: DomainRegistrationId,
         auth: &AuthCtx,
     ) -> Result<(DomainRegistration, Environment), DomainRegistrationError> {
         let domain_registration: DomainRegistration = self
             .domain_registration_repo
-            .get_by_id(&domain_registration_id.0)
+            .get_by_id(domain_registration_id.0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
-                *domain_registration_id,
+                domain_registration_id,
             ))?
             .into();
 
         let environment = self
             .environment_service
-            .get(&domain_registration.environment_id, false, auth)
+            .get(domain_registration.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    DomainRegistrationError::DomainRegistrationNotFound(*domain_registration_id)
+                    DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewDomainRegistration,
         )
-        .map_err(|_| {
-            DomainRegistrationError::DomainRegistrationNotFound(*domain_registration_id)
-        })?;
+        .map_err(|_| DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id))?;
 
         Ok((domain_registration, environment))
     }

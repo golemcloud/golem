@@ -24,7 +24,7 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -48,14 +48,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvokeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
-use golem_common::grpc::{
-    proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string,
-    proto_worker_id_string,
-};
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -67,6 +62,10 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
+use golem_service_base::grpc::{
+    proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string,
+    proto_worker_id_string,
+};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::protobuf::Val;
@@ -217,8 +216,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        let component_version: ComponentRevision = ComponentRevision(request.component_version);
-
         let existing_worker = self.worker_service().get(&owned_worker_id).await;
         if existing_worker.is_some() && !request.ignore_already_existing {
             return Err(WorkerExecutorError::worker_already_exists(
@@ -226,7 +223,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let args = request.args;
         let env = request
             .env
             .iter()
@@ -237,7 +233,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             auth_ctx.account_id(),
             &owned_worker_id,
-            Some(args),
             Some(env),
             Some(
                 request
@@ -247,7 +242,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ))?
                     .into(),
             ),
-            Some(component_version),
+            None,
             None,
             &InvocationContextStack::fresh(),
         )
@@ -352,7 +347,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 None,
-                None,
                 &InvocationContextStack::fresh(),
             )
             .await?;
@@ -409,7 +403,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_target_worker_id = OwnedWorkerId::new(&environment_id, &target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(environment_id, &target_worker_id);
 
         let source_worker_id_proto = request
             .source_worker_id
@@ -420,12 +414,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(&environment_id, &source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(environment_id, &source_worker_id);
 
         self.services
             .worker_fork_service()
             .fork(
-                &account_id,
+                account_id,
                 &owned_source_worker_id,
                 &owned_target_worker_id.worker_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
@@ -474,7 +468,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     auth_ctx.account_id(),
                     &owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -531,7 +524,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self,
                 auth_ctx.account_id(),
                 &owned_worker_id,
-                None,
                 None,
                 None,
                 None,
@@ -595,7 +587,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
-                        None,
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
@@ -620,7 +611,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
-                        None,
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
@@ -640,7 +630,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         auth_ctx.account_id(),
                         &owned_worker_id,
-                        None,
                         None,
                         None,
                         None,
@@ -710,7 +699,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
-                    None,
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
@@ -725,7 +713,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &self.services,
                     auth_ctx.account_id(),
                     &owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -801,9 +788,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let worker_id = request.worker_id()?;
-        let project_id = request.environment_id()?;
+        let environment_id = request.environment_id()?;
 
-        let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
         let auth_ctx = request.auth_ctx()?;
@@ -822,7 +809,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             auth_ctx.account_id(),
             &owned_worker_id,
-            request.args(),
             request.env(),
             request.wasi_config_vars()?,
             None,
@@ -1021,8 +1007,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
-
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .clone()
@@ -1032,13 +1016,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
+        let target_revision = request.target_version.try_into().map_err(|e| {
+            WorkerExecutorError::invalid_request(format!(
+                "failed converting component_revision: {e}"
+            ))
+        })?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_worker_id.worker_id(),
             ))?;
 
-        if metadata.last_known_status.component_revision.0 == request.target_version {
+        if metadata.last_known_status.component_revision == target_revision {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is already at the target version",
             ));
@@ -1047,7 +1039,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = self
             .component_service()
             .get_metadata(
-                &owned_worker_id.worker_id.component_id,
+                owned_worker_id.worker_id.component_id,
                 Some(metadata.last_known_status.component_revision),
             )
             .await?;
@@ -1070,9 +1062,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match request.mode() {
             UpdateMode::Automatic => {
-                let update_description = UpdateDescription::Automatic {
-                    target_revision: ComponentRevision(request.target_version),
-                };
+                let update_description = UpdateDescription::Automatic { target_revision };
 
                 if metadata
                     .last_known_status
@@ -1107,7 +1097,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_worker_id,
                             None,
                             None,
-                            None,
                             Some(metadata.last_known_status.component_revision),
                             None,
                             &InvocationContextStack::fresh(),
@@ -1132,7 +1121,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
-                            None,
                             &InvocationContextStack::fresh(),
                         )
                         .await?;
@@ -1150,7 +1138,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_revision, .. }, ..} if target_revision.0 == request.target_version)
+                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
                 ) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1169,13 +1157,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
-                    None,
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker
-                    .enqueue_manual_update(ComponentRevision(request.target_version))
-                    .await?;
+                worker.enqueue_manual_update(target_revision).await?;
             }
         }
 
@@ -1216,7 +1201,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 None,
-                None,
                 &InvocationContextStack::fresh(),
             )
             .await?
@@ -1246,20 +1230,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
-            Some(cursor) => get_public_oplog_chunk(
-                self.component_service(),
-                self.oplog_service(),
-                self.plugins(),
-                &owned_worker_id,
-                ComponentRevision(cursor.current_component_version),
-                OplogIndex::from_u64(cursor.next_oplog_index),
-                min(
-                    request.count as usize,
-                    self.services.config().limits.max_oplog_query_pages_size,
-                ),
-            )
-            .await
-            .map_err(WorkerExecutorError::unknown)?,
+            Some(cursor) => {
+                let current_component_version =
+                    cursor.current_component_version.try_into().map_err(|e| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "failed converting component_revision: {e}"
+                        ))
+                    })?;
+
+                get_public_oplog_chunk(
+                    self.component_service(),
+                    self.oplog_service(),
+                    &owned_worker_id,
+                    current_component_version,
+                    OplogIndex::from_u64(cursor.next_oplog_index),
+                    min(
+                        request.count as usize,
+                        self.services.config().limits.max_oplog_query_pages_size,
+                    ),
+                )
+                .await
+                .map_err(WorkerExecutorError::unknown)?
+            }
             None => {
                 let start = OplogIndex::from_u64(request.from_oplog_index);
                 let initial_component_version =
@@ -1269,7 +1261,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 get_public_oplog_chunk(
                     self.component_service(),
                     self.oplog_service(),
-                    self.plugins(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1288,7 +1279,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Some(golem::worker::OplogCursor {
                 next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_version: chunk.current_component_revision.0,
+                current_component_version: chunk.current_component_revision.into(),
             })
         };
 
@@ -1317,24 +1308,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<SearchOplogResponse, WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
-            Some(cursor) => search_public_oplog(
-                self.component_service(),
-                self.oplog_service(),
-                self.plugins(),
-                &owned_worker_id,
-                ComponentRevision(cursor.current_component_version),
-                OplogIndex::from_u64(cursor.next_oplog_index),
-                min(
-                    request.count as usize,
-                    self.services.config().limits.max_oplog_query_pages_size,
-                ),
-                &request.query,
-            )
-            .await
-            .map_err(WorkerExecutorError::unknown)?,
+            Some(cursor) => {
+                let current_component_version =
+                    cursor.current_component_version.try_into().map_err(|e| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "failed converting component_revision: {e}"
+                        ))
+                    })?;
+
+                search_public_oplog(
+                    self.component_service(),
+                    self.oplog_service(),
+                    &owned_worker_id,
+                    current_component_version,
+                    OplogIndex::from_u64(cursor.next_oplog_index),
+                    min(
+                        request.count as usize,
+                        self.services.config().limits.max_oplog_query_pages_size,
+                    ),
+                    &request.query,
+                )
+                .await
+                .map_err(WorkerExecutorError::unknown)?
+            }
             None => {
                 let start = OplogIndex::INITIAL;
                 let initial_component_version =
@@ -1343,7 +1343,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 search_public_oplog(
                     self.component_service(),
                     self.oplog_service(),
-                    self.plugins(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1363,7 +1362,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Some(golem::worker::OplogCursor {
                 next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_version: chunk.current_component_revision.0,
+                current_component_version: chunk.current_component_revision.into(),
             })
         };
 
@@ -1546,7 +1545,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &owned_worker_id.worker_id.component_id,
+                            owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_revision),
                         )
                         .await?;
@@ -1560,7 +1559,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             self,
                             auth_ctx.account_id(),
                             &owned_worker_id,
-                            None,
                             None,
                             None,
                             None,
@@ -1619,7 +1617,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let component_metadata = self
                 .component_service()
                 .get_metadata(
-                    &owned_worker_id.worker_id.component_id,
+                    owned_worker_id.worker_id.component_id,
                     Some(metadata.last_known_status.component_revision),
                 )
                 .await?;
@@ -1633,7 +1631,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     auth_ctx.account_id(),
                     &owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -1666,7 +1663,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 updates.push(golem::worker::UpdateRecord {
                     timestamp: Some((*timestamp).into()),
-                    target_version: target_revision.0,
+                    target_version: (*target_revision).into(),
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),
@@ -1676,7 +1673,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for pending_update in &latest_status.pending_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
-                target_version: pending_update.description.target_revision().0,
+                target_version: (*pending_update.description.target_revision()).into(),
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),
@@ -1685,7 +1682,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for successful_update in &latest_status.successful_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(successful_update.timestamp.into()),
-                target_version: successful_update.target_revision.0,
+                target_version: successful_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Successful(
                     golem::worker::SuccessfulUpdate {},
                 )),
@@ -1694,7 +1691,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for failed_update in &latest_status.failed_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(failed_update.timestamp.into()),
-                target_version: failed_update.target_revision.0,
+                target_version: failed_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Failed(
                     golem::worker::FailedUpdate {
                         details: failed_update.details.clone(),
@@ -1717,11 +1714,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
             environment_id: Some(metadata.environment_id.into()),
-            args: metadata.args.clone(),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             created_by: Some(metadata.created_by.into()),
             wasi_config_vars: Some(metadata.wasi_config_vars.into()),
-            component_version: latest_status.component_revision.0,
+            component_version: latest_status.component_revision.into(),
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count
                 .as_ref()
@@ -1777,7 +1773,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "create_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
-            component_version = request.component_version
         );
 
         match self
@@ -2793,5 +2788,5 @@ fn extract_owned_worker_id<T>(
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
-    Ok(OwnedWorkerId::new(&environment_id, &worker_id))
+    Ok(OwnedWorkerId::new(environment_id, &worker_id))
 }

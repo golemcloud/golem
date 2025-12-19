@@ -1,8 +1,7 @@
 ## Generated from default config
 cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
-grpc_port = 8081
-http_port = 8080
+http_port = 8081
 workspace = "release"
 
 [blob_storage]
@@ -19,12 +18,17 @@ connect_timeout = "10s"
 host = "localhost"
 port = 9091
 
-[component_compilation.config.retries]
+[component_compilation.config.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[component_compilation.config.tls]
+type = "Disabled"
+
+[component_compilation.config.tls.config]
 
 [component_transformer_plugin_caller.retries]
 max_attempts = 5
@@ -45,6 +49,14 @@ max_connections = 10
 type = "NoOp"
 
 [domain_provisioner.config]
+
+[grpc]
+port = 9090
+
+[grpc.tls]
+type = "Disabled"
+
+[grpc.tls.config]
 
 [initial_accounts.marketing]
 email = "marketing@user"
@@ -67,7 +79,7 @@ app_limit = 10
 component_limit = 100
 env_limit = 40
 max_memory_per_worker = 1073741824
-monthly_gas_limit = 1000000000000
+monthly_gas_limit = 1000000000000000000
 monthly_upload_limit = 1000000000
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 plan_name = "default"

@@ -29,10 +29,10 @@ pub struct AgentTypeView {
 }
 
 impl AgentTypeView {
-    pub fn new(value: &RegisteredAgentType) -> Self {
+    pub fn new(value: &RegisteredAgentType, wrapper_naming: bool) -> Self {
         Self {
             agent_type: value.agent_type.type_name.clone(),
-            constructor: render_agent_constructor(&value.agent_type, false),
+            constructor: render_agent_constructor(&value.agent_type, wrapper_naming, false),
             description: value.agent_type.description.clone(),
         }
     }

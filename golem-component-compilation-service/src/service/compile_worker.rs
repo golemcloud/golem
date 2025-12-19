@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{CompileWorkerConfig, StaticComponentServiceConfig};
+use crate::config::{CompileWorkerConfig, StaticRegistryServiceConfig};
 use crate::metrics::record_compilation_time;
 use crate::model::*;
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RegistryServiceConfig;
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
@@ -42,7 +41,7 @@ pub struct CompileWorker {
 
 impl CompileWorker {
     pub async fn start(
-        component_service_config: Option<StaticComponentServiceConfig>,
+        component_service_config: Option<StaticRegistryServiceConfig>,
         config: CompileWorkerConfig,
 
         engine: Engine,
@@ -52,9 +51,9 @@ impl CompileWorker {
         mut recv: mpsc::Receiver<CompilationRequest>,
     ) {
         let worker = Self {
+            config,
             engine,
             compiled_component_service,
-            config: config.clone(),
             client: Arc::new(Mutex::new(None)),
         };
 
@@ -74,7 +73,7 @@ impl CompileWorker {
                     }
 
                     let result = worker
-                        .compile_component(&request.component, &request.environment_id)
+                        .compile_component(request.component, request.environment_id)
                         .await;
                     match result {
                         Err(error) => {
@@ -106,17 +105,17 @@ impl CompileWorker {
         );
     }
 
-    async fn set_client(&self, config: StaticComponentServiceConfig) {
+    async fn set_client(&self, config: StaticRegistryServiceConfig) {
         info!(
-            "Initializing component service client for {}:{}",
+            "Initializing registry service client for {}:{}",
             config.host, config.port
         );
 
-        let client = GrpcRegistryService::new(&RegistryServiceConfig {
+        let client = GrpcRegistryService::new(&GrpcRegistryServiceConfig {
             host: config.host,
             port: config.port,
-            retries: self.config.retries.clone(),
-            ..Default::default()
+            max_message_size: self.config.max_message_size,
+            client_config: self.config.client_config.clone(),
         });
 
         self.client.lock().await.replace(client);
@@ -124,8 +123,8 @@ impl CompileWorker {
 
     async fn compile_component(
         &self,
-        component_with_version: &ComponentIdAndRevision,
-        environment_id: &EnvironmentId,
+        component_with_version: ComponentIdAndRevision,
+        environment_id: EnvironmentId,
     ) -> Result<Component, CompilationError> {
         let engine = self.engine.clone();
 
@@ -134,7 +133,7 @@ impl CompileWorker {
             .compiled_component_service
             .get(
                 environment_id,
-                &component_with_version.id,
+                component_with_version.id,
                 component_with_version.version,
                 &engine,
             )
@@ -151,19 +150,15 @@ impl CompileWorker {
             }
         };
 
+        // TODO: we should download directly from blob store here.
         if let Some(client) = &*self.client.lock().await {
             let bytes = client
-                .download_component(
-                    &component_with_version.id,
-                    component_with_version.version,
-                    &AuthCtx::System,
-                )
+                .download_component(component_with_version.id, component_with_version.version)
                 .await
                 .map_err(|e| CompilationError::ComponentDownloadFailed(e.to_string()))?;
 
             let start = Instant::now();
             let component = spawn_blocking({
-                let component_with_version = component_with_version.clone();
                 move || {
                     Component::from_binary(&engine, &bytes).map_err(|e| {
                         CompilationError::CompileFailure(format!(

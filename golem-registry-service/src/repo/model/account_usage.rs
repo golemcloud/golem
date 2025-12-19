@@ -14,6 +14,7 @@
 
 use crate::repo::model::plan::PlanRecord;
 use golem_service_base::model::ResourceLimits;
+use golem_service_base::repo::numeric::NumericU64;
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum_macros::EnumIter;
@@ -82,7 +83,7 @@ pub struct AccountUsageStatsRecord {
     pub account_id: Uuid,
     pub usage_type: i32,
     pub usage_key: String,
-    pub value: i64,
+    pub value: NumericU64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,14 +93,13 @@ pub struct AccountUsage {
     pub year: i32,
     pub month: u32,
 
-    pub usage: BTreeMap<UsageType, i64>,
+    pub usage: BTreeMap<UsageType, u64>,
     pub plan: PlanRecord,
-
     pub changes: BTreeMap<UsageType, i64>,
 }
 
 impl AccountUsage {
-    pub fn usage(&self, usage_type: UsageType) -> i64 {
+    pub fn usage(&self, usage_type: UsageType) -> u64 {
         self.usage.get(&usage_type).copied().unwrap_or(0)
     }
 
@@ -107,29 +107,37 @@ impl AccountUsage {
         self.changes.get(&usage_type).copied().unwrap_or(0)
     }
 
-    pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> bool {
-        let limit = self.plan.limit(usage_type);
+    pub fn final_value(&self, usage_type: UsageType) -> u64 {
+        let base = self.usage(usage_type);
+        let delta = self.change(usage_type);
 
+        if delta >= 0 {
+            // Safe addition, clamp at u64::MAX
+            base.saturating_add(delta as u64)
+        } else {
+            // Safe subtraction, clamp at 0
+            let delta_abs = delta.unsigned_abs();
+            base.saturating_sub(delta_abs)
+        }
+    }
+
+    pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> bool {
         self.changes
             .entry(usage_type)
             .and_modify(|e| *e = e.saturating_add(change))
             .or_insert(change);
 
-        let change = self.change(usage_type);
-        let final_value = self.usage(usage_type).saturating_add(change);
-
-        final_value <= limit
+        self.final_value(usage_type) <= self.plan.limit(usage_type)
     }
 
     pub fn resource_limits(&self) -> ResourceLimits {
-        let available_fuel = self
-            .plan
-            .monthly_gas_limit
-            .saturating_sub(self.usage(UsageType::MonthlyGasLimit));
+        let fuel_limit = self.plan.limit(UsageType::MonthlyGasLimit);
+        let available_fuel =
+            fuel_limit.saturating_sub(self.final_value(UsageType::MonthlyGasLimit));
 
         ResourceLimits {
             available_fuel,
-            max_memory_per_worker: self.plan.max_memory_per_worker as u64,
+            max_memory_per_worker: self.plan.max_memory_per_worker.get(),
         }
     }
 }

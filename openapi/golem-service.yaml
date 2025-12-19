@@ -4148,7 +4148,7 @@ paths:
       - RegistryService
       - EnvironmentPluginGrants
       - EnvironmentPluginGrants
-      summary: Get environment grant by id
+      summary: Get environment plugin grant by id
       operationId: get_environment_plugin_grant
       parameters:
       - in: path
@@ -4160,6 +4160,14 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: include_deleted
+        deprecated: false
+        schema:
+          default: false
+          type: boolean
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -4507,6 +4515,28 @@ paths:
       - Environment
       summary: List all environments that are visible to the current user, either directly or through shares.
       operationId: list_visible_environments
+      parameters:
+      - in: query
+        name: account_email
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: app_name
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: env_name
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -5183,6 +5213,92 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/Page_RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_id}/agent-types/{agent_type_name}:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Get a registered agent type in a deployment
+      operationId: get_deployment_agent_type
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: agent_type_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RegisteredAgentType'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -8972,8 +9088,6 @@ components:
           type: string
         pluginVersion:
           type: string
-        registered:
-          type: boolean
         parameters:
           type: object
           additionalProperties:
@@ -8982,7 +9096,6 @@ components:
       - pluginPriority
       - pluginName
       - pluginVersion
-      - registered
       - parameters
     PublicAttribute:
       title: PublicAttribute
@@ -10163,22 +10276,17 @@ components:
       properties:
         name:
           type: string
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
+        configVars:
           default: []
           type: array
           items:
             $ref: '#/components/schemas/WasiConfigVarsEntry'
       required:
       - name
-      - args
       - env
     WorkerCreationResponse:
       title: WorkerCreationResponse
@@ -10376,10 +10484,6 @@ components:
         createdBy:
           type: string
           format: uuid
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
@@ -10443,7 +10547,6 @@ components:
       - workerId
       - environmentId
       - createdBy
-      - args
       - env
       - wasiConfigVars
       - status
@@ -10701,10 +10804,6 @@ components:
         componentRevision:
           type: integer
           format: uint64
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
@@ -10738,7 +10837,6 @@ components:
       - timestamp
       - workerId
       - componentRevision
-      - args
       - env
       - createdBy
       - environmentId
@@ -11198,13 +11296,13 @@ components:
       properties:
         totalAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalActiveAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalDeletedAccounts:
           type: integer
-          format: int64
+          format: uint64
       required:
       - totalAccounts
       - totalActiveAccounts
@@ -11280,10 +11378,10 @@ components:
           type: string
         componentsCount:
           type: integer
-          format: int64
+          format: uint64
         workersCount:
           type: integer
-          format: int64
+          format: uint64
         createdAt:
           type: string
           format: date-time
@@ -11307,8 +11405,6 @@ components:
           type: string
       required:
       - currentRevision
-      - name
-      - email
     AgentConstructor:
       title: AgentConstructor
       type: object
@@ -11521,7 +11617,7 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
       required:
       - currentRevision
@@ -12144,12 +12240,15 @@ components:
         deploymentRevision:
           type: integer
           format: uint64
+        deploymentVersion:
+          type: string
         deploymentHash:
           type: string
           format: hash
       required:
       - revision
       - deploymentRevision
+      - deploymentVersion
       - deploymentHash
     EnvironmentPluginGrant:
       title: EnvironmentPluginGrant
@@ -12161,13 +12260,12 @@ components:
         environmentId:
           type: string
           format: uuid
-        pluginRegistrationId:
-          type: string
-          format: uuid
+        plugin:
+          $ref: '#/components/schemas/PluginRegistrationDto'
       required:
       - id
       - environmentId
-      - pluginRegistrationId
+      - plugin
     EnvironmentPluginGrantCreation:
       title: EnvironmentPluginGrantCreation
       type: object
@@ -12230,13 +12328,13 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newRoles:
+        roles:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentRole'
       required:
       - currentRevision
-      - newRoles
+      - roles
     EnvironmentSummary:
       title: EnvironmentSummary
       type: object
@@ -12276,8 +12374,14 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
       required:
       - currentRevision
     EnvironmentWithDetails:
@@ -12595,7 +12699,7 @@ components:
       title: InstalledPlugin
       type: object
       properties:
-        pluginRegistrationId:
+        environmentPluginGrantId:
           type: string
           format: uuid
         priority:
@@ -12608,10 +12712,26 @@ components:
           type: object
           additionalProperties:
             type: string
+        pluginRegistrationId:
+          type: string
+          format: uuid
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+        oplogProcessorComponentId:
+          type: string
+          format: uuid
+        oplogProcessorComponentRevision:
+          type: integer
+          format: uint64
       required:
-      - pluginRegistrationId
+      - environmentPluginGrantId
       - priority
       - parameters
+      - pluginRegistrationId
+      - pluginName
+      - pluginVersion
     LinearMemory:
       title: LinearMemory
       type: object
@@ -12863,28 +12983,28 @@ components:
           type: string
         appLimit:
           type: integer
-          format: int64
+          format: uint64
         envLimit:
           type: integer
-          format: int64
+          format: uint64
         componentLimit:
           type: integer
-          format: int64
+          format: uint64
         workerLimit:
           type: integer
-          format: int64
+          format: uint64
         workerConnectionLimit:
           type: integer
-          format: int64
+          format: uint64
         storageLimit:
           type: integer
-          format: int64
+          format: uint64
         monthlyGasLimit:
           type: integer
-          format: int64
+          format: uint64
         monthlyUploadLimit:
           type: integer
-          format: int64
+          format: uint64
         maxMemoryPerWorker:
           type: integer
           format: uint64
@@ -13149,11 +13269,23 @@ components:
         agentType:
           $ref: '#/components/schemas/AgentType'
         implementedBy:
-          type: string
-          format: uuid
+          $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
       required:
       - agentType
       - implementedBy
+    RegisteredAgentTypeImplementer:
+      title: RegisteredAgentTypeImplementer
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentRevision:
+          type: integer
+          format: uint64
+      required:
+      - componentId
+      - componentRevision
     RouteMethod:
       type: string
       enum:

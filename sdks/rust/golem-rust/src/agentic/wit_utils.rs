@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wasm_rpc::{WitNode, WitValue};
+use crate::golem_wasm::{WitNode, WitValue};
 use golem_wasm::NodeIndex;
 
 // Allows unwrapping a wit-value which is a tuple with a single element

@@ -119,11 +119,11 @@ impl PlanService {
 
         let result = self
             .plan_repo
-            .get_by_id(&plan_id.0)
+            .get_by_id(plan_id.0)
             .await?
             .ok_or(PlanError::PlanNotFound(*plan_id))?;
 
-        Ok(result.try_into()?)
+        Ok(result.into())
     }
 
     async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
@@ -132,15 +132,15 @@ impl PlanService {
         let record: PlanRecord = PlanRecord {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
-            max_memory_per_worker: plan.max_memory_per_worker as i64,
-            total_app_count: plan.app_limit,
-            total_env_count: plan.env_limit,
-            total_component_count: plan.component_limit,
-            total_component_storage_bytes: plan.storage_limit,
-            total_worker_count: plan.worker_limit,
-            total_worker_connection_count: plan.worker_connection_limit,
-            monthly_component_upload_limit_bytes: plan.monthly_upload_limit,
-            monthly_gas_limit: plan.monthly_gas_limit,
+            max_memory_per_worker: plan.max_memory_per_worker.into(),
+            total_app_count: plan.app_limit.into(),
+            total_env_count: plan.env_limit.into(),
+            total_component_count: plan.component_limit.into(),
+            total_component_storage_bytes: plan.storage_limit.into(),
+            total_worker_count: plan.worker_limit.into(),
+            total_worker_connection_count: plan.worker_connection_limit.into(),
+            monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
+            monthly_gas_limit: plan.monthly_gas_limit.into(),
         };
 
         self.plan_repo.create_or_update(record).await?;

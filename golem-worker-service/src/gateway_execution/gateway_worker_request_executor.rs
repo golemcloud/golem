@@ -16,6 +16,7 @@ use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -55,11 +56,12 @@ impl GatewayWorkerRequestExecutor {
         self: &Arc<Self>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
+        account_id: AccountId,
         expr: RibByteCode,
         rib_input: RibInput,
     ) -> Result<RibResult, WorkerRequestExecutorError> {
         let worker_invoke_function: Arc<dyn RibComponentFunctionInvoke + Send + Sync> =
-            Arc::new(self.rib_invoke(idempotency_key, invocation_context));
+            Arc::new(self.rib_invoke(idempotency_key, invocation_context, account_id));
 
         let result = rib::interpret(expr, rib_input, worker_invoke_function, None)
             .await
@@ -70,11 +72,12 @@ impl GatewayWorkerRequestExecutor {
     pub async fn execute(
         &self,
         resolved_worker_request: GatewayResolvedWorkerRequest,
+        account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerRequestExecutorError> {
         let component = self
             .component_service
             .get_revision(
-                &resolved_worker_request.component_id,
+                resolved_worker_request.component_id,
                 resolved_worker_request.component_revision,
             )
             .await
@@ -122,12 +125,11 @@ impl GatewayWorkerRequestExecutor {
                 resolved_worker_request.function_params,
                 Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                     parent: None,
-                    args: vec![],
                     env: Default::default(),
                     wasi_config_vars: Some(BTreeMap::new().into()),
                     tracing: Some(resolved_worker_request.invocation_context.into()),
                 }),
-                AuthCtx::impersonated_user(component.account_id),
+                AuthCtx::impersonated_user(account_id),
             )
             .await
             .map_err(|e| format!("Error when executing resolved worker request. Error: {e}"))?;
@@ -139,11 +141,13 @@ impl GatewayWorkerRequestExecutor {
         self: &Arc<Self>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
+        account_id: AccountId,
     ) -> WorkerRequestExecutorRibInvoke {
         WorkerRequestExecutorRibInvoke {
             idempotency_key,
             invocation_context,
             executor: self.clone(),
+            account_id,
         }
     }
 }
@@ -175,6 +179,7 @@ struct WorkerRequestExecutorRibInvoke {
     executor: Arc<GatewayWorkerRequestExecutor>,
     idempotency_key: Option<IdempotencyKey>,
     invocation_context: InvocationContextStack,
+    account_id: AccountId,
 }
 
 #[async_trait]
@@ -198,7 +203,8 @@ impl RibComponentFunctionInvoke for WorkerRequestExecutorRibInvoke {
         let function_params: Vec<ValueAndType> = parameters.0;
 
         let component_id = ComponentId(component_dependency_key.component_id);
-        let component_revision = ComponentRevision(component_dependency_key.component_revision);
+        let component_revision: ComponentRevision =
+            component_dependency_key.component_revision.try_into()?;
 
         let worker_request = GatewayResolvedWorkerRequest {
             component_id,
@@ -210,7 +216,7 @@ impl RibComponentFunctionInvoke for WorkerRequestExecutorRibInvoke {
             invocation_context,
         };
 
-        let result = executor.execute(worker_request).await?;
+        let result = executor.execute(worker_request, self.account_id).await?;
         Ok(result)
     }
 }

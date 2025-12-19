@@ -15,11 +15,9 @@
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
-pub mod plugins;
 
 use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
-use crate::plugins::PluginsUnavailable;
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -49,6 +47,7 @@ use golem_common::model::{
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::service::compiled_component::{
@@ -82,13 +81,12 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, GolemConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    GrpcApiConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
+    MemoryConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
-use golem_worker_executor::services::plugins::PluginsService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
@@ -352,8 +350,11 @@ pub async fn start_customized(
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: Path::new("data/blobs").to_path_buf(),
         }),
-        port: 0,
         http_port: 0,
+        grpc: GrpcApiConfig {
+            port: 0,
+            tls: GrpcServerTlsConfig::disabled(),
+        },
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
@@ -460,18 +461,12 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
-    fn is_out_of_fuel(&self, _current_level: i64) -> bool {
-        false
+    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+        true
     }
 
-    async fn borrow_fuel(&mut self, _current_level: i64) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
-    fn borrow_fuel_sync(&mut self, _current_level: i64) {}
-
-    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
-        Ok(0)
+    fn return_fuel(&mut self, _current_level: u64) -> u64 {
+        0
     }
 }
 
@@ -589,7 +584,7 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
@@ -687,7 +682,6 @@ impl WorkerCtx for TestWorkerCtx {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
@@ -722,7 +716,6 @@ impl WorkerCtx for TestWorkerCtx {
             worker_config,
             execution_status,
             file_loader,
-            plugins,
             worker_fork,
             agent_types_service,
             shard_service,
@@ -765,7 +758,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.agent_mode()
     }
 
-    fn created_by(&self) -> &AccountId {
+    fn created_by(&self) -> AccountId {
         self.durable_ctx.created_by()
     }
 
@@ -1007,14 +1000,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
-    fn create_plugins(
-        &self,
-        _golem_config: &GolemConfig,
-        _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn PluginsService> {
-        Arc::new(PluginsUnavailable)
-    }
-
     fn create_component_service(
         &self,
         _golem_config: &GolemConfig,
@@ -1052,7 +1037,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         registry_service: Arc<dyn RegistryService>,
@@ -1090,7 +1074,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -1123,7 +1106,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -1154,7 +1136,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             worker_proxy,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             resource_limits,
             extra_deps.clone(),

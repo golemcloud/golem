@@ -103,7 +103,7 @@ impl HttpApiDeploymentService {
 
     pub async fn create(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         data: HttpApiDeploymentCreation,
         auth: &AuthCtx,
     ) -> Result<HttpApiDeployment, HttpApiDeploymentError> {
@@ -119,7 +119,7 @@ impl HttpApiDeploymentService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateHttpApiDeployment,
         )?;
@@ -136,11 +136,11 @@ impl HttpApiDeploymentService {
 
         let id = HttpApiDeploymentId::new();
         let record =
-            HttpApiDeploymentRevisionRecord::creation(id, data.api_definitions, *auth.account_id());
+            HttpApiDeploymentRevisionRecord::creation(id, data.api_definitions, auth.account_id());
 
         let stored_http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .create(&environment_id.0, &data.domain.0, record)
+            .create(environment_id.0, &data.domain.0, record)
             .await
             .map_err(|err| match err {
                 HttpApiDeploymentRepoError::ConcurrentModification => {
@@ -151,46 +151,46 @@ impl HttpApiDeploymentService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(stored_http_api_deployment)
     }
 
     pub async fn update(
         &self,
-        http_api_deployment_id: &HttpApiDeploymentId,
+        http_api_deployment_id: HttpApiDeploymentId,
         update: HttpApiDeploymentUpdate,
         auth: &AuthCtx,
     ) -> Result<HttpApiDeployment, HttpApiDeploymentError> {
         let mut http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .get_staged_by_id(&http_api_deployment_id.0)
+            .get_staged_by_id(http_api_deployment_id.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                *http_api_deployment_id,
+                http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&http_api_deployment.environment_id, false, auth)
+            .get(http_api_deployment.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
-        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::UpdateHttpApiDeployment,
         )?;
@@ -219,46 +219,46 @@ impl HttpApiDeploymentService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(stored_http_api_deployment)
     }
 
     pub async fn delete(
         &self,
-        http_api_deployment_id: &HttpApiDeploymentId,
+        http_api_deployment_id: HttpApiDeploymentId,
         current_revision: HttpApiDeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<(), HttpApiDeploymentError> {
         let http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .get_staged_by_id(&http_api_deployment_id.0)
+            .get_staged_by_id(http_api_deployment_id.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                *http_api_deployment_id,
+                http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&http_api_deployment.environment_id, false, auth)
+            .get(http_api_deployment.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
-        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteHttpApiDeployment,
         )?;
@@ -269,8 +269,8 @@ impl HttpApiDeploymentService {
 
         self.http_api_deployment_repo
             .delete(
-                &auth.account_id().0,
-                &http_api_deployment_id.0,
+                auth.account_id().0,
+                http_api_deployment_id.0,
                 current_revision.next()?.into(),
             )
             .await
@@ -286,43 +286,43 @@ impl HttpApiDeploymentService {
 
     pub async fn get_revision(
         &self,
-        http_api_deployment_id: &HttpApiDeploymentId,
+        http_api_deployment_id: HttpApiDeploymentId,
         revision: HttpApiDeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<HttpApiDeployment, HttpApiDeploymentError> {
         let http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .get_by_id_and_revision(&http_api_deployment_id.0, revision.into())
+            .get_by_id_and_revision(http_api_deployment_id.0, revision.into())
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                *http_api_deployment_id,
+                http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&http_api_deployment.environment_id, false, auth)
+            .get(http_api_deployment.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
-        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
         Ok(http_api_deployment)
     }
 
     pub async fn list_staged(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDeployment>, HttpApiDeploymentError> {
         let environment = self
@@ -345,25 +345,25 @@ impl HttpApiDeploymentService {
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDeployment>, HttpApiDeploymentError> {
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )?;
 
         let http_api_deployments: Vec<HttpApiDeployment> = self
             .http_api_deployment_repo
-            .list_staged(&environment.id.0)
+            .list_staged(environment.id.0)
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(http_api_deployments)
     }
 
     pub async fn list_in_deployment(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDeployment>, HttpApiDeploymentError> {
@@ -379,60 +379,60 @@ impl HttpApiDeploymentService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )?;
 
         let http_api_deployments: Vec<HttpApiDeployment> = self
             .http_api_deployment_repo
-            .list_by_deployment(&environment_id.0, deployment_revision.into())
+            .list_by_deployment(environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(http_api_deployments)
     }
 
     pub async fn get_staged(
         &self,
-        http_api_deployment_id: &HttpApiDeploymentId,
+        http_api_deployment_id: HttpApiDeploymentId,
         auth: &AuthCtx,
     ) -> Result<HttpApiDeployment, HttpApiDeploymentError> {
         let http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .get_staged_by_id(&http_api_deployment_id.0)
+            .get_staged_by_id(http_api_deployment_id.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                *http_api_deployment_id,
+                http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&http_api_deployment.environment_id, false, auth)
+            .get(http_api_deployment.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
-        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
         Ok(http_api_deployment)
     }
 
     pub async fn get_staged_by_domain(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         domain: &Domain,
         auth: &AuthCtx,
     ) -> Result<HttpApiDeployment, HttpApiDeploymentError> {
@@ -448,7 +448,7 @@ impl HttpApiDeploymentService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
@@ -456,19 +456,19 @@ impl HttpApiDeploymentService {
 
         let http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .get_staged_by_domain(&environment_id.0, &domain.0)
+            .get_staged_by_domain(environment_id.0, &domain.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(
                 domain.clone(),
             ))?
-            .into();
+            .try_into()?;
 
         Ok(http_api_deployment)
     }
 
     pub async fn get_in_deployment_by_domain(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         domain: &Domain,
         auth: &AuthCtx,
@@ -488,7 +488,7 @@ impl HttpApiDeploymentService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
@@ -496,12 +496,12 @@ impl HttpApiDeploymentService {
 
         let http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .get_in_deployment_by_domain(&environment_id.0, deployment_revision.into(), &domain.0)
+            .get_in_deployment_by_domain(environment_id.0, deployment_revision.into(), &domain.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(
                 domain.clone(),
             ))?
-            .into();
+            .try_into()?;
 
         Ok(http_api_deployment)
     }

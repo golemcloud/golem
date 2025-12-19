@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::{
-    builtin_app_subcommands, help_target_to_command, GolemCliCommandPartialMatch,
+    builtin_exec_subcommands, help_target_to_command, GolemCliCommandPartialMatch,
     GolemCliGlobalFlags,
 };
 use crate::command_handler::Handlers;
@@ -55,7 +55,7 @@ impl ErrorHandler {
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        builtin_app_subcommands(),
+                        builtin_exec_subcommands(),
                     ))?
                 }
 
@@ -72,7 +72,7 @@ impl ErrorHandler {
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        builtin_app_subcommands(),
+                        builtin_exec_subcommands(),
                     ))?
                 }
 
@@ -227,9 +227,18 @@ impl ErrorHandler {
                 log_error("The requested operation requires using cloud profile!");
                 logln("");
                 logln("Switch to cloud profile with one of the following options");
-                logln(" - use the '--cloud' or '-c' flag");
+                logln(" - use the '--cloud' or '-C' flag");
                 logln(" - use 'profile switch cloud' ");
                 logln(" - set the GOLEM_PROFILE environment variable to 'cloud'");
+                logln("");
+                Ok(())
+            }
+            HintError::EnvironmentHasNoDeployment => {
+                log_error(
+                    "The requested operation requires an existing deployment for the environment!",
+                );
+                logln("");
+                logln("Use 'golem deploy' for deploying, or select a different environment.");
                 logln("");
                 Ok(())
             }

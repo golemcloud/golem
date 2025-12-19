@@ -51,7 +51,7 @@ pub trait DebugService: Send + Sync {
     async fn playback(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -60,14 +60,14 @@ pub trait DebugService: Send + Sync {
     async fn rewind(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
     ) -> Result<RewindResult, DebugServiceError>;
 
     async fn fork(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         source_owned_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -178,8 +178,8 @@ impl DebugServiceDefault {
     async fn connect_worker(
         &self,
         worker_id: WorkerId,
-        account_id: &AccountId,
-        enironment_id: &EnvironmentId,
+        account_id: AccountId,
+        enironment_id: EnvironmentId,
     ) -> Result<(WorkerMetadata, WorkerEventReceiver), DebugServiceError> {
         let owned_worker_id = OwnedWorkerId::new(enironment_id, &worker_id);
 
@@ -199,7 +199,7 @@ impl DebugServiceDefault {
 
         let host = gethostname().to_string_lossy().to_string();
 
-        let port = self.all.config().port;
+        let port = self.all.config().grpc.port;
 
         info!(
             "Registering worker {} with host {} and port {}",
@@ -222,7 +222,6 @@ impl DebugServiceDefault {
             &self.all,
             account_id,
             &owned_worker_id,
-            None,
             None,
             None,
             None,
@@ -312,12 +311,12 @@ impl DebugService for DebugServiceDefault {
     {
         let component = self
             .component_service
-            .get_metadata(&worker_id.component_id, None)
+            .get_metadata(worker_id.component_id, None)
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
         self.auth_service
-            .check_user_allowed_to_debug_in_environment(&component.environment_id, auth_ctx)
+            .check_user_allowed_to_debug_in_environment(component.environment_id, auth_ctx)
             .await
             .map_err(|e| match e {
                 AuthServiceError::DebuggingNotAllowed => DebugServiceError::Unauthorized {
@@ -326,7 +325,7 @@ impl DebugService for DebugServiceDefault {
                 e => DebugServiceError::internal(e.to_string(), Some(worker_id.clone())),
             })?;
 
-        let owned_worker_id = OwnedWorkerId::new(&component.environment_id, worker_id);
+        let owned_worker_id = OwnedWorkerId::new(component.environment_id, worker_id);
 
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -341,8 +340,8 @@ impl DebugService for DebugServiceDefault {
         let (worker_metadata, worker_event_receiver) = self
             .connect_worker(
                 worker_id.clone(),
-                &component.account_id,
-                &component.environment_id,
+                component.account_id,
+                component.environment_id,
             )
             .await?;
 
@@ -374,7 +373,7 @@ impl DebugService for DebugServiceDefault {
     async fn playback(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         playback_overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -411,7 +410,6 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(session_data.worker_metadata.args.clone()),
             Some(session_data.worker_metadata.env.clone()),
             Some(session_data.worker_metadata.wasi_config_vars.clone()),
             Some(
@@ -504,7 +502,7 @@ impl DebugService for DebugServiceDefault {
     async fn rewind(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
     ) -> Result<RewindResult, DebugServiceError> {
@@ -539,7 +537,6 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(debug_session_data.worker_metadata.args.clone()),
             Some(debug_session_data.worker_metadata.env.clone()),
             Some(debug_session_data.worker_metadata.wasi_config_vars.clone()),
             Some(
@@ -611,7 +608,7 @@ impl DebugService for DebugServiceDefault {
 
     async fn fork(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,

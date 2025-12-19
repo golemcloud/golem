@@ -50,17 +50,17 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
-    async fn activate_worker(&self, created_by: &AccountId, owned_worker_id: &OwnedWorkerId);
+    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId);
     async fn open_oplog(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     // enqueue and invocation to the worker
     async fn enqueue_invocation(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
@@ -71,7 +71,7 @@ pub trait SchedulerWorkerAccess {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
-    async fn activate_worker(&self, created_by: &AccountId, owned_worker_id: &OwnedWorkerId) {
+    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId) {
         self.deref()
             .activate_worker(created_by, owned_worker_id)
             .await;
@@ -79,14 +79,13 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
 
     async fn open_oplog(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
                 created_by,
                 owned_worker_id,
-                None,
                 None,
                 None,
                 None,
@@ -99,7 +98,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
 
     async fn enqueue_invocation(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
@@ -110,7 +109,6 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
             .get_or_create_suspended(
                 created_by,
                 owned_worker_id,
-                None,
                 None,
                 None,
                 None,
@@ -246,12 +244,11 @@ impl SchedulerServiceDefault {
                     promise_id,
                     environment_id,
                 } => {
-                    let owned_worker_id =
-                        OwnedWorkerId::new(&environment_id, &promise_id.worker_id);
+                    let owned_worker_id = OwnedWorkerId::new(environment_id, &promise_id.worker_id);
 
                     let result = self
                         .promise_service
-                        .complete(promise_id.clone(), vec![], &account_id)
+                        .complete(promise_id.clone(), vec![], account_id)
                         .await;
 
                     // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
@@ -267,7 +264,7 @@ impl SchedulerServiceDefault {
                                 );
 
                                 self.worker_access
-                                    .activate_worker(&account_id, &owned_worker_id)
+                                    .activate_worker(account_id, &owned_worker_id)
                                     .instrument(span)
                                     .await;
                             }
@@ -296,7 +293,7 @@ impl SchedulerServiceDefault {
                             // Need to create the `Worker` instance to avoid race conditions
                             match self
                                 .worker_access
-                                .open_oplog(&account_id, &owned_worker_id)
+                                .open_oplog(account_id, &owned_worker_id)
                                 .await
                             {
                                 Ok(oplog) => {
@@ -351,7 +348,7 @@ impl SchedulerServiceDefault {
                     let result = self
                         .worker_access
                         .enqueue_invocation(
-                            &account_id,
+                            account_id,
                             &owned_worker_id,
                             idempotency_key,
                             full_function_name.clone(),
@@ -487,18 +484,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
-        async fn activate_worker(&self, _created_by: &AccountId, _owned_worker_id: &OwnedWorkerId) {
-        }
+        async fn activate_worker(&self, _created_by: AccountId, _owned_worker_id: &OwnedWorkerId) {}
         async fn open_oplog(
             &self,
-            _created_by: &AccountId,
+            _created_by: AccountId,
             _owned_worker_id: &OwnedWorkerId,
         ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn enqueue_invocation(
             &self,
-            _created_by: &AccountId,
+            _created_by: AccountId,
             _owned_worker_id: &OwnedWorkerId,
             _idempotency_key: IdempotencyKey,
             _full_function_name: String,

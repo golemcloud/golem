@@ -1877,7 +1877,7 @@ async fn start_workers<T: RdbmsType>(
             name_suffix
         );
         let worker_id = executor
-            .start_worker_with(component_id, &worker_name, vec![], env.clone(), vec![])
+            .start_worker_with(component_id, &worker_name, env.clone(), vec![])
             .await?;
         worker_ids.push(worker_id.clone());
         let _result = executor

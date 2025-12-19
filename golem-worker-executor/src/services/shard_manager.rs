@@ -16,10 +16,10 @@ use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServi
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::{ShardAssignment, ShardId};
+use golem_common::model::{RetryConfig, ShardAssignment, ShardId};
 use golem_common::retries::with_retries;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::GrpcClient;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
@@ -40,7 +40,7 @@ pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerSer
     match config {
         ShardManagerServiceConfig::Grpc(config) => {
             tracing::info!("Using grpc shard manager");
-            Arc::new(ShardManagerServiceGrpc::new(config.clone()))
+            Arc::new(ShardManagerServiceGrpc::new(config))
         }
         ShardManagerServiceConfig::SingleShard(_) => {
             tracing::info!("Using single shard shard manager");
@@ -50,12 +50,12 @@ pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerSer
 }
 
 pub struct ShardManagerServiceGrpc {
-    config: ShardManagerServiceGrpcConfig,
+    retries: RetryConfig,
     client: GrpcClient<ShardManagerServiceClient<OtelGrpcService<Channel>>>,
 }
 
 impl ShardManagerServiceGrpc {
-    pub fn new(config: ShardManagerServiceGrpcConfig) -> Self {
+    pub fn new(config: &ShardManagerServiceGrpcConfig) -> Self {
         let client = GrpcClient::new(
             "shard_manager",
             |channel| {
@@ -64,12 +64,12 @@ impl ShardManagerServiceGrpc {
                     .accept_compressed(CompressionEncoding::Gzip)
             },
             config.uri(),
-            GrpcClientConfig {
-                retries_on_unavailable: config.retries.clone(),
-                ..Default::default()
-            },
+            config.client_config.clone(),
         );
-        Self { config, client }
+        Self {
+            retries: config.retries.clone(),
+            client,
+        }
     }
 }
 
@@ -85,7 +85,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
             "shard_manager",
             "register",
             Some(format!("{pod_name:?}")),
-            &self.config.retries,
+            &self.retries,
             &(host, port),
             |(host, port)| {
                 let client = self.client.clone();

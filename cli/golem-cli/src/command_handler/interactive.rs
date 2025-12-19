@@ -29,7 +29,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_templates::model::{GuestLanguage, PackageName};
+use golem_templates::model::GuestLanguage;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
@@ -93,6 +93,17 @@ impl InteractiveHandler {
                 application_name.0.log_color_highlight(),
                 environment_name.0.log_color_highlight(),
                 server_formatted.log_color_highlight(),
+            },
+            None,
+        )
+    }
+
+    pub fn confirm_environment_deployment_options(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            formatdoc! { "
+                To continue the current command the deployments options must be updated!
+                Do you want to apply the changes now?",
             },
             None,
         )
@@ -162,7 +173,7 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_update_to_latest(
+    pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
         worker_name: &WorkerName,
@@ -170,7 +181,7 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Agent {}/{} will be updated to the latest component revision: {}. Do you want to continue?",
+            format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
                     worker_name.0.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
@@ -185,7 +196,7 @@ impl InteractiveHandler {
             format!(
                 "Are you sure you want to delete the requested account? ({}, {})",
                 account.name.log_color_highlight(),
-                account.email.log_color_highlight()
+                account.email.0.log_color_highlight()
             ),
             None,
         )
@@ -572,6 +583,11 @@ impl InteractiveHandler {
                         "The specified application name already exists as a directory!".to_string(),
                     )));
                 }
+
+                if let Err(error) = ApplicationName::from_str(value) {
+                    return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
+                }
+
                 Ok(Validation::Valid)
             })
             .prompt()
@@ -579,9 +595,10 @@ impl InteractiveHandler {
         else {
             return Ok(None);
         };
+        let app_name = ApplicationName(app_name);
 
         let mut existing_component_names = HashSet::<String>::new();
-        let mut templated_component_names = Vec::<(String, PackageName)>::new();
+        let mut templated_component_names = Vec::<(String, ComponentName)>::new();
 
         loop {
             let Some(templated_component_name) = self
@@ -602,8 +619,7 @@ impl InteractiveHandler {
 
             match choice {
                 AddComponentOrCreateApp::AddComponent => {
-                    existing_component_names
-                        .insert(templated_component_name.1.to_string_with_colon());
+                    existing_component_names.insert(templated_component_name.1 .0.clone());
                     templated_component_names.push(templated_component_name);
                     continue;
                 }
@@ -623,7 +639,7 @@ impl InteractiveHandler {
     pub fn select_new_component_template_and_package_name(
         &self,
         existing_component_names: HashSet<String>,
-    ) -> anyhow::Result<Option<(String, PackageName)>> {
+    ) -> anyhow::Result<Option<(String, ComponentName)>> {
         let available_languages = self
             .ctx
             .templates(self.ctx.dev_mode())
@@ -678,7 +694,7 @@ impl InteractiveHandler {
                     )));
                 }
 
-                if let Err(error) = PackageName::from_str(value) {
+                if let Err(error) = ComponentName::from_str(value) {
                     return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
                 }
 
@@ -690,10 +706,11 @@ impl InteractiveHandler {
         else {
             return Ok(None);
         };
+        let component_name = ComponentName(component_name);
 
         Ok(Some((
             format!("{}/{}", language.id(), template.template_name),
-            PackageName::from_str(&component_name).unwrap(),
+            component_name,
         )))
     }
 

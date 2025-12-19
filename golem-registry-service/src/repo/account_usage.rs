@@ -25,6 +25,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool};
 use golem_service_base::repo::RepoResult;
+use golem_service_base::repo::numeric::NumericU64;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::BTreeMap;
@@ -33,11 +34,11 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait AccountUsageRepo: Send + Sync {
-    async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>>;
+    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>>;
 
     async fn get_for_type(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>>;
@@ -56,14 +57,14 @@ impl<Repo: AccountUsageRepo> LoggedAccountUsageRepo<Repo> {
         Self { repo }
     }
 
-    fn span_account_id(account_id: &Uuid) -> Span {
+    fn span_account_id(account_id: Uuid) -> Span {
         info_span!(SPAN_NAME, account_id=%account_id)
     }
 }
 
 #[async_trait]
 impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
-    async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
+    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         self.repo
             .get(account_id, date)
             .instrument(Self::span_account_id(account_id))
@@ -72,7 +73,7 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
 
     async fn get_for_type(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
@@ -85,7 +86,7 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()> {
         self.repo
             .add(account_usage)
-            .instrument(Self::span_account_id(&account_usage.account_id))
+            .instrument(Self::span_account_id(account_usage.account_id))
             .await
     }
 }
@@ -127,7 +128,7 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
-    async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
+    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         let Some(plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
@@ -138,13 +139,13 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 sqlx::query(indoc! { r#"
                     WITH counts AS (
                         SELECT
-                            COUNT(DISTINCT a.application_id) AS total_apps,
-                            COUNT(DISTINCT e.environment_id) AS total_envs,
-                            COUNT(DISTINCT c.component_id) AS total_components,
+                            CAST(COUNT(DISTINCT a.application_id) AS NUMERIC) AS total_apps,
+                            CAST(COUNT(DISTINCT e.environment_id) AS NUMERIC) AS total_envs,
+                            CAST(COUNT(DISTINCT c.component_id) AS NUMERIC) AS total_components,
                             CASE
-                                WHEN SUM(CAST(cr.size AS NUMERIC)) > 9223372036854775807 THEN 9223372036854775807
-                                WHEN SUM(CAST(cr.size AS NUMERIC)) < -9223372036854775808 THEN -9223372036854775808
-                                ELSE CAST(COALESCE(SUM(CAST(cr.size AS NUMERIC)), 0) AS BIGINT)
+                                WHEN SUM(cr.size) > 18446744073709551615
+                                THEN 18446744073709551615
+                                ELSE COALESCE(SUM(cr.size), 0)
                             END AS total_component_size
                         FROM applications a
                         LEFT JOIN environments e
@@ -178,17 +179,20 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 .bind(UsageType::TotalAppCount)
                 .bind(UsageType::TotalEnvCount)
                 .bind(UsageType::TotalComponentCount)
-                .bind(UsageType::TotalComponentStorageBytes)
+                .bind(UsageType::TotalComponentStorageBytes),
             )
             .await?;
 
         let mut usage = BTreeMap::new();
         for row in usage_rows {
-            usage.insert(row.try_get("usage_type")?, row.try_get("value")?);
+            usage.insert(
+                row.try_get("usage_type")?,
+                row.try_get::<NumericU64, _>("value")?.get(),
+            );
         }
 
         Ok(Some(AccountUsage {
-            account_id: *account_id,
+            account_id,
             year: date.as_utc().year(),
             month: date.as_utc().month(),
             usage,
@@ -199,7 +203,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
 
     async fn get_for_type(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
@@ -229,7 +233,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         .fetch_all(
                             sqlx::query(indoc! { r#"
                                 SELECT $1 as usage_type, (
-                                    SELECT COUNT(*)
+                                    SELECT CAST(COUNT(*) AS NUMERIC)
                                     FROM applications
                                     WHERE account_id = $2 AND deleted_at IS NULL
                                 ) as value
@@ -244,7 +248,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         .fetch_all(
                             sqlx::query(indoc! { r#"
                                 SELECT $1 as usage_type, (
-                                    SELECT COUNT(*)
+                                    SELECT CAST(COUNT(*) AS NUMERIC)
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
                                     WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
@@ -260,7 +264,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         .fetch_all(
                             sqlx::query(indoc! { r#"
                                 SELECT $1 as usage_type, (
-                                    SELECT COUNT(*)
+                                    SELECT CAST(COUNT(*) AS NUMERIC)
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
                                     JOIN components c ON c.environment_id = e.environment_id
@@ -281,12 +285,12 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                     (
                                         SELECT
                                             CASE
-                                                WHEN total > 9223372036854775807 THEN 9223372036854775807
-                                                WHEN total < -9223372036854775808 THEN -9223372036854775808
-                                                ELSE CAST(total AS BIGINT)
+                                                WHEN total > 18446744073709551615
+                                                THEN 18446744073709551615
+                                                ELSE total
                                             END AS value
                                         FROM (
-                                            SELECT COALESCE(SUM(CAST(cr.size AS NUMERIC)), 0) AS total
+                                            SELECT COALESCE(SUM(cr.size), 0) AS total
                                             FROM applications a
                                             JOIN environments e
                                                 ON e.application_id = a.application_id
@@ -311,11 +315,14 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         };
         let mut usage = BTreeMap::new();
         for row in usage_rows {
-            usage.insert(row.try_get("usage_type")?, row.try_get("value")?);
+            usage.insert(
+                row.try_get("usage_type")?,
+                row.try_get::<NumericU64, _>("value")?.get(),
+            );
         }
 
         Ok(Some(AccountUsage {
-            account_id: *account_id,
+            account_id,
             year: date.as_utc().year(),
             month: date.as_utc().month(),
             usage,
@@ -349,13 +356,11 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                             ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE
                             SET
                                 value = CASE
-                                    WHEN $4 > 0
-                                        AND account_usage_stats.value > 9223372036854775807 - $4
-                                        THEN 9223372036854775807
-                                    WHEN $4 < 0
-                                        AND account_usage_stats.value < -9223372036854775808 - $4
-                                        THEN -9223372036854775808
-                                    ELSE account_usage_stats.value + $4
+                                    WHEN account_usage_stats.value + $6 < 0
+                                        THEN 0
+                                    WHEN account_usage_stats.value + $6 > 18446744073709551615
+                                        THEN 18446744073709551615
+                                    ELSE account_usage_stats.value + $6
                                 END,
                                 updated_at = $5;
                         "#})
@@ -365,8 +370,13 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                             UsageGrouping::Total => USAGE_KEY_TOTAL,
                             UsageGrouping::Monthly => &date_usage_key,
                         })
-                        .bind(change)
-                        .bind(SqlDateTime::now()),
+                        .bind(if change < 0 {
+                            0.into()
+                        } else {
+                            NumericU64::new(change as u64)
+                        })
+                        .bind(SqlDateTime::now())
+                        .bind(change),
                     )
                     .await?;
                 }
@@ -384,7 +394,7 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>>;
+    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<PlanRecord>>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -393,7 +403,7 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>> {
+    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<PlanRecord>> {
         let plan: Option<PlanRecord> = self
             .with_ro("get_plan - plan")
             .fetch_optional_as(

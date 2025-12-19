@@ -51,10 +51,10 @@ pub trait AuthService: Send + Sync {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
     async fn authorize_environment_actions(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         action: EnvironmentAction,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), AuthServiceError>;
+    ) -> Result<AuthDetailsForEnvironment, AuthServiceError>;
 }
 
 #[derive(Clone)]
@@ -118,25 +118,31 @@ impl RemoteAuthService {
 
     async fn auth_details_for_environment_id(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Option<AuthDetailsForEnvironment>, AuthServiceError> {
+        // environment level auth does not care about impersonation, so downgrade here to avoid cache
+        // misses during rpc
+        let impersonated_auth = auth_ctx.impersonated();
         let result = self
             .environment_auth_details_cache
-            .get_or_insert_simple(&(*environment_id, auth_ctx.clone()), async move || {
-                self.client
-                    .get_auth_details_for_environment(environment_id, false, auth_ctx)
-                    .await
-                    .map_err(|e| match e {
-                        RegistryServiceError::NotFound(_) => {
-                            EnvironmentAuthDetailsCacheError::NotFound
-                        }
-                        e => {
-                            tracing::warn!("Authenticating user token failed: {e}");
-                            EnvironmentAuthDetailsCacheError::Error
-                        }
-                    })
-            })
+            .get_or_insert_simple(
+                &(environment_id, impersonated_auth.clone()),
+                async move || {
+                    self.client
+                        .get_auth_details_for_environment(environment_id, false, &impersonated_auth)
+                        .await
+                        .map_err(|e| match e {
+                            RegistryServiceError::NotFound(_) => {
+                                EnvironmentAuthDetailsCacheError::NotFound
+                            }
+                            e => {
+                                tracing::warn!("Authenticating user token failed: {e}");
+                                EnvironmentAuthDetailsCacheError::Error
+                            }
+                        })
+                },
+            )
             .await
             .map(Some)
             .or_else(|e| match e {
@@ -176,10 +182,10 @@ impl AuthService for RemoteAuthService {
 
     async fn authorize_environment_actions(
         &self,
-        environment_id: &EnvironmentId,
+        environment_id: EnvironmentId,
         action: EnvironmentAction,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), AuthServiceError> {
+    ) -> Result<AuthDetailsForEnvironment, AuthServiceError> {
         let environment_auth_details = self
             .auth_details_for_environment_id(environment_id, auth_ctx)
             .await?
@@ -188,11 +194,11 @@ impl AuthService for RemoteAuthService {
             ))?;
 
         auth_ctx.authorize_environment_action(
-            &environment_auth_details.account_id_owning_environment,
+            environment_auth_details.account_id_owning_environment,
             &environment_auth_details.environment_roles_from_shares,
             action,
         )?;
 
-        Ok(())
+        Ok(environment_auth_details)
     }
 }

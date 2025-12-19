@@ -28,44 +28,62 @@ pub fn get_remote_client(
     let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
 
     let type_name = item_trait.ident.to_string();
-    let method_impls = get_remote_method_impls(
+
+    let remote_agent_methods_info = get_remote_agent_methods_info(
         item_trait,
         type_name.to_string(),
         agent_type_parameter_names,
     );
 
+    let method_names = &remote_agent_methods_info.method_names;
+
+    let methods_impl = remote_agent_methods_info.methods_impl;
+
+    let constructor_params_data_value = quote! {
+        let data_value = if structured_values.is_empty() {
+            golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![])
+        } else {
+            match &structured_values[0] {
+                golem_rust::agentic::StructuredValue::Default(_) => {
+                    let element_values = structured_values.into_iter().map(|vt| {
+                        if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
+                            ev
+                        } else {
+                            panic!("constructor parameter type mismatch. Expected default, found multimodal");
+                        }
+                    }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
+
+                    golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
+                }
+
+                golem_rust::agentic::StructuredValue::Multimodal(_) => {
+                    let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch. Expected multimodal, found default");
+                    golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
+                }
+            }
+        };
+    };
+
+    let get_client_method_name = if method_names.contains_get() {
+        format_ident!("get_")
+    } else {
+        format_ident!("get")
+    };
+
     quote! {
         pub struct #remote_client_type_name {
-            agent_id: golem_rust::wasm_rpc::AgentId,
-            wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
+            agent_id: golem_rust::golem_wasm::AgentId,
+            wasm_rpc: golem_rust::golem_wasm::WasmRpc,
         }
 
         impl #remote_client_type_name {
-            pub fn get(#(#constructor_param_defs), *) -> #remote_client_type_name {
+            pub fn #get_client_method_name(#(#constructor_param_defs), *) -> #remote_client_type_name {
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
                  let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
 
-                 let data_value = match &structured_values[0] {
-                    golem_rust::agentic::StructuredValue::Default(_) => {
-                        let element_values = structured_values.into_iter().map(|vt| {
-                            if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
-                                ev
-                            } else {
-                                panic!("Constructor parameter type mismatch");
-                            }
-                        }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
-
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
-
-                    }
-
-                    golem_rust::agentic::StructuredValue::Multimodal(_) => {
-                        let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
-                    }
-                 };
+                 #constructor_params_data_value
 
                  let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
@@ -74,9 +92,9 @@ pub fn get_remote_client(
                       None
                    ).expect("Internal Error: Failed to make agent id");
 
-                 let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+                 let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+                 let wasm_rpc = golem_rust::golem_wasm::WasmRpc::new(&agent_id);
 
                  #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
@@ -86,38 +104,20 @@ pub fn get_remote_client(
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
-                 let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+                let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
 
-                 let data_value = match &structured_values[0] {
-                    golem_rust::agentic::StructuredValue::Default(_) => {
-                        let element_values = structured_values.into_iter().map(|vt| {
-                            if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
-                                ev
-                            } else {
-                                panic!("Constructor parameter type mismatch");
-                            }
-                        }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
+                #constructor_params_data_value
 
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
-
-                    }
-
-                    golem_rust::agentic::StructuredValue::Multimodal(_) => {
-                        let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
-                    }
-                 };
-
-                 let agent_id_string =
+                let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                         #type_name,
                         &data_value,
                         Some(golem_rust::Uuid::new_v4().into())
                    ).expect("Internal Error: Failed to make agent id");
 
-                 let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+                 let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+                 let wasm_rpc = golem_rust::golem_wasm::WasmRpc::new(&agent_id);
 
                  #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
@@ -127,40 +127,22 @@ pub fn get_remote_client(
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
-                 let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+                let mut structured_values = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
 
-                 let data_value = match &structured_values[0] {
-                    golem_rust::agentic::StructuredValue::Default(_) => {
-                        let element_values = structured_values.into_iter().map(|vt| {
-                            if let golem_rust::agentic::StructuredValue::Default(ev) = vt {
-                                ev
-                            } else {
-                                panic!("Constructor parameter type mismatch");
-                            }
-                        }).collect::<Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue>>();
+                #constructor_params_data_value
 
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values)
-
-                    }
-
-                    golem_rust::agentic::StructuredValue::Multimodal(_) => {
-                        let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch");
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
-                    }
-                 };
-
-                 let agent_id_string =
+                let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                         #type_name,
                         &data_value,
                         Some(phantom_id.into())
                    ).expect("Internal Error: Failed to make agent id");
 
-                 let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+                let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+                let wasm_rpc = golem_rust::golem_wasm::WasmRpc::new(&agent_id);
 
-                 #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+                #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
             }
 
 
@@ -173,16 +155,18 @@ pub fn get_remote_client(
                 self.agent_id.agent_id.clone()
             }
 
-            #method_impls
+            #methods_impl
         }
     }
 }
 
-fn get_remote_method_impls(
+fn get_remote_agent_methods_info(
     tr: &ItemTrait,
     agent_type_name: String,
     type_parameter_names: &[String],
-) -> proc_macro2::TokenStream {
+) -> RemoteAgentMethodsInfo {
+    let mut agent_method_names = AgentClientMethodNames::new();
+
     let method_impls = tr.items.iter().filter_map(|item| {
 
         if let syn::TraitItem::Fn(method) = item {
@@ -211,16 +195,16 @@ fn get_remote_method_impls(
             }
 
             let method_name = &method.sig.ident;
+
             let trigger_method_name = format_ident!("trigger_{}", method_name);
+
             let schedule_method_name = format_ident!("schedule_{}", method_name);
+
+            agent_method_names.extend(vec![method_name.to_string(), trigger_method_name.to_string(), schedule_method_name.to_string()]);
 
             let remote_method_name = rpc_invoke_method_name(&agent_type_name, &method_name.to_string());
 
-            let remote_method_name_token = {
-                quote! {
-                   #remote_method_name
-                }
-            };
+            let remote_method_name_token = quote! { #remote_method_name };
 
             let inputs: Vec<_> = method.sig.inputs.iter().collect();
 
@@ -278,7 +262,7 @@ fn get_remote_method_impls(
 
                   Some(quote!{
                         pub async fn #method_name(#(#inputs),*) -> #return_type {
-                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
                           let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
@@ -286,7 +270,7 @@ fn get_remote_method_impls(
                             &wit_values
                           );
 
-                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = golem_rust::agentic::await_invoke_result(rpc_result_future).await;
+                          let rpc_result: Result<golem_rust::golem_wasm::WitValue, golem_rust::golem_wasm::RpcError> = golem_rust::agentic::await_invoke_result(rpc_result_future).await;
 
                           let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
@@ -296,10 +280,10 @@ fn get_remote_method_impls(
                         }
 
                         pub fn #trigger_method_name(#(#inputs),*) {
-                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = self.wasm_rpc.invoke(
+                          let rpc_result: Result<(), golem_rust::golem_wasm::RpcError> = self.wasm_rpc.invoke(
                             #remote_method_name_token,
                             &wit_values
                           );
@@ -307,8 +291,8 @@ fn get_remote_method_impls(
                           rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
                         }
 
-                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime) {
-                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime) {
+                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
                           self.wasm_rpc.schedule_invocation(
@@ -326,9 +310,11 @@ fn get_remote_method_impls(
 
     }).collect::<Vec<_>>();
 
-    quote! {
+    let code = quote! {
         #(#method_impls)*
-    }
+    };
+
+    RemoteAgentMethodsInfo::new(code, agent_method_names)
 }
 
 fn rpc_invoke_method_name(agent_type_name: &str, method_name: &str) -> String {
@@ -336,4 +322,43 @@ fn rpc_invoke_method_name(agent_type_name: &str, method_name: &str) -> String {
     let method_name_kebab = method_name.to_kebab_case();
 
     format!("{}.{{{}}}", agent_type_name_kebab, method_name_kebab)
+}
+
+struct RemoteAgentMethodsInfo {
+    methods_impl: proc_macro2::TokenStream,
+    method_names: AgentClientMethodNames,
+}
+
+impl RemoteAgentMethodsInfo {
+    fn new(methods_impl: proc_macro2::TokenStream, method_names: AgentClientMethodNames) -> Self {
+        Self {
+            methods_impl,
+            method_names,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AgentClientMethodNames {
+    method_names: Vec<String>,
+}
+
+impl AgentClientMethodNames {
+    fn new() -> Self {
+        Self {
+            method_names: vec![],
+        }
+    }
+
+    fn extend(&mut self, names: Vec<String>) {
+        self.method_names.extend(names);
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.method_names.iter().any(|n| n == name)
+    }
+
+    fn contains_get(&self) -> bool {
+        self.contains("get")
+    }
 }

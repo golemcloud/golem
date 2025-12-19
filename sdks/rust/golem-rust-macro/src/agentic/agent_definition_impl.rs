@@ -135,7 +135,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
 fn get_load_snapshot_item() -> syn::TraitItem {
     syn::parse_quote! {
-        async fn load_snapshot(&self, _bytes: Vec<u8>) -> Result<(), String> {
+        async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
             Err("load_snapshot not implemented".to_string())
         }
     }
@@ -185,8 +185,8 @@ fn get_agent_type_with_remote_client(
             let name = &trait_fn.sig.ident;
             let method_name = &name.to_string();
 
-            let description = extract_description(&trait_fn.attrs).unwrap_or_default();
-            let prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
+            let method_description = extract_description(&trait_fn.attrs).unwrap_or_default();
+            let method_prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
 
             let mut input_schema_logic = vec![];
 
@@ -295,12 +295,12 @@ fn get_agent_type_with_remote_client(
             Some(quote! {
                 golem_rust::golem_agentic::golem::agent::common::AgentMethod {
                     name: #method_name.to_string(),
-                    description: #description.to_string(),
+                    description: #method_description.to_string(),
                     prompt_hint: {
-                        if #prompt_hint.is_empty() {
+                        if #method_prompt_hint.is_empty() {
                             None
                         } else {
-                            Some(#prompt_hint.to_string())
+                            Some(#method_prompt_hint.to_string())
                         }
                     },
                     input_schema: #input_schema,
@@ -332,9 +332,16 @@ fn get_agent_type_with_remote_client(
     }
 
     let mut constructor_description = String::new();
+    let mut constructor_prompt = String::new();
+    let mut constructor_name = String::new();
+
+    let high_level_description =
+        extract_description(&agent_definition_trait.attrs).unwrap_or_default();
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
         constructor_description = extract_description(&ctor_fn.attrs).unwrap_or_default();
+        constructor_prompt = extract_prompt_hint(&ctor_fn.attrs).unwrap_or_default();
+        constructor_name = ctor_fn.sig.ident.to_string();
 
         for input in &ctor_fn.sig.inputs {
             if let syn::FnArg::Typed(pat_type) = input {
@@ -414,24 +421,42 @@ fn get_agent_type_with_remote_client(
         type_parameters,
     );
 
+    let constructor_prompt_hint = if constructor_prompt.is_empty() {
+        quote! { None }
+    } else {
+        quote! { Some(#constructor_prompt.to_string()) }
+    };
+
+    let constructor_name = if constructor_name.is_empty() {
+        quote! { None }
+    } else {
+        quote! { Some(#constructor_name.to_string()) }
+    };
+
     let agent_constructor = quote! {
         {
          #constructor_data_schema_token
 
          golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
-            name: None,
+            name: #constructor_name,
             description: #constructor_description.to_string(),
-            prompt_hint: None,
+            prompt_hint: #constructor_prompt_hint,
             input_schema: constructor_data_schema,
          }
         }
+    };
+
+    let high_level_description_ident = if high_level_description.is_empty() {
+        quote! { "" }
+    } else {
+        quote! { #high_level_description }
     };
 
     Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {
             golem_rust::golem_agentic::golem::agent::common::AgentType {
                 type_name: #agent_trait_name.to_string(),
-                description: #constructor_description.to_string(),
+                description: #high_level_description_ident.to_string(),
                 methods: vec![#(#methods),*],
                 dependencies: vec![],
                 constructor: #agent_constructor,

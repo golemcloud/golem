@@ -14,10 +14,11 @@
 
 use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
+use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -171,12 +172,6 @@ impl MessageWithFields for WorkerGetView {
                 format_binary_size,
             )
             .fmt_field_optional(
-                "Arguments",
-                &self.metadata.args,
-                !self.metadata.args.is_empty(),
-                |args| args.join(" "),
-            )
-            .fmt_field_optional(
                 "Environment variables",
                 &self.metadata.env,
                 !self.metadata.env.is_empty(),
@@ -226,6 +221,8 @@ struct WorkerMetadataTableView {
     pub component_revision: ComponentRevision,
     #[table(title = "Status", justify = "Justify::Right")]
     pub status: String,
+    #[table(title = "Pending\ninvocations", justify = "Justify::Right")]
+    pub pending_invocations: u64,
     #[table(title = "Created at")]
     pub created_at: Timestamp,
 }
@@ -239,6 +236,7 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
             status: format_status(&value.status),
             component_revision: value.component_revision,
             created_at: value.created_at,
+            pending_invocations: value.pending_invocation_count,
         }
     }
 }
@@ -323,10 +321,6 @@ impl TextView for PublicOplogEntry {
                 logln(format!(
                     "{pad}component revision: {}",
                     format_id(&params.component_revision),
-                ));
-                logln(format!(
-                    "{pad}args:               {}",
-                    format_id(&params.args.join(", ")),
                 ));
                 logln(format!("{pad}env:"));
                 for (k, v) in &params.env {
@@ -985,4 +979,44 @@ pub fn format_timestamp(timestamp: u64) -> String {
     } else {
         format!("{timestamp}") // Fallback to raw timestamp if conversion fails
     }
+}
+
+pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
+    format!(
+        "{}{}/{}",
+        match &worker_name_match.environment_reference() {
+            Some(environment_reference) => {
+                match environment_reference {
+                    EnvironmentReference::Environment { environment_name } => {
+                        format!("{}/", environment_name.0.blue().bold())
+                    }
+                    EnvironmentReference::ApplicationEnvironment {
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/",
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                    EnvironmentReference::AccountApplicationEnvironment {
+                        account_email,
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/{}/",
+                            account_email.blue().bold(),
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                }
+            }
+            None => "".to_string(),
+        },
+        worker_name_match.component_name.0.blue().bold(),
+        worker_name_match.worker_name.0.green().bold(),
+    )
 }

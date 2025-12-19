@@ -80,7 +80,7 @@ impl HttpApiDefinitionRevisionRecord {
         http_api_definition_id: Uuid,
         revision_id: i64,
     ) -> Result<Self, HttpApiDefinitionRepoError> {
-        let revision: HttpApiDefinitionRevision = revision_id.into();
+        let revision: HttpApiDefinitionRevision = revision_id.try_into()?;
         let next_revision_id = revision.next()?.into();
 
         self.http_api_definition_id = http_api_definition_id;
@@ -235,11 +235,12 @@ impl HttpApiDefinitionExtRevisionRecord {
     }
 }
 
-impl From<HttpApiDefinitionExtRevisionRecord> for HttpApiDefinition {
-    fn from(value: HttpApiDefinitionExtRevisionRecord) -> Self {
-        Self {
+impl TryFrom<HttpApiDefinitionExtRevisionRecord> for HttpApiDefinition {
+    type Error = HttpApiDefinitionRepoError;
+    fn try_from(value: HttpApiDefinitionExtRevisionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: HttpApiDefinitionId(value.revision.http_api_definition_id),
-            revision: HttpApiDefinitionRevision(value.revision.revision_id as u64),
+            revision: value.revision.revision_id.try_into()?,
             environment_id: EnvironmentId(value.environment_id),
             name: HttpApiDefinitionName(value.name),
             hash: value.revision.hash.into(),
@@ -247,7 +248,7 @@ impl From<HttpApiDefinitionExtRevisionRecord> for HttpApiDefinition {
             routes: value.revision.definition.into_value().routes,
             created_at: value.entity_created_at.into(),
             updated_at: value.revision.audit.created_at.into(),
-        }
+        })
     }
 }
 
@@ -260,14 +261,15 @@ pub struct HttpApiDefinitionRevisionIdentityRecord {
     pub hash: SqlBlake3Hash,
 }
 
-impl From<HttpApiDefinitionRevisionIdentityRecord> for DeploymentPlanHttpApiDefintionEntry {
-    fn from(value: HttpApiDefinitionRevisionIdentityRecord) -> Self {
-        Self {
+impl TryFrom<HttpApiDefinitionRevisionIdentityRecord> for DeploymentPlanHttpApiDefintionEntry {
+    type Error = RepoError;
+    fn try_from(value: HttpApiDefinitionRevisionIdentityRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: HttpApiDefinitionId(value.http_api_definition_id),
-            revision: value.revision_id.into(),
+            revision: value.revision_id.try_into()?,
             name: HttpApiDefinitionName(value.name),
             hash: value.hash.into(),
-        }
+        })
     }
 }
 

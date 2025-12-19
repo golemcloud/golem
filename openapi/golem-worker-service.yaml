@@ -2435,7 +2435,6 @@ components:
       - pluginPriority
       - pluginName
       - pluginVersion
-      - registered
       - parameters
       properties:
         pluginPriority:
@@ -2448,8 +2447,6 @@ components:
           type: string
         pluginVersion:
           type: string
-        registered:
-          type: boolean
         parameters:
           type: object
           additionalProperties:
@@ -3632,20 +3629,15 @@ components:
       title: WorkerCreationRequest
       required:
       - name
-      - args
       - env
       properties:
         name:
           type: string
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
+        configVars:
           type: array
           default: []
           items:
@@ -3841,7 +3833,6 @@ components:
       - workerId
       - environmentId
       - createdBy
-      - args
       - env
       - wasiConfigVars
       - status
@@ -3865,10 +3856,6 @@ components:
         createdBy:
           type: string
           format: uuid
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
@@ -4166,7 +4153,6 @@ components:
       - timestamp
       - workerId
       - componentRevision
-      - args
       - env
       - createdBy
       - environmentId
@@ -4183,10 +4169,6 @@ components:
         componentRevision:
           type: integer
           format: uint64
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:

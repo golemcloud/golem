@@ -175,7 +175,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         name: &str,
     ) -> Self::WorkerInvocationResult<WorkerId> {
-        self.try_start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
+        self.try_start_worker_with(component_id, name, HashMap::new(), vec![])
             .await
     }
 
@@ -183,7 +183,6 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> Self::WorkerInvocationResult<WorkerId>;
@@ -193,7 +192,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         name: &str,
     ) -> anyhow::Result<WorkerId> {
-        self.start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
+        self.start_worker_with(component_id, name, HashMap::new(), vec![])
             .await
     }
 
@@ -201,7 +200,6 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId>;
@@ -936,19 +934,19 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         }
         WorkerExecutorError::ComponentDownloadFailed {
             component_id,
-            component_version,
+            component_revision,
             reason,
         } => format!(
-            "Failed to download component: {:?} version {}: {}",
-            component_id, component_version, reason
+            "Failed to download component: {:?} revision {}: {}",
+            component_id, component_revision, reason
         ),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
-            component_version,
+            component_revision,
             reason,
         } => format!(
-            "Failed to parse component: {:?} version {}: {}",
-            component_id, component_version, reason
+            "Failed to parse component: {:?} revision {}: {}",
+            component_id, component_revision, reason
         ),
         WorkerExecutorError::GetLatestVersionOfComponentFailed {
             component_id,

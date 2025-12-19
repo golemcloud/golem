@@ -37,11 +37,11 @@ pub struct EnvironmentDiff {
 impl Diffable for Environment {
     type DiffResult = EnvironmentDiff;
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
         let diff = EnvironmentDiff {
-            compatibility_check_changed: local.compatibility_check != server.compatibility_check,
-            version_check_changed: local.version_check != server.version_check,
-            security_overrides_changed: local.security_overrides != server.security_overrides,
+            compatibility_check_changed: new.compatibility_check != current.compatibility_check,
+            version_check_changed: new.version_check != current.version_check,
+            security_overrides_changed: new.security_overrides != current.security_overrides,
         };
 
         let any_changed = diff.compatibility_check_changed
@@ -73,8 +73,8 @@ pub struct EnvironmentPluginInstallationsDiff {
 impl Diffable for EnvironmentPluginInstallations {
     type DiffResult = EnvironmentPluginInstallationsDiff;
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
-        let plugins_changed = local.plugins_by_priority != server.plugins_by_priority;
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let plugins_changed = new.plugins_by_priority != current.plugins_by_priority;
         plugins_changed.then_some(EnvironmentPluginInstallationsDiff { plugins_changed })
     }
 }

@@ -79,9 +79,9 @@ impl TestDsl for TestWorkerExecutor {
             ));
         }
 
-        let component_directy = &self.deps.component_directory;
+        let component_directory = &self.deps.component_directory;
 
-        let source_path = component_directy.join(format!("{wasm_name}.wasm"));
+        let source_path = component_directory.join(format!("{wasm_name}.wasm"));
 
         let component_name = if unique {
             let uuid = Uuid::new_v4();
@@ -108,13 +108,13 @@ impl TestDsl for TestWorkerExecutor {
 
         let mut converted_files = Vec::new();
         for entry in files {
-            let full_source_path = component_directy.join(entry.source_path);
+            let full_source_path = component_directory.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
             let content_hash = self
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
-                    &environment_id,
+                    environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
@@ -199,20 +199,29 @@ impl TestDsl for TestWorkerExecutor {
             ));
         };
 
-        let component_directy = &self.deps.component_directory;
+        let component_dir = &self.deps.component_directory;
 
-        let source_path =
-            wasm_name.map(|wasm_name| component_directy.join(format!("{wasm_name}.wasm")));
+        let source_path = if let Some(wasm_name) = wasm_name {
+            let source_path = component_dir.join(format!("{wasm_name}.wasm"));
+            let source_path = rename_component_if_needed(
+                self.deps.component_temp_directory.path(),
+                &source_path,
+                &latest_version.component_name.0,
+            )?;
+            Some(source_path)
+        } else {
+            None
+        };
 
         let mut converted_new_files = Vec::new();
         for entry in new_files {
-            let full_source_path = component_directy.join(entry.source_path);
+            let full_source_path = component_dir.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
             let content_hash = self
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
-                    &latest_version.environment_id,
+                    latest_version.environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
@@ -244,7 +253,6 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
@@ -260,10 +268,8 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .create_worker(CreateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                component_version: latest_version.revision.0,
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                args,
                 env,
                 wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
                 ignore_already_existing: false,
@@ -286,12 +292,11 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
         let result = self
-            .try_start_worker_with(component_id, name, args, env, wasi_config_vars)
+            .try_start_worker_with(component_id, name, env, wasi_config_vars)
             .await??;
         Ok(result)
     }
@@ -779,7 +784,7 @@ impl TestDsl for TestWorkerExecutor {
             .update_worker(UpdateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                target_version: target_version.0,
+                target_version: target_version.into(),
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -810,7 +815,7 @@ impl TestDsl for TestWorkerExecutor {
             .update_worker(UpdateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                target_version: target_version.0,
+                target_version: target_version.into(),
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
             })

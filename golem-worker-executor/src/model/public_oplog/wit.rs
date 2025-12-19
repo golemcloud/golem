@@ -43,7 +43,6 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp,
                 worker_id,
                 component_revision,
-                args,
                 env,
                 created_by,
                 environment_id,
@@ -56,8 +55,8 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),
-                component_revision: component_revision.0,
-                args,
+                component_revision: component_revision.into(),
+                args: vec![],
                 env: env.into_iter().collect(),
                 created_by: created_by.into(),
                 environment_id: environment_id.into(),
@@ -182,7 +181,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 description,
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
-                target_revision: target_revision.0,
+                target_revision: target_revision.into(),
                 update_description: description.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
@@ -192,7 +191,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 new_active_plugins,
             }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
-                target_revision: target_revision.0,
+                target_revision: target_revision.into(),
                 new_component_size,
                 new_active_plugins: new_active_plugins.into_iter().map(|pr| pr.into()).collect(),
             }),
@@ -202,7 +201,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 details,
             }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
-                target_revision: target_revision.0,
+                target_revision: target_revision.into(),
                 details,
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
@@ -433,7 +432,7 @@ impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
                     .collect(),
             }),
             PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Self::ManualUpdate(target_revision.0)
+                Self::ManualUpdate(target_revision.into())
             }
         }
     }

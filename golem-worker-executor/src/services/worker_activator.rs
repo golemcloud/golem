@@ -30,14 +30,13 @@ use tracing::{error, warn};
 #[async_trait]
 pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
     /// Makes sure an already existing worker is active in a background task. Returns immediately
-    async fn activate_worker(&self, created_by: &AccountId, owned_worker_id: &OwnedWorkerId);
+    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId);
 
     /// Gets or creates a worker in suspended state
     async fn get_or_create_suspended(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -48,9 +47,8 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
     /// Gets or creates a worker and starts it
     async fn get_or_create_running(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -83,7 +81,7 @@ impl<Ctx: WorkerCtx> Default for LazyWorkerActivator<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
-    async fn activate_worker(&self, created_by: &AccountId, owned_worker_id: &OwnedWorkerId) {
+    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId) {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
             Some(worker_activator) => {
@@ -97,9 +95,8 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
 
     async fn get_or_create_suspended(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -113,7 +110,6 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                     .get_or_create_suspended(
                         created_by,
                         owned_worker_id,
-                        worker_args,
                         worker_env,
                         worker_config,
                         component_version,
@@ -130,9 +126,8 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
 
     async fn get_or_create_running(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -146,7 +141,6 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                     .get_or_create_running(
                         created_by,
                         owned_worker_id,
-                        worker_args,
                         worker_env,
                         worker_config,
                         component_version,
@@ -181,7 +175,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<Ctx>
     for DefaultWorkerActivator<Ctx, Svcs>
 {
-    async fn activate_worker(&self, created_by: &AccountId, owned_worker_id: &OwnedWorkerId) {
+    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId) {
         let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
             Some(_) => {
@@ -189,7 +183,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     &self.all,
                     created_by,
                     owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -209,9 +202,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
 
     async fn get_or_create_suspended(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -222,7 +214,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             &self.all,
             created_by,
             owned_worker_id,
-            worker_args,
             worker_env,
             worker_config,
             component_version,
@@ -234,9 +225,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
 
     async fn get_or_create_running(
         &self,
-        created_by: &AccountId,
+        created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<ComponentRevision>,
@@ -247,7 +237,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             &self.all,
             created_by,
             owned_worker_id,
-            worker_args,
             worker_env,
             worker_config,
             component_version,

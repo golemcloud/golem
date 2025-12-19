@@ -34,11 +34,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 "{pad}component revision: {}",
                 &params.component_revision,
             );
-            let _ = writeln!(
-                result,
-                "{pad}args:               {}",
-                &params.args.join(", "),
-            );
             let _ = writeln!(result, "{pad}env:");
             for (k, v) in &params.env {
                 let _ = writeln!(result, "{pad}  - {}: {}", k, &v);
