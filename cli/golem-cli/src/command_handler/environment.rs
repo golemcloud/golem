@@ -102,8 +102,53 @@ impl EnvironmentCommandHandler {
                 self.resolve_environment_reference(mode, environment_reference)
                     .await
             }
-            None => match self.ctx.manifest_environment() {
-                Some(env) => {
+            None => self.resolve_manifest_environment(mode).await,
+        }
+    }
+
+    pub async fn resolve_manifest_environment(
+        &self,
+        mode: EnvironmentResolveMode,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        match self.ctx.manifest_environment() {
+            Some(env) => match &env.environment.account {
+                Some(account) => {
+                    let env_summary = self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .list_visible_environments(
+                            Some(&account),
+                            Some(&env.application_name.0),
+                            Some(&env.environment_name.0),
+                        )
+                        .await?
+                        .values
+                        .pop();
+
+                    match env_summary {
+                        Some(env_summary) => {
+                            Ok(ResolvedEnvironmentIdentity::from_summary(None, env_summary))
+                        }
+                        None => {
+                            // TODO: atomic: here we should try to create the env
+                            //       (especially that account might be the current one),
+                            //       but we cannot resolve account_id by email currently
+                            log_error(format!(
+                                "Environment {}/{}/{} not found",
+                                account.log_color_highlight(),
+                                env.application_name.0.log_color_highlight(),
+                                env.environment_name.to_string().log_color_highlight()
+                            ));
+
+                            self.show_available_application_environments().await?;
+
+                            bail!(NonSuccessfulExit);
+                        }
+                    }
+                }
+                None => {
                     let application = self
                         .ctx
                         .app_handler()
@@ -124,11 +169,11 @@ impl EnvironmentCommandHandler {
                                 environment,
                             ))
                         }
-                        None => self.environment_is_required_error(mode)?,
+                        None => self.environment_is_required_error(mode),
                     }
                 }
-                None => self.environment_is_required_error(mode)?,
             },
+            None => self.environment_is_required_error(mode),
         }
     }
 
@@ -143,32 +188,12 @@ impl EnvironmentCommandHandler {
 
         match environment_reference {
             // NOTE: when only the env name is included in the reference
-            //       AND that matches the manifest env name,
-            //       then we on-demand create the application and the env
-            EnvironmentReference::Environment { environment_name } => {
-                let application = self
-                    .ctx
-                    .app_handler()
-                    .get_or_create_server_application_by_manifest()
-                    .await?;
-
-                match application {
-                    Some(application) => {
-                        let environment = self
-                            .get_or_create_server_environment_by_manifest(
-                                &application.id,
-                                environment_name,
-                            )
-                            .await?;
-                        Ok(ResolvedEnvironmentIdentity::from_app_and_env(
-                            Some(environment_reference),
-                            application,
-                            environment,
-                        ))
-                    }
-                    None => self.environment_is_required_error(mode)?,
-                }
-            }
+            //       we expect it to be a manifest environment.
+            //       If such an environment exists in the manifest, then it is already selected
+            //       during context init
+            EnvironmentReference::Environment {
+                environment_name: _,
+            } => self.resolve_manifest_environment(mode).await,
             // NOTE: with app-env references we DO NOT create anything, these are used for
             //       querying without using the manifest
             EnvironmentReference::ApplicationEnvironment {
@@ -388,8 +413,8 @@ impl EnvironmentCommandHandler {
         match mode {
             EnvironmentResolveMode::ManifestOnly => {
                 log_error(
-                    "The requested command requires an environment defined in an application manifest.",
-                );
+                "The requested command requires an environment defined in an application manifest.",
+            );
             }
             EnvironmentResolveMode::Any => {
                 log_error("The requested command requires an environment from an application manifest or via flags or environment variables.");
