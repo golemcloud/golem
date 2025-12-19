@@ -2077,7 +2077,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_component_wasm
-  /v1/{environment_id}/domain-registrations:
+  /v1/envs/{environment_id}/domain-registrations:
     post:
       tags:
       - RegistryService

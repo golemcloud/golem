@@ -3719,7 +3719,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/{environment_id}/domain-registrations:
+  /v1/envs/{environment_id}/domain-registrations:
     get:
       tags:
       - RegistryService
