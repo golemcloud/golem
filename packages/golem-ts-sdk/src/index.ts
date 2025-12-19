@@ -41,22 +41,6 @@ export * from './host/transaction';
 
 let resolvedAgent: Option.Option<ResolvedAgent> = Option.none();
 
-const UninitiatedAgentErrorMessage: string = 'Agent is not initialized';
-
-const UninitializedAgentError: AgentError = createCustomError(
-  UninitiatedAgentErrorMessage,
-);
-
-// An error can happen if the user agent is not composed (which will initialize the agent with precompiled wasm)
-function getResolvedAgentOrThrow(
-  resolvedAgent: Option.Option<ResolvedAgent>,
-): ResolvedAgent {
-  return Option.getOrThrowWith(
-    resolvedAgent,
-    () => new Error(UninitiatedAgentErrorMessage),
-  );
-}
-
 async function initialize(
   agentTypeName: string,
   input: DataValue,
@@ -90,10 +74,13 @@ async function invoke(
   input: DataValue,
 ): Promise<DataValue> {
   if (Option.isNone(resolvedAgent)) {
-    throw UninitializedAgentError;
+    throw createCustomError(
+      `Failed to invoke method ${methodName}: agent is not initialized`,
+    );
   }
 
   const result = await resolvedAgent.val.invoke(methodName, input);
+
   if (result.tag === 'ok') {
     return result.val;
   } else {
@@ -115,12 +102,15 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
 }
 
 async function getDefinition(): Promise<AgentType> {
-  return getResolvedAgentOrThrow(resolvedAgent).getAgentType();
+  return Option.getOrThrowWith(
+    resolvedAgent,
+    () => new Error('Failed to get agent definition: agent is not initialized'),
+  ).getAgentType();
 }
 
 async function save(): Promise<Uint8Array> {
   if (Option.isNone(resolvedAgent)) {
-    throw UninitializedAgentError;
+    throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
   const agentSnapshot = await resolvedAgent.val.saveSnapshot();
