@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::model::{
-    PluginDefinitionCreation, PluginTypeSpecificCreation, PluginTypeSpecificDefinition,
-};
-use golem_common::model::plugin::PluginScope;
+use golem_common::model::component::ComponentRevision;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -33,7 +31,7 @@ pub enum PluginTypeSpecificManifest {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentTransformerManifest {
     pub provided_wit_package: Option<String>,
-    pub json_schema: Option<String>,
+    pub json_schema: Option<serde_json::Value>,
     pub validate_url: String,
     pub transform_url: String,
 }
@@ -41,7 +39,8 @@ pub struct ComponentTransformerManifest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OplogProcessorManifest {
-    pub component: PathBuf,
+    pub component_id: Uuid,
+    pub component_revision: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,56 +64,4 @@ pub struct PluginManifest {
     pub icon: PathBuf,
     pub homepage: String,
     pub specs: PluginTypeSpecificManifest,
-}
-
-impl PluginManifest {
-    pub fn into_definition<PluginDefinition: FromPluginManifest>(
-        self,
-        scope: <PluginDefinition as FromPluginManifest>::PluginScope,
-        specs: PluginTypeSpecificDefinition,
-        icon: Vec<u8>,
-    ) -> PluginDefinition {
-        PluginDefinition::from_plugin_manifest(self, scope, specs, icon)
-    }
-}
-
-pub trait FromPluginManifest {
-    type PluginScope;
-
-    fn from_plugin_manifest(
-        manifest: PluginManifest,
-        scope: Self::PluginScope,
-        specs: PluginTypeSpecificDefinition,
-        icon: Vec<u8>,
-    ) -> Self;
-}
-
-impl FromPluginManifest for PluginDefinitionCreation {
-    type PluginScope = PluginScope;
-
-    fn from_plugin_manifest(
-        manifest: PluginManifest,
-        scope: Self::PluginScope,
-        specs: PluginTypeSpecificDefinition,
-        icon: Vec<u8>,
-    ) -> Self {
-        PluginDefinitionCreation {
-            name: manifest.name,
-            version: manifest.version,
-            description: manifest.description,
-            icon,
-            homepage: manifest.homepage,
-            specs: match specs {
-                PluginTypeSpecificDefinition::ComponentTransformer(params) => {
-                    PluginTypeSpecificCreation::ComponentTransformer(params)
-                }
-                PluginTypeSpecificDefinition::OplogProcessor(params) => {
-                    PluginTypeSpecificCreation::OplogProcessor(params)
-                }
-                PluginTypeSpecificDefinition::Library(_) => unreachable!(),
-                PluginTypeSpecificDefinition::App(_) => unreachable!(),
-            },
-            scope,
-        }
-    }
 }

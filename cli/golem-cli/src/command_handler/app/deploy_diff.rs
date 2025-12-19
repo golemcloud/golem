@@ -906,7 +906,7 @@ fn normalized_diff_deployment(
                             },
                             wasm_hash: component.wasm_hash,
                             files_by_path: component.files_by_path.clone(),
-                            plugins_by_priority: component.plugins_by_priority.clone(),
+                            plugins_by_grant_id: component.plugins_by_grant_id.clone(),
                         }
                         .into(),
                         None => component.hash().into(),

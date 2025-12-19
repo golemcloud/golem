@@ -118,11 +118,11 @@ if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
     if [ "$rebuild" = true ]; then
       rm -rf node_modules
       npm install
-      golem-cli app clean
+      golem-cli clean
     fi
 
-    golem-cli app build
-    golem-cli app copy
+    golem-cli build
+    golem-cli copy
 
     popd || exit
   done
@@ -137,12 +137,12 @@ if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
     if [ "$rebuild" = true ]; then
       rm -rf node_modules
       npm install
-      golem-cli app clean
+      golem-cli clean
       cargo clean
     fi
 
-    golem-cli app build
-    golem-cli app copy
+    golem-cli build
+    golem-cli copy
 
     popd || exit
   done

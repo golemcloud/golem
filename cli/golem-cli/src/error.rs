@@ -23,7 +23,6 @@ impl Error for NonSuccessfulExit {}
 pub enum ShowClapHelpTarget {
     AppNew,
     ComponentNew,
-    ComponentAddDependency,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages

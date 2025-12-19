@@ -22,7 +22,8 @@ pub mod environment;
 pub mod format;
 pub mod http_api;
 pub mod invoke_result_view;
-// TODO: atomic: pub mod plugin_manifest;
+pub mod plugin;
+pub mod plugin_manifest;
 pub mod template;
 pub mod text;
 pub mod wave;
@@ -31,7 +32,6 @@ pub mod worker;
 use crate::command::shared_args::ComponentTemplateName;
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
-use crate::log::LogColorize;
 use anyhow::{anyhow, Context};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -48,78 +48,8 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
 use url::Url;
+
 // TODO: move non generic entities into mods
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum PluginReference {
-    RelativeToCurrentAccount {
-        name: String,
-        version: String,
-    },
-    FullyQualified {
-        account_email: String,
-        name: String,
-        version: String,
-    },
-}
-
-impl PluginReference {
-    pub fn account_email(&self) -> Option<String> {
-        match self {
-            Self::FullyQualified { account_email, .. } => Some(account_email.clone()),
-            Self::RelativeToCurrentAccount { .. } => None,
-        }
-    }
-
-    pub fn plugin_name(&self) -> String {
-        match self {
-            Self::FullyQualified { name, .. } => name.clone(),
-            Self::RelativeToCurrentAccount { name, .. } => name.clone(),
-        }
-    }
-
-    pub fn plugin_version(&self) -> String {
-        match self {
-            Self::FullyQualified { version, .. } => version.clone(),
-            Self::RelativeToCurrentAccount { version, .. } => version.clone(),
-        }
-    }
-}
-
-impl FromStr for PluginReference {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut segments = s.split("/").collect::<Vec<_>>();
-        match segments.len() {
-            2 => {
-                let version = segments.pop().unwrap().to_string();
-                let name = segments.pop().unwrap().to_string();
-                Ok(Self::RelativeToCurrentAccount { name, version })
-            }
-            3 => {
-                let version = segments.pop().unwrap().to_string();
-                let name = segments.pop().unwrap().to_string();
-                let account_email = segments.pop().unwrap().to_string();
-                Ok(Self::FullyQualified { account_email, name, version })
-            }
-            _ => Err(format!("Unknown format for plugin: {}. Expected either <PLUGIN_NAME>/<PLUGIN_VERSION> or <ACCOUNT_EMAIL>/<PLUGIN_NAME>/<PLUGIN_VERSION>", s.log_color_highlight()))
-        }
-    }
-}
-
-impl Display for PluginReference {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RelativeToCurrentAccount { name, version } => write!(f, "{name}/{version}"),
-            Self::FullyQualified {
-                account_email,
-                name,
-                version,
-            } => write!(f, "{account_email}/{name}/{version}"),
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct JsonValueParser;
@@ -267,66 +197,6 @@ impl From<golem_client::model::Account> for AccountDetails {
         }
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginDefinition {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub homepage: String,
-    pub scope: String,
-    #[serde(rename = "type")]
-    pub typ: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub component_transformer_validate_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub component_transformer_transform_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oplog_processor_component_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oplog_processor_component_version: Option<u64>,
-}
-
-// TODO: atomic
-/*
-impl From<golem_client::model::PluginDefinition> for PluginDefinition {
-    fn from(value: golem_client::model::PluginDefinition) -> Self {
-        let mut plugin_definition = Self {
-            name: value.name,
-            version: value.version,
-            description: value.description,
-            homepage: value.homepage,
-            scope: value.scope.to_string(),
-            typ: "".to_string(),
-            component_transformer_validate_url: None,
-            component_transformer_transform_url: None,
-            oplog_processor_component_id: None,
-            oplog_processor_component_version: None,
-        };
-
-        match value.specs {
-            PluginTypeSpecificDefinition::ComponentTransformer(specs) => {
-                plugin_definition.typ = "Component Transformer".to_string();
-                plugin_definition.component_transformer_validate_url = Some(specs.validate_url);
-                plugin_definition.component_transformer_transform_url = Some(specs.transform_url);
-            }
-            PluginTypeSpecificDefinition::OplogProcessor(specs) => {
-                plugin_definition.typ = "Oplog Processor".to_string();
-                plugin_definition.oplog_processor_component_id =
-                    Some(specs.component_id.to_string());
-                plugin_definition.oplog_processor_component_version = Some(specs.component_version);
-            }
-            PluginTypeSpecificDefinition::Library(_) => {
-                plugin_definition.typ = "Library".to_string();
-            }
-            PluginTypeSpecificDefinition::App(_) => plugin_definition.typ = "App".to_string(),
-        };
-
-        plugin_definition
-    }
-}
-*/
 
 pub struct NewInteractiveApp {
     pub app_name: ApplicationName,

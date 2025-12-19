@@ -46,6 +46,7 @@ goldenfile.workspace = true
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
+itertools = { workspace = true }
 hyper = { workspace = true }
 indoc = { workspace = true }
 jsonwebtoken = { workspace = true }

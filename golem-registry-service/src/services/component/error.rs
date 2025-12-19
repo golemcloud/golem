@@ -70,10 +70,10 @@ pub enum ComponentError {
     ComponentNotFound(ComponentId),
     #[error("Component for name {0} not found in environment")]
     ComponentByNameNotFound(ComponentName),
-    #[error("Plugin not found in the environment for id: {0}")]
+    #[error("Plugin not found in the environment for grant id: {0}")]
     EnvironmentPluginNotFound(EnvironmentPluginGrantId),
-    #[error("Referenced plugin installation with priority {0} not found")]
-    PluginInstallationNotFound(PluginPriority),
+    #[error("Referenced plugin installation with grant id {0} not found")]
+    PluginInstallationNotFound(EnvironmentPluginGrantId),
     #[error("Multiple plugins with same priority {0}")]
     ConflictingPluginPriority(PluginPriority),
     #[error("Failed to componse component with plugin with priority {plugin_priority}")]

@@ -48,6 +48,7 @@ use golem_service_base::model::plugin_registration::{
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -571,9 +572,11 @@ impl ComponentWriteService {
                 PluginInstallationAction::Uninstall(inner) => {
                     let plugin_index = updated
                         .iter()
-                        .position(|p| p.priority == inner.plugin_priority)
+                        .position(|p| {
+                            p.environment_plugin_grant_id == inner.environment_plugin_grant_id
+                        })
                         .ok_or(ComponentError::PluginInstallationNotFound(
-                            inner.plugin_priority,
+                            inner.environment_plugin_grant_id,
                         ))?;
 
                     updated.swap_remove(plugin_index);
@@ -581,9 +584,11 @@ impl ComponentWriteService {
                 PluginInstallationAction::Update(inner) => {
                     let plugin_index = updated
                         .iter()
-                        .position(|p| p.priority == inner.plugin_priority)
+                        .position(|p| {
+                            p.environment_plugin_grant_id == inner.environment_plugin_grant_id
+                        })
                         .ok_or(ComponentError::PluginInstallationNotFound(
-                            inner.plugin_priority,
+                            inner.environment_plugin_grant_id,
                         ))?;
 
                     // Currently it's ok to update a plugin even if it was removed from the enviroment / deleted.
@@ -644,6 +649,16 @@ impl ComponentWriteService {
                     });
                 }
             }
+        }
+
+        let non_unique_priorities = updated
+            .iter()
+            .into_group_map_by(|p| p.priority)
+            .into_iter()
+            .filter(|(_, plugins)| plugins.len() > 1)
+            .collect::<HashMap<_, _>>();
+        if let Some((priority, _)) = non_unique_priorities.iter().next() {
+            return Err(ComponentError::ConflictingPluginPriority(*priority));
         }
 
         Ok(updated)

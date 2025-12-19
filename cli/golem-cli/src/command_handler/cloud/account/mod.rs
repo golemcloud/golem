@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: atomic: pub mod grant;
-
 use crate::command::cloud::account::AccountSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -55,14 +53,6 @@ impl CloudAccountCommandHandler {
             AccountSubcommand::Delete { account_id } => {
                 self.cmd_delete(account_id.account_id).await
             }
-            AccountSubcommand::Grant { subcommand: _ } => {
-                // TODO: atomic:
-                // self.ctx
-                //     .cloud_account_grant_handler()
-                //     .handle_command(subcommand)
-                //     .await
-                todo!()
-            }
         }
     }
 
@@ -84,7 +74,6 @@ impl CloudAccountCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        // TODO: this should have a proper update endpoint instead of getting then updating...
         let account = self.get(account_id).await?;
         let account = self
             .ctx

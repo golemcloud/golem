@@ -249,8 +249,8 @@ impl AppCommandHandler {
                 format!(
                     "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
                     application_name.as_str().log_color_highlight(),
-                    "app build".log_color_highlight(),
-                    "app deploy".log_color_highlight(),
+                    "build".log_color_highlight(),
+                    "deploy".log_color_highlight(),
                 )
             );
         }
@@ -734,7 +734,11 @@ impl AppCommandHandler {
                 let diffable_component = self
                     .ctx
                     .component_handler()
-                    .diffable_local_component(component_name, component_deploy_properties)
+                    .diffable_local_component(
+                        &environment,
+                        component_name,
+                        component_deploy_properties,
+                    )
                     .await?;
                 diffable_components.insert(component_name.0.clone(), diffable_component.into());
             }
@@ -1304,6 +1308,7 @@ impl AppCommandHandler {
                 diff::BTreeMapDiffValue::Update(component_diff) => {
                     component_handler
                         .update_staged_component(
+                            &deploy_diff.environment,
                             deploy_diff.staged_component_identity(&component_name),
                             deploy_diff.deployable_manifest_component(&component_name),
                             component_diff,
@@ -1469,7 +1474,7 @@ impl AppCommandHandler {
         deploy_args: &DeployArgs,
         current_deployment: &CurrentDeployment,
     ) -> anyhow::Result<()> {
-        if !deploy_args.is_any_set() {
+        if !deploy_args.is_any_set(self.ctx.deploy_args()) {
             return Ok(());
         }
 

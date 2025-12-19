@@ -38,6 +38,7 @@ use crate::model::environment::{
 use crate::model::text::component::ComponentGetView;
 use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::help::ComponentNameHelp;
+use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -65,12 +66,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use url::Url;
 
 pub mod ifs;
 mod staging;
-// TODO: atomic: pub mod plugin;
-// TODO: atomic: pub mod plugin_installation;
 
 pub struct ComponentCommandHandler {
     ctx: Arc<Context>,
@@ -96,22 +94,6 @@ impl ComponentCommandHandler {
                 build: build_args,
             } => self.cmd_build(component_name, build_args).await,
             ComponentSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
-            ComponentSubcommand::AddDependency {
-                component_name,
-                target_component_name,
-                target_component_path,
-                target_component_url,
-                dependency_type,
-            } => {
-                self.cmd_add_dependency(
-                    component_name,
-                    target_component_name,
-                    target_component_path,
-                    target_component_url,
-                    dependency_type,
-                )
-                .await
-            }
             ComponentSubcommand::List => self.cmd_list().await,
             ComponentSubcommand::Get {
                 component_name,
@@ -129,16 +111,6 @@ impl ComponentCommandHandler {
             ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
-            }
-            ComponentSubcommand::Plugin { subcommand: _ } => {
-                // TODO: atomic
-                /*
-                self.ctx
-                    .component_plugin_handler()
-                    .handle_command(subcommand)
-                    .await
-                */
-                todo!()
             }
             ComponentSubcommand::Diagnose { component_name } => {
                 self.cmd_diagnose(component_name).await
@@ -527,60 +499,6 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    async fn cmd_add_dependency(
-        &self,
-        _component_name: Option<ComponentName>,
-        _target_component_name: Option<ComponentName>,
-        _target_component_path: Option<PathBuf>,
-        _target_component_url: Option<Url>,
-        _dependency_type: Option<DependencyType>,
-    ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
-        self.ctx.silence_app_context_init().await;
-
-        let Some((component_name, target_component_source, dependency_type)) = self
-            .ctx
-            .interactive_handler()
-            .create_component_dependency(
-                component_name,
-                target_component_name,
-                target_component_path,
-                target_component_url,
-                dependency_type,
-            )
-            .await?
-        else {
-            log_error("All of COMPONENT_NAME, (TARGET_COMPONENT_NAME/TARGET_COMPONENT_PATH/TARGET_COMPONENT_URL) and DEPENDENCY_TYPE are required in non-interactive mode");
-            logln("");
-            bail!(HintError::ShowClapHelp(
-                ShowClapHelpTarget::ComponentAddDependency
-            ));
-        };
-
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-
-        let mut editor = AppYamlEditor::new(&app_ctx.application);
-
-        let inserted = editor.insert_or_update_dependency(
-            &component_name,
-            &target_component_source,
-            dependency_type,
-        )?;
-
-        editor.update_documents()?;
-
-        if inserted {
-            log_action("Added", "component dependency");
-        } else {
-            log_action("Updated", "component dependency");
-        }
-
-        Ok(())*/
-        todo!()
-    }
-
     pub async fn update_workers_by_components(
         &self,
         components: &[ComponentDto],
@@ -848,7 +766,7 @@ impl ComponentCommandHandler {
         component_revision_selection: Option<ComponentRevisionSelection<'_>>,
         deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<ComponentDto> {
-        if deploy_args.is_some() || self.ctx.deploy_args().is_any_set() {
+        if deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
             self.ctx
                 .app_handler()
                 .deploy(DeployConfig {
@@ -1017,6 +935,7 @@ impl ComponentCommandHandler {
             bail!("Component {component_name} is not deployable");
         }
         let files = component.files().clone();
+        let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
         let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
@@ -1025,12 +944,14 @@ impl ComponentCommandHandler {
             agent_types,
             files,
             dynamic_linking,
+            plugins,
             env,
         })
     }
 
     pub async fn diffable_local_component(
         &self,
+        environment: &ResolvedEnvironmentIdentity,
         component_name: &ComponentName,
         properties: &ComponentDeployProperties,
     ) -> anyhow::Result<diff::Component> {
@@ -1052,7 +973,7 @@ impl ComponentCommandHandler {
         };
 
         // TODO: atomic: cache it with a TaskResultMarker (handling local vs http)?
-        let files: BTreeMap<String, diff::HashOf<diff::ComponentFile>> = {
+        let files_by_path: BTreeMap<String, diff::HashOf<diff::ComponentFile>> = {
             IfsFileManager::new(self.ctx.file_download_client().clone())
                 .collect_file_hashes(component_name.as_str(), properties.files.as_slice())
                 .await?
@@ -1070,6 +991,50 @@ impl ComponentCommandHandler {
                 .collect()
         };
 
+        let plugins_by_grant_id = {
+            if properties.plugins.is_empty() {
+                BTreeMap::new()
+            } else {
+                let plugin_grants = self
+                    .ctx
+                    .environment_handler()
+                    .plugin_grants(environment)
+                    .await?;
+
+                let mut plugins_by_grant_id = BTreeMap::new();
+
+                for (priority, plugin) in properties.plugins.iter().enumerate() {
+                    // TODO: atomic: cannot lookup by account email
+                    let Some(server_plugin) = plugin_grants.get(&PluginNameAndVersion {
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                    }) else {
+                        log_error(format!(
+                            "Plugin {}/{} for component {} not found.",
+                            plugin.name,
+                            plugin.version,
+                            component_name.0.log_color_highlight()
+                        ));
+                        logln("");
+                        logln("Check if the plugin is registered and granted for the application environment!");
+                        bail!(NonSuccessfulExit);
+                    };
+                    plugins_by_grant_id.insert(
+                        server_plugin.id.0,
+                        diff::PluginInstallation {
+                            priority: priority as i32,
+                            name: plugin.name.clone(),
+                            version: plugin.version.clone(),
+                            grant_id: server_plugin.id.0,
+                            parameters: Default::default(),
+                        },
+                    );
+                }
+
+                plugins_by_grant_id
+            }
+        };
+
         Ok(diff::Component {
             metadata: diff::ComponentMetadata {
                 version: Some("".to_string()), // TODO: atomic
@@ -1082,8 +1047,8 @@ impl ComponentCommandHandler {
             }
             .into(),
             wasm_hash: component_binary_hash.into(),
-            files_by_path: files,
-            plugins_by_priority: Default::default(), // TODO: atomic: plugins
+            files_by_path,
+            plugins_by_grant_id,
         })
     }
 
@@ -1099,8 +1064,15 @@ impl ComponentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let component_stager =
-            ComponentStager::new(self.ctx.clone(), component_deploy_properties, None);
+        let component_stager = ComponentStager::new(
+            self.ctx.clone(),
+            component_deploy_properties,
+            self.ctx
+                .environment_handler()
+                .plugin_grants(environment)
+                .await?,
+            None,
+        );
 
         let linked_wasm = component_stager.open_linked_wasm().await?;
         let agent_types: Vec<AgentType> = component_stager.agent_types().clone();
@@ -1124,7 +1096,7 @@ impl ComponentCommandHandler {
                     dynamic_linking: component_stager.dynamic_linking(),
                     env: component_stager.env(),
                     agent_types,
-                    plugins: Default::default(), // TODO: atomic, collect plugins from manifest
+                    plugins: component_stager.plugins(),
                 },
                 linked_wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
@@ -1178,6 +1150,7 @@ impl ComponentCommandHandler {
 
     pub async fn update_staged_component(
         &self,
+        environment: &ResolvedEnvironmentIdentity,
         component: &DeploymentPlanComponentEntry,
         component_deploy_properties: &ComponentDeployProperties,
         diff: &diff::DiffForHashOf<diff::Component>,
@@ -1188,8 +1161,15 @@ impl ComponentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let component_stager =
-            ComponentStager::new(self.ctx.clone(), component_deploy_properties, Some(diff));
+        let component_stager = ComponentStager::new(
+            self.ctx.clone(),
+            component_deploy_properties,
+            self.ctx
+                .environment_handler()
+                .plugin_grants(environment)
+                .await?,
+            Some(diff),
+        );
 
         let linked_wasm = component_stager.open_linked_wasm_if_changed().await?;
         let agent_types = component_stager.agent_types_if_changed().cloned();
@@ -1211,7 +1191,7 @@ impl ComponentCommandHandler {
                     dynamic_linking: component_stager.dynamic_linking_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
-                    plugin_updates: Default::default(), // TODO: atomic, from diff
+                    plugin_updates: component_stager.plugins_if_changed(),
                 },
                 linked_wasm,
                 changed_files.open_archive().await?,
