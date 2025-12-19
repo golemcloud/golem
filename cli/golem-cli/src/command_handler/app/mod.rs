@@ -1474,7 +1474,7 @@ impl AppCommandHandler {
         deploy_args: &DeployArgs,
         current_deployment: &CurrentDeployment,
     ) -> anyhow::Result<()> {
-        if !deploy_args.is_any_set() {
+        if !deploy_args.is_any_set(self.ctx.deploy_args()) {
             return Ok(());
         }
 

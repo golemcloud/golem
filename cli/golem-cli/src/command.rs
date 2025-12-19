@@ -853,9 +853,13 @@ pub mod shared_args {
     }
 
     impl DeployArgs {
-        // TODO: atomic: should use env args? check before atomic
-        pub fn is_any_set(&self) -> bool {
-            self.update_agents.is_some() || self.redeploy_agents || self.reset
+        pub fn is_any_set(&self, env_args: &DeployArgs) -> bool {
+            env_args.update_agents.is_some()
+                || env_args.redeploy_agents
+                || env_args.reset
+                || self.update_agents.is_some()
+                || self.redeploy_agents
+                || self.reset
         }
 
         pub fn none() -> Self {
@@ -883,40 +887,6 @@ pub mod shared_args {
         #[arg(long)]
         pub account_id: Option<AccountId>,
     }
-
-    // TODO: atomic
-    /*#[derive(Debug, Args)]
-    pub struct PluginArg {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Plugin, accepted formats:
-        ///   - <PLUGIN_NAME>/<PLUGIN_VERSION>
-        ///   - <ACCOUNT_EMAIL>/<PLUGIN_NAME>/<PLUGIN_VERSION>
-        #[arg(verbatim_doc_comment)]
-        pub plugin: PluginReference,
-    }
-
-    #[derive(clap::Args, Debug, Clone)]
-    pub struct PluginScopeArgs {
-        /// Global scope (plugin available for all components)
-        #[arg(long, conflicts_with_all=["account", "project", "component"])]
-        pub global: bool,
-        /// Account id, optionally specifies the account id for the project name
-        #[arg(long, conflicts_with_all = ["global"])]
-        pub account: Option<String>,
-        /// Project name; Required when component name is used. Without a given component, it defines a project scope.
-        #[arg(long, conflicts_with_all = ["global"])]
-        pub project: Option<ProjectName>,
-        /// Component scope given by the component's name (plugin only available for this component)
-        #[arg(long, conflicts_with_all=["global"])]
-        pub component: Option<ComponentName>,
-    }
-
-    impl PluginScopeArgs {
-        pub fn is_global(&self) -> bool {
-            self.global
-                || (self.account.is_none() && self.project.is_none() && self.component.is_none())
-        }
-    }*/
 }
 
 pub mod exec {
@@ -943,17 +913,13 @@ pub mod environment {
 }
 
 pub mod component {
-    use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
         ComponentTemplateName,
     };
-    use crate::model::app::DependencyType;
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use std::path::PathBuf;
-    use url::Url;
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {
@@ -981,24 +947,6 @@ pub mod component {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
         },
-        /// Add or update a component dependency
-        AddDependency {
-            /// The name of the component to which the dependency should be added
-            #[arg(long)]
-            component_name: Option<ComponentName>,
-            /// The name of the component that will be used as the target component
-            #[arg(long, conflicts_with_all = ["target_component_path", "target_component_url"])]
-            target_component_name: Option<ComponentName>,
-            /// The path to the local component WASM that will be used as the target
-            #[arg(long, conflicts_with_all = ["target_component_name", "target_component_url"])]
-            target_component_path: Option<PathBuf>,
-            /// The URL to the remote component WASM that will be used as the target
-            #[arg(long, conflicts_with_all = ["target_component_name", "target_component_path"])]
-            target_component_url: Option<Url>,
-            /// The type of the dependency, defaults to wasm-rpc
-            #[arg(long)]
-            dependency_type: Option<DependencyType>,
-        },
         /// List deployed component versions' metadata
         List,
         /// Get the latest or selected revision of deployed component metadata
@@ -1023,11 +971,6 @@ pub mod component {
         RedeployAgents {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
-        },
-        /// Manage component plugin installations
-        Plugin {
-            #[command(subcommand)]
-            subcommand: ComponentPluginSubcommand,
         },
         /// Diagnose possible tooling problems
         Diagnose {
@@ -1423,7 +1366,6 @@ pub mod api {
 }
 
 pub mod plugin {
-
     use crate::model::PathBufOrStdin;
     use clap::Subcommand;
     use uuid::Uuid;
@@ -1636,146 +1578,6 @@ pub mod cloud {
             }
         }
     }
-
-    // TODO: atomic
-    /*
-    pub mod project {
-        use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
-        use crate::command::cloud::project::policy::PolicySubcommand;
-        use crate::model::{ProjectName, ProjectPolicyId, ProjectReference};
-        use clap::Subcommand;
-        use golem_common::model::auth::ProjectPermission;
-
-        #[derive(clap::Args, Debug)]
-        #[group(required = true, multiple = false)]
-        pub struct ProjectActionsOrPolicyId {
-            /// The sharing policy's identifier. If not provided, use `--action` instead
-            #[arg(long, required = true, group = "project_actions_or_policy")]
-            pub policy_id: Option<ProjectPolicyId>,
-            /// A list of actions to be granted to the recipient account. If not provided, use `--policy-id` instead
-            #[arg(long, required = true, group = "project_actions_or_policy")]
-            pub action: Option<Vec<ProjectPermission>>,
-        }
-
-        #[derive(Debug, Subcommand)]
-        pub enum ProjectSubcommand {
-            /// Create new project
-            New {
-                /// The new project's name
-                project_name: ProjectName,
-                /// The new project's description
-                #[arg(short, long)]
-                description: Option<String>,
-            },
-            /// Lists existing projects
-            List {
-                /// Optionally filter projects by name
-                project_name: Option<ProjectName>,
-            },
-            /// Gets the default project which is used when no explicit project is specified
-            GetDefault,
-            /// Share a project with another account
-            Grant {
-                /// The project to be shared
-                project_reference: ProjectReference,
-                /// Email of the user account the project will be shared with
-                recipient_email: String,
-                #[command(flatten)]
-                project_actions_or_policy_id: ProjectActionsOrPolicyId,
-            },
-            /// Manage project policies
-            Policy {
-                #[command(subcommand)]
-                subcommand: PolicySubcommand,
-            },
-            /// Manage project plugins
-            Plugin {
-                #[command(subcommand)]
-                subcommand: ProjectPluginSubcommand,
-            },
-        }
-
-        pub mod policy {
-            use crate::model::ProjectPolicyId;
-            use clap::Subcommand;
-            use golem_common::model::auth::ProjectPermission;
-
-            #[derive(Subcommand, Debug)]
-            pub enum PolicySubcommand {
-                /// Creates a new project sharing policy
-                New {
-                    /// Name of the policy
-                    policy_name: String,
-                    /// List of actions allowed by the policy
-                    actions: Vec<ProjectPermission>,
-                },
-                /// Gets the existing project sharing policies
-                #[command()]
-                Get {
-                    /// Project policy ID
-                    policy_id: ProjectPolicyId,
-                },
-            }
-        }
-
-        pub mod plugin {
-            use crate::command::parse_key_val;
-            use crate::command::shared_args::ProjectArg;
-            use clap::Subcommand;
-            use golem_common::base_model::PluginInstallationId;
-
-            #[derive(Debug, Subcommand)]
-            pub enum ProjectPluginSubcommand {
-                /// Install a plugin for a project
-                Install {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /// The plugin to install
-                    #[arg(long)]
-                    plugin_name: String,
-                    /// The version of the plugin to install
-                    #[arg(long)]
-                    plugin_version: String,
-                    /// Priority of the plugin - largest priority is applied first
-                    #[arg(long)]
-                    priority: i32,
-                    /// List of parameters (key-value pairs) passed to the plugin
-                    #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                    param: Vec<(String, String)>,
-                },
-                /// Get the installed plugins for the project
-                Get {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /* TODO: Missing from HTTP API
-                    /// The version of the component
-                    version: Option<u64>,
-                    */
-                },
-                /// Update project plugin
-                Update {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /// Installation id of the plugin to update
-                    plugin_installation_id: PluginInstallationId,
-                    /// Updated priority of the plugin - largest priority is applied first
-                    #[arg(long)]
-                    priority: i32,
-                    /// Updated list of parameters (key-value pairs) passed to the plugin
-                    #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                    param: Vec<(String, String)>,
-                },
-                /// Uninstall a plugin for selected component
-                Uninstall {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /// Installation id of the plugin to uninstall
-                    plugin_installation_id: PluginInstallationId,
-                },
-            }
-        }
-    }
-    */
 }
 
 pub mod server {

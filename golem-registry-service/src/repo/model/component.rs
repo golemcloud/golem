@@ -320,13 +320,11 @@ impl ComponentRevisionRecord {
                 .collect(),
             component_id,
             revision_id,
-            version:
-            // TODO: atomic
-            value
+            version: value
                 .metadata
                 .root_package_version()
                 .clone()
-                .unwrap_or_default(),
+                .unwrap_or_default(), // TODO: atomic
             size: value.component_size.into(),
             metadata: Blob::new(value.metadata),
             hash: SqlBlake3Hash::empty(),

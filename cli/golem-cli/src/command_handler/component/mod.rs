@@ -66,10 +66,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use url::Url;
 
 pub mod ifs;
-// TODO: atomic: pub mod plugin;
 mod staging;
 
 pub struct ComponentCommandHandler {
@@ -96,22 +94,6 @@ impl ComponentCommandHandler {
                 build: build_args,
             } => self.cmd_build(component_name, build_args).await,
             ComponentSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
-            ComponentSubcommand::AddDependency {
-                component_name,
-                target_component_name,
-                target_component_path,
-                target_component_url,
-                dependency_type,
-            } => {
-                self.cmd_add_dependency(
-                    component_name,
-                    target_component_name,
-                    target_component_path,
-                    target_component_url,
-                    dependency_type,
-                )
-                .await
-            }
             ComponentSubcommand::List => self.cmd_list().await,
             ComponentSubcommand::Get {
                 component_name,
@@ -129,17 +111,6 @@ impl ComponentCommandHandler {
             ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
-            }
-            ComponentSubcommand::Plugin {
-                subcommand: _subcommand,
-            } => {
-                /*self.ctx
-                   .component_plugin_handler()
-                   .handle_command(subcommand)
-                   .await
-                */
-                // TODO: atomic
-                todo!()
             }
             ComponentSubcommand::Diagnose { component_name } => {
                 self.cmd_diagnose(component_name).await
@@ -528,60 +499,6 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    async fn cmd_add_dependency(
-        &self,
-        _component_name: Option<ComponentName>,
-        _target_component_name: Option<ComponentName>,
-        _target_component_path: Option<PathBuf>,
-        _target_component_url: Option<Url>,
-        _dependency_type: Option<DependencyType>,
-    ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
-        self.ctx.silence_app_context_init().await;
-
-        let Some((component_name, target_component_source, dependency_type)) = self
-            .ctx
-            .interactive_handler()
-            .create_component_dependency(
-                component_name,
-                target_component_name,
-                target_component_path,
-                target_component_url,
-                dependency_type,
-            )
-            .await?
-        else {
-            log_error("All of COMPONENT_NAME, (TARGET_COMPONENT_NAME/TARGET_COMPONENT_PATH/TARGET_COMPONENT_URL) and DEPENDENCY_TYPE are required in non-interactive mode");
-            logln("");
-            bail!(HintError::ShowClapHelp(
-                ShowClapHelpTarget::ComponentAddDependency
-            ));
-        };
-
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-
-        let mut editor = AppYamlEditor::new(&app_ctx.application);
-
-        let inserted = editor.insert_or_update_dependency(
-            &component_name,
-            &target_component_source,
-            dependency_type,
-        )?;
-
-        editor.update_documents()?;
-
-        if inserted {
-            log_action("Added", "component dependency");
-        } else {
-            log_action("Updated", "component dependency");
-        }
-
-        Ok(())*/
-        todo!()
-    }
-
     pub async fn update_workers_by_components(
         &self,
         components: &[ComponentDto],
@@ -849,7 +766,7 @@ impl ComponentCommandHandler {
         component_revision_selection: Option<ComponentRevisionSelection<'_>>,
         deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<ComponentDto> {
-        if deploy_args.is_some() || self.ctx.deploy_args().is_any_set() {
+        if deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
             self.ctx
                 .app_handler()
                 .deploy(DeployConfig {

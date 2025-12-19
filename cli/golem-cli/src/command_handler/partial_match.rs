@@ -109,7 +109,7 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::AgentHelp => {
-                // TODO: atomic: show agents
+                // TODO: show agents
                 Ok(())
             }
             GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName { worker_name } => {
