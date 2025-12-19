@@ -298,7 +298,8 @@ impl DeploymentOptions {
     }
 
     pub fn version_check(&self) -> bool {
-        self.version_check.unwrap_or(true)
+        // TODO: atomic: switch to true, once versioning is implemented
+        self.version_check.unwrap_or(false)
     }
 
     pub fn security_overrides(&self) -> bool {
