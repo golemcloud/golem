@@ -691,8 +691,11 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"ok("foo")"#]).await;
     run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"err"#]).await;
 
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case1("yay")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case2(42)"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"ok("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"err(42)"#]).await;
+
+    run_and_assert(&ctx, "fun-result-like-with-void", &[r#"err"#]).await;
+    run_and_assert(&ctx, "fun-result-like-with-void", &[r#"ok"#]).await;
 
     // TODO: fix root cause for this
     // An arrow function

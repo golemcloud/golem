@@ -284,8 +284,7 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funBuiltinResultSV(result);
     }
 
-    // TODO: accept result type
-    async funBuiltinResultSN(result: string | number): Promise<Result<string, number>> {
+    async funBuiltinResultSN(result: Result<string, number>): Promise<Result<string, number>> {
         return await this.barAgent.funBuiltinResultSN(result);
     }
 
@@ -469,13 +468,8 @@ class BarAgent extends BaseAgent {
        return result
     }
 
-    // TODO: accept result type
-    funBuiltinResultSN(result: string | number): Result<string, number> {
-        if (typeof result == "string") {
-            return Result.ok(result);
-        } else {
-            return Result.err(result);
-        }
+    funBuiltinResultSN(result: Result<string, number>): Result<string, number> {
+        return result;
     }
 
     async funNoReturn(text: string) {
