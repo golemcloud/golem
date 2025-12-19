@@ -749,7 +749,8 @@ function convertValueToTextReference(value: Value.Value): TextReference {
             case 'record':
               const record = inlineValue.value;
               const data = record[0];
-              const languageCodeField = record.length > 1 ? record[1] : undefined;
+              const languageCodeField =
+                record.length > 1 ? record[1] : undefined;
 
               switch (data.kind) {
                 case 'string':
@@ -790,10 +791,10 @@ function convertValueToTextReference(value: Value.Value): TextReference {
                             },
                           };
 
-                          default:
-                            throw new Error(
-                              `Invalid inline text language code option type: expected string, found ${JSON.stringify(langCodeOpt)}`,
-                              );
+                        default:
+                          throw new Error(
+                            `Invalid inline text language code option type: expected string, found ${JSON.stringify(langCodeOpt)}`,
+                          );
                       }
 
                     default:
