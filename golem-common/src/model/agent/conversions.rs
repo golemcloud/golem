@@ -266,9 +266,6 @@ impl DataValue {
                 ),
                 crate::model::agent::bindings::golem::agent::common::DataSchema::Multimodal(schema),
             ) => {
-                if multimodal.len() != schema.len() {
-                    return Err("Multimodal length mismatch".to_string());
-                }
                 Ok(DataValue::Multimodal(NamedElementValues {
                     elements: multimodal
                         .into_iter()
