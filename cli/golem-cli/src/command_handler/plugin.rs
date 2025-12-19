@@ -44,9 +44,9 @@ impl PluginCommandHandler {
     pub async fn handle_command(&self, subcommand: PluginSubcommand) -> anyhow::Result<()> {
         match subcommand {
             PluginSubcommand::List => self.cmd_list().await,
-            PluginSubcommand::Get { id } => self.cmd_get(id).await,
+            PluginSubcommand::Get { plugin_id: id } => self.cmd_get(id).await,
             PluginSubcommand::Register { manifest } => self.cmd_register(manifest).await,
-            PluginSubcommand::Unregister { id } => self.cmd_unregister(id).await,
+            PluginSubcommand::Unregister { plugin_id: id } => self.cmd_unregister(id).await,
         }
     }
 

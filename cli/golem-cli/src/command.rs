@@ -705,7 +705,7 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ApiSubcommand,
     },
-    // Manage plugins
+    /// Manage plugins
     Plugin {
         #[clap(subcommand)]
         subcommand: PluginSubcommand,
@@ -1377,8 +1377,8 @@ pub mod plugin {
         List,
         /// Get
         Get {
-            // PluginID
-            id: Uuid, // TODO: atomic: missing method for looking up by name
+            /// PluginID
+            plugin_id: Uuid, // TODO: atomic: missing method for looking up by name
         },
         /// Register a new plugin for the account
         Register {
@@ -1387,8 +1387,8 @@ pub mod plugin {
         },
         /// Unregister a plugin
         Unregister {
-            // PluginID
-            id: Uuid, // TODO: atomic: missing method for deleting by name
+            /// PluginID
+            plugin_id: Uuid, // TODO: atomic: missing method for deleting by name
         },
     }
 }
@@ -1516,7 +1516,6 @@ pub mod cloud {
     }
 
     pub mod account {
-        use crate::command::cloud::account::grant::GrantSubcommand;
         use crate::command::shared_args::AccountIdOptionalArg;
         use clap::Subcommand;
 
@@ -1548,37 +1547,6 @@ pub mod cloud {
                 #[command(flatten)]
                 account_id: AccountIdOptionalArg,
             },
-            /// Manage the account roles
-            Grant {
-                #[command(subcommand)]
-                subcommand: GrantSubcommand,
-            },
-        }
-
-        pub mod grant {
-            use crate::command::shared_args::AccountIdOptionalArg;
-            use clap::Subcommand;
-
-            #[derive(Subcommand, Debug)]
-            pub enum GrantSubcommand {
-                /// Get the roles granted to the account
-                Get {
-                    #[command(flatten)]
-                    account_id: AccountIdOptionalArg,
-                },
-                /// Grant a new role to the account
-                New {
-                    #[command(flatten)]
-                    account_id: AccountIdOptionalArg,
-                    // TODO: atomic role: Role, /// The role to be granted
-                },
-                /// Remove a role from the account
-                Delete {
-                    #[command(flatten)]
-                    account_id: AccountIdOptionalArg,
-                    // TODO: atomic role: Role, /// The role to be deleted
-                },
-            }
         }
     }
 }

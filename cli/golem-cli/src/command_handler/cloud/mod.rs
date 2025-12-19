@@ -31,14 +31,6 @@ impl CloudCommandHandler {
 
     pub async fn handle_command(&self, subcommand: CloudSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            // TODO: atomic
-            /*CloudSubcommand::Project { subcommand } => {
-                self.ctx
-                    .cloud_project_handler()
-                    .handle_command(subcommand)
-                    .await
-            }
-            */
             CloudSubcommand::Account { subcommand } => {
                 self.ctx
                     .cloud_account_handler()
