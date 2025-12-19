@@ -622,7 +622,19 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
 
     // Multimodal
-    run_and_assert(&ctx, "fun-multimodal", &["[text(\"foo\")]"]).await;
+    run_and_assert(
+        &ctx,
+        "ts:agent/foo-agent.{fun-multimodal}",
+        &["[text(inline({data: \"data\", text-type: none}))]"],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "ts:agent/foo-agent.{fun-multimodal-advanced}",
+        &["[text(\"foo\")]"],
+    )
+    .await;
 
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
@@ -685,14 +697,17 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     .await;
 
     // Functions using the builtin result type
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"some("yay")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"none"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"ok"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"err("foo")"#]).await;
 
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"none"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"some("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"ok("foo")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"err"#]).await;
 
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case1("yay")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case2(42)"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"ok("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"err(42)"#]).await;
+
+    run_and_assert(&ctx, "fun-result-like-with-void", &[r#"err"#]).await;
+    run_and_assert(&ctx, "fun-result-like-with-void", &[r#"ok"#]).await;
 
     // TODO: fix root cause for this
     // An arrow function

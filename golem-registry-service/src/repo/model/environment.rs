@@ -17,15 +17,16 @@ use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
+use golem_common::model::account::AccountSummary;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::application::ApplicationSummary;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{self};
 use golem_common::model::environment::{
-    AccountSummary, ApplicationSummary, Environment, EnvironmentCreation,
-    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName, EnvironmentRevision,
-    EnvironmentSummary, EnvironmentWithDetails,
+    Environment, EnvironmentCreation, EnvironmentCurrentDeploymentView, EnvironmentId,
+    EnvironmentName, EnvironmentRevision, EnvironmentSummary, EnvironmentWithDetails,
 };
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;

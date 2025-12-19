@@ -2077,7 +2077,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_component_wasm
-  /v1/{environment_id}/domain-registrations:
+  /v1/envs/{environment_id}/domain-registrations:
     post:
       tags:
       - RegistryService
@@ -2447,7 +2447,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_EnvironmentPluginGrant'
+                $ref: '#/components/schemas/Page_EnvironmentPluginGrantWithDetails'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2524,7 +2524,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/EnvironmentPluginGrant'
+                $ref: '#/components/schemas/EnvironmentPluginGrantWithDetails'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -8038,7 +8038,7 @@ components:
       required:
       - id
       - environmentId
-      - plugin
+      - pluginId
       properties:
         id:
           type: string
@@ -8046,8 +8046,9 @@ components:
         environmentId:
           type: string
           format: uuid
-        plugin:
-          $ref: '#/components/schemas/PluginRegistrationDto'
+        pluginId:
+          type: string
+          format: uuid
     EnvironmentPluginGrantCreation:
       type: object
       title: EnvironmentPluginGrantCreation
@@ -8057,6 +8058,25 @@ components:
         pluginRegistrationId:
           type: string
           format: uuid
+    EnvironmentPluginGrantWithDetails:
+      type: object
+      title: EnvironmentPluginGrantWithDetails
+      required:
+      - id
+      - environmentId
+      - plugin
+      - pluginAccount
+      properties:
+        id:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        plugin:
+          $ref: '#/components/schemas/PluginRegistrationDto'
+        pluginAccount:
+          $ref: '#/components/schemas/AccountSummary'
     EnvironmentRole:
       type: string
       enum:
@@ -8703,16 +8723,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Environment'
-    Page_EnvironmentPluginGrant:
+    Page_EnvironmentPluginGrantWithDetails:
       type: object
-      title: Page_EnvironmentPluginGrant
+      title: Page_EnvironmentPluginGrantWithDetails
       required:
       - values
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/EnvironmentPluginGrant'
+            $ref: '#/components/schemas/EnvironmentPluginGrantWithDetails'
     Page_EnvironmentShare:
       type: object
       title: Page_EnvironmentShare

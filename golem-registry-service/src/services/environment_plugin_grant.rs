@@ -21,6 +21,7 @@ use crate::repo::model::environment_plugin_grant::{
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
+    EnvironmentPluginGrantWithDetails,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -100,8 +101,7 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        let plugin_registration = self
-            .plugin_registration_service
+        self.plugin_registration_service
             .get_plugin(data.plugin_registration_id, false, auth)
             .await
             .map_err(|err| match err {
@@ -133,7 +133,7 @@ impl EnvironmentPluginGrantService {
                 }
                 other => other.into(),
             })?
-            .into_model(plugin_registration.into());
+            .into();
 
         Ok(created)
     }
@@ -164,7 +164,7 @@ impl EnvironmentPluginGrantService {
         &self,
         environment_id: EnvironmentId,
         auth: &AuthCtx,
-    ) -> Result<Vec<EnvironmentPluginGrant>, EnvironmentPluginGrantError> {
+    ) -> Result<Vec<EnvironmentPluginGrantWithDetails>, EnvironmentPluginGrantError> {
         // Optimally this is fetched together with the grant data instead of up front
         // see EnvironmentService::list_in_application for a better pattern
         let environment = self
@@ -184,7 +184,7 @@ impl EnvironmentPluginGrantService {
             EnvironmentAction::ViewEnvironmentPluginGrant,
         )?;
 
-        let grants: Vec<EnvironmentPluginGrant> = self
+        let grants: Vec<EnvironmentPluginGrantWithDetails> = self
             .environment_plugin_grant_repo
             .list_by_environment(environment_id.0)
             .await?
@@ -200,7 +200,7 @@ impl EnvironmentPluginGrantService {
         environment_plugin_grant_id: EnvironmentPluginGrantId,
         include_deleted: bool,
         auth: &AuthCtx,
-    ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
+    ) -> Result<EnvironmentPluginGrantWithDetails, EnvironmentPluginGrantError> {
         Ok(self
             .get_by_id_with_environment(environment_plugin_grant_id, include_deleted, auth)
             .await?
@@ -213,8 +213,8 @@ impl EnvironmentPluginGrantService {
         environment_plugin_grant_id: EnvironmentPluginGrantId,
         environment: &Environment,
         auth: &AuthCtx,
-    ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
-        let grant: EnvironmentPluginGrant = self
+    ) -> Result<EnvironmentPluginGrantWithDetails, EnvironmentPluginGrantError> {
+        let grant: EnvironmentPluginGrantWithDetails = self
             .environment_plugin_grant_repo
             .get_by_id(environment_plugin_grant_id.0, false)
             .await?
@@ -246,8 +246,8 @@ impl EnvironmentPluginGrantService {
         environment_plugin_grant_id: EnvironmentPluginGrantId,
         include_deleted: bool,
         auth: &AuthCtx,
-    ) -> Result<(EnvironmentPluginGrant, Environment), EnvironmentPluginGrantError> {
-        let grant: EnvironmentPluginGrant = self
+    ) -> Result<(EnvironmentPluginGrantWithDetails, Environment), EnvironmentPluginGrantError> {
+        let grant: EnvironmentPluginGrantWithDetails = self
             .environment_plugin_grant_repo
             .get_by_id(environment_plugin_grant_id.0, include_deleted)
             .await?

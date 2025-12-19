@@ -4,7 +4,8 @@ import {
     agent,
     UnstructuredText,
     UnstructuredBinary,
-    WithRemoteMethods,
+    Client,
+    Multimodal,
     MultimodalAdvanced
 } from '@golemcloud/golem-ts-sdk';
 
@@ -31,16 +32,17 @@ import {
     ResultLikeWithNoTag,
     ResultLike,
     ResultExact,
-    UnionWithOnlyLiterals,
+    UnionWithOnlyLiterals, ResultLikeWithVoid,
 } from './model';
 
 
 export type InputText = { val: string, tag: "text" };
 export type InputImage = { val: Uint8Array; tag: "image" };
 
+
 @agent()
 class FooAgent extends BaseAgent {
-    readonly barAgent: WithRemoteMethods<BarAgent>;
+    readonly barAgent: Client<BarAgent>;
 
     constructor(readonly input: string) {
         super();
@@ -255,8 +257,12 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUnstructuredBinary(unstructuredText);
     }
 
-    async funMultimodal(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise<string> {
+    async funMultimodal(multimodal: Multimodal): Promise<Multimodal> {
         return await this.barAgent.funMultimodal(multimodal);
+    }
+
+    async funMultimodalAdvanced(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise< MultimodalAdvanced<InputText | InputImage>> {
+        return await this.barAgent.funMultimodalAdvanced(multimodal);
     }
 
     async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
@@ -271,18 +277,19 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funResultLike(eitherOneOptional);
     }
 
-    // TODO: accept result type
-    async funBuiltinResultVS(result: string | undefined): Promise<Result<void, string>> {
+    async funResultLikeWithVoid(resultLikeWithVoid: ResultLikeWithVoid): Promise<ResultLikeWithVoid> {
+        return await this.barAgent.funResultLikeWithVoid(resultLikeWithVoid);
+    }
+
+    async funBuiltinResultVS(result: Result<void, string>): Promise<Result<void, string>> {
         return await this.barAgent.funBuiltinResultVS(result);
     }
 
-    // TODO: accept result type
-    async funBuiltinResultSV(result: string | undefined): Promise<Result<string, void>> {
+    async funBuiltinResultSV(result: Result<string, void>): Promise<Result<string, void>> {
         return await this.barAgent.funBuiltinResultSV(result);
     }
 
-    // TODO: accept result type
-    async funBuiltinResultSN(result: string | number): Promise<Result<string, number>> {
+    async funBuiltinResultSN(result: Result<string, number>): Promise<Result<string, number>> {
         return await this.barAgent.funBuiltinResultSN(result);
     }
 
@@ -430,8 +437,12 @@ class BarAgent extends BaseAgent {
         return "foo"
     }
 
-    async funMultimodal(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise<string> {
-        return "foo"
+    async funMultimodal(multimodal: Multimodal): Promise<Multimodal> {
+        return multimodal
+    }
+
+    async funMultimodalAdvanced(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise< MultimodalAdvanced<InputText | InputImage>> {
+        return multimodal
     }
 
     async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
@@ -454,31 +465,20 @@ class BarAgent extends BaseAgent {
         return eitherOneOptional
     }
 
-    // TODO: accept result type
-    funBuiltinResultVS(result: string | undefined): Result<void, string> {
-        if (result) {
-            return Result.err(result);
-        } else {
-            return Result.ok(undefined);
-        }
+    async funResultLikeWithVoid(resultLikeWithVoid: ResultLikeWithVoid): Promise<ResultLikeWithVoid> {
+        return resultLikeWithVoid
     }
 
-    // TODO: accept result type
-    funBuiltinResultSV(result: string | undefined): Result<string, void> {
-        if (result) {
-            return Result.ok(result);
-        } else {
-            return Result.err(undefined);
-        }
+    funBuiltinResultVS(result: Result<void, string>): Result<void, string> {
+        return result;
     }
 
-    // TODO: accept result type
-    funBuiltinResultSN(result: string | number): Result<string, number> {
-        if (typeof result == "string") {
-            return Result.ok(result);
-        } else {
-            return Result.err(result);
-        }
+    funBuiltinResultSV(result: Result<string, void>): Result<string, void> {
+       return result
+    }
+
+    funBuiltinResultSN(result: Result<string, number>): Result<string, number> {
+        return result;
     }
 
     async funNoReturn(text: string) {

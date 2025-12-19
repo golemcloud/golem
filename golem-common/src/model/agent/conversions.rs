@@ -265,21 +265,16 @@ impl DataValue {
                     multimodal,
                 ),
                 crate::model::agent::bindings::golem::agent::common::DataSchema::Multimodal(schema),
-            ) => {
-                if multimodal.len() != schema.len() {
-                    return Err("Multimodal length mismatch".to_string());
-                }
-                Ok(DataValue::Multimodal(NamedElementValues {
-                    elements: multimodal
-                        .into_iter()
-                        .zip(schema)
-                        .map(|((name, value), schema)| {
-                            ElementValue::try_from_bindings(value, schema.1)
-                                .map(|v| NamedElementValue { name, value: v })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                }))
-            }
+            ) => Ok(DataValue::Multimodal(NamedElementValues {
+                elements: multimodal
+                    .into_iter()
+                    .zip(schema)
+                    .map(|((name, value), schema)| {
+                        ElementValue::try_from_bindings(value, schema.1)
+                            .map(|v| NamedElementValue { name, value: v })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            })),
             _ => Err("Data value does not match schema".to_string()),
         }
     }
