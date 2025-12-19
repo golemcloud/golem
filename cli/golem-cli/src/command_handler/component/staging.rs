@@ -17,11 +17,17 @@ use crate::context::Context;
 use crate::log::LogColorize;
 use crate::model::app::InitialComponentFile;
 use crate::model::component::ComponentDeployProperties;
+use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{anyhow, Context as AnyhowContext};
+use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentFileOptions, ComponentFilePath};
+use golem_common::model::component::{
+    ComponentFileOptions, ComponentFilePath, PluginInstallation, PluginInstallationAction,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::diff;
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
@@ -87,12 +93,14 @@ pub struct ComponentStager<'a> {
     ctx: Arc<Context>,
     component_deploy_properties: &'a ComponentDeployProperties,
     diff: ComponentDiff,
+    plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
 }
 
 impl<'a> ComponentStager<'a> {
     pub fn new(
         ctx: Arc<Context>,
         component_deploy_properties: &'a ComponentDeployProperties,
+        plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
         // NOTE: none means ALL changed (e.g. new)
         diff: Option<&diff::DiffForHashOf<diff::Component>>,
     ) -> Self {
@@ -105,6 +113,7 @@ impl<'a> ComponentStager<'a> {
                     ComponentDiff::Diff { diff: diff.clone() }
                 }
             },
+            plugin_grants,
         }
     }
 
@@ -257,6 +266,74 @@ impl<'a> ComponentStager<'a> {
             Some(self.env())
         } else {
             None
+        }
+    }
+
+    pub fn plugins(&self) -> Vec<PluginInstallation> {
+        self.component_deploy_properties
+            .plugins
+            .iter()
+            .enumerate()
+            .map(|(idx, p)| PluginInstallation {
+                environment_plugin_grant_id: self
+                    .plugin_grants
+                    .get(&PluginNameAndVersion {
+                        name: p.name.clone(),
+                        version: p.version.clone(),
+                    })
+                    .expect("Plugin grant not found")
+                    .id,
+                priority: PluginPriority(idx as i32),
+                parameters: p
+                    .parameters
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            })
+            .collect()
+    }
+
+    pub fn plugins_if_changed(&self) -> Vec<PluginInstallationAction> {
+        match &self.diff {
+            ComponentDiff::All => self
+                .plugins()
+                .into_iter()
+                .map(PluginInstallationAction::Install)
+                .collect(),
+            ComponentDiff::Diff { diff } => {
+                let mut plugins_by_grant_id = self
+                    .plugins()
+                    .into_iter()
+                    .map(|p| (p.environment_plugin_grant_id.0, p))
+                    .collect::<HashMap<_, _>>();
+
+                diff.plugin_changes
+                    .iter()
+                    .map(|(grant_id, diff)| match diff {
+                        diff::BTreeMapDiffValue::Create => PluginInstallationAction::Install(
+                            plugins_by_grant_id
+                                .remove(grant_id)
+                                .expect("Missing manifest plugin for creation"),
+                        ),
+                        diff::BTreeMapDiffValue::Delete => {
+                            PluginInstallationAction::Uninstall(PluginUninstallation {
+                                environment_plugin_grant_id: EnvironmentPluginGrantId(*grant_id),
+                            })
+                        }
+                        diff::BTreeMapDiffValue::Update(diff) => {
+                            let p = plugins_by_grant_id
+                                .remove(grant_id)
+                                .expect("Missing manifest plugin for Update");
+
+                            PluginInstallationAction::Update(PluginInstallationUpdate {
+                                environment_plugin_grant_id: p.environment_plugin_grant_id,
+                                new_priority: diff.priority_changed.then_some(p.priority),
+                                new_parameters: diff.parameters_changed.then_some(p.parameters),
+                            })
+                        }
+                    })
+                    .collect()
+            }
         }
     }
 }

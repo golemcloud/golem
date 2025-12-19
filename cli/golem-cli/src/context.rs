@@ -32,17 +32,19 @@ use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app_raw::{BuiltinServer, DeploymentOptions, Environment, Marker, Server};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
+use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
+use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_definition::{
     HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
 };
@@ -52,7 +54,7 @@ use golem_common::model::http_api_deployment::{
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};
@@ -284,16 +286,18 @@ impl Context {
                             ComponentPresetSelector {
                                 environment: selected_environment.environment_name.clone(),
                                 presets: {
-                                    let mut presets = selected_environment
-                                        .environment
-                                        .component_presets
-                                        .clone()
-                                        .into_vec()
-                                        .into_iter()
-                                        .map(ComponentPresetName)
-                                        .collect::<Vec<_>>();
-                                    presets.extend(global_flags.preset.iter().cloned());
-                                    presets
+                                    if global_flags.preset.is_empty() {
+                                        selected_environment
+                                            .environment
+                                            .component_presets
+                                            .clone()
+                                            .into_vec()
+                                            .into_iter()
+                                            .map(ComponentPresetName)
+                                            .collect::<Vec<_>>()
+                                    } else {
+                                        global_flags.preset.clone()
+                                    }
                                 },
                             },
                         )
@@ -488,7 +492,7 @@ impl Context {
                     }
                 }
                 Some(Server::Custom(server)) => AuthenticationConfigWithSource {
-                    authentication: Default::default(),
+                    authentication: Default::default(), // TODO: atomic: load auth
                     source: AuthenticationSource::ApplicationEnvironment(
                         ApplicationEnvironmentConfigId {
                             application_name: env.application_name.clone(),
@@ -922,6 +926,12 @@ pub struct Caches {
         HttpApiDeployment,
         Arc<anyhow::Error>,
     >,
+    pub plugin_grants: Cache<
+        EnvironmentId,
+        (),
+        HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+        Arc<anyhow::Error>,
+    >,
 }
 
 impl Default for Caches {
@@ -950,6 +960,12 @@ impl Caches {
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
                 "http_api_deployment_revision",
+            ),
+            plugin_grants: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "plugin_grants",
             ),
         }
     }

@@ -12,13 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::diff::Diffable;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallation {
-    pub plugin_id: Uuid,
+    pub priority: i32,
+    pub name: String,
+    pub version: String,
+    pub grant_id: Uuid,
     pub parameters: BTreeMap<String, String>,
+}
+
+impl Diffable for PluginInstallation {
+    type DiffResult = PluginInstallationDiff;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let priority_changed = new.priority != current.priority;
+        let parameters_changed = new.parameters != current.parameters;
+
+        if priority_changed || parameters_changed {
+            Some(PluginInstallationDiff {
+                priority_changed,
+                parameters_changed,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallationDiff {
+    pub priority_changed: bool,
+    pub parameters_changed: bool,
 }

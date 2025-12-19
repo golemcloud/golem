@@ -13114,13 +13114,10 @@ components:
       title: PluginInstallationUpdate
       type: object
       properties:
-        pluginPriority:
-          title: |-
-            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-            There can only be a single plugin with a given priority installed to a component.
-          description: Priority will be used to identify the plugin to update
-          type: integer
-          format: int32
+        environmentPluginGrantId:
+          description: EnvironmentPluginGrantId to identify the plugin to update
+          type: string
+          format: uuid
         newPriority:
           title: |-
             Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
@@ -13132,7 +13129,7 @@ components:
           additionalProperties:
             type: string
       required:
-      - pluginPriority
+      - environmentPluginGrantId
     PluginRegistrationCreation:
       title: PluginRegistrationCreation
       type: object
@@ -13243,15 +13240,12 @@ components:
       title: PluginUninstallation
       type: object
       properties:
-        pluginPriority:
-          title: |-
-            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-            There can only be a single plugin with a given priority installed to a component.
-          description: Priority will be used to identify the plugin to delete
-          type: integer
-          format: int32
+        environmentPluginGrantId:
+          description: EnvironmentPluginGrantId to identify the plugin to update
+          type: string
+          format: uuid
       required:
-      - pluginPriority
+      - environmentPluginGrantId
     ProducerField:
       title: ProducerField
       type: object

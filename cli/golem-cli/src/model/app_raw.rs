@@ -178,7 +178,7 @@ impl HttpApiDefinitionBinding {
                 HttpApiDefinitionBindingType::SwaggerUi => GatewayBindingType::SwaggerUi,
             },
             component_name: self.component_name.clone(),
-            worker_name: None, // TODO: atomic: check if we have restore it (and if it's agent compatible now)
+            worker_name: self.agent.clone(),
             idempotency_key: self.idempotency_key.clone(),
             invocation_context: self.invocation_context.clone(),
             response: self.response.clone(),
@@ -199,6 +199,8 @@ pub struct HttpApiDeployment {
 pub struct Environment {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default: Option<Marker>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub server: Option<Server>,
     #[serde(skip_serializing_if = "Presets::is_empty", default)]
@@ -296,7 +298,8 @@ impl DeploymentOptions {
     }
 
     pub fn version_check(&self) -> bool {
-        self.version_check.unwrap_or(true)
+        // TODO: atomic: switch to true, once versioning is implemented
+        self.version_check.unwrap_or(false)
     }
 
     pub fn security_overrides(&self) -> bool {
@@ -550,6 +553,8 @@ pub struct Dependency {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginInstallation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub name: String,
     pub version: String,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

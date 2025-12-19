@@ -363,7 +363,7 @@ pub struct EnvironmentNameHelp;
 
 impl MessageWithFields for EnvironmentNameHelp {
     fn message(&self) -> String {
-        "Accepted environment name flags, environment variables and formats:"
+        "Accepted environment and profile flags and environment variables:"
             .log_color_help_group()
             .to_string()
     }
@@ -388,25 +388,56 @@ impl MessageWithFields for EnvironmentNameHelp {
         fields.field(
             "--environment <APPLICATION_NAME>/<ENVIRONMENT_NAME>, -E <APPLICATION_NAME>/<ENVIRONMENT_NAME>",
             &indoc! { "
-                #TODO: atomic
+                Selects a server environment from a specific application. The used server is the
+                current selected manifest environment or the selected profile if the CLI is used
+                without a manifest.
+
             "},
         );
         fields.field(
             "--environment <ACCOUNT_EMAIL>/<APPLICATION_NAME>/<ENVIRONMENT_NAME>, -E <ACCOUNT_EMAIL>/<APPLICATION_NAME>/<ENVIRONMENT_NAME>",
             &indoc! { "
-                #TODO: atomic
+                Selects a server environment from a specific application owned by another account.
+                The used server is the current selected manifest environment or the selected profile
+                if the CLI is used without a manifest.
+
             "},
         );
         fields.field(
-            "--local",
+            "--local, -L",
             &indoc! { "
-                #TODO: atomic
+                When used with an application manifest then the environment is selected from the
+                manifest. Without it it selects the built-in local profile.
+
             "},
         );
         fields.field(
-            "--cloud",
+            "--cloud, -C",
             &indoc! { "
-                #TODO: atomic
+                When used with an application manifest then the environment is selected from the
+                manifest. Without it it selects the built-in cloud profile.
+
+            "},
+        );
+        fields.field(
+            "--profile",
+            &indoc! { "
+                Selects a different profile then the default one. Only effective when used without
+                an application manifest.
+
+            "},
+        );
+        fields.field(
+            "GOLEM_ENVIRONMENT environment variable",
+            &indoc! { "
+                Alternative to the --environment flag.
+
+            "},
+        );
+        fields.field(
+            "GOLEM_PROFILE environment variable",
+            &indoc! { "
+                Alternative to the --profile flag.
             "},
         );
 

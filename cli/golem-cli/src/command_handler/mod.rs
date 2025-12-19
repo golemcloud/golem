@@ -33,6 +33,7 @@ use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::partial_match::ErrorHandler;
+use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::rib_repl::RibReplHandler;
@@ -60,7 +61,7 @@ mod environment;
 pub(crate) mod interactive;
 mod log;
 mod partial_match;
-// TODO: atomic: mod plugin;
+mod plugin;
 mod profile;
 mod rib_repl;
 mod worker;
@@ -365,12 +366,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::Api { subcommand } => {
                 self.ctx.api_handler().handle_command(subcommand).await
             }
-            // TODO: atomic
-            /*
             GolemCliSubcommand::Plugin { subcommand } => {
                 self.ctx.plugin_handler().handle_command(subcommand).await
             }
-            */
             GolemCliSubcommand::Profile { subcommand } => {
                 self.ctx.profile_handler().handle_command(subcommand).await
             }
@@ -411,13 +409,11 @@ pub trait Handlers {
     fn cloud_handler(&self) -> CloudCommandHandler;
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
-    // TODO: atomic: fn component_plugin_handler(&self) -> ComponentPluginCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
-    // TODO: atomic: fn plugin_installation_handler(&self) -> PluginInstallationHandler;
-    // TODO: atomic: fn plugin_handler(&self) -> PluginCommandHandler;
+    fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn rib_repl_handler(&self) -> RibReplHandler;
@@ -502,12 +498,9 @@ impl Handlers for Arc<Context> {
     }
     */
 
-    // TODO: atomic
-    /*
     fn plugin_handler(&self) -> PluginCommandHandler {
         PluginCommandHandler::new(self.clone())
     }
-    */
 
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler {
         ProfileConfigCommandHandler::new(self.clone())

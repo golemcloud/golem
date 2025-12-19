@@ -8935,15 +8935,12 @@ components:
       type: object
       title: PluginInstallationUpdate
       required:
-      - pluginPriority
+      - environmentPluginGrantId
       properties:
-        pluginPriority:
-          type: integer
-          format: int32
-          title: |-
-            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-            There can only be a single plugin with a given priority installed to a component.
-          description: Priority will be used to identify the plugin to update
+        environmentPluginGrantId:
+          type: string
+          format: uuid
+          description: EnvironmentPluginGrantId to identify the plugin to update
         newPriority:
           type: integer
           format: int32
@@ -9064,15 +9061,12 @@ components:
       type: object
       title: PluginUninstallation
       required:
-      - pluginPriority
+      - environmentPluginGrantId
       properties:
-        pluginPriority:
-          type: integer
-          format: int32
-          title: |-
-            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-            There can only be a single plugin with a given priority installed to a component.
-          description: Priority will be used to identify the plugin to delete
+        environmentPluginGrantId:
+          type: string
+          format: uuid
+          description: EnvironmentPluginGrantId to identify the plugin to update
     ProducerField:
       type: object
       title: ProducerField

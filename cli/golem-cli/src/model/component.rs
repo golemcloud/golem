@@ -216,6 +216,7 @@ pub struct ComponentDeployProperties {
     pub agent_types: Vec<AgentType>,
     pub files: Vec<crate::model::app::InitialComponentFile>,
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    pub plugins: Vec<crate::model::app::PluginInstallation>,
     pub env: BTreeMap<String, String>,
 }
 

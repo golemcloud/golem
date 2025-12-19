@@ -425,7 +425,10 @@ impl ApiDefinitionCommandHandler {
             None => match &environment.server_environment.current_deployment {
                 Some(deployment) => deployment.deployment_revision,
                 None => {
-                    log_error("The application is not deployed. Run {}, then export!");
+                    log_error(format!(
+                        "The application is not deployed. Run {}, then retry the command!",
+                        "golem deploy"
+                    ));
                     bail!(NonSuccessfulExit);
                 }
             },

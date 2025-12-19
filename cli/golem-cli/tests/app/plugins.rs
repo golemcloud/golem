@@ -63,8 +63,8 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
         indoc! {"
             components:
               test:rust1:
-                template: rust
-                profiles:
+                templates: rust
+                presets:
                   debug:
                     plugins: []
         "},
@@ -148,8 +148,8 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
         indoc! {"
             components:
               test:rust1:
-                template: rust
-                profiles:
+                templates: rust
+                presets:
                   debug:
                     plugins:
                         - name: component-transformer-1
@@ -402,8 +402,8 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
         indoc! {"
             components:
               test:rust1:
-                template: rust
-                profiles:
+                templates: rust
+                presets:
                   debug:
                     plugins:
                         - name: oplog-processor-1

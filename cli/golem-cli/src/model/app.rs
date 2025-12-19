@@ -119,7 +119,6 @@ pub enum CleanMode {
     SelectedComponentsOnly,
 }
 
-// TODO: atomic: environments
 #[derive(Debug, Clone)]
 pub struct DynamicHelpSections {
     environments: bool,
@@ -1597,6 +1596,7 @@ impl HttpApiDefinition {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallation {
+    pub account: Option<String>,
     pub name: String,
     pub version: String,
     pub parameters: HashMap<String, String>,
@@ -1609,6 +1609,7 @@ impl PluginInstallation {
         file: app_raw::PluginInstallation,
     ) -> Option<PluginInstallation> {
         Some(PluginInstallation {
+            account: file.account,
             name: file.name,
             version: file.version,
             parameters: file.parameters,

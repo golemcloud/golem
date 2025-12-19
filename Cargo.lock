@@ -4430,6 +4430,7 @@ dependencies = [
  "hyper 1.8.1",
  "include_dir",
  "indoc",
+ "itertools 0.14.0",
  "jsonwebtoken",
  "lazy_static 1.5.0",
  "mappable-rc",
