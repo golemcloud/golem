@@ -96,7 +96,8 @@ impl<Repo: OAuth2TokenRepo> OAuth2TokenRepo for LoggedOAuth2TokenRepo<Repo> {
     }
 
     async fn get_by_token_id(&self, token_id: Uuid) -> RepoResult<Option<OAuth2TokenRecord>> {
-        self.get_by_token_id(token_id)
+        self.repo
+            .get_by_token_id(token_id)
             .instrument(Self::span_token_id(token_id))
             .await
     }

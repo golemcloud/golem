@@ -25,7 +25,7 @@ use golem_common::model::http_api_definition::{
     HttpApiDefinitionVersion, HttpApiRoute, RouteMethod, WorkerGatewayBinding,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{EnvironmentOptions, TestDslExtended};
+use golem_test_framework::dsl::{EnvironmentOptions, TestDsl, TestDslExtended};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -500,6 +500,73 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
             http_api_definition_2.revision.into(),
         )
         .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    user.component(&env.id, "golem_it_constructor_parameter_echo")
+        .name("golem-it:constructor-parameter-echo")
+        .store()
+        .await?;
+
+    let http_api_definition_creation = HttpApiDefinitionCreation {
+        name: HttpApiDefinitionName("echo-api".to_string()),
+        version: HttpApiDefinitionVersion("1".to_string()),
+        routes: vec![HttpApiRoute {
+            method: RouteMethod::Post,
+            path: "/echo/{param}".to_string(),
+            binding: GatewayBinding::Worker(WorkerGatewayBinding {
+                component_name: ComponentName("golem-it:constructor-parameter-echo".to_string()),
+                idempotency_key: None,
+                invocation_context: None,
+                response: r#"
+                    let param = request.path.param;
+                    let agent = ephemeral-echo-agent("${param}");
+                    let result = agent.change-and-get();
+                    {
+                        body: {
+                            result: result
+                        },
+                        status: 200
+                    }
+                "#
+                .to_string(),
+            }),
+            security: None,
+        }],
+    };
+
+    let http_api_definition = client
+        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .await?;
+
+    let deployment = user.deploy_environment(&env.id).await?;
+
+    {
+        let fetched_http_api_definition = client
+            .get_http_api_definition_in_deployment(
+                &env.id.0,
+                deployment.revision.into(),
+                "echo-api",
+            )
+            .await?;
+        assert!(fetched_http_api_definition == http_api_definition);
+    }
+
+    {
+        let fetched_http_api_definitions = client
+            .list_deployment_http_api_definitions(&env.id.0, deployment.revision.into())
+            .await?;
+        assert!(fetched_http_api_definitions.values == vec![http_api_definition]);
+    }
 
     Ok(())
 }
