@@ -31,6 +31,7 @@ pub enum ShowClapHelpTarget {
 pub enum HintError {
     NoApplicationManifestFound,
     ExpectedCloudProfile,
+    EnvironmentHasNoDeployment,
     ShowClapHelp(ShowClapHelpTarget),
 }
 

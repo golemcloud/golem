@@ -137,7 +137,7 @@ where
 
 pub fn get_agent_id() -> AgentId {
     let env_vars: HashMap<String, String> =
-        HashMap::from_iter(crate::bindings::wasi::cli::environment::get_environment());
+        HashMap::from_iter(wasi::cli::environment::get_environment());
     let raw_agent_id = env_vars
         .get("GOLEM_AGENT_ID")
         .expect("Missing GOLEM_AGENT_ID environment variable"); // This is always provided by the Golem runtime

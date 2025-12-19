@@ -49,8 +49,8 @@ pub mod uuid;
 
 use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
 use golem_wasm::{
-    ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType, WitTypeNode, WitValue,
-    WitValueBuilderExtensions,
+    AgentId, ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType, WitTypeNode,
+    WitValue, WitValueBuilderExtensions,
 };
 use std::collections::Bound;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque};
@@ -66,6 +66,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use type_builder::WitTypeBuilderExtensions;
 
+use crate::PromiseId;
 pub use golem_wasm::{NodeBuilder, WitValueExtractor};
 pub use type_builder::TypeNodeBuilder;
 
@@ -175,6 +176,27 @@ impl FromValueAndType for u64 {
         extractor: &'a impl WitValueExtractor<'a, 'b>,
     ) -> Result<Self, String> {
         extractor.u64().ok_or_else(|| "Expected u64".to_string())
+    }
+}
+
+impl IntoValue for usize {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u64(self as u64)
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u64()
+    }
+}
+
+impl FromValueAndType for usize {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u64()
+            .map(|n| n as usize)
+            .ok_or_else(|| "Expected u64".to_string())
     }
 }
 
@@ -690,6 +712,7 @@ impl IntoValue for ValueAndType {
         builder.finish()
     }
 }
+
 impl FromValueAndType for ValueAndType {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl WitValueExtractor<'a, 'b>,
@@ -1715,5 +1738,79 @@ impl FromValueAndType for IpAddr {
             }
             _ => Err(format!("Invalid IpAddr variant: {}", idx)),
         }
+    }
+}
+
+impl IntoValue for AgentId {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let builder = builder.record();
+        let builder = self.component_id.add_to_builder(builder.item());
+        let builder = self.agent_id.add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let builder = builder.record(Some("agent-id".to_string()), Some("golem".to_string()));
+        let builder = ComponentId::add_to_type_builder(builder.field("component_id"));
+        let builder = String::add_to_type_builder(builder.field("agent_id"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for AgentId {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let component_id = ComponentId::from_extractor(
+            &extractor
+                .field(0)
+                .ok_or_else(|| "Missing component-id field".to_string())?,
+        )?;
+        let agent_id = String::from_extractor(
+            &extractor
+                .field(1)
+                .ok_or_else(|| "Missing agent-id field".to_string())?,
+        )?;
+        Ok(AgentId {
+            component_id,
+            agent_id,
+        })
+    }
+}
+
+impl IntoValue for PromiseId {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let builder = builder.record();
+        let builder = self.agent_id.add_to_builder(builder.item());
+        let builder = self.oplog_idx.add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let builder = builder.record(Some("promise-id".to_string()), Some("golem".to_string()));
+        let builder = AgentId::add_to_type_builder(builder.field("agent-id"));
+        let builder = u64::add_to_type_builder(builder.field("oplog-idx"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for PromiseId {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let agent_id = AgentId::from_extractor(
+            &extractor
+                .field(0)
+                .ok_or_else(|| "Missing agent-id field".to_string())?,
+        )?;
+        let oplog_idx = u64::from_extractor(
+            &extractor
+                .field(1)
+                .ok_or_else(|| "Missing oplog-idx field".to_string())?,
+        )?;
+        Ok(PromiseId {
+            agent_id,
+            oplog_idx,
+        })
     }
 }

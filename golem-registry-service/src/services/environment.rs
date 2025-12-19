@@ -19,7 +19,8 @@ use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
 use crate::services::application::ApplicationError;
-use golem_common::model::application::ApplicationId;
+use golem_common::model::account::AccountEmail;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
     EnvironmentUpdate, EnvironmentWithDetails,
@@ -161,9 +162,18 @@ impl EnvironmentService {
         };
 
         environment.revision = environment.revision.next()?;
-        if let Some(new_name) = update.new_name {
+        if let Some(new_name) = update.name {
             environment.name = new_name
         };
+        if let Some(compatibility_check) = update.compatibility_check {
+            environment.compatibility_check = compatibility_check;
+        }
+        if let Some(version_check) = update.version_check {
+            environment.version_check = version_check;
+        }
+        if let Some(security_overrides) = update.security_overrides {
+            environment.security_overrides = security_overrides;
+        }
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
@@ -341,11 +351,19 @@ impl EnvironmentService {
 
     pub async fn list_visible_environments(
         &self,
+        account_email: Option<&AccountEmail>,
+        app_name: Option<&ApplicationName>,
+        env_name: Option<&EnvironmentName>,
         auth: &AuthCtx,
     ) -> Result<Vec<EnvironmentWithDetails>, EnvironmentError> {
         // When we go for an admin ui / view, this should be extended with an optional, admin-only paramter that allows listing for a different account.
         self.environment_repo
-            .list_visible_to_account(auth.account_id().0)
+            .list_visible_to_account(
+                auth.account_id().0,
+                account_email.map(|ae| ae.0.as_str()),
+                app_name.map(|an| an.0.as_str()),
+                env_name.map(|en| en.0.as_str()),
+            )
             .await?
             .into_iter()
             .map(EnvironmentWithDetails::try_from)

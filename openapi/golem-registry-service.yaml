@@ -2860,6 +2860,28 @@ paths:
       - RegistryService
       - Environment
       summary: List all environments that are visible to the current user, either directly or through shares.
+      parameters:
+      - name: account_email
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: app_name
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: env_name
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
       responses:
         '200':
           description: ''
@@ -6830,8 +6852,6 @@ components:
       title: AccountUpdate
       required:
       - currentRevision
-      - name
-      - email
       properties:
         currentRevision:
           type: integer
@@ -7373,7 +7393,7 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
     BinaryDescriptor:
       type: object
@@ -7998,6 +8018,7 @@ components:
       required:
       - revision
       - deploymentRevision
+      - deploymentVersion
       - deploymentHash
       properties:
         revision:
@@ -8006,6 +8027,8 @@ components:
         deploymentRevision:
           type: integer
           format: uint64
+        deploymentVersion:
+          type: string
         deploymentHash:
           type: string
           format: hash
@@ -8085,12 +8108,12 @@ components:
       title: EnvironmentShareUpdate
       required:
       - currentRevision
-      - newRoles
+      - roles
       properties:
         currentRevision:
           type: integer
           format: uint64
-        newRoles:
+        roles:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentRole'
@@ -8135,8 +8158,14 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
     EnvironmentWithDetails:
       type: object
       title: EnvironmentWithDetails

@@ -342,7 +342,7 @@ fn generate_base_agent_impl(
                     .expect("Agent definition not found")
             }
 
-            async fn load_snapshot_base(&self, bytes: Vec<u8>) -> Result<(), String> {
+            async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String> {
                 self.load_snapshot(bytes).await
             }
 

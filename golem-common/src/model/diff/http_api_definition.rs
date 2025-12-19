@@ -113,14 +113,14 @@ pub struct HttpApiRouteDiff {
 impl Diffable for HttpApiRoute {
     type DiffResult = HttpApiRouteDiff;
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
-        if local.hash() == server.hash() {
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        if new.hash() == current.hash() {
             return None;
         }
 
         Some(HttpApiRouteDiff {
-            binding_changed: local.binding != server.binding,
-            security_changed: local.security != server.security,
+            binding_changed: new.binding != current.binding,
+            security_changed: new.security != current.security,
         })
     }
 }
@@ -150,17 +150,17 @@ pub struct HttpApiDefinitionDiff {
 impl Diffable for HttpApiDefinition {
     type DiffResult = HttpApiDefinitionDiff;
 
-    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
-        if local.hash() == server.hash() {
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        if new.hash() == current.hash() {
             return None;
         }
 
         Some(HttpApiDefinitionDiff {
-            routes: local
+            routes: new
                 .routes
-                .diff_with_server(&server.routes)
+                .diff_with_current(&current.routes)
                 .unwrap_or_default(),
-            version_changed: local.version != server.version,
+            version_changed: new.version != current.version,
         })
     }
 }

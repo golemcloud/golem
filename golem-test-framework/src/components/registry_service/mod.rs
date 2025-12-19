@@ -21,7 +21,7 @@ use super::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use async_trait::async_trait;
 use golem_client::api::RegistryServiceClientLive;
 use golem_client::{Context, Security};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use std::collections::HashMap;
@@ -39,7 +39,7 @@ pub trait RegistryService: Send + Sync {
     fn grpc_port(&self) -> u16;
 
     fn admin_account_id(&self) -> AccountId;
-    fn admin_account_email(&self) -> String;
+    fn admin_account_email(&self) -> AccountEmail;
     fn admin_account_token(&self) -> TokenSecret;
 
     fn default_plan(&self) -> PlanId;
@@ -75,7 +75,7 @@ async fn env_vars(
     verbosity: Level,
     admin_plan_id: &PlanId,
     admin_account_id: &AccountId,
-    admin_account_email: &str,
+    admin_account_email: &AccountEmail,
     admin_token: &TokenSecret,
     default_plan_id: &PlanId,
     low_fuel_plan_id: &PlanId,

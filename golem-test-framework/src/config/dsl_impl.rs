@@ -31,7 +31,7 @@ use golem_client::api::{
 use golem_client::model::{
     CompleteParameters, InvokeParameters, UpdateWorkerRequest, WorkersMetadataRequest,
 };
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
@@ -68,7 +68,7 @@ use uuid::Uuid;
 pub struct TestUserContext<Deps> {
     pub deps: Deps,
     pub account_id: AccountId,
-    pub account_email: String,
+    pub account_email: AccountEmail,
     pub token: TokenSecret,
     pub auto_deploy_enabled: bool,
 }

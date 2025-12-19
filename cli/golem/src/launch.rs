@@ -17,7 +17,7 @@ use crate::StartedComponents;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::Empty;
@@ -204,7 +204,7 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("51de7d7d-f286-49aa-b79a-96022f7e2df9")),
                     name: "Initial User".to_string(),
-                    email: "initial@user".to_string(),
+                    email: AccountEmail("initial@user".to_string()),
                     token: TokenSecret::trusted(ADMIN_TOKEN.to_string()),
                     plan_id,
                     role: AccountRole::Admin,
