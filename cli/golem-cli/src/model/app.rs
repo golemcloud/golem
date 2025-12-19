@@ -119,7 +119,6 @@ pub enum CleanMode {
     SelectedComponentsOnly,
 }
 
-// TODO: atomic: environments
 #[derive(Debug, Clone)]
 pub struct DynamicHelpSections {
     environments: bool,

@@ -490,7 +490,7 @@ impl Context {
                     }
                 }
                 Some(Server::Custom(server)) => AuthenticationConfigWithSource {
-                    authentication: Default::default(),
+                    authentication: Default::default(), // TODO: atomic: load auth
                     source: AuthenticationSource::ApplicationEnvironment(
                         ApplicationEnvironmentConfigId {
                             application_name: env.application_name.clone(),
