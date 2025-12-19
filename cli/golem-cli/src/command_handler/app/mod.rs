@@ -249,8 +249,8 @@ impl AppCommandHandler {
                 format!(
                     "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
                     application_name.as_str().log_color_highlight(),
-                    "app build".log_color_highlight(),
-                    "app deploy".log_color_highlight(),
+                    "build".log_color_highlight(),
+                    "deploy".log_color_highlight(),
                 )
             );
         }
