@@ -20,7 +20,7 @@ use crate::model::agent::{
     Url,
 };
 use async_trait::async_trait;
-use golem_wasm::analysis::analysed_type::{field, flags, list, record, u32};
+use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use proptest::prelude::Strategy;
@@ -363,6 +363,50 @@ fn roundtrip_without_phantom_id_maintains_none() {
     )
 }
 
+#[test]
+fn roundtrip_with_non_kebab_metadata() {
+    roundtrip_test(
+        "non-kebab-agent",
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ValueAndType::new(
+                // promiseId
+                Value::Record(vec![
+                    // agentId
+                    Value::Record(vec![
+                        // componentId
+                        Value::Record(vec![
+                            // uuid
+                            Value::Record(vec![
+                                Value::U64(115746831381919841),   // highBits
+                                Value::U64(13556493125794766855), // lowBits
+                            ]),
+                        ]),
+                        // agentId
+                        Value::String("some-agent-id(\"hello\")".to_string()),
+                    ]),
+                    Value::U64(1234), // oplogIdx
+                ]),
+                record(vec![
+                    field(
+                        "agentId",
+                        record(vec![
+                            field(
+                                "componentId",
+                                record(vec![field(
+                                    "uuid",
+                                    record(vec![field("highBits", u64()), field("lowBits", u64())]),
+                                )]),
+                            ),
+                            field("agentId", str()),
+                        ]),
+                    ),
+                    field("oplogIdx", u64()),
+                ]),
+            ))],
+        }),
+    );
+}
+
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
     let id = AgentId::new(agent_type.to_string(), parameters, None);
     let s = id.to_string();
@@ -585,6 +629,44 @@ fn test_agent_types() -> HashMap<String, AgentType> {
                         name: "args".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                             element_type: list(u32()),
+                        }),
+                    }],
+                }),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+        },
+        AgentType {
+            type_name: "non-kebab-agent".to_string(),
+            description: "".to_string(),
+            constructor: AgentConstructor {
+                name: None,
+                description: "".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "args".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: record(vec![
+                                field(
+                                    "agentId",
+                                    record(vec![
+                                        field(
+                                            "componentId",
+                                            record(vec![field(
+                                                "uuid",
+                                                record(vec![
+                                                    field("highBits", u64()),
+                                                    field("lowBits", u64()),
+                                                ]),
+                                            )]),
+                                        ),
+                                        field("agentId", str()),
+                                    ]),
+                                ),
+                                field("oplogIdx", u64()),
+                            ]),
                         }),
                     }],
                 }),
