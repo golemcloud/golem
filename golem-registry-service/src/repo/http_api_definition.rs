@@ -226,7 +226,8 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>> {
-        self.list_by_deployment(environment_id, deployment_revision_id)
+        self.repo
+            .list_by_deployment(environment_id, deployment_revision_id)
             .instrument(Self::span_env_and_deployment(
                 environment_id,
                 deployment_revision_id,
