@@ -523,6 +523,14 @@ impl ComponentWriteService {
                 ));
             };
 
+            if result.iter().any(|p| {
+                p.environment_plugin_grant_id == plugin_installation.environment_plugin_grant_id
+            }) {
+                return Err(ComponentError::ConflictingEnvironmentPluginGrantId(
+                    plugin_installation.environment_plugin_grant_id,
+                ));
+            };
+
             // get the plugin details and ensure the plugin is installed to the environment
             let environment_plugin_grant = self
                 .environment_plugin_grant_service
@@ -612,9 +620,18 @@ impl ComponentWriteService {
                     };
                 }
                 PluginInstallationAction::Install(inner) => {
-                    // ensure the plugin priority is not already used
+                    // ensure the plugin priority and environment_plugin_grant_id is not already used
                     if updated.iter().any(|p| p.priority == inner.priority) {
                         return Err(ComponentError::ConflictingPluginPriority(inner.priority));
+                    };
+
+                    if updated
+                        .iter()
+                        .any(|p| p.environment_plugin_grant_id == inner.environment_plugin_grant_id)
+                    {
+                        return Err(ComponentError::ConflictingEnvironmentPluginGrantId(
+                            inner.environment_plugin_grant_id,
+                        ));
                     };
 
                     // get the plugin details and ensure the plugin is installed to the environment

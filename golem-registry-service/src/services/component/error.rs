@@ -76,6 +76,8 @@ pub enum ComponentError {
     PluginInstallationNotFound(EnvironmentPluginGrantId),
     #[error("Multiple plugins with same priority {0}")]
     ConflictingPluginPriority(PluginPriority),
+    #[error("Multiple plugins with same environment plugin grant id {0}")]
+    ConflictingEnvironmentPluginGrantId(EnvironmentPluginGrantId),
     #[error("Failed to componse component with plugin with priority {plugin_priority}")]
     PluginCompositionFailed {
         plugin_priority: PluginPriority,
@@ -114,6 +116,7 @@ impl SafeDisplay for ComponentError {
             Self::PluginInstallationNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DeploymentRevisionNotFound(_) => self.to_string(),
+            Self::ConflictingEnvironmentPluginGrantId(_) => self.to_string(),
             Self::ConflictingPluginPriority(_) => self.to_string(),
             Self::PluginCompositionFailed { .. } => self.to_string(),
             Self::ComponentTransformerPluginFailed { .. } => self.to_string(),
