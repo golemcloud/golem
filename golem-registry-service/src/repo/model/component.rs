@@ -261,14 +261,8 @@ impl ComponentRevisionRecord {
                         plugin.environment_plugin_grant_id,
                         diff::PluginInstallation {
                             priority: plugin.priority,
-                            name: plugin
-                                .plugin_name
-                                .clone()
-                                .expect("Plugin name must set by repo"),
-                            version: plugin
-                                .plugin_version
-                                .clone()
-                                .expect("Plugin version must set by repo"),
+                            name: plugin.plugin_name.clone(),
+                            version: plugin.plugin_version.clone(),
                             grant_id: plugin.environment_plugin_grant_id,
                             parameters: plugin
                                 .parameters
@@ -320,11 +314,7 @@ impl ComponentRevisionRecord {
                 .collect(),
             component_id,
             revision_id,
-            version: value
-                .metadata
-                .root_package_version()
-                .clone()
-                .unwrap_or_default(), // TODO: atomic
+            version: "".to_string(), // TODO: atomic
             size: value.component_size.into(),
             metadata: Blob::new(value.metadata),
             hash: SqlBlake3Hash::empty(),
@@ -441,11 +431,13 @@ pub struct ComponentPluginInstallationRecord {
     pub environment_plugin_grant_id: Uuid,
     pub parameters: Json<BTreeMap<String, String>>,
 
-    pub plugin_registration_id: Uuid, // NOTE: not used directly in the repo, but needed for hash calculation
-    pub plugin_name: Option<String>,  // NOTE: returned by repo, not required to set
-    pub plugin_version: Option<String>, // NOTE: returned by repo, not required to set
-    pub oplog_processor_component_id: Option<Uuid>, // NOTE: returned by repo, not required to set
-    pub oplog_processor_component_revision_id: Option<i64>, // NOTE: returned by repo, not required to set
+    pub oplog_processor_component_id: Option<Uuid>,
+    pub oplog_processor_component_revision_id: Option<i64>,
+
+    // NOTE: the properties below are used for hash calculation when inserting and must be returned by repo
+    pub plugin_registration_id: Uuid,
+    pub plugin_name: String,
+    pub plugin_version: String,
 }
 
 impl ComponentPluginInstallationRecord {
@@ -468,10 +460,14 @@ impl ComponentPluginInstallationRecord {
                     .collect::<BTreeMap<_, _>>(),
             ),
             plugin_registration_id: plugin_installation.plugin_registration_id.0,
-            plugin_name: None,
-            plugin_version: None,
-            oplog_processor_component_id: None,
-            oplog_processor_component_revision_id: None,
+            plugin_name: plugin_installation.plugin_name,
+            plugin_version: plugin_installation.plugin_version,
+            oplog_processor_component_id: plugin_installation
+                .oplog_processor_component_id
+                .map(|id| id.0),
+            oplog_processor_component_revision_id: plugin_installation
+                .oplog_processor_component_revision
+                .map(|id| id.into()),
         }
     }
 }
@@ -487,10 +483,8 @@ impl TryFrom<ComponentPluginInstallationRecord> for InstalledPlugin {
             parameters: value.parameters.0,
 
             plugin_registration_id: PluginRegistrationId(value.plugin_registration_id),
-            plugin_name: value.plugin_name.ok_or(anyhow!("missing plugin name"))?,
-            plugin_version: value
-                .plugin_version
-                .ok_or(anyhow!("missing plugin version"))?,
+            plugin_name: value.plugin_name,
+            plugin_version: value.plugin_version,
             oplog_processor_component_id: value.oplog_processor_component_id.map(ComponentId),
             oplog_processor_component_revision: value
                 .oplog_processor_component_revision_id
