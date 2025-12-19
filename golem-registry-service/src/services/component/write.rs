@@ -658,7 +658,7 @@ impl ComponentWriteService {
             .filter(|(_, plugins)| plugins.len() > 1)
             .collect::<HashMap<_, _>>();
         if let Some((priority, _)) = non_unique_priorities.iter().next() {
-            return Err(ComponentError::ConflictingPluginPriority(priority.clone()));
+            return Err(ComponentError::ConflictingPluginPriority(*priority));
         }
 
         Ok(updated)

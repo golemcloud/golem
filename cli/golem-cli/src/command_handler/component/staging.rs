@@ -19,7 +19,7 @@ use crate::model::app::InitialComponentFile;
 use crate::model::component::ComponentDeployProperties;
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{anyhow, Context as AnyhowContext};
-use golem_client::model::EnvironmentPluginGrant;
+use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::{
     ComponentFileOptions, ComponentFilePath, PluginInstallation, PluginInstallationAction,
@@ -93,14 +93,14 @@ pub struct ComponentStager<'a> {
     ctx: Arc<Context>,
     component_deploy_properties: &'a ComponentDeployProperties,
     diff: ComponentDiff,
-    plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrant>,
+    plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
 }
 
 impl<'a> ComponentStager<'a> {
     pub fn new(
         ctx: Arc<Context>,
         component_deploy_properties: &'a ComponentDeployProperties,
-        plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrant>,
+        plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
         // NOTE: none means ALL changed (e.g. new)
         diff: Option<&diff::DiffForHashOf<diff::Component>>,
     ) -> Self {
@@ -282,8 +282,7 @@ impl<'a> ComponentStager<'a> {
                         version: p.version.clone(),
                     })
                     .expect("Plugin grant not found")
-                    .id
-                    .clone(),
+                    .id,
                 priority: PluginPriority(idx as i32),
                 parameters: p
                     .parameters
@@ -299,7 +298,7 @@ impl<'a> ComponentStager<'a> {
             ComponentDiff::All => self
                 .plugins()
                 .into_iter()
-                .map(|p| PluginInstallationAction::Install(p))
+                .map(PluginInstallationAction::Install)
                 .collect(),
             ComponentDiff::Diff { diff } => {
                 let mut plugins_by_grant_id = self
@@ -313,7 +312,7 @@ impl<'a> ComponentStager<'a> {
                     .map(|(grant_id, diff)| match diff {
                         diff::BTreeMapDiffValue::Create => PluginInstallationAction::Install(
                             plugins_by_grant_id
-                                .remove(&grant_id)
+                                .remove(grant_id)
                                 .expect("Missing manifest plugin for creation"),
                         ),
                         diff::BTreeMapDiffValue::Delete => {
@@ -323,13 +322,13 @@ impl<'a> ComponentStager<'a> {
                         }
                         diff::BTreeMapDiffValue::Update(diff) => {
                             let p = plugins_by_grant_id
-                                .remove(&grant_id)
+                                .remove(grant_id)
                                 .expect("Missing manifest plugin for Update");
 
                             PluginInstallationAction::Update(PluginInstallationUpdate {
                                 environment_plugin_grant_id: p.environment_plugin_grant_id,
-                                new_priority: diff.priority_changed.then(|| p.priority),
-                                new_parameters: diff.parameters_changed.then(|| p.parameters),
+                                new_priority: diff.priority_changed.then_some(p.priority),
+                                new_parameters: diff.parameters_changed.then_some(p.parameters),
                             })
                         }
                     })

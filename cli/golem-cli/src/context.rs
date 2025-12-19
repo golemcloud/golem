@@ -37,7 +37,7 @@ use crate::model::text::server::ToFormattedServerContext;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
-use golem_client::model::EnvironmentPluginGrant;
+use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
@@ -927,7 +927,7 @@ pub struct Caches {
     pub plugin_grants: Cache<
         EnvironmentId,
         (),
-        HashMap<PluginNameAndVersion, EnvironmentPluginGrant>,
+        HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
         Arc<anyhow::Error>,
     >,
 }

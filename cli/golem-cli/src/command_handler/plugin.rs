@@ -113,7 +113,7 @@ impl PluginCommandHandler {
                 PluginTypeSpecificManifest::OplogProcessor(spec) => {
                     PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                         component_id: spec.component_id.into(),
-                        component_revision: spec.component_revision.clone(),
+                        component_revision: spec.component_revision,
                     })
                 }
                 PluginTypeSpecificManifest::App(_) => PluginSpecDto::App(Empty {}),

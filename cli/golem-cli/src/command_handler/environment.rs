@@ -30,7 +30,7 @@ use crate::model::text::help::EnvironmentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{anyhow, bail};
 use golem_client::api::EnvironmentClient;
-use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrant};
+use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrantWithDetails};
 use golem_common::cache::SimpleCache;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::diff;
@@ -122,7 +122,7 @@ impl EnvironmentCommandHandler {
                         .await?
                         .environment
                         .list_visible_environments(
-                            Some(&account),
+                            Some(account),
                             Some(&env.application_name.0),
                             Some(&env.environment_name.0),
                         )
@@ -464,7 +464,7 @@ impl EnvironmentCommandHandler {
     pub async fn plugin_grants(
         &self,
         environment: &ResolvedEnvironmentIdentity,
-    ) -> anyhow::Result<HashMap<PluginNameAndVersion, EnvironmentPluginGrant>> {
+    ) -> anyhow::Result<HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>> {
         self.ctx
             .caches()
             .plugin_grants
