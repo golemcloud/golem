@@ -685,11 +685,11 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     .await;
 
     // Functions using the builtin result type
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"some("yay")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"none"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"ok"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"err("foo")"#]).await;
 
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"none"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"some("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"ok("foo")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"err"#]).await;
 
     run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case1("yay")"#]).await;
     run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case2(42)"#]).await;
