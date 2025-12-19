@@ -254,7 +254,7 @@ async fn create_component_with_plugins_and_update_installations(
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
-                    plugin_priority: installed_plugin.priority,
+                    environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
                     new_priority: Some(PluginPriority(1)),
                     new_parameters: None,
                 })],
@@ -282,7 +282,7 @@ async fn create_component_with_plugins_and_update_installations(
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
-                    plugin_priority: installed_plugin.priority,
+                    environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
                 })],
             },
             None::<Vec<u8>>,

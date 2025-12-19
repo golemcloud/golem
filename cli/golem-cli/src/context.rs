@@ -32,17 +32,19 @@ use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app_raw::{BuiltinServer, DeploymentOptions, Environment, Marker, Server};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
+use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
+use golem_client::model::EnvironmentPluginGrant;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_definition::{
     HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
 };
@@ -52,7 +54,7 @@ use golem_common::model::http_api_deployment::{
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};
@@ -922,6 +924,12 @@ pub struct Caches {
         HttpApiDeployment,
         Arc<anyhow::Error>,
     >,
+    pub plugin_grants: Cache<
+        EnvironmentId,
+        (),
+        HashMap<PluginNameAndVersion, EnvironmentPluginGrant>,
+        Arc<anyhow::Error>,
+    >,
 }
 
 impl Default for Caches {
@@ -950,6 +958,12 @@ impl Caches {
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
                 "http_api_deployment_revision",
+            ),
+            plugin_grants: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "plugin_grants",
             ),
         }
     }

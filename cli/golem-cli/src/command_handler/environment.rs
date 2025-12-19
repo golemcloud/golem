@@ -27,13 +27,16 @@ use crate::model::environment::{
 use crate::model::text::diff::log_unified_diff;
 use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::help::EnvironmentNameHelp;
-use anyhow::bail;
+use crate::model::text::plugin::PluginNameAndVersion;
+use anyhow::{anyhow, bail};
 use golem_client::api::EnvironmentClient;
-use golem_client::model::EnvironmentCreation;
+use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrant};
+use golem_common::cache::SimpleCache;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::diff;
 use golem_common::model::diff::Diffable;
 use golem_common::model::environment::{EnvironmentName, EnvironmentUpdate};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct EnvironmentCommandHandler {
@@ -456,5 +459,42 @@ impl EnvironmentCommandHandler {
         }
 
         Ok(())
+    }
+
+    pub async fn plugin_grants(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<HashMap<PluginNameAndVersion, EnvironmentPluginGrant>> {
+        self.ctx
+            .caches()
+            .plugin_grants
+            .get_or_insert_simple(&environment.environment_id, {
+                let ctx = self.ctx.clone();
+                async move || {
+                    ctx.golem_clients()
+                        .await?
+                        .environment
+                        .list_environment_plugin_grants(&environment.environment_id.0)
+                        .await
+                        .map_service_error()
+                        .map_err(Arc::new)
+                        .map(|result| {
+                            {
+                                result.values.into_iter().map(|p| {
+                                    (
+                                        PluginNameAndVersion {
+                                            name: p.plugin.name.clone(),
+                                            version: p.plugin.version.clone(),
+                                        },
+                                        p,
+                                    )
+                                })
+                            }
+                            .collect()
+                        })
+                }
+            })
+            .await
+            .map_err(|err| anyhow!(err))
     }
 }

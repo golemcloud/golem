@@ -101,9 +101,9 @@ impl TextView for DeploymentDiff {
                                     }
                                 }
                             }
-                            if diff.plugins_changed {
-                                logln("    - plugins");
-                                // TODO: atomic
+                            if !diff.plugin_changes.is_empty() {
+                                // TODO: atomic: detailed readable plan (requires id -> name, version mapping)
+                                logln("    - update plugins");
                             }
                         }
                     },

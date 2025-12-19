@@ -253,15 +253,28 @@ impl ComponentRevisionRecord {
                     )
                 })
                 .collect(),
-            plugins_by_priority: self
+            plugins_by_grant_id: self
                 .plugins
                 .iter()
                 .map(|plugin| {
                     (
-                        plugin.priority.to_string(),
+                        plugin.environment_plugin_grant_id,
                         diff::PluginInstallation {
-                            plugin_id: plugin.plugin_registration_id,
-                            parameters: plugin.parameters.0.clone(),
+                            priority: plugin.priority,
+                            name: plugin
+                                .plugin_name
+                                .clone()
+                                .expect("Plugin name must set by repo"),
+                            version: plugin
+                                .plugin_version
+                                .clone()
+                                .expect("Plugin version must set by repo"),
+                            grant_id: plugin.environment_plugin_grant_id,
+                            parameters: plugin
+                                .parameters
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
                         },
                     )
                 })
@@ -307,7 +320,9 @@ impl ComponentRevisionRecord {
                 .collect(),
             component_id,
             revision_id,
-            version: value
+            version:
+            // TODO: atomic
+            value
                 .metadata
                 .root_package_version()
                 .clone()

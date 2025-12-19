@@ -20,6 +20,12 @@ use cli_table::Table;
 use golem_common::model::plugin_registration::PluginRegistrationDto;
 use serde_derive::Serialize;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PluginNameAndVersion {
+    pub name: String,
+    pub version: String,
+}
+
 #[derive(Table)]
 struct PluginRegistrationTableView {
     #[table(title = "Plugin name")]
