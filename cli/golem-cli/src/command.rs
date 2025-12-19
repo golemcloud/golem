@@ -705,6 +705,7 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ApiSubcommand,
     },
+    // Manage plugins
     Plugin {
         #[clap(subcommand)]
         subcommand: PluginSubcommand,
@@ -1376,6 +1377,7 @@ pub mod plugin {
         List,
         /// Get
         Get {
+            // PluginID
             id: Uuid, // TODO: atomic: missing method for looking up by name
         },
         /// Register a new plugin for the account
@@ -1385,6 +1387,7 @@ pub mod plugin {
         },
         /// Unregister a plugin
         Unregister {
+            // PluginID
             id: Uuid, // TODO: atomic: missing method for deleting by name
         },
     }
@@ -1649,9 +1652,6 @@ fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static s
         }
         ShowClapHelpTarget::ComponentNew => {
             vec!["component", "new"]
-        }
-        ShowClapHelpTarget::ComponentAddDependency => {
-            vec!["component", "add-dependency"]
         }
     }
 }

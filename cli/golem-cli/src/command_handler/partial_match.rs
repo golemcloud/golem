@@ -259,7 +259,6 @@ impl ErrorHandler {
                             .app_handler()
                             .log_templates_help(None, None, self.ctx.dev_mode());
                     }
-                    ShowClapHelpTarget::ComponentAddDependency => {}
                 }
                 Ok(())
             }

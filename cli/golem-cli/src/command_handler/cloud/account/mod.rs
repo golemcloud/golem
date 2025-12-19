@@ -84,7 +84,6 @@ impl CloudAccountCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        // TODO: this should have a proper update endpoint instead of getting then updating...
         let account = self.get(account_id).await?;
         let account = self
             .ctx
