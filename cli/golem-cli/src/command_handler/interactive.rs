@@ -98,6 +98,17 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_environment_deployment_options(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            formatdoc! { "
+                To continue the current command the deployments options must be updated!
+                Do you want to apply the changes now?",
+            },
+            None,
+        )
+    }
+
     pub fn confirm_register_missing_domain(&self, domain: &Domain) -> anyhow::Result<bool> {
         self.confirm(
             true,
@@ -162,7 +173,7 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_update_to_latest(
+    pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
         worker_name: &WorkerName,
@@ -170,7 +181,7 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Agent {}/{} will be updated to the latest component revision: {}. Do you want to continue?",
+            format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
                     worker_name.0.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()

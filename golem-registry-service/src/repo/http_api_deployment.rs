@@ -509,7 +509,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT had.environment_id, had.domain, hadr.http_api_deployment_id,
-                        hadr.revision_id, hadr.hash, hard.http_api_definitions,
+                        hadr.revision_id, hadr.hash, hadr.http_api_definitions,
                         hadr.created_at, hadr.created_by, hadr.deleted,
                         had.created_at as entity_created_at
                     FROM http_api_deployments had
@@ -536,7 +536,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT had.environment_id, had.domain, hadr.http_api_deployment_id,
-                        hadr.revision_id, hadr.hash, hard.http_api_definitions,
+                        hadr.revision_id, hadr.hash, hadr.http_api_definitions,
                         hadr.created_at, hadr.created_by, hadr.deleted,
                         had.created_at as entity_created_at
                     FROM http_api_deployments had

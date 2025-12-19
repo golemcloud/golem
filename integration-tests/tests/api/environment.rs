@@ -227,6 +227,9 @@ async fn cannot_create_two_environments_with_same_name(
                 &EnvironmentUpdate {
                     current_revision: env_2.revision,
                     name: Some(env_1.name.clone()),
+                    compatibility_check: None,
+                    version_check: None,
+                    security_overrides: None,
                 },
             )
             .await;
@@ -269,6 +272,9 @@ async fn cannot_create_two_environments_with_same_name(
             &EnvironmentUpdate {
                 current_revision: env_2.revision,
                 name: Some(env_1.name.clone()),
+                compatibility_check: None,
+                version_check: None,
+                security_overrides: None,
             },
         )
         .await?;

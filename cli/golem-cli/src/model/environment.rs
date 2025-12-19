@@ -12,14 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::LogColorize;
+use crate::error::HintError;
+use crate::log::{logln, LogColorize};
 use crate::model::app_raw::Environment;
 use crate::model::text::environment::format_resolved_environment_identity;
+use crate::model::text::fmt::log_warn;
+use anyhow::bail;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::{
+    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName, EnvironmentWithDetails,
+};
 use indoc::formatdoc;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::str::FromStr;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -144,7 +151,7 @@ pub struct ResolvedEnvironmentIdentity {
 }
 
 impl ResolvedEnvironmentIdentity {
-    pub fn new(
+    pub fn from_app_and_env(
         environment_reference: Option<&EnvironmentReference>,
         application: golem_client::model::Application,
         environment: golem_client::model::Environment,
@@ -163,12 +170,78 @@ impl ResolvedEnvironmentIdentity {
         }
     }
 
+    pub fn from_summary(
+        environment_reference: Option<&EnvironmentReference>,
+        summary: EnvironmentWithDetails,
+    ) -> Self {
+        Self {
+            source: match environment_reference {
+                Some(env_ref) => ResolvedEnvironmentIdentitySource::Reference(env_ref.clone()),
+                None => ResolvedEnvironmentIdentitySource::DefaultFromManifest,
+            },
+            account_id: summary.account.id,
+            application_id: summary.application.id,
+            application_name: summary.application.name,
+            environment_id: summary.environment.id,
+            environment_name: summary.environment.name.clone(),
+            server_environment: golem_common::model::environment::Environment {
+                id: summary.environment.id,
+                revision: summary.environment.revision,
+                application_id: summary.application.id,
+                name: summary.environment.name,
+                compatibility_check: summary.environment.compatibility_check,
+                version_check: summary.environment.version_check,
+                security_overrides: summary.environment.security_overrides,
+                owner_account_id: summary.account.id,
+                roles_from_active_shares: summary.environment.roles_from_active_shares,
+                current_deployment: summary.environment.current_deployment,
+            },
+        }
+    }
+
     pub fn is_manifest_scoped(&self) -> bool {
         self.source.is_manifest_scoped()
     }
 
     pub fn text_format(&self) -> String {
         format_resolved_environment_identity(self)
+    }
+
+    pub fn current_deployment(&self) -> Option<&EnvironmentCurrentDeploymentView> {
+        self.server_environment.current_deployment.as_ref()
+    }
+
+    pub fn current_deployment_or_err(&self) -> anyhow::Result<&EnvironmentCurrentDeploymentView> {
+        match self.server_environment.current_deployment.as_ref() {
+            Some(deployment) => Ok(deployment),
+            None => {
+                bail!(HintError::EnvironmentHasNoDeployment);
+            }
+        }
+    }
+
+    pub async fn with_current_deployment_revision_or_default_warn<F, Fut, R>(
+        &self,
+        f: F,
+    ) -> anyhow::Result<R>
+    where
+        F: FnOnce(DeploymentRevision) -> Fut,
+        Fut: Future<Output = anyhow::Result<R>>,
+        R: Default,
+    {
+        match self.current_deployment() {
+            Some(deployment) => f(deployment.deployment_revision).await,
+            None => {
+                logln("");
+                log_warn(format!(
+                    "The current environment {} has no deployment.",
+                    self.text_format()
+                ));
+                logln("Use 'golem deploy' for deploying, or select a different environment.");
+                logln("");
+                Ok(R::default())
+            }
+        }
     }
 }
 

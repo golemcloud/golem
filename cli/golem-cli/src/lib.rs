@@ -114,7 +114,7 @@ mod tests {
     use clap::{ArgAction, Command, CommandFactory};
 
     #[test]
-    fn dump_commands_v_1_2() {
+    fn dump_commands() {
         let command = GolemCliCommand::command();
         dump_command(0, &command);
     }

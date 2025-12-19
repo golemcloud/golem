@@ -10,8 +10,7 @@ pub trait CounterAgent {
 
 struct CounterImpl {
     _name: String,
-    count: u32,
-}
+    count: u32,                                                                                                                                                                                                        }
 
 #[agent_implementation]
 impl CounterAgent for CounterImpl {
@@ -24,12 +23,16 @@ impl CounterAgent for CounterImpl {
 
     fn increment(&mut self) -> u32 {
         self.count += 1;
+        log::info!("The new value is {}", self.count);
         self.count
     }
 
-    async fn load_snapshot(&self, bytes: Vec<u8>) -> Result<(), String> {
-        let arr: [u8; 4] = bytes.try_into().ok_or("Expected a 4-byte long snapshot")?;
+    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        let arr: [u8; 4] = bytes
+            .try_into()
+            .map_err(|_| "Expected a 4-byte long snapshot")?;
         self.count = u32::from_be_bytes(arr);
+        Ok(())
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

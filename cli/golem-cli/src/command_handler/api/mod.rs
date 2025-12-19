@@ -20,8 +20,7 @@ use std::sync::Arc;
 pub mod definition;
 pub mod deployment;
 pub mod domain;
-// TODO: atomic: pub mod certificate;
-// TODO: atomic: pub mod security_scheme;
+pub mod security_scheme;
 
 pub struct ApiCommandHandler {
     ctx: Arc<Context>,
@@ -46,23 +45,17 @@ impl ApiCommandHandler {
                     .handle_command(subcommand)
                     .await
             }
-            ApiSubcommand::SecurityScheme { subcommand: _ } => {
-                // TODO: atomic
-                // self.ctx
-                //     .api_security_scheme_handler()
-                //     .handle_command(subcommand)
-                //     .await
-                todo!()
+            ApiSubcommand::SecurityScheme { subcommand } => {
+                self.ctx
+                    .api_security_scheme_handler()
+                    .handle_command(subcommand)
+                    .await
             }
             ApiSubcommand::Domain { subcommand } => {
                 self.ctx
                     .api_domain_handler()
                     .handle_command(subcommand)
                     .await
-            }
-            ApiSubcommand::Certificate { subcommand: _ } => {
-                // TODO: atomic:
-                todo!()
             }
         }
     }

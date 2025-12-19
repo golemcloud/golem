@@ -112,12 +112,7 @@ impl ApiDomainCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let domains = clients
-            .api_domain
-            .list_environment_domain_registrations(&environment.environment_id.0)
-            .await
-            .map_service_error()?
-            .values;
+        let domains = self.list_domains(&environment.environment_id).await?;
 
         let Some(domain_to_delete) = domains.iter().find(|d| d.domain == domain) else {
             log_error(format!(

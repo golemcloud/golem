@@ -59,6 +59,7 @@ pub struct EnvironmentExtRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -132,6 +133,7 @@ pub struct EnvironmentExtRevisionRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -155,15 +157,20 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             current_deployment: match (
                 value.current_deployment_revision,
                 value.current_deployment_deployment_revision,
+                value.current_deployment_deployment_version,
                 value.current_deployment_deployment_hash,
             ) {
-                (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
-                    Some(EnvironmentCurrentDeploymentView {
-                        revision: revision.try_into()?,
-                        deployment_revision: deployment_revision.try_into()?,
-                        deployment_hash: deployment_hash.into_blake3_hash().into(),
-                    })
-                }
+                (
+                    Some(revision),
+                    Some(deployment_revision),
+                    Some(deployment_version),
+                    Some(deployment_hash),
+                ) => Some(EnvironmentCurrentDeploymentView {
+                    revision: revision.try_into()?,
+                    deployment_revision: deployment_revision.try_into()?,
+                    deployment_version: deployment_version.into(),
+                    deployment_hash: deployment_hash.into_blake3_hash().into(),
+                }),
                 _ => None,
             },
         })
@@ -191,6 +198,7 @@ pub struct OptionalEnvironmentExtRevisionRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -236,6 +244,7 @@ impl OptionalEnvironmentExtRevisionRecord {
 
             current_deployment_revision: self.current_deployment_revision,
             current_deployment_deployment_revision: self.current_deployment_deployment_revision,
+            current_deployment_deployment_version: self.current_deployment_deployment_version,
             current_deployment_deployment_hash: self.current_deployment_deployment_hash,
         })
     }
@@ -255,6 +264,7 @@ pub struct EnvironmentWithDetailsRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 
     pub application_id: Uuid,
@@ -282,15 +292,20 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
                 current_deployment: match (
                     value.current_deployment_revision,
                     value.current_deployment_deployment_revision,
+                    value.current_deployment_deployment_version,
                     value.current_deployment_deployment_hash,
                 ) {
-                    (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
-                        Some(EnvironmentCurrentDeploymentView {
-                            revision: revision.try_into()?,
-                            deployment_revision: deployment_revision.try_into()?,
-                            deployment_hash: deployment_hash.into_blake3_hash().into(),
-                        })
-                    }
+                    (
+                        Some(revision),
+                        Some(deployment_revision),
+                        Some(deployment_version),
+                        Some(deployment_hash),
+                    ) => Some(EnvironmentCurrentDeploymentView {
+                        revision: revision.try_into()?,
+                        deployment_revision: deployment_revision.try_into()?,
+                        deployment_version: deployment_version.into(),
+                        deployment_hash: deployment_hash.into_blake3_hash().into(),
+                    }),
                     _ => None,
                 },
             },

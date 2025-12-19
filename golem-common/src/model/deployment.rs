@@ -34,6 +34,18 @@ declare_transparent_newtypes! {
     pub struct DeploymentVersion(pub String);
 }
 
+impl From<String> for DeploymentVersion {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for DeploymentVersion {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
 declare_structs! {
     pub struct Deployment {
         pub environment_id: EnvironmentId,
