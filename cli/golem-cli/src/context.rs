@@ -286,16 +286,18 @@ impl Context {
                             ComponentPresetSelector {
                                 environment: selected_environment.environment_name.clone(),
                                 presets: {
-                                    let mut presets = selected_environment
-                                        .environment
-                                        .component_presets
-                                        .clone()
-                                        .into_vec()
-                                        .into_iter()
-                                        .map(ComponentPresetName)
-                                        .collect::<Vec<_>>();
-                                    presets.extend(global_flags.preset.iter().cloned());
-                                    presets
+                                    if global_flags.preset.is_empty() {
+                                        selected_environment
+                                            .environment
+                                            .component_presets
+                                            .clone()
+                                            .into_vec()
+                                            .into_iter()
+                                            .map(ComponentPresetName)
+                                            .collect::<Vec<_>>()
+                                    } else {
+                                        global_flags.preset.clone()
+                                    }
                                 },
                             },
                         )
