@@ -12,10 +12,10 @@ This page summarizes the workflow of developing an application on Golem, with li
 ## Creating an application
 The primary tool for developing an application on Golem is the [Golem CLI](/cli).
 
-To create a new application, use the `golem app new` command, passing the name of the application and it's default programming language (note: it is possible to add components using different languages later).
+To create a new application, use the `golem new` command, passing the name of the application and it's default programming language (note: it is possible to add components using different languages later).
 
 ```shell copy
-golem app new my-app
+golem new my-app
 ```
 
 ## Writing the code
@@ -25,13 +25,13 @@ The application is just a project directory that can contain multiple components
 During development the whole application can be built using
 
 ```shell copy
-golem app build
+golem build
 ```
 
 and every component can be deployed using
 
 ```shell copy
-golem app deploy
+golem deploy
 ```
 
 This is going to create a new **version** of each component. If there are agents created already, those are not going to be updated automatically to these new versions. Check the [agents page](/concepts/agents) for more information about updating agents.
@@ -83,6 +83,6 @@ golem api deployment deploy my-definition/0.0.2
 
 ### Breaking the component APIs
 
-When an API is using a component's **exported interface**, it is not possible to deploy a new version of that component if it is breaking that used interface (`golem app deploy` will fail). To resolve this, delete the deployment first as shown above.
+When an API is using a component's **exported interface**, it is not possible to deploy a new version of that component if it is breaking that used interface (`golem deploy` will fail). To resolve this, delete the deployment first as shown above.
 
 </Steps>

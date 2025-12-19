@@ -11,7 +11,7 @@ Golem's **command line interface** provides a set of predefined, Golem-specific 
 To get started from scratch, first create a new application using the `TS` template:
 
 ```shell copy
-golem app new my-app ts
+golem new my-app ts
 cd my-app
 ```
     </Tabs.Tab>
@@ -20,7 +20,7 @@ cd my-app
 To get started from scratch, first create a new application using the `TS` template:
 
 ```shell copy
-golem app new my-app rust
+golem new my-app rust
 cd my-app
 ```
     </Tabs.Tab>
@@ -124,7 +124,7 @@ class RequestHandler extends BaseAgent {
 ```rust
 #[agent_definition]
 trait RequestHandler {
-    pub fn new(userId: string, requestId: string) -> Self;
+    pub fn new(userId: String, requestId: String) -> Self;
 }
 ```
     </Tabs.Tab>
@@ -208,6 +208,8 @@ The SDK supports a large variety of data types to be used in agent constructors 
 
     <Tabs.Tab>
     In Rust any data type that implements the `golem_rust::Schema` trait can be used as parameters and return types of agent metods and constructors. For user-defined types, use `#[derive(Schema)]` to derive the implementation automatically. See the [page about data type mapping](/type-mapping) for more details about the supported built-in types.
+
+    Note that parameters must be passed by value to agent methods, not as references (`Schema` is not implemented for `&T`).
     </Tabs.Tab>
 </Tabs>
 

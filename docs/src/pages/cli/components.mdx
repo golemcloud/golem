@@ -8,7 +8,7 @@ To create, list, build and deploy components you can use `golem component` comma
 
 ## Creating a new component
 
-To create a new component in an application directory (previously created with `golem app new`) use the `component new` command in the following way:
+To create a new component in an application directory (previously created with `golem new`) use the `component new` command in the following way:
 
 ```shell copy
 golem component new <template-name> <component-name>
@@ -29,70 +29,15 @@ golem component build <component-name>
 To build the whole application, use the `app build` command in the following way:
 
 ```shell copy
-golem app build
+golem build
 ```
 
 Both commands accept a `--build-profile <BUILD_PROFILE>` argument. Some of the built-in templates define a separate `release` profile which creates a more optimized version of the components. Build profiles can be fully customized by editing the _application manifest files_.
 
-## Deploying a component
-
-To deploy a component, use the `component deploy` or `app deploy` commands in the following way:
-
-```shell copy
-golem component deploy <component-name>
-```
-or
-
-```shell copy
-golem app deploy <component-name>
-```
-
-to deploy a specific component only.
-
-The output of the command will be something like the following:
-```
-New component created with URN urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799, version 0, and size of 89735 bytes.
-Component name: my-component.
-Exports:
-        rpc:counters/api.{[constructor]counter}(name: string) -> handle<0>
-        rpc:counters/api.{[method]counter.inc-by}(self: &handle<0>, value: u64)
-        rpc:counters/api.{[method]counter.get-value}(self: &handle<0>) -> u64
-        rpc:counters/api.{[method]counter.get-args}(self: &handle<0>) -> list<string>
-        rpc:counters/api.{[method]counter.get-env}(self: &handle<0>) -> list<tuple<string, string>>
-        rpc:counters/api.{inc-global-by}(value: u64)
-        rpc:counters/api.{get-global-value}() -> u64
-        rpc:counters/api.{get-all-dropped}() -> list<tuple<string, u64>>
-        rpc:counters/api.{bug-wasm-rpc-i32}(in: variant { leaf }) -> variant { leaf }
-        rpc:counters/api.{[drop]counter}(self: handle<0>)
-```
-
-The returned output contains the following information:
-
-- **Component URN** - URN for the new component. You can use this URN whenever you want to specify the component instead of component name.
-- **Component version** - incremental component version - used for updating the agents.
-- **Component size** - size of the `wasm` file - it is important for the storage limit in the hosted Golem Cloud.
-- **Exports** - exported function you can call. You can copy function name (the part before parameters) to call the function. All Golem API expect function names in exactly this format. See the [name mapping page](/name-mapping) for more details.
-
 To deploy **all components** of an application, use:
 
 ```shell copy
-golem app deploy
-```
-
-To deploy the **component** based on the current directory, use:
-
-```shell copy
-golem component deploy
-```
-
-### Ephemeral components
-
-Components created are **durable** by default. To create an **ephemeral component** instead, change the component's application manifest (`golem.yaml`) to contain:
-
-```yaml
-components:
-  example:component:
-    componentType: ephemeral
+golem deploy
 ```
 
 ## Component search

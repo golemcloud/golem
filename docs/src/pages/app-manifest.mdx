@@ -781,17 +781,13 @@ Available naming related string transforming functions:
 
     The commands can be executed using:
     ```shell
-    golem app command-name
+    golem exec command-name
     ```
 
     Multiple components can use the same `command-name`, the above command will execute _all matching_
     commands in this case, both component specific and project ones.
 
     For defining project level custom commands see <FieldLink path="customCommands"/>.
-
-    The following command names cannot be used, as they are used by `golem app` itself:
-    - `build`
-    - `clean`
 
     <Example>
       { /* @formatter:off */ }
@@ -866,7 +862,7 @@ Available naming related string transforming functions:
     the component has a matching profile. E.g. the following command:
 
     ```shell copy
-    golem app --build-profile release build
+    golem --preset release build
     ```
     - will build components that have no profiles by using the non-profile component fields
     - will use the `release` profile for components that are using `profiles` _and_ have a profile named `release`
@@ -1106,7 +1102,7 @@ Available naming related string transforming functions:
     path: "clean",
     since: Release.R_1_1_1
   }}>
-    ***Optional list of paths*** which are added as targets to the `golem app clean` command.
+    ***Optional list of paths*** which are added as targets to the `golem clean` command.
 
     The paths are relative to the manifest document.
 
@@ -1128,7 +1124,7 @@ Available naming related string transforming functions:
 
     The commands can be executed using:
     ```shell
-    golem app command-name
+    golem exec command-name
     ```
 
     Components specific custom commands can use the same `command-name`, the above command will execute _all matching_
@@ -1136,9 +1132,6 @@ Available naming related string transforming functions:
 
     For defining component specific custom commands see <FieldLink path="components.<component-name>.customCommands"/>.
 
-    The following command names cannot be used, as they are used by `golem app` itself:
-    - `build`
-    - `clean`
 
     <Example>
       { /* @formatter:off */ }

@@ -26,86 +26,132 @@ Once all manifest documents are found, the paths in them are resolved based on t
 
 ## Using composable templates
 
-Golem projects can be created with `golem app new` command. This creates a new application that may consist of multiple components. To add a new component to an existing application, use `golem component new`. E.g.: let's add a new _c_ and _ts_ component in a new and empty directory:
+Golem projects can be created with `golem new` command. This creates a new application that may consist of multiple components. To add a new component to an existing application, use `golem component new`. E.g.: let's add a new _c_ and _ts_ component in a new and empty directory:
 
 ```shell
-golem app new app:component-a c
-cd app:component-a
+golem new myapp ts
+cd myapp
+golem component new rust app:component-a
 golem component new ts app:component-b
 ```
 
 When using the `app new` command, it will create:
 
-- common directory for the given language (`common-cpp` and `common-ts`):
+- common directory for the given language (`common-rust` and `common-ts`):
   - this directory contains the languages specific _Application Manifest Template_, which defines how to
     build the components
   - can be used for shared subprojects
   - might contain other shared configurations
-- directory for components for the given language (`components-cpp` and `components-ts`)
-- directory called `wit/deps` for common WIT dependencies, and populates it with WASI and Golem packages
-- depending on the language it might add `common-adapters`.
+- directory for components for the given language (`components-rust` and `components-ts`)
 
-Now that we added our components, let's use the `app` command list our project metadata:
+Now that we added our components, let's use the `golem` command list our project metadata:
 
 ```shell
-$ golem app
+$ golem
 
 Build, deploy application
 
-Usage: golem app [OPTIONS] <COMMAND>
+Usage: golem [OPTIONS] <COMMAND>
 
 Commands:
-  new     Create new application
-  build   Build all or selected components in the application
-  deploy  Deploy all or selected components in the application, includes building
-  clean   Clean all components in the application or by selection
-  help    Print this message or the help of the given subcommand(s)
+  new               Create a new application
+  build             Build all or selected components in the application
+  repl              Start Rib REPL for a selected component
+  deploy            Deploy application
+  clean             Clean all components in the application or by selection
+  update-agents     Try to automatically update all existing agents of the application to the latest version
+  redeploy-agents   Redeploy all agents of the application using the latest version
+  diagnose          Diagnose possible tooling problems
+  list-agent-types  List all the deployed agent types
+  exec              Execute custom, application manifest defined commands
+  environment       Manage environments
+  component         Manage components
+  agent             Invoke and manage agents
+  api               Manage API gateway objects
+  profile           Manage global CLI profiles
+  server            Run and manage the local Golem server
+  cloud             Manage Golem Cloud accounts and projects
+  completion        Generate shell completion
+  help              Print this message or the help of the given subcommand(s)
 
 Options:
-  -f, --format <FORMAT>
+  -F, --format <FORMAT>
           Output format, defaults to text, unless specified by the selected profile
-  -p, --profile <PROFILE>
-          Select Golem profile by name
-  -l, --local
-          Select builtin "local" profile, to use services provided by the "golem server" command
-  -c, --cloud
-          Select builtin "cloud" profile to use Golem Cloud
-  -a, --app-manifest-path <APP_MANIFEST_PATH>
+  -E, --environment <ENVIRONMENT>
+          Select Golem environment by name
+  -L, --local
+          Select" local" environment from the manifest, or "local" profile
+  -C, --cloud
+          Select "cloud" environment from the manifest, or "cloud" profile
+  -A, --app-manifest-path <APP_MANIFEST_PATH>
           Custom path to the root application manifest (golem.yaml)
-  -A, --disable-app-manifest-discovery
+  -X, --disable-app-manifest-discovery
           Disable automatic searching for application manifests
-  -b, --build-profile <BUILD_PROFILE>
-          Select build profile
+  -P, --preset <PRESET>
+          Select custom component presets
+      --profile <PROFILE>
+          Select Golem profile by name
       --config-dir <CONFIG_DIR>
           Custom path to the config directory (defaults to $HOME/.golem)
+  -Y, --yes
+          Automatically answer "yes" to any interactive confirm questions
+      --show-sensitive
+          Disables filtering of potentially sensitive use values in text mode (e.g. component environment variable values)
+      --dev-mode
+          Enable experimental, development-only features
+      --template-group <TEMPLATE_GROUP>
+          Switch to experimental or development-only template groups
   -v, --verbose...
           Increase logging verbosity
   -q, --quiet...
           Decrease logging verbosity
   -h, --help
           Print help
+  -V, --version
+          Print version
 
-Components:
+Application environments:
+  cloud
+    Selected: no
+    Server:   cloud - builtin (https://release.api.golem.cloud)
+    Presets:  release
+
+  local
+    Selected: yes
+    Server:   local - builtin (http://localhost:9881)
+    Presets:  debug
+
+Application components:
   app:component-a
     Selected:     yes
-    Source:       /Users/<...>/app-demo/components-cpp/app-component-a/golem.yaml
-    Template:     cpp
-    Profiles:     debug, release
+    Source:       /Users/vigoo/projects/golem/golem/tmp4/myapp/components-rust/app-component-a/golem.yaml
+    Layers:       rust, rust[debug], app:component-a
+
   app:component-b
     Selected:     yes
-    Source:       /Users/<...>/app-demo/components-ts/app-component-b/golem.yaml
-    Template:     ts
+    Source:       /Users/vigoo/projects/golem/golem/tmp4/myapp/components-ts/app-component-b/golem.yaml
+    Layers:       ts, app:component-b
 
-Custom commands:
-  npm-install
+Application API definitions:
+  app-component-a-api@0.0.1
+  app-component-b-api@0.0.1
+
+Application API deployments for environment local:
+  myapp.localhost:9006
+    app-component-a-api
+    app-component-b-api
+
+Application custom commands:
+  cargo-clean
+  ts-npm-install
 ```
 
-Because the _ts_ components use npm, we have to use `npm install` before building the components. We can also see that this has a wrapper custom command in the manifest called `npm-install`. Let's use that, then build our components:
+Because the _ts_ components use npm, we have to use `npm install` before building the components. We can also see that this has a wrapper custom command in the manifest called `npm-install`, and `golem` itself will automatically run it before a build. Let's see an example for both:
 
 ```sh
-$ golem app npm-install
+$ golem exec npm-install
 <..>
-$ golem app build
+$ golem build
 Collecting sources
   Found sources: /Users/<...>/app-demo/common-cpp/golem.yaml, /Users/<...>/app-demo/common-ts/golem.yaml, /Users/<...>/app-demo/components-cpp/app-component-a/golem.yaml, /Users/<...>/app-demo/components-ts/app-component-b/golem.yaml, /Users/<...>/app-demo/golem.yaml
 Collecting components
@@ -140,8 +186,8 @@ in the project root folder, and the CLI will add or update all or components.
 If we want to only update some components, we can do so by explicitly selecting them with the `--component-name` flag, or we can implicitly select them by changing our current working directory, e.g.:
 
 ```shell
-$ cd components-cpp
-$ golem app
+$ cd components-rust
+$ golem
 <...>
 Components:
   app:component-a

@@ -71,14 +71,14 @@ Golem runs components that are WebAssembly programs implementing **agents**. Eve
 
 The `golem` command line interface provides a set of commands to create, build, and deploy components.
 
-To get started, you create an application and a single component using one of the supported programming languages with the `golem app new` command. If no additional parameters are provided, the command will interactively ask for all required information.
+To get started, you create an application and a single component using one of the supported programming languages with the `golem new` command. If no additional parameters are provided, the command will interactively ask for all required information.
 
 <Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
   <Tabs.Tab>
   Create a TypeScript agent using the default template:
 
   ```shell copy
-  golem app new
+  golem new
 
   > Application name: agent-examples
   > Select language for the new component TypeScript
@@ -94,7 +94,7 @@ To get started, you create an application and a single component using one of th
     Create a Rust agent using the default template:
 
     ```shell copy
-    golem app new
+    golem new
 
     > Application name: agent-examples
     > Select language for the new component Rust
@@ -110,7 +110,7 @@ This will generate a new component in a new directory named after the provided a
 To **build** the newly created component, use the following command:
 
 ```shell copy
-golem app build
+golem build
 ```
 
 This compiles the newly created application, which consists of a _single Golem component_ at the moment. An application can have multiple components, each implementing a different set of agent types. New components can be added to the application by using the `golem component new` command.
@@ -198,7 +198,7 @@ This is a simple example of an agent that does not communicate with other agents
 To upload your component to Golem, you can use the `app deploy` command.
 
 ```shell copy
-golem app deploy
+golem deploy
 ```
 
 When you add a component you will see some basic information about the component such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the exported agent types of the component.
