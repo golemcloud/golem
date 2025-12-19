@@ -622,7 +622,9 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
 
     // Multimodal
-    run_and_assert(&ctx, "fun-multimodal", &["[text(\"foo\")]"]).await;
+    run_and_assert(&ctx, "ts:agent/foo-agent.{fun-multimodal}", &["[text(inline({data: \"data\", text-type: none}))]"]).await;
+
+    run_and_assert(&ctx, "ts:agent/foo-agent.{fun-multimodal-advanced}", &["[text(\"foo\")]"]).await;
 
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;

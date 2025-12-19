@@ -5,6 +5,7 @@ import {
     UnstructuredText,
     UnstructuredBinary,
     Client,
+    Multimodal,
     MultimodalAdvanced
 } from '@golemcloud/golem-ts-sdk';
 
@@ -256,8 +257,12 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUnstructuredBinary(unstructuredText);
     }
 
-    async funMultimodal(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise<string> {
+    async funMultimodal(multimodal: Multimodal): Promise<Multimodal> {
         return await this.barAgent.funMultimodal(multimodal);
+    }
+
+    async funMultimodalAdvanced(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise< MultimodalAdvanced<InputText | InputImage>> {
+        return await this.barAgent.funMultimodalAdvanced(multimodal);
     }
 
     async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
@@ -432,8 +437,12 @@ class BarAgent extends BaseAgent {
         return "foo"
     }
 
-    async funMultimodal(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise<string> {
-        return "foo"
+    async funMultimodal(multimodal: Multimodal): Promise<Multimodal> {
+        return multimodal
+    }
+
+    async funMultimodalAdvanced(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise< MultimodalAdvanced<InputText | InputImage>> {
+        return multimodal
     }
 
     async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
