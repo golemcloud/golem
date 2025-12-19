@@ -14,12 +14,14 @@
 
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentMethod, AgentType, ComponentModelElementSchema,
-    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
+    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
+    NamedElementSchemas, NamedElementValue, NamedElementValues,
 };
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
     TypeOption, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };
+use golem_wasm::ValueAndType;
 
 /// ToWitNaming allows converting discovered AgentTypes to WIT and WAVE compatible naming for named
 /// elements
@@ -240,6 +242,61 @@ impl ToWitNaming for NameTypePair {
         Self {
             name: self.name.to_wit_naming(),
             typ: self.typ.to_wit_naming(),
+        }
+    }
+}
+
+impl ToWitNaming for DataValue {
+    fn to_wit_naming(&self) -> Self {
+        match self {
+            DataValue::Tuple(elems) => DataValue::Tuple(elems.to_wit_naming()),
+            DataValue::Multimodal(elems) => DataValue::Multimodal(elems.to_wit_naming()),
+        }
+    }
+}
+
+impl ToWitNaming for ElementValues {
+    fn to_wit_naming(&self) -> Self {
+        Self {
+            elements: self
+                .elements
+                .iter()
+                .map(|elem| elem.to_wit_naming())
+                .collect(),
+        }
+    }
+}
+
+impl ToWitNaming for NamedElementValues {
+    fn to_wit_naming(&self) -> Self {
+        Self {
+            elements: self
+                .elements
+                .iter()
+                .map(|elem| elem.to_wit_naming())
+                .collect(),
+        }
+    }
+}
+
+impl ToWitNaming for NamedElementValue {
+    fn to_wit_naming(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            value: self.value.to_wit_naming(),
+        }
+    }
+}
+
+impl ToWitNaming for ElementValue {
+    fn to_wit_naming(&self) -> Self {
+        match self {
+            ElementValue::ComponentModel(vnt) => ElementValue::ComponentModel(ValueAndType::new(
+                vnt.value.clone(),
+                vnt.typ.to_wit_naming(),
+            )),
+            ElementValue::UnstructuredText(_) => self.clone(),
+            ElementValue::UnstructuredBinary(_) => self.clone(),
         }
     }
 }

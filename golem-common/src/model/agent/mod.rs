@@ -657,8 +657,9 @@ impl ElementValue {
     pub fn parse(s: &str, schema: &ElementSchema) -> Result<Self, String> {
         match schema {
             ElementSchema::ComponentModel(typ) => {
-                let value_and_type = parse_value_and_type(&typ.element_type, s)
+                let mut value_and_type = parse_value_and_type(&typ.element_type.to_wit_naming(), s)
                     .map_err(|e| format!("Failed to parse parameter value {s}: {e}"))?;
+                value_and_type.typ = typ.element_type.clone(); // Store the original type, not the wit-naming one
                 Ok(ElementValue::ComponentModel(value_and_type))
             }
             ElementSchema::UnstructuredText(_) => {
@@ -983,17 +984,21 @@ pub struct AgentId {
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,
     wrapper_agent_type: String,
+    as_string: String,
 }
 
 impl AgentId {
     pub fn new(agent_type: String, parameters: DataValue, phantom_id: Option<Uuid>) -> Self {
         let wrapper_agent_type = agent_type.to_wit_naming();
-        Self {
+        let mut result = Self {
             agent_type,
             parameters,
             phantom_id,
             wrapper_agent_type,
-        }
+            as_string: "".to_string(),
+        };
+        result.as_string = result.to_string();
+        result
     }
 
     pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
@@ -1037,15 +1042,15 @@ impl AgentId {
         let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type_name)?;
         let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
 
-        Ok((
-            AgentId {
-                agent_type: agent_type.type_name.clone(),
-                wrapper_agent_type: agent_type.type_name.to_wit_naming(),
-                parameters: value,
-                phantom_id,
-            },
-            agent_type,
-        ))
+        let mut agent_id = AgentId {
+            agent_type: agent_type.type_name.clone(),
+            wrapper_agent_type: agent_type.type_name.to_wit_naming(),
+            parameters: value,
+            phantom_id,
+            as_string: "".to_string(),
+        };
+        agent_id.as_string = agent_id.to_string();
+        Ok((agent_id, agent_type))
     }
 
     pub fn wrapper_agent_type(&self) -> &str {
@@ -1062,16 +1067,20 @@ impl AgentId {
 
 impl Display for AgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}({})",
-            self.wrapper_agent_type,
-            self.parameters.to_compact_string()
-        )?;
-        if let Some(phantom_id) = &self.phantom_id {
-            write!(f, "[{phantom_id}]")?;
+        if self.as_string.is_empty() {
+            write!(
+                f,
+                "{}({})",
+                self.wrapper_agent_type,
+                self.parameters.to_wit_naming().to_compact_string()
+            )?;
+            if let Some(phantom_id) = &self.phantom_id {
+                write!(f, "[{phantom_id}]")?;
+            }
+            Ok(())
+        } else {
+            write!(f, "{}", self.as_string)
         }
-        Ok(())
     }
 }
 
