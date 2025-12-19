@@ -3719,7 +3719,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/{environment_id}/domain-registrations:
+  /v1/envs/{environment_id}/domain-registrations:
     get:
       tags:
       - RegistryService
@@ -4021,7 +4021,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_EnvironmentPluginGrant'
+                $ref: '#/components/schemas/Page_EnvironmentPluginGrantWithDetails'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4174,7 +4174,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/EnvironmentPluginGrant'
+                $ref: '#/components/schemas/EnvironmentPluginGrantWithDetails'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -12260,12 +12260,13 @@ components:
         environmentId:
           type: string
           format: uuid
-        plugin:
-          $ref: '#/components/schemas/PluginRegistrationDto'
+        pluginId:
+          type: string
+          format: uuid
       required:
       - id
       - environmentId
-      - plugin
+      - pluginId
     EnvironmentPluginGrantCreation:
       title: EnvironmentPluginGrantCreation
       type: object
@@ -12275,6 +12276,25 @@ components:
           format: uuid
       required:
       - pluginRegistrationId
+    EnvironmentPluginGrantWithDetails:
+      title: EnvironmentPluginGrantWithDetails
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        plugin:
+          $ref: '#/components/schemas/PluginRegistrationDto'
+        pluginAccount:
+          $ref: '#/components/schemas/AccountSummary'
+      required:
+      - id
+      - environmentId
+      - plugin
+      - pluginAccount
     EnvironmentRole:
       type: string
       enum:
@@ -12882,14 +12902,14 @@ components:
             $ref: '#/components/schemas/Environment'
       required:
       - values
-    Page_EnvironmentPluginGrant:
-      title: Page_EnvironmentPluginGrant
+    Page_EnvironmentPluginGrantWithDetails:
+      title: Page_EnvironmentPluginGrantWithDetails
       type: object
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/EnvironmentPluginGrant'
+            $ref: '#/components/schemas/EnvironmentPluginGrantWithDetails'
       required:
       - values
     Page_EnvironmentShare:

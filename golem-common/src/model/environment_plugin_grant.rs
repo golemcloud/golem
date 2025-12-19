@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::account::AccountSummary;
 use super::environment::EnvironmentId;
 use super::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
 use crate::{declare_structs, newtype_uuid};
@@ -25,7 +26,14 @@ declare_structs! {
     pub struct EnvironmentPluginGrant {
         pub id: EnvironmentPluginGrantId,
         pub environment_id: EnvironmentId,
-        pub plugin: PluginRegistrationDto
+        pub plugin_id: PluginRegistrationId
+    }
+
+    pub struct EnvironmentPluginGrantWithDetails {
+        pub id: EnvironmentPluginGrantId,
+        pub environment_id: EnvironmentId,
+        pub plugin: PluginRegistrationDto,
+        pub plugin_account: AccountSummary,
     }
 
     pub struct EnvironmentPluginGrantCreation {

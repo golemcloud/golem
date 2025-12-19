@@ -19,6 +19,7 @@ use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
+    EnvironmentPluginGrantWithDetails,
 };
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -104,7 +105,7 @@ impl EnvironmentPluginGrantsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<EnvironmentPluginGrant>>> {
+    ) -> ApiResult<Json<Page<EnvironmentPluginGrantWithDetails>>> {
         let record = recorded_http_api_request!(
             "list_environment_plugin_grants_internal",
             environment_id = environment_id.0.to_string()
@@ -124,7 +125,7 @@ impl EnvironmentPluginGrantsApi {
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Page<EnvironmentPluginGrant>>> {
+    ) -> ApiResult<Json<Page<EnvironmentPluginGrantWithDetails>>> {
         let grants = self
             .environment_plugin_grant_service
             .list_in_environment(environment_id, &auth)
@@ -145,7 +146,7 @@ impl EnvironmentPluginGrantsApi {
         environment_plugin_grant_id: Path<EnvironmentPluginGrantId>,
         #[oai(default)] include_deleted: Query<bool>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<EnvironmentPluginGrant>> {
+    ) -> ApiResult<Json<EnvironmentPluginGrantWithDetails>> {
         let record = recorded_http_api_request!(
             "get_environment_plugin_grant",
             environment_plugin_grant_id = environment_plugin_grant_id.0.to_string(),
@@ -171,7 +172,7 @@ impl EnvironmentPluginGrantsApi {
         environment_plugin_grant_id: EnvironmentPluginGrantId,
         include_deleted: bool,
         auth: AuthCtx,
-    ) -> ApiResult<Json<EnvironmentPluginGrant>> {
+    ) -> ApiResult<Json<EnvironmentPluginGrantWithDetails>> {
         let grant = self
             .environment_plugin_grant_service
             .get_by_id(environment_plugin_grant_id, include_deleted, &auth)

@@ -41,6 +41,12 @@ declare_structs! {
         pub roles: Vec<AccountRole>
     }
 
+    pub struct AccountSummary {
+        pub id: AccountId,
+        pub name: String,
+        pub email: AccountEmail,
+    }
+
     pub struct AccountCreation {
         pub name: String,
         pub email: AccountEmail,

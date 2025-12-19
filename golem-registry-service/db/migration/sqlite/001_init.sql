@@ -115,7 +115,7 @@ CREATE INDEX oauth2_tokens_account_idx
 CREATE TABLE oauth2_web_flow_states
 (
     state_id   UUID      NOT NULL,
-    metadata   BYTEA     NOT NULL,
+    metadata   JSONB     NOT NULL,
     token_id   UUID      NULL,
     created_at TIMESTAMP NOT NULL,
     CONSTRAINT oauth2_web_flow_states_pk PRIMARY KEY (state_id),
@@ -821,5 +821,5 @@ CREATE TABLE deployment_registered_agent_types
 CREATE UNIQUE INDEX deployment_registered_agent_types_agent_type_wrapper_idx
     ON deployment_registered_agent_types (environment_id, deployment_revision_id, agent_wrapper_type_name);
 
-CREATE INDEX deployment_registered_agent_types_latest_by_component_idx
+CREATE INDEX deployment_registered_agent_types_components_idx
     ON deployment_registered_agent_types (component_id, component_revision_id, deployment_revision_id DESC);
