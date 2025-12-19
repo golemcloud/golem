@@ -20,9 +20,6 @@ use std::sync::Arc;
 pub mod account;
 pub mod token;
 
-// TODO: atomic
-// pub mod project;
-
 pub struct CloudCommandHandler {
     ctx: Arc<Context>,
 }
