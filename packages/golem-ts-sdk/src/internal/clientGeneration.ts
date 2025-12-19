@@ -749,13 +749,14 @@ function convertValueToTextReference(value: Value.Value): TextReference {
             case 'record':
               const record = inlineValue.value;
               const data = record[0];
-              const languageCode = record.length > 1 ? record[1] : undefined;
+              const languageCodeField = record.length > 1 ? record[1] : undefined;
 
               switch (data.kind) {
                 case 'string':
                   const textData = data.value;
 
-                  if (!languageCode) {
+                  // The languageCode field doesn't exist at all
+                  if (!languageCodeField) {
                     return {
                       tag: 'inline',
                       val: {
@@ -764,20 +765,40 @@ function convertValueToTextReference(value: Value.Value): TextReference {
                     };
                   }
 
-                  switch (languageCode.kind) {
-                    case 'string':
-                      const languageCodeStr = languageCode.value;
-                      return {
-                        tag: 'inline',
-                        val: {
-                          data: textData,
-                          textType: { languageCode: languageCodeStr },
-                        },
-                      };
+                  switch (languageCodeField.kind) {
+                    case 'option':
+                      const langCodeOpt = languageCodeField.value;
+
+                      // The languageCode field exists; however, it's None
+                      if (!langCodeOpt) {
+                        return {
+                          tag: 'inline',
+                          val: {
+                            data: textData,
+                          },
+                        };
+                      }
+
+                      switch (langCodeOpt.kind) {
+                        case 'string':
+                          const languageCodeStrOpt = langCodeOpt.value;
+                          return {
+                            tag: 'inline',
+                            val: {
+                              data: textData,
+                              textType: { languageCode: languageCodeStrOpt },
+                            },
+                          };
+
+                          default:
+                            throw new Error(
+                              `Invalid inline text language code option type: expected string, found ${JSON.stringify(langCodeOpt)}`,
+                              );
+                      }
 
                     default:
                       throw new Error(
-                        `Invalid inline text language code type: expected string`,
+                        `Invalid inline text language code type: expected string, found ${languageCodeField.kind}`,
                       );
                   }
 
