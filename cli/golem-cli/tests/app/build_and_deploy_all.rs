@@ -1,4 +1,4 @@
-use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
+use crate::app::{cmd, flag, replace_string_in_file, TestContext};
 use crate::Tracing;
 use assert2::assert;
 use assert2::let_assert;
@@ -204,7 +204,7 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
             "ts-research-agent",
         ),
     ] {
-        replace_strings_in_file(ctx.cwd_path_join(path), &[(from, to)]).unwrap()
+        replace_string_in_file(ctx.cwd_path_join(path), from, to).unwrap()
     }
 
     let outputs = ctx.cli([cmd::BUILD]).await;
