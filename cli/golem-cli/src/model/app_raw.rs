@@ -228,7 +228,6 @@ pub enum BuiltinServer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CustomServer {
-    pub account: Option<String>,
     pub url: Url,
     pub worker_url: Option<Url>,
     pub allow_insecure: Option<bool>,
@@ -257,7 +256,7 @@ pub struct CliOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeploymentOptions {
+pub struct  DeploymentOptions {
     pub compatibility_check: Option<bool>,
     pub version_check: Option<bool>,
     pub security_overrides: Option<bool>,
