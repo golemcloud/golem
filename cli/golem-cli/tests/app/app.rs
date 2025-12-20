@@ -291,4 +291,3 @@ async fn custom_app_subcommand_with_builtin_name() {
     assert2::assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }
-

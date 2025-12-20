@@ -49,7 +49,7 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 static GOLEM_RUST_VERSION: &str = "1.10.3";
 static GOLEM_TS_VERSION: &str = "0.0.73";
 static GOLEM_AI_VERSION: &str = "v0.4.0";
-static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
+static GOLEM_AI_SUFFIX: &str = ".wasm";
 
 fn all_templates(dev_mode: bool) -> Vec<Template> {
     let mut result: Vec<Template> = vec![];

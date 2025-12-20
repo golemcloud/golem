@@ -1961,13 +1961,14 @@ mod app_builder {
                     }
 
                     for (component_name, component) in app.application.components {
-                        let component_name = match ComponentName::try_from(component_name.as_str()) {
+                        let component_name = match ComponentName::try_from(component_name.as_str())
+                        {
                             Ok(component_name) => component_name,
                             Err(err) => {
                                 validation.add_error(format!(
                                     "Invalid component name: {}. {}",
                                     component_name.log_color_error_highlight(),
-                                    err.to_string()
+                                    err
                                 ));
                                 ComponentName(component_name)
                             }

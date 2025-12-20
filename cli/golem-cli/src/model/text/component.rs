@@ -82,7 +82,7 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
             "Plugins",
             view.plugins.as_slice(),
             !view.plugins.is_empty(),
-            format_plugins
+            format_plugins,
         );
 
     fields.build()
