@@ -1816,7 +1816,7 @@ impl Display for RdbmsPoolKey {
     }
 }
 
-fn validate_lower_kebab_case_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
+pub fn validate_lower_kebab_case_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
     if identifier.is_empty() {
         return Err(format!("{} cannot be empty", field_name));
     }
