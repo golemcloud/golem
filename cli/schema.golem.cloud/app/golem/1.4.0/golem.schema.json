@@ -1,10 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "$id": "https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json",
+  "$id": "https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json",
   "title": "Golem Application Manifest",
   "description": "Golem Application Manifest.",
   "type": "object",
   "properties": {
+    "app": {
+      "type": "string",
+      "description": "Application name"
+    },
     "includes": {
       "type": "array",
       "description": "Include paths or globs for searching for application manifest documents. Only allowed in root application manifest documents.",
@@ -23,11 +27,11 @@
         "type": "string"
       }
     },
-    "templates": {
+    "componentTemplates": {
       "type": "object",
-      "description": "Component definition templates",
+      "description": "Component templates by template names",
       "additionalProperties": {
-        "$ref": "#/definitions/componentTemplate"
+        "$ref": "#/definitions/component"
       }
     },
     "components": {
@@ -35,15 +39,6 @@
       "description": "Components by component names",
       "additionalProperties": {
         "$ref": "#/definitions/component"
-      }
-    },
-    "dependencies": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {
-          "$ref": "#/definitions/componentDependency"
-        }
       }
     },
     "clean": {
@@ -76,7 +71,7 @@
         },
         "deployments": {
           "type": "object",
-          "description": "HTTP API deployments by profile",
+          "description": "HTTP API deployments by environments",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -86,98 +81,147 @@
         }
       }
     },
-    "profiles": {
+    "environments": {
       "type": "object",
-      "description": "Custom or customized profiles for the application",
+      "description": "Application environments",
       "additionalProperties": {
         "properties": {
           "default": {
-            "type": "boolean",
-            "description": "Use as default profile, only one can be selected"
+            "const": true,
+            "description": "Use as default environment, only one can be selected, if missing, the first environment is used as default"
           },
-          "cloud": {
-            "type": "boolean",
-            "description": "Marks the profile as Cloud Profile customization, implicitly ture if project is set for the profile"
-          },
-          "project": {
+          "account": {
             "type": "string",
-            "description": "Default project to be used with the profile, implicitly sets 'cloud'"
+            "description": "Optional account that owns the application environment. When not specified then th current user will be used."
           },
-          "url": {
-            "type": "string",
-            "description": "Custom URL for golem services, only allowed for OSS profiles"
+          "server": {
+            "description": "Server for the environment, can be either  the built-in local or cloud servers, or a custom one. When not specified then the local server is used.",
+            "oneOf": [
+              {
+                "const": "local"
+              },
+              {
+                "const": "cloud"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Custom URL for golem services"
+                  },
+                  "workerUrl": {
+                    "type": "string",
+                    "description": "Custom URL for golem worker service"
+                  },
+                  "allowInsecure": {
+                    "type": "boolean",
+                    "description": "Allow insecure connections to the server, defaults to false"
+                  },
+                  "auth": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "oauth2": {
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "oauth2"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "staticToken": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "staticToken"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            ]
           },
-          "workerUrl": {
-            "type": "string",
-            "description": "Custom URL for golem worker service, only allowed for OSS profiles"
+          "componentPresets": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
           },
-          "format": {
-            "enum": [
-              "text",
-              "json",
-              "yaml",
-              "pretty",
-              "pretty-json",
-              "pretty-yaml"
-            ],
-            "description": "Default output format"
+          "cli": {
+            "type": "object",
+            "properties": {
+              "format": {
+                "enum": [
+                  "text",
+                  "json",
+                  "yaml",
+                  "pretty",
+                  "pretty-json",
+                  "pretty-yaml"
+                ],
+                "description": "Default output format"
+              },
+              "autoConfirm": {
+                "const": true,
+                "description": "Enables auto-confirm (yes) flag by default"
+              },
+              "redeployAgents": {
+                "const": true,
+                "description": "Enables redeploy-agents flag by default"
+              },
+              "reset": {
+                "const": true,
+                "description": "Enables reset flag by default"
+              }
+            }
           },
-          "buildProfile": {
-            "type": "string",
-            "description": "Default build profile"
-          },
-          "autoConfirm": {
-            "type": "boolean",
-            "description": "Enables auto-confirm (yes) flag by default"
-          },
-          "redeployAgents": {
-            "type": "boolean",
-            "description": "Enables redeploy-agents flag by default"
-          },
-          "redeployHttpApi": {
-            "type": "boolean",
-            "description": "Enables redeploy-http-api flag by default"
-          },
-          "redeployAll": {
-            "type": "boolean",
-            "description": "Enables redeploy-all flag by default"
-          },
-          "reset": {
-            "type": "boolean",
-            "description": "Enables reset flag by default"
+          "deployment": {
+            "type": "object",
+            "properties": {
+              "compatibilityCheck": {
+                "type": "boolean"
+              },
+              "versionCheck": {
+                "type": "boolean"
+              },
+              "securityOverrides": {
+                "type": "boolean"
+              }
+            }
           }
         }
       }
     }
   },
   "definitions": {
-    "componentTemplate": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/componentProperties"
-        },
-        {
-          "$ref": "#/definitions/componentProfiles"
-        }
-      ]
-    },
     "component": {
       "description": "Component definition",
       "allOf": [
         {
-          "type": "object",
-          "properties": {
-            "template": {
-              "type": "string",
-              "description": "Component template to be used for defining this component."
-            }
-          }
+          "$ref": "#/definitions/templates"
         },
         {
           "$ref": "#/definitions/componentProperties"
         },
         {
-          "$ref": "#/definitions/componentProfiles"
+          "$ref": "#/definitions/componentPresets"
         }
       ]
     },
@@ -199,6 +243,9 @@
         "linkedWasm": {
           "type": "string",
           "description": "File path for the linked WASM component which is ready to be uploaded to Golem."
+        },
+        "buildMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
         },
         "build": {
           "type": "array",
@@ -232,12 +279,18 @@
           ],
           "description": "Optional component type, defaults to durable."
         },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
         "files": {
           "type": "array",
           "description": "Initial component files system",
           "items": {
             "$ref": "#/definitions/initialComponentFile"
           }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
         },
         "plugins": {
           "type": "array",
@@ -246,29 +299,68 @@
             "$ref": "#/definitions/pluginInstallation"
           }
         },
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
         "env": {
           "type": "object",
           "description": "Environment variables for the component.",
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "dependenciesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/componentDependency"
+          }
         }
       }
     },
-    "componentProfiles": {
+    "componentPresets": {
       "type": "object",
-      "description": "Component definition profiles",
+      "description": "Component definition presets",
       "properties": {
-        "profiles": {
+        "presets": {
           "type": "object",
-          "description": "Component definition profiles",
+          "description": "Component definition presets",
           "additionalProperties": {
-            "$ref": "#/definitions/componentProperties"
+            "allOf": [
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "default:": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "$ref": "#/definitions/componentProperties"
+              }
+            ]
           }
-        },
-        "defaultProfile": {
-          "type": "string",
-          "description": "Default profile"
+        }
+      }
+    },
+    "templates": {
+      "description": "List of parent component templates",
+      "type": "object",
+      "properties": {
+        "templates": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
         }
       }
     },
@@ -562,6 +654,10 @@
       "type": "object",
       "description": "Represents an installed plugin",
       "properties": {
+        "account": {
+          "type": "string",
+          "description": "Account of the plugin"
+        },
         "name": {
           "type": "string",
           "description": "Name of the plugin"
@@ -649,9 +745,9 @@
               "type": "string",
               "description": "Component to be used in the binding"
             },
-            "componentVersion": {
+            "agent": {
               "type": "string",
-              "description": "Component version to be used in the binding, defaults to latest version"
+              "description": "Rib script for calculating the agent to be used"
             },
             "idempotencyKey": {
               "type": "string",
@@ -678,24 +774,34 @@
       "type": "object",
       "description": "HTTP API Deployment",
       "properties": {
-        "host": {
+        "domain": {
           "type": "string",
-          "description": "Host for the HTTP API deployment"
-        },
-        "subdomain": {
-          "type": "string",
-          "description": "Optional subdomain"
+          "description": "Domain"
         },
         "definitions": {
           "type": "array",
-          "description": "HTTP API definitions to be used in the deployment. Accepted formats: <name> or <name>@<version>",
+          "description": "HTTP API definitions to be used in the deployment",
           "items": {
             "type": "string"
           }
         }
       },
       "required": [
-        "host"
+        "domain"
+      ]
+    },
+    "vecMergeMode": {
+      "enum": [
+        "append",
+        "prepend",
+        "replace"
+      ]
+    },
+    "mapMergeMode": {
+      "enum": [
+        "upsert",
+        "replace",
+        "remove"
       ]
     }
   }
