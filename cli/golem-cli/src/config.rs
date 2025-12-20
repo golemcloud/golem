@@ -255,6 +255,13 @@ impl Config {
         config.store_file(config_dir)
     }
 
+    pub fn application_environment(
+        &self,
+        env_id: &ApplicationEnvironmentConfigId,
+    ) -> Option<&ApplicationEnvironmentConfig> {
+        self.application_environments.get(&env_id.to_hashed_key())
+    }
+
     pub fn get_application_environment(
         config_dir: &Path,
         env_id: &ApplicationEnvironmentConfigId,

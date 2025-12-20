@@ -437,7 +437,7 @@ impl Context {
                 let clients = GolemClients::new(
                     &self.client_config,
                     self.auth_token_override.clone(),
-                    &self.auth_config(),
+                    &self.auth_config()?,
                     self.config_dir(),
                 )
                 .await?;
@@ -467,11 +467,11 @@ impl Context {
         Ok(self.golem_clients().await?.auth_token().clone())
     }
 
-    fn auth_config(&self) -> AuthenticationConfigWithSource {
+    fn auth_config(&self) -> anyhow::Result<AuthenticationConfigWithSource> {
         match self.manifest_environment() {
             Some(env) => match &env.environment.server {
                 Some(Server::Builtin(BuiltinServer::Local)) | None => {
-                    AuthenticationConfigWithSource {
+                    Ok(AuthenticationConfigWithSource {
                         authentication: AuthenticationConfig::static_builtin_local(),
                         source: AuthenticationSource::ApplicationEnvironment(
                             ApplicationEnvironmentConfigId {
@@ -480,32 +480,39 @@ impl Context {
                                 server_url: BUILTIN_LOCAL_URL.parse().unwrap(),
                             },
                         ),
-                    }
+                    })
                 }
                 Some(Server::Builtin(BuiltinServer::Cloud)) => {
                     if !self.profile.name.is_builtin_cloud() {
                         panic!("when using the builtin cloud environment, the selected profile must be the builtin cloud profile");
                     }
-                    AuthenticationConfigWithSource {
+                    Ok(AuthenticationConfigWithSource {
                         authentication: self.profile.profile.auth.clone(),
                         source: AuthenticationSource::Profile(self.profile.name.clone()),
-                    }
+                    })
                 }
-                Some(Server::Custom(server)) => AuthenticationConfigWithSource {
-                    authentication: Default::default(), // TODO: atomic: load auth
-                    source: AuthenticationSource::ApplicationEnvironment(
-                        ApplicationEnvironmentConfigId {
-                            application_name: env.application_name.clone(),
-                            environment_name: env.environment_name.clone(),
-                            server_url: server.url.clone(),
-                        },
-                    ),
-                },
+                Some(Server::Custom(server)) => {
+                    let app_env_cfg_id = ApplicationEnvironmentConfigId {
+                        application_name: env.application_name.clone(),
+                        environment_name: env.environment_name.clone(),
+                        server_url: server.url.clone(),
+                    };
+
+                    Ok(AuthenticationConfigWithSource {
+                        authentication: Config::get_application_environment(
+                            &self.config_dir,
+                            &app_env_cfg_id,
+                        )?
+                        .map(|cfg| AuthenticationConfig::OAuth2(cfg.auth))
+                        .unwrap_or_default(),
+                        source: AuthenticationSource::ApplicationEnvironment(app_env_cfg_id),
+                    })
+                }
             },
-            _ => AuthenticationConfigWithSource {
+            _ => Ok(AuthenticationConfigWithSource {
                 authentication: self.profile.profile.auth.clone(),
                 source: AuthenticationSource::Profile(self.profile.name.clone()),
-            },
+            }),
         }
     }
 

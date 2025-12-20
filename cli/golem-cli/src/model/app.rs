@@ -29,12 +29,12 @@ use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
-use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::http_api_definition::{
     HttpApiDefinitionName, HttpApiDefinitionVersion, HttpApiRoute,
 };
+use golem_common::model::{diff, validate_lower_kebab_case_identifier};
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -659,7 +659,6 @@ impl Application {
     }
 }
 
-// TODO: atomic: parse / validate
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentPresetName(pub String);
@@ -668,12 +667,7 @@ impl FromStr for ComponentPresetName {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            return Err("Component preset name cannot be empty".to_string());
-        }
-        if s.contains(':') {
-            return Err("Component preset name cannot contain ':'".to_string());
-        }
+        validate_lower_kebab_case_identifier("Component preset", s)?;
         Ok(Self(s.to_string()))
     }
 }
@@ -1967,8 +1961,18 @@ mod app_builder {
                     }
 
                     for (component_name, component) in app.application.components {
-                        // TODO: atomic: validate component name
-                        let component_name = ComponentName(component_name);
+                        let component_name = match ComponentName::try_from(component_name.as_str())
+                        {
+                            Ok(component_name) => component_name,
+                            Err(err) => {
+                                validation.add_error(format!(
+                                    "Invalid component name: {}. {}",
+                                    component_name.log_color_error_highlight(),
+                                    err
+                                ));
+                                ComponentName(component_name)
+                            }
+                        };
                         let unique_key =
                             UniqueSourceCheckedEntityKey::Component(component_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
