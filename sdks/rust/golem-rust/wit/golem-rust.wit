@@ -43,6 +43,7 @@ world golem-agentic {
 world golem-ai {
    include golem-rust;
 
+   import golem:embed/embed@1.0.0;
    import golem:exec/executor@1.0.0;
    import golem:exec/types@1.0.0;
    import golem:graph/connection@1.0.0;
