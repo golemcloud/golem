@@ -38,9 +38,9 @@ static WIT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/wit/deps");
 
 static APP_MANIFEST_HEADER: &str = indoc! {"
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
@@ -48,8 +48,8 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 
 static GOLEM_RUST_VERSION: &str = "1.10.3";
 static GOLEM_TS_VERSION: &str = "0.0.73";
-static GOLEM_AI_VERSION: &str = "v0.4.0-dev.1";
-static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
+static GOLEM_AI_VERSION: &str = "v0.4.0";
+static GOLEM_AI_SUFFIX: &str = ".wasm";
 
 fn all_templates(dev_mode: bool) -> Vec<Template> {
     let mut result: Vec<Template> = vec![];

@@ -59,7 +59,6 @@ use url::Url;
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
-    pub static ADD_DEPENDENCY: &str = "add-dependency";
     pub static AGENT: &str = "agent";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
@@ -348,6 +347,7 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
+    #[allow(dead_code)]
     fn use_generic_template_group(&mut self) {
         self.use_template_group("generic")
     }
@@ -556,4 +556,8 @@ pub fn replace_strings_in_file(
         content = content.replace(from, to);
     }
     write_str(path, content)
+}
+
+pub fn replace_string_in_file(path: impl AsRef<Path>, from: &str, to: &str) -> anyhow::Result<()> {
+    replace_strings_in_file(path, &[(from, to)])
 }
