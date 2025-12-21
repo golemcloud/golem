@@ -46,8 +46,8 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 "};
 
-static GOLEM_RUST_VERSION: &str = "1.10.3";
-static GOLEM_TS_VERSION: &str = "0.0.73";
+static GOLEM_RUST_VERSION: &str = "1.10.4";
+static GOLEM_TS_VERSION: &str = "0.0.74";
 static GOLEM_AI_VERSION: &str = "v0.4.0";
 static GOLEM_AI_SUFFIX: &str = ".wasm";
 
@@ -789,6 +789,26 @@ fn doc_dependencies() -> &'static Vec<DocDependencyGroup> {
                     dep("Python and JavaScript", vec![], golem_ai("golem_exec")),
                     dep("Python only", vec![], golem_ai("golem_exec_python")),
                     dep("JavaScript only", vec![], golem_ai("golem_exec_javascript")),
+                ],
+            ),
+            dep_group(
+                "Embedding providers",
+                vec![
+                    dep(
+                        "OpenAI",
+                        vec![env("OPENAI_API_KEY", "<KEY>", "")],
+                        golem_ai("golem_embed_openai"),
+                    ),
+                    dep(
+                        "Cohere",
+                        vec![env("COHERE_API_KEY", "<KEY>", "")],
+                        golem_ai("golem_embed_cohere"),
+                    ),
+                    dep(
+                        "Hugging Face",
+                        vec![env("HUGGING_FACE_API_KEY", "<KEY>", "")],
+                        golem_ai("golem_embedding_openrouter"),
+                    ),
                 ],
             ),
             dep_group(
