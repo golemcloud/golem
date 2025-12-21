@@ -805,9 +805,14 @@ fn doc_dependencies() -> &'static Vec<DocDependencyGroup> {
                         golem_ai("golem_embed_cohere"),
                     ),
                     dep(
-                        "Hugging Face",
+                        "HuggingFace",
                         vec![env("HUGGING_FACE_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_embedding_openrouter"),
+                        golem_ai("golem_embed_hugging_face"),
+                    ),
+                    dep(
+                        "VoyageAI",
+                        vec![env("VOYAGEAI_API_KEY", "<KEY>", "")],
+                        golem_ai("golem_embed_voyageai"),
                     ),
                 ],
             ),
