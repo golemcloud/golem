@@ -3,12 +3,8 @@ client_max_body_size ${GOLEM_COMPONENT_MAX_SIZE_ALLOWED}; # Increase this especi
 # For docker we need this for service discovery in docker network
 resolver 127.0.0.11;
 
-upstream cloud-service {
-    server ${GOLEM_CLOUD_SERVICE_HOST}:${GOLEM_CLOUD_SERVICE_PORT} fail_timeout=0 max_fails=0;
-}
-
-upstream component-service {
-    server ${GOLEM_COMPONENT_SERVICE_HOST}:${GOLEM_COMPONENT_SERVICE_PORT} fail_timeout=0 max_fails=0;
+upstream registry-service {
+    server ${GOLEM_REGISTRY_SERVICE_HOST}:${GOLEM_REGISTRY_SERVICE_PORT} fail_timeout=0 max_fails=0;
 }
 
 upstream worker-service {
@@ -39,32 +35,8 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location /v1/api {
-        proxy_pass http://worker-service;
-    }
-
     location ~ /v1/components/[^/]+/workers(.*)$ {
         proxy_pass http://worker-service;
-    }
-
-    location ~ /v1/components/[^/]+/invoke$ {
-        proxy_pass http://worker-service;
-    }
-
-    location ~ /v1/components/[^/]+/invoke-and-await$ {
-        proxy_pass http://worker-service;
-    }
-
-    location /v1/agent-types {
-        proxy_pass http://component-service;
-    }
-
-    location /v1/components {
-        proxy_pass http://component-service;
-    }
-
-    location /v1/plugins {
-        proxy_pass http://component-service;
     }
 
     location /v1/debugger {
@@ -78,6 +50,6 @@ server {
     }
 
     location / {
-        proxy_pass http://cloud-service;
+        proxy_pass http://registry-service;
     }
 }
