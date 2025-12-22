@@ -556,7 +556,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDefinitionExtRevisionRecord>> {
-        self.with_ro("list_deployed")
+        self.with_ro("list_by_deployment")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT had.name, had.environment_id,
