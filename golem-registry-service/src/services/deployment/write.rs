@@ -52,6 +52,7 @@ use golem_service_base::custom_api::{
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
+use indoc::formatdoc;
 use rib::{ComponentDependencyKey, RibCompilationError};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -137,18 +138,7 @@ pub enum DeployValidationError {
     HttpApiDefinitionInvalidPathPattern(String),
     #[error("Invalid rib expression: {0}")]
     InvalidRibExpr(String),
-    #[error(
-        r#"
-            Failed rib compilation:
-                definition: {definition}
-                method: {method}
-                path: {path}
-                field: {field}
-                error:
-                    {}
-        "#,
-        indent_string(&error.to_string(), 8)
-    )]
+    #[error(fmt = format_rib_compilation_failed)]
     RibCompilationFailed {
         definition: HttpApiDefinitionName,
         method: RouteMethod,
@@ -164,12 +154,52 @@ pub enum DeployValidationError {
     AmbiguousAgentTypeName(String),
 }
 
-fn indent_string(text: &str, indent: usize) -> String {
+fn indent_multiline_string(text: &str, indent: usize) -> String {
     let prefix = " ".repeat(indent);
-    text.lines()
-        .map(|line| format!("{prefix}{line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::new();
+
+    for (i, line) in text.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+
+        if i == 0 {
+            out.push_str(line);
+        } else {
+            out.push_str(&prefix);
+            out.push_str(line);
+        }
+    }
+
+    out
+}
+
+fn format_rib_compilation_failed(
+    definition: &HttpApiDefinitionName,
+    method: &RouteMethod,
+    path: &String,
+    field: &String,
+    error: &RibCompilationError,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    write!(
+        f,
+        "{}",
+        formatdoc!(
+            r#"
+                Failed rib compilation:
+                    definition: {definition}
+                    method: {method}
+                    path: {path}
+                    field: {field}
+                    error:
+                        {}
+            "#,
+            indent_multiline_string(&error.to_string(), 8)
+        )
+    )?;
+
+    Ok(())
 }
 
 impl SafeDisplay for DeployValidationError {
