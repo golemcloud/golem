@@ -54,7 +54,7 @@ async function writeOpenApiDocs(target: string, openapiSpec: string) {
   const apiItems = extractApiItems(api)
 
   const grouped = groupBy(apiItems, item => {
-    const tagId = item.operation.tags?.at(0)
+    const tagId = item.operation.tags?.find(tag => tag !== "RegistryService")
     if (!tagId) {
       throw new Error(`Operation Missing Tag: ${JSON.stringify(item)}}`)
     }
@@ -69,9 +69,9 @@ async function writeOpenApiDocs(target: string, openapiSpec: string) {
   })
 
   const markdown = Array.from(grouped.entries())
-    .filter(([tag, _]) => tag.name !== "HealthCheck")
-    .filter(([tag, _]) => tag.name !== "Grant")
-    .filter(([tag, _]) => tag.name !== "AccountSummary")
+    .filter(([tag, _]) => {
+      return tag.name !== "RegistryService" && tag.name !== "HealthCheck" && tag.name !== "Reports"
+    })
     .map(([tag, items]) => [tag, convertToMarkdown(api, tag, items)] as const)
 
   await Promise.all(
@@ -201,8 +201,17 @@ function makeQueryParamTable(queryParams: OpenAPIV3.ParameterObject[]) {
 
 function makeResponseType(api: OpenAPIV3.Document, operation: OpenAPIV3.OperationObject) {
   const response = (() => {
-    const successResponse = operation.responses["200"]
-    if (!successResponse || !("content" in successResponse)) {
+    const successResponse =
+      operation.responses["200"] || operation.responses["204"] || operation.responses["101"]
+
+    if (!("content" in successResponse)) {
+      return {
+        content: undefined,
+      }
+    }
+
+    if (!successResponse) {
+      console.log({ operation })
       throw new Error("No Success Response")
     }
 

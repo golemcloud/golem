@@ -3,7 +3,7 @@ The login endpoints are implementing an OAuth2 flow.
 ## Acquire token with OAuth2 authorization
 Path|Method|Protected
 ---|---|---
-`/v1/oauth2`|POST|No
+`/v1/login/oauth2`|POST|No
 
 Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
 
@@ -17,7 +17,7 @@ In the response:
 
 Name|Type|Required|Description
 ---|---|---|---
-provider|string|Yes|Currently only `github` is supported.
+provider|#/components/schemas/OAuth2Provider|Yes|Currently only `github` is supported.
 access-token|string|Yes|OAuth2 access token
 
 
@@ -26,15 +26,11 @@ access-token|string|Yes|OAuth2 access token
 
 ```json copy
 {
-  "data": {
-    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-    "accountId": "string",
-    "createdAt": "2019-08-24T14:15:22Z",
-    "expiresAt": "2019-08-24T14:15:22Z"
-  },
-  "secret": {
-    "value": "a860a344-d7b2-406e-828e-8d442f23f344"
-  }
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
 }
 ```
 
@@ -55,16 +51,16 @@ The JSON is the same as the data object in the oauth2 endpoint's response.
 ```json copy
 {
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-  "accountId": "string",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
   "createdAt": "2019-08-24T14:15:22Z",
   "expiresAt": "2019-08-24T14:15:22Z"
 }
 ```
 
-## Start GitHub OAuth2 interactive flow
+## Start OAuth2 interactive flow
 Path|Method|Protected
 ---|---|---
-`/login/oauth2/device/start`|POST|No
+`/v1/login/oauth2/device/start`|POST|No
 
 Starts an interactive authorization flow.
 The user must open the returned url and enter the userCode in a form before the expires deadline.
@@ -72,7 +68,12 @@ Then the finish GitHub OAuth2 interactive flow endpoint must be called with the 
 
 
 
-
+**Example Request JSON**
+```json copy
+{
+  "provider": "github"
+}
+```
 
 **Example Response JSON**
 
@@ -88,7 +89,7 @@ Then the finish GitHub OAuth2 interactive flow endpoint must be called with the 
 ## Finish GitHub OAuth2 interactive flow
 Path|Method|Protected
 ---|---|---
-`/login/oauth2/device/complete`|POST|No
+`/v1/login/oauth2/device/complete`|POST|No
 
 Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
 Returns a JSON string containing the encodedSession from the start endpoint's response.
@@ -104,15 +105,11 @@ Returns a JSON string containing the encodedSession from the start endpoint's re
 
 ```json copy
 {
-  "data": {
-    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-    "accountId": "string",
-    "createdAt": "2019-08-24T14:15:22Z",
-    "expiresAt": "2019-08-24T14:15:22Z"
-  },
-  "secret": {
-    "value": "a860a344-d7b2-406e-828e-8d442f23f344"
-  }
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
 }
 ```
 
@@ -127,7 +124,7 @@ Starts the OAuth2 web flow authorization process by returning the authorization 
 
 Name|Type|Required|Description
 ---|---|---|---
-provider|string|Yes|Currently only `github` is supported.
+provider|#/components/schemas/OAuth2Provider|Yes|Currently only `github` is supported.
 redirect|string|No|The redirect URL to redirect to after the user has authorized the application
 
 
@@ -137,16 +134,16 @@ redirect|string|No|The redirect URL to redirect to after the user has authorized
 ```json copy
 {
   "url": "string",
-  "state": "string"
+  "state": "0e231ca7-8c83-44ad-9df9-f0699a512c67"
 }
 ```
 
-## GitHub OAuth2 Web Flow callback
+## OAuth2 Web Flow callback
 Path|Method|Protected
 ---|---|---
-`/v1/login/oauth2/web/callback/github`|GET|No
+`/v1/login/oauth2/web/callback`|GET|No
 
-This endpoint handles the callback from GitHub after the user has authorized the application.
+This endpoint handles the callback from the provider after the user has authorized the application.
 It exchanges the code for an access token and then uses that to log the user in.
 
 **Query Parameters**
@@ -170,6 +167,7 @@ Path|Method|Protected
 `/v1/login/oauth2/web/poll`|GET|No
 
 This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
 
 **Query Parameters**
 
@@ -183,15 +181,11 @@ state|string|Yes|The state parameter for identifying the session
 
 ```json copy
 {
-  "data": {
-    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-    "accountId": "string",
-    "createdAt": "2019-08-24T14:15:22Z",
-    "expiresAt": "2019-08-24T14:15:22Z"
-  },
-  "secret": {
-    "value": "a860a344-d7b2-406e-828e-8d442f23f344"
-  }
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
 }
 ```
 ## Login API Errors
@@ -202,4 +196,5 @@ Status Code|Description|Body
 403|Forbidden Request|`{"error":"string"}`
 404|Entity not found|`{"error":"string"}`
 409||`{"error":"string"}`
+422|Limits of the plan exceeded|`{"error":"string"}`
 500|Internal server error|`{"error":"string"}`

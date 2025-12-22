@@ -46,11 +46,8 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
         "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
         "workerName": "string"
       },
-      "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-      "createdBy": "string",
-      "args": [
-        "string"
-      ],
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
       "env": {
         "property1": "string",
         "property2": "string"
@@ -67,7 +64,7 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
       "pendingInvocationCount": 0,
       "updates": [
         {
-          "type": "pendingUpdate",
+          "type": "PendingUpdate",
           "timestamp": "2019-08-24T14:15:22Z",
           "targetVersion": 0
         }
@@ -87,7 +84,7 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
         }
       ],
       "activePlugins": [
-        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        0
       ],
       "skippedRegions": [
         {
@@ -128,14 +125,11 @@ The parameters in the request are the following:
 ```json copy
 {
   "name": "string",
-  "args": [
-    "string"
-  ],
   "env": {
     "property1": "string",
     "property2": "string"
   },
-  "wasiConfigVars": []
+  "configVars": []
 }
 ```
 
@@ -147,7 +141,7 @@ The parameters in the request are the following:
     "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
     "workerName": "string"
   },
-  "componentVersion": 0
+  "componentRevision": 0
 }
 ```
 
@@ -184,11 +178,8 @@ Returns metadata about an existing worker:
     "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
     "workerName": "string"
   },
-  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-  "createdBy": "string",
-  "args": [
-    "string"
-  ],
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
   "env": {
     "property1": "string",
     "property2": "string"
@@ -205,7 +196,7 @@ Returns metadata about an existing worker:
   "pendingInvocationCount": 0,
   "updates": [
     {
-      "type": "pendingUpdate",
+      "type": "PendingUpdate",
       "timestamp": "2019-08-24T14:15:22Z",
       "targetVersion": 0
     }
@@ -225,7 +216,7 @@ Returns metadata about an existing worker:
     }
   ],
   "activePlugins": [
-    "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+    0
   ],
   "skippedRegions": [
     {
@@ -461,11 +452,8 @@ Returns metadata about an existing component workers:
         "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
         "workerName": "string"
       },
-      "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-      "createdBy": "string",
-      "args": [
-        "string"
-      ],
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
       "env": {
         "property1": "string",
         "property2": "string"
@@ -482,7 +470,7 @@ Returns metadata about an existing component workers:
       "pendingInvocationCount": 0,
       "updates": [
         {
-          "type": "pendingUpdate",
+          "type": "PendingUpdate",
           "timestamp": "2019-08-24T14:15:22Z",
           "targetVersion": 0
         }
@@ -502,7 +490,7 @@ Returns metadata about an existing component workers:
         }
       ],
       "activePlugins": [
-        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        0
       ],
       "skippedRegions": [
         {
@@ -554,8 +542,8 @@ Path|Method|Protected
 **Example Request JSON**
 ```json copy
 {
-  "mode": "Automatic",
-  "targetVersion": 0
+  "mode": "automatic",
+  "targetRevision": 0
 }
 ```
 
@@ -597,22 +585,13 @@ query|string|No|-
           "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
           "workerName": "string"
         },
-        "componentVersion": 0,
-        "args": [
-          "string"
-        ],
+        "componentRevision": 0,
         "env": {
           "property1": "string",
           "property2": "string"
         },
-        "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-        "createdBy": "string",
-        "wasiConfigVars": [
-          {
-            "key": "string",
-            "value": "string"
-          }
-        ],
+        "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+        "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
         "parent": {
           "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
           "workerName": "string"
@@ -621,16 +600,22 @@ query|string|No|-
         "initialTotalLinearMemorySize": 0,
         "initialActivePlugins": [
           {
-            "installationId": "7a1bf939-4d70-4439-9ced-a3dbbce12bd7",
+            "pluginPriority": 0,
             "pluginName": "string",
             "pluginVersion": "string",
-            "registered": true,
             "parameters": {
               "property1": "string",
               "property2": "string"
             }
           }
-        ]
+        ],
+        "wasiConfigVars": [
+          {
+            "key": "string",
+            "value": "string"
+          }
+        ],
+        "originalPhantomId": "b4cbf8ea-df0a-4ef4-9b5d-93ad7b29cf4b"
       }
     }
   ],
@@ -694,7 +679,7 @@ The plugin must be one of the installed plugins for the worker's current compone
 
 Name|Type|Required|Description
 ---|---|---|---
-plugin-installation-id|string|Yes|-
+plugin-priority|integer|Yes|-
 
 
 
@@ -715,7 +700,7 @@ The plugin must be one of the installed plugins for the worker's current compone
 
 Name|Type|Required|Description
 ---|---|---|---
-plugin-installation-id|string|Yes|-
+plugin-priority|integer|Yes|-
 
 
 
@@ -737,8 +722,34 @@ Reverts a worker by undoing either the last few invocations or the last few reco
 **Example Request JSON**
 ```json copy
 {
-  "type": "revertToOplogIndex",
+  "type": "RevertToOplogIndex",
   "lastOplogIndex": 0
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Fork a worker
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/fork`|POST|Yes
+
+Fork a worker by creating a new worker with the oplog up to the provided index
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "targetWorkerId": {
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "workerName": "string"
+  },
+  "oplogIndexCutoff": 0
 }
 ```
 
@@ -766,6 +777,19 @@ The invocation to be cancelled is identified by the idempotency key passed to th
   "canceled": true
 }
 ```
+
+## Connect to a worker using a websocket and stream events
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{worker_name}/connect`|GET|No
+
+
+
+
+
+
+
+
 ## Worker API Errors
 Status Code|Description|Body
 ---|---|---

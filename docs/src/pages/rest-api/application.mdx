@@ -1,0 +1,153 @@
+# Application API
+
+## Get all applications in the account
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/apps`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+      "name": "string"
+    }
+  ]
+}
+```
+
+## Create an application in the account
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/apps`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "name": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "name": "string"
+}
+```
+
+## Get application in the account by name
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/apps/{application_name}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "name": "string"
+}
+```
+
+## Get application by id.
+Path|Method|Protected
+---|---|---
+`/v1/apps/{application_id}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "name": "string"
+}
+```
+
+## Update application by id.
+Path|Method|Protected
+---|---|---
+`/v1/apps/{application_id}`|DELETE|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+current_revision|integer|Yes|-
+
+
+
+
+
+## Update application by id.
+Path|Method|Protected
+---|---|---
+`/v1/apps/{application_id}`|PATCH|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "name": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "name": "string"
+}
+```
+## Application API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403|Forbidden Request|`{"error":"string"}`
+404|Entity not found|`{"error":"string"}`
+409||`{"error":"string"}`
+422|Limits of the plan exceeded|`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

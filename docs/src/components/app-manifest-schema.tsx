@@ -7,6 +7,7 @@ export const enum Release {
   R_1_2_2_1,
   R_1_2_4,
   R_1_3_0,
+  R_1_4_0,
 }
 
 type ReleaseMeta = {
@@ -64,6 +65,10 @@ const Releases: { [key in Release]: ReleaseMeta } = {
       </>
     ),
   },
+  [Release.R_1_4_0]: {
+    json: "1.4.0",
+    otherChanges: <></>,
+  },
 }
 
 export type FieldMeta = {
@@ -88,17 +93,17 @@ type FieldSpecialization = {
 // NOTE: order is important for matching
 const FieldSpecializations: FieldSpecialization[] = [
   {
-    pathPrefixMatch: "components.<component-name>.profiles.<profile-name>.",
+    pathPrefixMatch: "components.<component-name>.presets.<preset-name>.",
     parentPrefix: "components.<component-name>.",
-    descriptionPrefix: "Profile specific ",
+    descriptionPrefix: "Preset specific ",
   },
   {
-    pathPrefixMatch: "templates.<template-name>.profiles.<profile-name>.",
+    pathPrefixMatch: "componentTemplates.<template-name>.presets.<preset-name>.",
     parentPrefix: "components.<component-name>.",
-    descriptionPrefix: "Templated and profile specific ",
+    descriptionPrefix: "Templated and preset specific ",
   },
   {
-    pathPrefixMatch: "templates.<template-name>.",
+    pathPrefixMatch: "componentTemplates.<template-name>.",
     parentPrefix: "components.<component-name>.",
     descriptionPrefix: "Templated ",
   },
@@ -291,6 +296,7 @@ export const Fields: FC<FieldsProps> = ({ children }) => {
     [Release.R_1_2_2_1]: {},
     [Release.R_1_2_4]: {},
     [Release.R_1_3_0]: {},
+    [Release.R_1_4_0]: {},
   })
 
   const addField = (relase: Release, path: string, id: string) => {

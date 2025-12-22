@@ -181,7 +181,7 @@ const checkFile = async (fileStr: string): Promise<CheckFileResult> => {
           link,
           baseUrl,
           headings,
-          ignorePatterns: [/^https?:\/\//], // Ignore external links for now
+          ignorePatterns: [/^https?:\/\//, /^.*\/images\/.*/], // Ignore external links for now
         })
       )
     )

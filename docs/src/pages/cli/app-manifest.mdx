@@ -1,20 +1,6 @@
-import { Callout } from "nextra/components"
-
 # Golem Application Manifest
 
-The _Golem Application Manifest_ document format is used by `golem`, usually stored in files named `golem.yaml`, which can help working with components. Currently, the Application Manifest covers:
-
-- defining components and their metadata, including:
-  - component type
-  - location of user defined and generated WIT folders
-  - location of built and composed WASM binaries
-  - build commands
-  - Initial File System
-  - configuration values and environment variables
-- defining component dependencies on libraries
-- defining HTTP APIs
-- building components
-- deploying components
+The _Golem Application Manifest_ document format is used by `golem`, usually stored in files named `golem.yaml`, and they are the intended way to define, build, deploy and manage Golem Applications and Environments.
 
 The Application Manifest uses _YAML_ format, see the [reference](/app-manifest) for more information on the schema and for the field reference.
 
@@ -24,12 +10,12 @@ Application manifest documents can be explicitly passed as `golem` arguments, bu
 
 Once all manifest documents are found, the paths in them are resolved based on their directory, and then the documents are merged. For the field specific merge rules see the [field reference](/app-manifest#field-reference).
 
-## Using composable templates
+## Using component templates
 
 Golem projects can be created with `golem new` command. This creates a new application that may consist of multiple components. To add a new component to an existing application, use `golem component new`. E.g.: let's add a new _c_ and _ts_ component in a new and empty directory:
 
 ```shell
-golem new myapp ts
+golem new myapp rust
 cd myapp
 golem component new rust app:component-a
 golem component new ts app:component-b
@@ -38,18 +24,31 @@ golem component new ts app:component-b
 When using the `app new` command, it will create:
 
 - common directory for the given language (`common-rust` and `common-ts`):
-  - this directory contains the languages specific _Application Manifest Template_, which defines how to
-    build the components
-  - can be used for shared subprojects
-  - might contain other shared configurations
+- this directory contains the languages specific _Application Manifest Template_, which defines how to
+build the components
+- can be used for shared subprojects
+- might contain other shared configurations
 - directory for components for the given language (`components-rust` and `components-ts`)
+
+Let's rename one of the generated agents, so they are unique for the deployment. In `components-ts/app-component-b/src/main.ts` change:
+
+```diff
+- class CounterAgent extends BaseAgent {
++ class OtherCounterAgent extends BaseAgent {
+```
+
+and in `components-ts/app-component-b/golem.yaml`:
+```diff
+-             let agent = counter-agent(name);
++             let agent = other-counter-agent(name);
+```
 
 Now that we added our components, let's use the `golem` command list our project metadata:
 
 ```shell
 $ golem
 
-Build, deploy application
+Golem Command Line Interface
 
 Usage: golem [OPTIONS] <COMMAND>
 
@@ -68,6 +67,7 @@ Commands:
   component         Manage components
   agent             Invoke and manage agents
   api               Manage API gateway objects
+  plugin            Manage plugins
   profile           Manage global CLI profiles
   server            Run and manage the local Golem server
   cloud             Manage Golem Cloud accounts and projects
@@ -124,12 +124,12 @@ Application environments:
 Application components:
   app:component-a
     Selected:     yes
-    Source:       /Users/vigoo/projects/golem/golem/tmp4/myapp/components-rust/app-component-a/golem.yaml
+    Source:       /Users/noise64/workspace/golem-demo/myapp/components-rust/app-component-a/golem.yaml
     Layers:       rust, rust[debug], app:component-a
 
   app:component-b
     Selected:     yes
-    Source:       /Users/vigoo/projects/golem/golem/tmp4/myapp/components-ts/app-component-b/golem.yaml
+    Source:       /Users/noise64/workspace/golem-demo/myapp/components-ts/app-component-b/golem.yaml
     Layers:       ts, app:component-b
 
 Application API definitions:
@@ -146,6 +146,18 @@ Application custom commands:
   ts-npm-install
 ```
 
+## Starting the local development server
+
+The `golem` CLI also includes a local development server that can be used to quickly develop, deploy, test and debug Golem applications locally.
+To start the server use:
+```shell
+golem server run
+```
+
+The above command will quickly boot the server, and then it will keep logging to the terminal, so let's switch to another terminal to continue with building and deploying our application..
+
+## Building and deploying the application
+
 Because the _ts_ components use npm, we have to use `npm install` before building the components. We can also see that this has a wrapper custom command in the manifest called `npm-install`, and `golem` itself will automatically run it before a build. Let's see an example for both:
 
 ```sh
@@ -153,11 +165,11 @@ $ golem exec npm-install
 <..>
 $ golem build
 Collecting sources
-  Found sources: /Users/<...>/app-demo/common-cpp/golem.yaml, /Users/<...>/app-demo/common-ts/golem.yaml, /Users/<...>/app-demo/components-cpp/app-component-a/golem.yaml, /Users/<...>/app-demo/components-ts/app-component-b/golem.yaml, /Users/<...>/app-demo/golem.yaml
+  Found sources: /Users/<...>/app-demo/common-rust/golem.yaml, /Users/<...>/app-demo/common-ts/golem.yaml, /Users/<...>/app-demo/components-rust/app-component-a/golem.yaml, /Users/<...>/app-demo/components-ts/app-component-b/golem.yaml, /Users/<...>/app-demo/golem.yaml
 Collecting components
   Found components: app:component-a, app:component-b
 Resolving application wit directories
-  Resolving component wit dirs for app:component-a (/Users/<...>/app-demo/components-cpp/app-component-a/wit, /Users/<...>/app-demo/components-cpp/app-component-a/wit-generated)
+  Resolving component wit dirs for app:component-a (/Users/<...>/app-demo/components-rust/app-component-a/wit, /Users/<...>/app-demo/components-rust/app-component-a/wit-generated)
   Resolving component wit dirs for app:component-b (/Users/<...>/app-demo/components-ts/app-component-b/wit, /Users/<...>/app-demo/components-ts/app-component-b/wit-generated)
 Selecting profiles, no profile was requested
   Selected default profile debug for app:component-a using template cpp
@@ -175,15 +187,17 @@ $ ls golem-temp/components
 app_component_a_debug.wasm app_component_b.wasm
 ```
 
-To deploy (add or update) or components we can use
+To deploy the application, including all the components, we can use
 
 ```sh copy
-golem component deploy
+golem deploy
 ```
 
-in the project root folder, and the CLI will add or update all or components.
+in the application root folder, and the CLI will apply all changes required.
 
-If we want to only update some components, we can do so by explicitly selecting them with the `--component-name` flag, or we can implicitly select them by changing our current working directory, e.g.:
+Note that `golem deploy` will also always implicitly check for source changes, and based on that will automatically build any changed components, so usually we can just run `golem deploy`.
+
+If we want to only build some components, we can do so by explicitly selecting them with the `--component-name` flag, or we can implicitly select them by changing our current working directory, e.g.:
 
 ```shell
 $ cd components-rust
@@ -192,7 +206,7 @@ $ golem
 Components:
   app:component-a
     Selected:     yes
-    Source:       /Users/noise64/workspace/examples/app-demo/components-cpp/app-component-a/golem.yaml
+    Source:       /Users/noise64/workspace/examples/app-demo/components-rust/app-component-a/golem.yaml
     Template:     cpp
     Profiles:     debug, release
   app:component-b
@@ -202,5 +216,34 @@ Components:
 <...>
 ```
 
-Notice, how only app:component-a is selected in the above example, the same selection logic is used when
-adding or updating components.
+Notice how only app:component-a is selected in the above example, the same selection logic is used when building.
+On the other hand, deploying _will always deploy the whole application atomically_, so it is ensured that all our agents
+are up-to-date.
+
+When developing locally, it is often useful to drop all our existing durable agents and have a fresh clean environment
+for testing. For this, use:
+
+```shell
+golem deploy --reset
+```
+
+## Targeting Golem Cloud, or other environments
+By default, most `golem` commands will target the local Golem server.
+
+To access Golem's own hosted _Golem Cloud_ (or other custom installations), we can simply use the same commands as before
+but select the cloud environment with one of the following ways:
+```shell
+# Explicitly selecting the cloud (or a custom) environment
+golem --enviroment cloud deploy
+golem -E cloud deploy
+
+# Using the convenience cloud flag:
+golem --cloud deploy
+golem -C build
+
+# Or by using environment variables, which can be useful in CI/CD pipelines:
+export GOLEM_ENVIRONMENT=cloud
+golem deploy
+```
+
+For more information see the next seection about [Environments and Profiles](/cli/envs_and_profiles).

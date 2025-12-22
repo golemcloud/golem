@@ -1,0 +1,831 @@
+# Environment API
+
+## List all application environments
+Path|Method|Protected
+---|---|---
+`/v1/apps/{application_id}/envs`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+      "name": "string",
+      "compatibilityCheck": true,
+      "versionCheck": true,
+      "securityOverrides": true,
+      "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+      "rolesFromActiveShares": [
+        "admin"
+      ],
+      "currentDeployment": {
+        "revision": 0,
+        "deploymentRevision": 0,
+        "deploymentVersion": "string",
+        "deploymentHash": "string"
+      }
+    }
+  ]
+}
+```
+
+## Create an application environment
+Path|Method|Protected
+---|---|---
+`/v1/apps/{application_id}/envs`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "name": "string",
+  "compatibilityCheck": true,
+  "versionCheck": true,
+  "securityOverrides": true
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "name": "string",
+  "compatibilityCheck": true,
+  "versionCheck": true,
+  "securityOverrides": true,
+  "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+  "rolesFromActiveShares": [
+    "admin"
+  ],
+  "currentDeployment": {
+    "revision": 0,
+    "deploymentRevision": 0,
+    "deploymentVersion": "string",
+    "deploymentHash": "string"
+  }
+}
+```
+
+## Get application environment by name
+Path|Method|Protected
+---|---|---
+`/v1/apps/{application_id}/envs/{environment_name}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "name": "string",
+  "compatibilityCheck": true,
+  "versionCheck": true,
+  "securityOverrides": true,
+  "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+  "rolesFromActiveShares": [
+    "admin"
+  ],
+  "currentDeployment": {
+    "revision": 0,
+    "deploymentRevision": 0,
+    "deploymentVersion": "string",
+    "deploymentHash": "string"
+  }
+}
+```
+
+## List all environments that are visible to the current user, either directly or through shares.
+Path|Method|Protected
+---|---|---
+`/v1/envs`|GET|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+account_email|string|No|-
+app_name|string|No|-
+env_name|string|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "environment": {
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "revision": 0,
+        "name": "string",
+        "compatibilityCheck": true,
+        "versionCheck": true,
+        "securityOverrides": true,
+        "rolesFromActiveShares": [
+          "admin"
+        ],
+        "currentDeployment": {
+          "revision": 0,
+          "deploymentRevision": 0,
+          "deploymentVersion": "string",
+          "deploymentHash": "string"
+        }
+      },
+      "application": {
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "name": "string"
+      },
+      "account": {
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "name": "string",
+        "email": "string"
+      }
+    }
+  ]
+}
+```
+
+## Get environment by id.
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "name": "string",
+  "compatibilityCheck": true,
+  "versionCheck": true,
+  "securityOverrides": true,
+  "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+  "rolesFromActiveShares": [
+    "admin"
+  ],
+  "currentDeployment": {
+    "revision": 0,
+    "deploymentRevision": 0,
+    "deploymentVersion": "string",
+    "deploymentHash": "string"
+  }
+}
+```
+
+## Delete environment by id.
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}`|DELETE|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+current_revision|integer|Yes|-
+
+
+
+
+
+## Update environment by id.
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}`|PATCH|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "name": "string",
+  "compatibilityCheck": true,
+  "versionCheck": true,
+  "securityOverrides": true
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "name": "string",
+  "compatibilityCheck": true,
+  "versionCheck": true,
+  "securityOverrides": true,
+  "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+  "rolesFromActiveShares": [
+    "admin"
+  ],
+  "currentDeployment": {
+    "revision": 0,
+    "deploymentRevision": 0,
+    "deploymentVersion": "string",
+    "deploymentHash": "string"
+  }
+}
+```
+
+## Get the current deployment plan
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/plan`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "currentRevision": 0,
+  "deploymentHash": "string",
+  "components": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "name": "string",
+      "hash": "string"
+    }
+  ],
+  "httpApiDefinitions": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "name": "string",
+      "hash": "string"
+    }
+  ],
+  "httpApiDeployments": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "domain": "string",
+      "hash": "string"
+    }
+  ]
+}
+```
+
+## Rollback an environment to a previous deployment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/current-deployment`|PUT|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "deploymentRevision": 0
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "revision": 0,
+  "version": "string",
+  "deploymentHash": "string",
+  "currentRevision": 0
+}
+```
+
+## List all deployments in this environment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments`|GET|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+version|string|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "revision": 0,
+      "version": "string",
+      "deploymentHash": "string"
+    }
+  ]
+}
+```
+
+## Deploy the current staging area of this environment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "expectedDeploymentHash": "string",
+  "version": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "revision": 0,
+  "version": "string",
+  "deploymentHash": "string",
+  "currentRevision": 0
+}
+```
+
+## Get the deployment summary of a deployed deployment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_id}/summary`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "deploymentRevision": 0,
+  "deploymentHash": "string",
+  "components": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "name": "string",
+      "hash": "string"
+    }
+  ],
+  "httpApiDefinitions": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "name": "string",
+      "hash": "string"
+    }
+  ],
+  "httpApiDeployments": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "domain": "string",
+      "hash": "string"
+    }
+  ]
+}
+```
+
+## List all registered agent types in a deployment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_id}/agent-types`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "agentType": {
+        "typeName": "string",
+        "description": "string",
+        "constructor": {
+          "name": "string",
+          "description": "string",
+          "promptHint": "string",
+          "inputSchema": {
+            "type": "Multimodal",
+            "elements": [
+              {
+                "name": "string",
+                "schema": {
+                  "type": "ComponentModel",
+                  "elementType": {
+                    "type": "Variant",
+                    "name": "string",
+                    "owner": "string",
+                    "cases": [
+                      {
+                        "name": "string",
+                        "typ": {}
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "methods": [
+          {
+            "name": "string",
+            "description": "string",
+            "promptHint": "string",
+            "inputSchema": {
+              "type": "Multimodal",
+              "elements": [
+                {
+                  "name": "string",
+                  "schema": {
+                    "type": "ComponentModel",
+                    "elementType": {
+                      "type": "Variant",
+                      "name": "string",
+                      "owner": "string",
+                      "cases": [
+                        {
+                          "name": "string",
+                          "typ": {}
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "outputSchema": {
+              "type": "Multimodal",
+              "elements": [
+                {
+                  "name": "string",
+                  "schema": {
+                    "type": "ComponentModel",
+                    "elementType": {
+                      "type": "Variant",
+                      "name": "string",
+                      "owner": "string",
+                      "cases": [
+                        {
+                          "name": "string",
+                          "typ": {}
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "dependencies": [
+          {
+            "typeName": "string",
+            "description": "string",
+            "constructor": {
+              "name": "string",
+              "description": "string",
+              "promptHint": "string",
+              "inputSchema": {
+                "type": "Multimodal",
+                "elements": [
+                  {
+                    "name": "string",
+                    "schema": {
+                      "type": "ComponentModel",
+                      "elementType": {
+                        "type": "Variant",
+                        "name": "string",
+                        "owner": "string",
+                        "cases": [
+                          {
+                            "name": "string",
+                            "typ": {}
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "methods": [
+              {
+                "name": "string",
+                "description": "string",
+                "promptHint": "string",
+                "inputSchema": {
+                  "type": "Multimodal",
+                  "elements": [
+                    {
+                      "name": "string",
+                      "schema": {
+                        "type": "ComponentModel",
+                        "elementType": {
+                          "type": "Variant",
+                          "name": "string",
+                          "owner": "string",
+                          "cases": [
+                            {}
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                "outputSchema": {
+                  "type": "Multimodal",
+                  "elements": [
+                    {
+                      "name": "string",
+                      "schema": {
+                        "type": "ComponentModel",
+                        "elementType": {
+                          "type": "Variant",
+                          "name": "string",
+                          "owner": "string",
+                          "cases": [
+                            {}
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "mode": "Durable"
+      },
+      "implementedBy": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "componentRevision": 0
+      }
+    }
+  ]
+}
+```
+
+## Get a registered agent type in a deployment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_id}/agent-types/{agent_type_name}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "agentType": {
+    "typeName": "string",
+    "description": "string",
+    "constructor": {
+      "name": "string",
+      "description": "string",
+      "promptHint": "string",
+      "inputSchema": {
+        "type": "Multimodal",
+        "elements": [
+          {
+            "name": "string",
+            "schema": {
+              "type": "ComponentModel",
+              "elementType": {
+                "type": "Variant",
+                "name": "string",
+                "owner": "string",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "methods": [
+      {
+        "name": "string",
+        "description": "string",
+        "promptHint": "string",
+        "inputSchema": {
+          "type": "Multimodal",
+          "elements": [
+            {
+              "name": "string",
+              "schema": {
+                "type": "ComponentModel",
+                "elementType": {
+                  "type": "Variant",
+                  "name": "string",
+                  "owner": "string",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "outputSchema": {
+          "type": "Multimodal",
+          "elements": [
+            {
+              "name": "string",
+              "schema": {
+                "type": "ComponentModel",
+                "elementType": {
+                  "type": "Variant",
+                  "name": "string",
+                  "owner": "string",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "dependencies": [
+      {
+        "typeName": "string",
+        "description": "string",
+        "constructor": {
+          "name": "string",
+          "description": "string",
+          "promptHint": "string",
+          "inputSchema": {
+            "type": "Multimodal",
+            "elements": [
+              {
+                "name": "string",
+                "schema": {
+                  "type": "ComponentModel",
+                  "elementType": {
+                    "type": "Variant",
+                    "name": "string",
+                    "owner": "string",
+                    "cases": [
+                      {
+                        "name": "string",
+                        "typ": {}
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "methods": [
+          {
+            "name": "string",
+            "description": "string",
+            "promptHint": "string",
+            "inputSchema": {
+              "type": "Multimodal",
+              "elements": [
+                {
+                  "name": "string",
+                  "schema": {
+                    "type": "ComponentModel",
+                    "elementType": {
+                      "type": "Variant",
+                      "name": "string",
+                      "owner": "string",
+                      "cases": [
+                        {
+                          "name": "string",
+                          "typ": {}
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "outputSchema": {
+              "type": "Multimodal",
+              "elements": [
+                {
+                  "name": "string",
+                  "schema": {
+                    "type": "ComponentModel",
+                    "elementType": {
+                      "type": "Variant",
+                      "name": "string",
+                      "owner": "string",
+                      "cases": [
+                        {
+                          "name": "string",
+                          "typ": {}
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "mode": "Durable"
+  },
+  "implementedBy": {
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "componentRevision": 0
+  }
+}
+```
+## Environment API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403|Forbidden Request|`{"error":"string"}`
+404|Entity not found|`{"error":"string"}`
+409||`{"error":"string"}`
+422|Limits of the plan exceeded|`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

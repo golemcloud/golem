@@ -1,9 +1,9 @@
-# Api Security API
+# Environment Shares API
 
-## Get all security-schemes of the environment
+## Get all shares of the environment
 Path|Method|Protected
 ---|---|---
-`/v1/envs/{environment_id}/security-schemes`|GET|Yes
+`/v1/envs/{environment_id}/shares`|GET|Yes
 
 
 
@@ -19,23 +19,20 @@ Path|Method|Protected
     {
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
       "revision": 0,
-      "name": "string",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
-      "providerType": "google",
-      "clientId": "string",
-      "redirectUrl": "string",
-      "scopes": [
-        "string"
+      "granteeAccountId": "210f854b-3301-464e-9bfd-4e6f0bdab57d",
+      "roles": [
+        "admin"
       ]
     }
   ]
 }
 ```
 
-## Create a new security scheme
+## Create a new environment share
 Path|Method|Protected
 ---|---|---
-`/v1/envs/{environment_id}/security-schemes`|POST|Yes
+`/v1/envs/{environment_id}/shares`|POST|Yes
 
 
 
@@ -44,13 +41,9 @@ Path|Method|Protected
 **Example Request JSON**
 ```json copy
 {
-  "name": "string",
-  "providerType": "google",
-  "clientId": "string",
-  "clientSecret": "string",
-  "redirectUrl": "string",
-  "scopes": [
-    "string"
+  "granteeAccountId": "210f854b-3301-464e-9bfd-4e6f0bdab57d",
+  "roles": [
+    "admin"
   ]
 }
 ```
@@ -61,21 +54,18 @@ Path|Method|Protected
 {
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
-  "name": "string",
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
-  "providerType": "google",
-  "clientId": "string",
-  "redirectUrl": "string",
-  "scopes": [
-    "string"
+  "granteeAccountId": "210f854b-3301-464e-9bfd-4e6f0bdab57d",
+  "roles": [
+    "admin"
   ]
 }
 ```
 
-## Get security scheme
+## Get environment share by id.
 Path|Method|Protected
 ---|---|---
-`/v1/security-schemes/{security_scheme_id}`|GET|Yes
+`/v1/environment-shares/{environment_share_id}`|GET|Yes
 
 
 
@@ -89,21 +79,18 @@ Path|Method|Protected
 {
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
-  "name": "string",
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
-  "providerType": "google",
-  "clientId": "string",
-  "redirectUrl": "string",
-  "scopes": [
-    "string"
+  "granteeAccountId": "210f854b-3301-464e-9bfd-4e6f0bdab57d",
+  "roles": [
+    "admin"
   ]
 }
 ```
 
-## Delete security scheme
+## Delete environment share
 Path|Method|Protected
 ---|---|---
-`/v1/security-schemes/{security_scheme_id}`|DELETE|Yes
+`/v1/environment-shares/{environment_share_id}`|DELETE|Yes
 
 
 
@@ -121,21 +108,18 @@ current_revision|integer|Yes|-
 {
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
-  "name": "string",
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
-  "providerType": "google",
-  "clientId": "string",
-  "redirectUrl": "string",
-  "scopes": [
-    "string"
+  "granteeAccountId": "210f854b-3301-464e-9bfd-4e6f0bdab57d",
+  "roles": [
+    "admin"
   ]
 }
 ```
 
-## Update security scheme
+## Update environment share
 Path|Method|Protected
 ---|---|---
-`/v1/security-schemes/{security_scheme_id}`|PATCH|Yes
+`/v1/environment-shares/{environment_share_id}`|PATCH|Yes
 
 
 
@@ -145,12 +129,8 @@ Path|Method|Protected
 ```json copy
 {
   "currentRevision": 0,
-  "providerType": "google",
-  "clientId": "string",
-  "clientSecret": "string",
-  "redirectUrl": "string",
-  "scopes": [
-    "string"
+  "roles": [
+    "admin"
   ]
 }
 ```
@@ -161,17 +141,14 @@ Path|Method|Protected
 {
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
-  "name": "string",
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
-  "providerType": "google",
-  "clientId": "string",
-  "redirectUrl": "string",
-  "scopes": [
-    "string"
+  "granteeAccountId": "210f854b-3301-464e-9bfd-4e6f0bdab57d",
+  "roles": [
+    "admin"
   ]
 }
 ```
-## Api Security API Errors
+## Environment Shares API Errors
 Status Code|Description|Body
 ---|---|---
 400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`

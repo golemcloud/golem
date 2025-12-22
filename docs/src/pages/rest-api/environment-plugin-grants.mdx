@@ -1,0 +1,140 @@
+# Environment Plugin Grants API
+
+## List all environment plugin grants in the environment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/plugins`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "plugin": {
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+        "name": "string",
+        "version": "string",
+        "description": "string",
+        "icon": "string",
+        "homepage": "string",
+        "spec": {
+          "type": "ComponentTransformer",
+          "providedWitPackage": "string",
+          "jsonSchema": null,
+          "validateUrl": "string",
+          "transformUrl": "string"
+        }
+      },
+      "pluginAccount": {
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "name": "string",
+        "email": "string"
+      }
+    }
+  ]
+}
+```
+
+## Create a new environment plugin grant
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/plugins`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "pluginId": "91f8cbd0-11f2-4669-9910-90a5a0b7d84a"
+}
+```
+
+## Get environment plugin grant by id
+Path|Method|Protected
+---|---|---
+`/v1/environment-plugins/{environment_plugin_grant_id}`|GET|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+include_deleted|boolean|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "plugin": {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+    "name": "string",
+    "version": "string",
+    "description": "string",
+    "icon": "string",
+    "homepage": "string",
+    "spec": {
+      "type": "ComponentTransformer",
+      "providedWitPackage": "string",
+      "jsonSchema": null,
+      "validateUrl": "string",
+      "transformUrl": "string"
+    }
+  },
+  "pluginAccount": {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "name": "string",
+    "email": "string"
+  }
+}
+```
+
+## Delete environment plugin grant
+Path|Method|Protected
+---|---|---
+`/v1/environment-plugins/{environment_plugin_grant_id}`|DELETE|Yes
+
+
+
+
+
+
+
+
+## Environment Plugin Grants API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403|Forbidden Request|`{"error":"string"}`
+404|Entity not found|`{"error":"string"}`
+409||`{"error":"string"}`
+422|Limits of the plan exceeded|`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

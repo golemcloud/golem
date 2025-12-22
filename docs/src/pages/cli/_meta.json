@@ -1,8 +1,8 @@
 {
   "app-manifest": "Application Manifest",
+  "envs_and_profiles": "Environments and Profiles",
   "components": "Components",
   "agents": "Agents",
-  "profiles": "Profiles",
   "permissions": "Permissions",
   "plugins": "Plugins",
   "shell-completion": "Shell Completion",

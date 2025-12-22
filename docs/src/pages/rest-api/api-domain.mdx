@@ -1,39 +1,34 @@
 # Api Domain API
 
-## Get all API domains
+## List all domain registrations in the environment
 Path|Method|Protected
 ---|---|---
-`/v1/api/domains`|GET|Yes
+`/v1/envs/{environment_id}/domain-registrations`|GET|Yes
 
-Returns a list of API domains for the given project.
 
-**Query Parameters**
 
-Name|Type|Required|Description
----|---|---|---
-project-id|string|Yes|-
+
 
 
 
 **Example Response JSON**
 
 ```json copy
-[
-  {
-    "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-    "domainName": "string",
-    "nameServers": [
-      "string"
-    ],
-    "createdAt": "2019-08-24T14:15:22Z"
-  }
-]
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "domain": "string"
+    }
+  ]
+}
 ```
 
-## Create or update an API domain
+## Create a new domain registration in the environment
 Path|Method|Protected
 ---|---|---
-`/v1/api/domains`|PUT|Yes
+`/v1/envs/{environment_id}/domain-registrations`|POST|Yes
 
 
 
@@ -42,8 +37,7 @@ Path|Method|Protected
 **Example Request JSON**
 ```json copy
 {
-  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-  "domainName": "string"
+  "domain": "string"
 }
 ```
 
@@ -51,42 +45,52 @@ Path|Method|Protected
 
 ```json copy
 {
-  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-  "domainName": "string",
-  "nameServers": [
-    "string"
-  ],
-  "createdAt": "2019-08-24T14:15:22Z"
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "domain": "string"
 }
 ```
 
-## Delete an API domain
+## Get domain registration by id
 Path|Method|Protected
 ---|---|---
-`/v1/api/domains`|DELETE|Yes
+`/v1/domain-registrations/{domain_registration_id}`|GET|Yes
 
 
 
-**Query Parameters**
 
-Name|Type|Required|Description
----|---|---|---
-project-id|string|Yes|-
-domain|string|Yes|-
 
 
 
 **Example Response JSON**
 
 ```json copy
-"string"
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "domain": "string"
+}
 ```
+
+## Delete domain registration
+Path|Method|Protected
+---|---|---
+`/v1/domain-registrations/{domain_registration_id}`|DELETE|Yes
+
+
+
+
+
+
+
+
 ## Api Domain API Errors
 Status Code|Description|Body
 ---|---|---
-400||`{"errors":["string"]}`
-401||`{"error":"string"}`
-403||`{"error":"string"}`
-404||`{"error":"string"}`
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403|Forbidden Request|`{"error":"string"}`
+404|Entity not found|`{"error":"string"}`
 409||`{"error":"string"}`
-500||`{"error":"string","workerError":{"cause":"string","stderr":"string"}}`
+422|Limits of the plan exceeded|`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

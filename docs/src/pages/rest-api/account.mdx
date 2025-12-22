@@ -1,17 +1,14 @@
 # Account API
 The account API allows users to query and manipulate their own account data.
-## Find accounts
+## Get all tokens
 Path|Method|Protected
 ---|---|---
-`/v1/accounts`|GET|Yes
+`/v1/accounts/{account_id}/tokens`|GET|Yes
 
-Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
+Gets all created tokens of an account.
+The format of each element is the same as the data object in the oauth2 endpoint's response.
 
-**Query Parameters**
 
-Name|Type|Required|Description
----|---|---|---
-email|string|No|-
 
 
 
@@ -21,12 +18,42 @@ email|string|No|-
 {
   "values": [
     {
-      "id": "string",
-      "name": "string",
-      "email": "string",
-      "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+      "createdAt": "2019-08-24T14:15:22Z",
+      "expiresAt": "2019-08-24T14:15:22Z"
     }
   ]
+}
+```
+
+## Create new token
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/tokens`|POST|Yes
+
+Creates a new token with a given expiration date.
+The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
 }
 ```
 
@@ -51,10 +78,14 @@ Create a new account. The response is the created account data.
 
 ```json copy
 {
-  "id": "string",
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
   "name": "string",
   "email": "string",
-  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
 }
 ```
 
@@ -73,10 +104,14 @@ Retrieve an account for a given Account ID
 
 ```json copy
 {
-  "id": "string",
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
   "name": "string",
   "email": "string",
-  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
 }
 ```
 
@@ -95,6 +130,7 @@ The response is the updated account data.
 **Example Request JSON**
 ```json copy
 {
+  "currentRevision": 0,
   "name": "string",
   "email": "string"
 }
@@ -104,10 +140,14 @@ The response is the updated account data.
 
 ```json copy
 {
-  "id": "string",
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
   "name": "string",
   "email": "string",
-  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
 }
 ```
 
@@ -118,7 +158,11 @@ Path|Method|Protected
 
 Delete an account.
 
+**Query Parameters**
 
+Name|Type|Required|Description
+---|---|---|---
+current_revision|integer|Yes|-
 
 
 
@@ -144,13 +188,171 @@ Path|Method|Protected
 ```json copy
 {
   "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
-  "planData": {
-    "projectLimit": 0,
-    "componentLimit": 0,
-    "workerLimit": 0,
-    "storageLimit": 0,
-    "monthlyGasLimit": 0,
-    "monthlyUploadLimit": 0
+  "name": "string",
+  "appLimit": 0,
+  "envLimit": 0,
+  "componentLimit": 0,
+  "workerLimit": 0,
+  "workerConnectionLimit": 0,
+  "storageLimit": 0,
+  "monthlyGasLimit": 0,
+  "monthlyUploadLimit": 0,
+  "maxMemoryPerWorker": 0
+}
+```
+
+## Update plan of an accout
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/plan`|PUT|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "plan": "c685f150-7cb7-436f-9700-386be171480b"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+## Update roles of an accout
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/roles`|PUT|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+## Get all plugins registered in account
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/plugins`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+      "name": "string",
+      "version": "string",
+      "description": "string",
+      "icon": "string",
+      "homepage": "string",
+      "spec": {
+        "type": "ComponentTransformer",
+        "providedWitPackage": "string",
+        "jsonSchema": null,
+        "validateUrl": "string",
+        "transformUrl": "string"
+      }
+    }
+  ]
+}
+```
+
+## Register a new plugin
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/plugins`|POST|Yes
+
+
+
+
+
+**Request Form**: `multipart/form-data`
+
+> Make sure to include `Content-Type: multipart/form-data` Header
+
+**Field `metadata`**: JSON
+```json copy
+{
+  "name": "string",
+  "version": "string",
+  "description": "string",
+  "icon": "string",
+  "homepage": "string",
+  "spec": {
+    "type": "ComponentTransformer",
+    "providedWitPackage": "string",
+    "jsonSchema": null,
+    "validateUrl": "string",
+    "transformUrl": "string"
+  }
+}
+```
+
+**Field `pluginWasm`**: string binary
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "name": "string",
+  "version": "string",
+  "description": "string",
+  "icon": "string",
+  "homepage": "string",
+  "spec": {
+    "type": "ComponentTransformer",
+    "providedWitPackage": "string",
+    "jsonSchema": null,
+    "validateUrl": "string",
+    "transformUrl": "string"
   }
 }
 ```
@@ -162,4 +364,5 @@ Status Code|Description|Body
 403|Forbidden Request|`{"error":"string"}`
 404|Entity not found|`{"error":"string"}`
 409||`{"error":"string"}`
+422|Limits of the plan exceeded|`{"error":"string"}`
 500|Internal server error|`{"error":"string"}`
