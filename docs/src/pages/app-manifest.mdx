@@ -14,7 +14,7 @@ import {MultiPlatformCommand} from "@/components/multi-platform-command"
 
 ## JSON schema
 
-For the application manifest format we also publish _JSON schemas_. The current version (1.1.1) is available [here](https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json).
+For the application manifest format we also publish _JSON schemas_. The current version (1.4.0) is available [here](https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json).
 
 The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
 
@@ -24,12 +24,12 @@ Use the following _YAML comments_ at the start of your `golem.yaml` documents to
   commands={[
     {
       label: "IntelliJ IDEA based products",
-      command: "# $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json",
+      command: "# $schema: https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json",
     },
     {
       label: "VSCode with YAML Language Support plugin",
       command:
-        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json",
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json",
     },
   ]}
   language={"yaml"}
