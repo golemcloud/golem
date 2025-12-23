@@ -1,5 +1,5 @@
-declare module 'golem:rdbms/mysql@0.0.1' {
-  import * as golemRdbms001Types from 'golem:rdbms/types@0.0.1';
+declare module 'golem:rdbms/mysql@0.0.2' {
+  import * as golemRdbms002Types from 'golem:rdbms/types@0.0.2';
   export class DbResultStream {
     getColumns(): DbColumn[];
     getNext(): DbRow[] | undefined;
@@ -48,9 +48,9 @@ declare module 'golem:rdbms/mysql@0.0.1' {
      */
     rollback(): void;
   }
-  export type Date = golemRdbms001Types.Date;
-  export type Time = golemRdbms001Types.Time;
-  export type Timestamp = golemRdbms001Types.Timestamp;
+  export type Date = golemRdbms002Types.Date;
+  export type Time = golemRdbms002Types.Time;
+  export type Timestamp = golemRdbms002Types.Timestamp;
   export type Error = 
   {
     tag: 'connection-failure'
