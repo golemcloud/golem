@@ -1,0 +1,5 @@
+/dist
+/golem-temp
+/node_modules
+/target
+/wit/deps

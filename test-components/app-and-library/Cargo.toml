@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+
+members = ["app", "library"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

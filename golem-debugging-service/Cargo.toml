@@ -1,0 +1,60 @@
+[package]
+name = "golem-debugging-service"
+version = "0.0.0"
+edition = "2021"
+
+autotests = false
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem-debugging-service"
+path = "src/server.rs"
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false
+
+[dependencies]
+golem-worker-executor = { workspace = true }
+golem-common = { workspace = true }
+golem-api-grpc = { workspace = true }
+golem-service-base = { workspace = true }
+golem-wasm = { workspace = true }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum-jrpc = { workspace = true }
+futures = { workspace = true }
+gethostname = { workspace = true }
+humansize = { workspace = true }
+log = { workspace = true }
+poem = { workspace = true }
+poem-openapi = { workspace = true }
+prometheus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+
+wasmtime = { workspace = true, features = ["component-model"] }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+
+
+[dev-dependencies]
+golem-test-framework = { workspace = true }
+golem-worker-executor-test-utils = { workspace = true }
+test-r = { workspace = true }

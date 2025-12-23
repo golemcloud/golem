@@ -1,0 +1,52 @@
+name: On Demand Benchmark
+on:
+  schedule:
+    # Runs every day at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-benchmark:
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v3-rust
+          shared-key: release
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.35.1
+        with:
+          redis-version: latest
+          auto-start: false
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+
+      - name: Building release executables
+        run: cargo make --profile ci build-release
+
+      - name: Checkout benchmark results repository
+        uses: actions/checkout@v5
+        with:
+          repository: 'golemcloud/benchmark-results'
+          token: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
+          path: benchmark-results
+
+      - name: Run benchmark suite
+        run: cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' --primary-only suite --add-to-json benchmark-results/results/results.json integration-tests/benchmark_suites/ci.yaml spawned
+
+      - name: Commit results
+        run: |
+          cd benchmark-results
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add results/results.json
+          git diff --staged --quiet || (git commit -m "Appended new benchmark results" && git push)

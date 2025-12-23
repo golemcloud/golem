@@ -1,0 +1,8 @@
+[package]
+name = "common-lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+golem-rust = { workspace = true }
+wstd = { workspace = true }

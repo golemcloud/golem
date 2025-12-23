@@ -1,0 +1,55 @@
+client_max_body_size ${GOLEM_COMPONENT_MAX_SIZE_ALLOWED}; # Increase this especially if your component size is higher than this
+
+# For docker we need this for service discovery in docker network
+resolver 127.0.0.11;
+
+upstream registry-service {
+    server ${GOLEM_REGISTRY_SERVICE_HOST}:${GOLEM_REGISTRY_SERVICE_PORT} fail_timeout=0 max_fails=0;
+}
+
+upstream worker-service {
+    server ${GOLEM_WORKER_SERVICE_HOST}:${GOLEM_WORKER_SERVICE_PORT} fail_timeout=0 max_fails=0;
+}
+
+upstream debugging-service {
+    server ${GOLEM_DEBUGGING_SERVICE_HOST}:${GOLEM_DEBUGGING_SERVICE_PORT} fail_timeout=0 max_fails=0;
+}
+
+server {
+    listen 80;
+    server_name localhost;
+
+    # Common proxy headers
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    location ~ /v1/components/[^/]+/workers/[^/]+/connect$ {
+        proxy_pass http://worker-service;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade "websocket";
+        proxy_set_header Connection "upgrade";
+
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location ~ /v1/components/[^/]+/workers(.*)$ {
+        proxy_pass http://worker-service;
+    }
+
+    location /v1/debugger {
+        proxy_pass http://debugging-service;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade "websocket";
+        proxy_set_header Connection "upgrade";
+
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        proxy_pass http://registry-service;
+    }
+}

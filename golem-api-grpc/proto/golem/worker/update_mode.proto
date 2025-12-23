@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package golem.worker;
+
+enum UpdateMode {
+  AUTOMATIC = 0;
+  MANUAL = 1;
+}

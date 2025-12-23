@@ -1,0 +1,60 @@
+[package]
+name = "golem-test-framework"
+version = "0.0.0"
+edition = "2021"
+
+homepage = "https://golem.cloud"
+description = "Test framework for integration tests and benchmarks"
+repository = "https://github.com/golemcloud/golem"
+
+license-file = "../LICENSE"
+
+[lib]
+harness = false
+
+[dependencies]
+golem-api-grpc = { workspace = true }
+golem-client = { workspace = true }
+golem-common = { workspace = true }
+golem-service-base = { workspace = true }
+golem-wasm = { workspace = true }
+
+anyhow = { workspace = true }
+applying = { workspace = true }
+async-trait = { workspace = true }
+async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
+bytes = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+cli-table = { workspace = true }
+colored = { workspace = true }
+futures = { workspace = true }
+humantime-serde = { workspace = true }
+itertools = { workspace = true }
+prometheus = { workspace = true }
+redis = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+serde_yaml = { workspace = true }
+sysinfo = { workspace = true }
+tempfile = { workspace = true }
+sqlx = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["native-tls"] }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tryhard = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+wasm-metadata = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+[features]
+default = []

@@ -1,0 +1,149 @@
+#!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
+
+rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
+"option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
+"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests" "update-test-env-var")
+rust_test_apps=("auction-example" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters"  "rpc" "agent-updates")
+c_test_components=("large-initial-memory" "large-dynamic-memory")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc")
+benchmark_apps=("benchmarks")
+
+# Optional arguments:
+# - rebuild: clean all projects before building them
+# - rust / c / ts / benchmarks: build only the specified group
+
+rebuild=false
+single_group=false
+group=""
+for arg in "$@"; do
+  case $arg in
+    rebuild)
+      rebuild=true
+      ;;
+    rust)
+      single_group=true
+      group="rust"
+      ;;
+    c)
+      single_group=true
+      group="c"
+      ;;
+    ts)
+      single_group=true
+      group="ts"
+      ;;
+    benchmarks)
+      single_group=true
+      group="benchmarks"
+      ;;
+    *)
+      echo "Unknown argument: $arg"
+      exit 1
+      ;;
+  esac
+done
+
+if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
+  echo "Building the Rust test components"
+  for subdir in "${rust_test_components[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$rebuild" = true ]; then
+      cargo clean
+    fi
+    cargo component build --release
+
+    echo "Turning the module into a WebAssembly Component..."
+    target="../$subdir.wasm"
+    target_wat="../$subdir.wat"
+    cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
+    wasm-tools print "$target" >"$target_wat"
+
+    popd || exit
+  done
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
+  echo "Building the Rust test apps"
+  TEST_COMP_DIR="$(pwd)"
+  export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
+  for subdir in "${rust_test_apps[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$rebuild" = true ]; then
+      golem-cli app --preset release clean
+      cargo clean
+    fi
+
+    golem-cli app --preset release build
+    golem-cli app --preset release copy
+
+    popd || exit
+  done
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "c" ]; then
+  echo "Building the C test components"
+  for subdir in "${c_test_components[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$rebuild" = true ]; then
+      rm *.wasm
+    fi
+    wit-bindgen c --autodrop-borrows yes ./wit
+    # last built with wasi-sdk-0.25.0
+    $WASI_SDK_PATH/bin/clang --sysroot $WASI_SDK_PATH/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
+
+    echo "Turning the module into a WebAssembly Component..."
+    target="../$subdir.wasm"
+    target_wat="../$subdir.wat"
+    wasm-tools component new main.wasm -o "$target" --adapt ../../../golem-wit/adapters/tier1/wasi_snapshot_preview1.wasm
+    wasm-tools print "$target" >"$target_wat"
+
+    popd || exit
+  done
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
+  echo "Building the TS test apps"
+  for subdir in "${ts_test_apps[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$rebuild" = true ]; then
+      rm -rf node_modules
+      npm install
+      golem-cli clean
+    fi
+
+    golem-cli build
+    golem-cli copy
+
+    popd || exit
+  done
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
+  echo "Building benchmark apps"
+  for subdir in "${benchmark_apps[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$rebuild" = true ]; then
+      rm -rf node_modules
+      npm install
+      golem-cli clean
+      cargo clean
+    fi
+
+    golem-cli build
+    golem-cli copy
+
+    popd || exit
+  done
+fi

@@ -1,0 +1,12 @@
+package golem:component;
+
+// See https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md for more details about the WIT syntax
+
+interface api {
+  add: func(value: u64);
+  get: func() -> u64;
+}
+
+world failing-component {
+  export api;
+}

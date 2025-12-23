@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package golem.account;
+
+message AccountData {
+  string name = 1;
+  string email = 2;
+}

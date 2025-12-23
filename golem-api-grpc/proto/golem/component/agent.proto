@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+import "wasm/rpc/type.proto";
+import "wasm/rpc/value_and_type.proto";
+
+package golem.component;
+
+enum AgentMode {
+  DURABLE = 0;
+  EPHEMERAL = 1;
+}
+
+message AgentConstructor {
+  optional string name = 1;
+  string description = 2;
+  optional string prompt_hint = 3;
+  DataSchema input_schema = 4;
+}
+
+message AgentDependency {
+  string type_name = 1;
+  optional string description = 2;
+  AgentConstructor constructor = 3;
+  repeated AgentMethod methods = 4;
+}
+
+message AgentMethod {
+  string name = 1;
+  string description = 2;
+  optional string prompt_hint = 3;
+  DataSchema input_schema = 4;
+  DataSchema output_schema = 5;
+}
+
+message AgentType {
+  string type_name = 1;
+  string description = 2;
+  AgentConstructor constructor = 3;
+  repeated AgentMethod methods = 4;
+  repeated AgentDependency dependencies = 5;
+  AgentMode mode = 6;
+}
+
+message BinaryDescriptor {
+  repeated BinaryType restrictions = 1;
+}
+
+message BinaryType {
+  string mime_type = 1;
+}
+
+message NamedElementSchema {
+  string name = 1;
+  ElementSchema schema = 2;
+}
+
+message TupleSchema {
+  repeated NamedElementSchema elements = 1;
+}
+
+message MultimodalSchema {
+  repeated NamedElementSchema elements = 1;
+}
+
+message DataSchema {
+  oneof schema {
+    TupleSchema tuple = 1;
+    MultimodalSchema multimodal = 2;
+  }
+}
+
+message ElementSchema {
+  oneof schema {
+    wasm.rpc.Type component_model = 2;
+    TextDescriptor unstructured_text = 3;
+    BinaryDescriptor unstructured_binary = 4;
+  }
+}
+
+message TextDescriptor {
+  repeated TextType restrictions = 1;
+}
+
+message TextType {
+  string language_code = 1;
+}
+
+message DataValue {
+  oneof value {
+    TupleValue tuple = 1;
+    MultimodalValue multimodal = 2;
+  }
+}
+
+message TupleValue {
+  repeated ElementValue elements = 1;
+}
+
+message MultimodalValue {
+  repeated NamedElementValue elements = 1;
+}
+
+message NamedElementValue {
+  string name = 1;
+  ElementValue value = 2;
+}
+
+message ElementValue {
+  oneof value {
+    wasm.rpc.ValueAndType component_model = 1;
+    TextReference unstructured_text = 2;
+    BinaryReference unstructured_binary = 3;
+  }
+}
+
+message TextReference {
+  oneof text {
+    string url = 1;
+    TextSource inline = 2;
+  }
+}
+
+message TextSource {
+  string data = 1;
+  optional TextType text_type = 2;
+}
+
+message BinaryReference {
+  oneof binary {
+    string url = 1;
+    BinarySource inline = 2;
+  }
+}
+
+message BinarySource {
+  bytes data = 1;
+  optional BinaryType binary_type = 2;
+}

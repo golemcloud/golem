@@ -1,0 +1,115 @@
+[package]
+name = "golem-worker-executor"
+version = "0.0.0"
+edition = "2021"
+
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem Worker Executor"
+
+license-file = "../LICENSE"
+
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+name = "worker-executor"
+path = "src/server.rs"
+harness = false
+test = false
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false
+
+[dependencies]
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true }
+golem-rib = { workspace = true }
+golem-service-base = { workspace = true, features = ["worker-executor"] }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
+
+anyhow = { workspace = true }
+applying = { workspace = true }
+async-lock = { workspace = true }
+async-recursion = { workspace = true }
+async-scoped = { workspace = true, features = ["use-tokio"] }
+async-trait = { workspace = true }
+bigdecimal = { workspace = true }
+bit-vec = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+cap-std = { workspace = true }
+cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
+chrono = { workspace = true }
+desert_rust = { workspace = true }
+drop-stream = { workspace = true }
+evicting_cache_map = { workspace = true }
+figment = { workspace = true }
+fred = { workspace = true }
+fs-set-times = { workspace = true }
+futures = { workspace = true }
+gethostname = { workspace = true }
+heck = { workspace = true }
+hex = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+humansize = { workspace = true }
+humantime-serde = { workspace = true }
+hyper = { workspace = true }
+itertools = { workspace = true }
+lazy_static = { workspace = true }
+log = { workspace = true }
+mac_address = { workspace = true, features = ["serde"] }
+md5 = { workspace = true }
+metrohash = { workspace = true }
+nonempty-collections = { workspace = true }
+prometheus = { workspace = true }
+prost = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+ringbuf = { workspace = true }
+scc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+sqlx-core = { workspace = true }
+sysinfo = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
+tracing = { workspace = true }
+try_match = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+zstd = { workspace = true }
+
+[dev-dependencies]
+golem-test-framework = { workspace = true }
+golem-worker-executor-test-utils = { workspace = true }
+
+assert2 = { workspace = true }
+axum = { workspace = true }
+futures-concurrency = { workspace = true }
+goldenfile = { workspace = true }
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+rand = { workspace = true }
+redis = { workspace = true }
+serde_json = { workspace = true }
+test-r = { workspace = true }
+system-interface = { workspace = true }

@@ -1,0 +1,96 @@
+[package]
+name = "golem-common"
+version = "0.0.0"
+edition = "2021"
+
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Shared code between Golem services"
+
+license-file = "../LICENSE"
+
+build = "build.rs"
+
+[lib]
+harness = false
+
+[dependencies]
+golem-api-grpc = { workspace = true }
+golem-rib = { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
+
+anyhow = { workspace = true }
+applying = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bigdecimal = { workspace = true }
+bit-vec = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+combine = { workspace = true }
+console-subscriber = { workspace = true }
+derive_more = { workspace = true }
+desert_rust = { workspace = true }
+figment = { workspace = true }
+fred = { workspace = true }
+heck = { workspace = true }
+http = { workspace = true }
+humantime-serde = { workspace = true }
+ident-mash = { workspace = true }
+iso8601-timestamp = { workspace = true }
+itertools = { workspace = true }
+lazy_static = { workspace = true }
+mac_address = { workspace = true }
+nonempty-collections = { workspace = true }
+openapiv3 = { workspace = true }
+openidconnect = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+poem = { workspace = true }
+poem-openapi = { workspace = true }
+prometheus = { workspace = true }
+prost-types = { workspace = true }
+rand = { workspace = true }
+range-set-blaze = { workspace = true }
+regex = { workspace = true }
+scc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+shadow-rs = { workspace = true }
+similar = { workspace = true }
+sqlx = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-serde = { workspace = true }
+typed-path = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+wasmparser = { workspace = true }
+wit-parser = { workspace = true }
+wasm-wave = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+assert2 = { workspace = true }
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+test-r = { workspace = true }
+tracing-test = { workspace = true }
+
+[build-dependencies]
+shadow-rs = { workspace = true }
+lenient_bool = { workspace = true }

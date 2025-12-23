@@ -1,0 +1,5 @@
+package golem:it;
+
+world directories {
+  export run: func() -> tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
+}

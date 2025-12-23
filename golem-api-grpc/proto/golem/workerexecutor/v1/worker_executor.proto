@@ -1,0 +1,493 @@
+syntax = "proto3";
+
+package golem.workerexecutor.v1;
+
+import "golem/common/account_id.proto";
+import "golem/common/empty.proto";
+import "golem/common/revert_worker_response.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation_context.proto";
+import "golem/worker/log_event.proto";
+import "golem/worker/promise_id.proto";
+import "golem/shardmanager/shard_id.proto";
+import "golem/component/component_id.proto";
+import "golem/worker/cursor.proto";
+import "golem/worker/oplog_cursor.proto";
+import "golem/worker/public_oplog.proto";
+import "golem/worker/update_mode.proto";
+import "golem/worker/worker_id.proto";
+import "golem/worker/worker_metadata.proto";
+import "golem/worker/worker_status.proto";
+import "golem/worker/worker_filter.proto";
+import "golem/worker/v1/worker_execution_error.proto";
+import "golem/worker/filesystem.proto";
+import "golem/worker/wasi_config_vars.proto";
+import "golem/common/environment.proto";
+import "golem/auth/auth_ctx.proto";
+import "wasm/rpc/val.proto";
+import "wasm/rpc/value_and_type.proto";
+
+service WorkerExecutor {
+  rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
+
+  rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
+  rpc InvokeAndAwaitWorkerTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
+  rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
+  rpc InvokeAndAwaitWorkerJson(InvokeAndAwaitWorkerJsonRequest) returns (InvokeAndAwaitWorkerResponseTyped);
+  rpc InvokeWorkerJson(InvokeJsonWorkerRequest) returns (InvokeWorkerResponse);
+
+  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
+  rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
+  rpc CompletePromise(CompletePromiseRequest) returns (CompletePromiseResponse);
+  rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
+  rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
+  rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
+  rpc GetWorkerMetadata(GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
+  rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
+  rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
+  rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
+  rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
+  rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
+  rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
+  rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
+  rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
+  rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
+
+  rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
+  rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
+
+  rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
+  rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
+}
+
+message ForkWorkerRequest {
+  golem.common.AccountId component_owner_account_id = 1;
+  golem.worker.WorkerId source_worker_id = 2;
+  golem.worker.WorkerId target_worker_id = 3;
+  uint64 oplog_index_cutoff = 4;
+  golem.common.EnvironmentId environment_id = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
+}
+
+message ForkWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message DeleteWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+message DeleteWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CompletePromiseRequest {
+  golem.worker.PromiseId promise_id = 1;
+  bytes data = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message CompletePromiseResponse {
+  oneof result {
+    CompletePromiseSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CompletePromiseSuccess {
+  bool completed = 1;
+}
+
+message InterruptWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CreateWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  map<string, string> env = 2;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 3;
+  // Component's owner environment
+  golem.common.EnvironmentId environment_id = 4;
+  golem.worker.WasiConfigVars wasi_config_vars = 5;
+  bool ignore_already_existing = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
+}
+
+message CreateWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+
+message InvokeAndAwaitWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated wasm.rpc.Val input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 5;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 6;
+  optional golem.worker.InvocationContext context = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
+}
+
+
+message InvokeAndAwaitWorkerResponse {
+  oneof result {
+    InvokeAndAwaitWorkerSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeAndAwaitWorkerResponseTyped {
+  oneof result {
+    InvokeAndAwaitWorkerSuccessTyped success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeAndAwaitWorkerSuccess {
+  optional wasm.rpc.Val output = 1;
+}
+
+message InvokeAndAwaitWorkerSuccessTyped {
+  optional wasm.rpc.ValueAndType output = 1;
+}
+
+
+message InvokeWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated wasm.rpc.Val input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 5;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 6;
+  optional golem.worker.InvocationContext context = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
+}
+
+message InvokeJsonWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated string input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 5;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 6;
+  optional golem.worker.InvocationContext context = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
+}
+
+message InvokeAndAwaitWorkerJsonRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated string input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 6;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 7;
+  optional golem.worker.InvocationContext context = 8;
+  golem.auth.AuthCtx auth_ctx = 9;
+}
+
+message ConnectWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  // Account the request belongs to
+  golem.common.AccountId component_owner_account_id = 2;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message InterruptWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  bool recover_immediately = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message RevokeShardsRequest {
+  repeated golem.shardmanager.ShardId shard_ids = 1;
+}
+
+message RevokeShardsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message AssignShardsRequest {
+  repeated golem.shardmanager.ShardId shard_ids = 1;
+}
+
+message AssignShardsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetWorkerMetadataRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+message GetWorkerMetadataResponse {
+  oneof result {
+    golem.worker.WorkerMetadata success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message ResumeWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  optional bool force = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message ResumeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetRunningWorkersMetadataRequest {
+  golem.component.ComponentId component_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+
+message GetRunningWorkersMetadataResponse {
+  oneof result {
+    GetRunningWorkersMetadataSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetRunningWorkersMetadataSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+}
+
+message GetWorkersMetadataRequest {
+  golem.component.ComponentId component_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+  golem.worker.Cursor cursor = 3;
+  uint64 count = 4;
+  bool precise = 5;
+  golem.common.EnvironmentId environment_id = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
+}
+
+message GetWorkersMetadataResponse {
+  oneof result {
+    GetWorkersMetadataSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetWorkersMetadataSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+  optional golem.worker.Cursor cursor = 2;
+}
+
+message UpdateWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  uint64 target_version = 2;
+  golem.worker.UpdateMode mode = 3;
+  golem.common.EnvironmentId environment_id = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+}
+
+message UpdateWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetOplogRequest {
+  golem.worker.WorkerId worker_id = 1;
+  uint64 from_oplog_index = 3;
+  optional golem.worker.OplogCursor cursor = 4;
+  uint64 count = 5;
+  golem.common.EnvironmentId environment_id = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
+}
+
+message GetOplogResponse {
+  oneof result {
+    GetOplogSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetOplogSuccessResponse {
+  repeated golem.worker.OplogEntry entries = 1;
+  optional golem.worker.OplogCursor next = 2;
+  uint64 first_index_in_chunk = 3;
+  uint64 last_index = 5;
+}
+
+message SearchOplogRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string query = 2;
+  optional golem.worker.OplogCursor cursor = 3;
+  uint64 count = 4;
+  golem.common.EnvironmentId environment_id = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
+}
+
+message SearchOplogResponse {
+  oneof result {
+    SearchOplogSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message SearchOplogSuccessResponse {
+  repeated golem.worker.OplogEntryWithIndex entries = 1;
+  optional golem.worker.OplogCursor next = 2;
+  uint64 last_index = 5;
+}
+
+message GetFileSystemNodeRequest {
+  golem.worker.WorkerId worker_id = 1;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 2;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 3;
+  string path = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+}
+
+message GetFileSystemNodeResponse {
+  oneof result {
+    ListDirectorySuccessResponse dir_success = 1;
+    ListFileDataSuccessResponse file_success = 2;
+    golem.common.Empty not_found = 3;
+    golem.worker.v1.WorkerExecutionError failure = 4;
+  }
+}
+
+message ListDirectorySuccessResponse {
+  repeated golem.worker.FileSystemNode nodes = 1;
+}
+
+message ListFileDataSuccessResponse {
+  golem.worker.FileSystemNode file = 1;
+}
+
+message GetFileContentsRequest {
+  golem.worker.WorkerId worker_id = 1;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 2;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 3;
+  string file_path = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+}
+
+message GetFileContentsResponse {
+  oneof result {
+    // must always be the first chunk (except if failure) and will never be sent again.
+    GetFileContentsResponseHeader header = 1;
+    bytes success = 2;
+    golem.worker.v1.WorkerExecutionError failure = 3;
+  }
+}
+
+message GetFileContentsResponseHeader {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.common.Empty not_found = 2;
+    golem.common.Empty not_a_file = 3;
+  }
+}
+
+message ActivatePluginRequest {
+  golem.worker.WorkerId worker_id = 1;
+  int32 plugin_priority = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message ActivatePluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message DeactivatePluginRequest {
+  golem.worker.WorkerId worker_id = 1;
+  int32 plugin_priority = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message DeactivatePluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message RevertWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.RevertWorkerTarget target = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message RevertWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CancelInvocationRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message CancelInvocationResponse {
+  oneof result {
+    bool success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}

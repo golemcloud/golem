@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/common/hash.proto";
+
+enum ComponentFilePermissions {
+  READ_ONLY = 0;
+  READ_WRITE = 1;
+}
+
+message InitialComponentFile {
+  golem.common.Hash content_hash = 1;
+  string path = 2;
+  ComponentFilePermissions permissions = 3;
+}

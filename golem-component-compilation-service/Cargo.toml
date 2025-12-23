@@ -1,0 +1,42 @@
+[package]
+name = "golem-component-compilation-service"
+version = "0.0.0"
+edition = "2021"
+
+license-file = "../LICENSE"
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+harness = false
+name = "golem-component-compilation-service"
+path = "src/server.rs"
+test = false
+
+[dependencies]
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true }
+golem-service-base = { workspace = true, features = ["worker-executor"] }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+lazy_static.workspace = true
+prometheus = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
+tracing = { workspace = true }
+#tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

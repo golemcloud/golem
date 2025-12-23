@@ -1,0 +1,58 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::await_promise;
+use crate::bindings::golem::api::host::PromiseId;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+/// Awaits a promise blocking the execution of the agent. The agent is going to be
+/// suspended until the promise is completed.
+///
+/// The completed promise's payload is decoded as JSON.
+///
+/// Use `await_promise_json` for an async version of this function, allowing to interleave
+/// awaiting of the promise with other operations.
+pub fn blocking_await_promise_json<T: DeserializeOwned>(
+    promise_id: &PromiseId,
+) -> Result<T, serde_json::Error> {
+    let promise = crate::bindings::golem::api::host::get_promise(promise_id);
+    promise.subscribe().block();
+    let bytes = promise.get().unwrap();
+    serde_json::from_slice(&bytes)
+}
+
+/// Awaits a promise.
+///
+/// The completed promise's payload is decoded as JSON.
+///
+/// If only promises or timeouts are awaited simultaneously, the agent is going to be
+/// suspended until any of them completes.
+pub async fn await_promise_json<T: DeserializeOwned>(
+    promise_id: &PromiseId,
+) -> Result<T, serde_json::Error> {
+    let bytes = await_promise(promise_id).await;
+    serde_json::from_slice(&bytes)
+}
+
+/// Completes a promise with a JSON payload
+pub fn complete_promise_json<T: Serialize>(
+    promise_id: &PromiseId,
+    value: T,
+) -> Result<bool, serde_json::Error> {
+    let bytes = serde_json::to_vec(&value)?;
+    Ok(crate::bindings::golem::api::host::complete_promise(
+        promise_id, &bytes,
+    ))
+}

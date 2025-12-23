@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package golem.worker;
+
+message IdempotencyKey {
+  string value = 1;
+}

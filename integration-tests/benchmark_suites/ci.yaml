@@ -1,0 +1,90 @@
+# A benchmark suite periodically running on CI to detect performance regressions
+
+name: CI
+benchmarks:
+  - name: cold-start-unknown-small
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 1, 5, 10 ]
+    length: [ 2 ]
+    disableCompilationCache: true
+
+  - name: cold-start-unknown-medium
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 1, 5, 10 ]
+    length: [ 5 ]
+    disableCompilationCache: true
+
+  - name: cold-start-unknown-large
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 1, 5, 10 ]
+    length: [ 10 ]
+    disableCompilationCache: true
+
+  - name: cold-start-unknown-small
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 1, 5, 10 ]
+    length: [ 2 ]
+
+  - name: cold-start-unknown-medium
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 1, 5, 10 ]
+    length: [ 5 ]
+
+  - name: cold-start-unknown-large
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 1, 5, 10 ]
+    length: [ 10 ]
+
+  - name: latency-small
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 100, 250, 500, 1000 ]
+    length: [ 2 ]
+
+  - name: latency-medium
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 100, 250, 500 ]
+    length: [ 5 ]
+
+  - name: latency-large
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 100, 250 ]
+    length: [ 10 ]
+
+  - name: sleep
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 10, 100, 500 ]
+    length: [ 10000 ]
+
+  - name: durability-overhead
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 10, 50, 100 ]
+    length: [ 5000 ]
+
+  - name: throughput-echo
+    iterations: 1
+    clusterSize: [ 1 ]
+    size: [ 1, 10, 50, 100 ]
+    length: [ 1000 ]
+
+  - name: throughput-large-input
+    iterations: 1
+    clusterSize: [ 1, 5 ]
+    size: [ 1, 10, 25 ]
+    length: [ 100, 10000, 50000 ]
+
+  - name: throughput-cpu-intensive
+    iterations: 1
+    clusterSize: [ 1, 5 ]
+    size: [ 1, 10, 25 ]
+    length: [ 100 ]

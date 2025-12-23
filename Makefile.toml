@@ -1,0 +1,952 @@
+# List of top-level tasks intended for use:
+#
+# - `cargo make dev-flow` or just `cargo make`: runs a full development flow, including fixing format and clippy, building and running tests and generating OpenAPI specs
+# - `cargo make wit`: fetches the WIT dependencies based on wit/deps.toml
+# - `cargo make check-wit`: deletes then fetches the WIT dependencies based on wit/deps.toml, then checks if it's up-to-date
+# - `cargo make build`: builds everything in debug mode
+# - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
+# - `cargo make check`: runs rustfmt and clippy checks without applying any fix
+# - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
+# - `cargo make unit-tests`: runs unit tests only
+# - `cargo make worker-executor-tests`: runs worker executor tests only
+# - `cargo make integration-tests`: runs integration tests only
+# - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
+# - `cargo make api-tests-http`: runs api integration tests using HTTP API only
+# - `cargo make api-tests-grpc`: runs api integration tests using GRPC API only
+# - `cargo make test`: runs all unit tests, worker executor tests and integration tests
+# - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
+# - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
+# - `cargo make publish`: publishes packages to crates.io
+# - `cargo make run`: runs all services locally, requires redis, lnav and nginx
+# - `cargo make run-with-login-enabled`: runs all services locally with login enabled, requires redis, lnav and nginx. Also requires oauth2 configuration to be provided.
+# - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
+# - `cargo make generate-configs`: generates configs from code defaults
+# - `cargo make elastic-up`: starts elastic, kibana, filebeat (in detached mode) and loads logs into elastic
+# - `cargo make elastic-stop`: stops the elastic env
+# - `cargo make elastic-down`: stops and removes the elastic env, including all stored data
+
+[config]
+default_to_workspace = false # by default, we run cargo commands on top level instead of per member
+skip_core_tasks = true       # we are not using the predefined cargo-make flows, instead redefine here for more clarity
+
+[env]
+JUNIT_OPTS = ""
+AWS_EC2_METADATA_DISABLED = "true"
+PROFILE = "dev"
+
+[env.ci]
+CARGO_INCREMENTAL = "false"
+#CARGO_PROFILE_dev_STRIP = "debuginfo"
+#CARGO_PROFILE_test_STRIP = "debuginfo"
+JUNIT_OPTS = "--format ctrf --logfile target/ctrf.json"
+PROFILE = "dev-ci"
+CI = "true"
+# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
+
+[tasks.default]
+description = "This is the task that gets executed by 'cargo make' when no task is specified"
+run_task = "dev-flow"
+
+[tasks.dev]
+description = "Alias to the dev-flow task"
+alias = "dev-flow"
+
+[tasks.dev-flow]
+description = "Runs a full development flow, including fixing format and clippy, building and running tests"
+dependencies = [
+    "wit",
+    "fix",
+    "check",
+    "build",
+    # "test"
+]
+
+# WIT DEPENDENCIES
+[tasks.wit]
+description = "Fetches the WIT dependencies based on wit/deps.toml"
+run_task = [
+    { name = [
+        "remove-wit-deps",
+        "wit-golem-wasm",
+        "wit-golem-common",
+        "wit-golem-cli",
+        "wit-test-components",
+        "wit-golem-templates",
+        "wit-sdks",
+    ] },
+]
+
+[tasks.wit-golem-wasm]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r golem-wasm/wit/deps
+mkdir golem-wasm/wit/deps
+cp wit/deps/io golem-wasm/wit/deps
+cp wit/deps/clocks golem-wasm/wit/deps
+cp wit/deps/golem-1.x golem-wasm/wit/deps
+cp wit/deps/golem-rpc golem-wasm/wit/deps
+"""
+
+[tasks.wit-golem-common]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r golem-common/wit/deps
+mkdir golem-common/wit/deps
+cp wit/deps/io golem-common/wit/deps
+cp wit/deps/clocks golem-common/wit/deps
+cp wit/deps/golem-1.x golem-common/wit/deps
+cp wit/deps/golem-rpc golem-common/wit/deps
+cp wit/deps/golem-agent golem-common/wit/deps
+"""
+
+[tasks.wit-golem-templates]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r cli/golem-templates/wit/deps
+mkdir cli/golem-templates/wit/deps
+glob_cp wit/deps/**/* cli/golem-templates/wit/deps
+"""
+
+[tasks.wit-sdks]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r sdks/rust/golem-rust/wit/deps
+rm -r sdks/ts/wit/deps
+mkdir sdks/rust/golem-rust/wit/deps
+mkdir sdks/ts/wit/deps
+glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
+glob_cp sdks/rust/golem-rust/wit/golem-ai/**/* sdks/rust/golem-rust/wit/deps
+glob_cp wit/deps/**/* sdks/ts/wit/deps
+"""
+
+[tasks.wit-golem-cli]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r cli/golem-cli/wit/deps
+mkdir cli/golem-cli/wit/deps
+cp wit/deps/clocks cli/golem-cli/wit/deps
+cp wit/deps/io cli/golem-cli/wit/deps
+cp wit/deps/golem-1.x cli/golem-cli/wit/deps
+cp wit/deps/golem-rpc cli/golem-cli/wit/deps
+cp wit/deps/golem-agent cli/golem-cli/wit/deps
+cp wit/deps/logging cli/golem-cli/wit/deps
+"""
+
+[tasks.wit-test-components]
+private = true
+script_runner = "@duckscript"
+script = """
+components = array
+array_push ${components} agent-counters/.wit
+array_push ${components} benchmarks
+array_push ${components} blob-store-service
+array_push ${components} component-resolve
+array_push ${components} component-transformer-example1/adapter
+array_push ${components} custom-durability
+array_push ${components} file-service
+array_push ${components} high-volume-logging
+array_push ${components} http-client
+array_push ${components} ifs-update
+array_push ${components} ifs-update-inside-exported-function
+array_push ${components} invocation-context
+array_push ${components} key-value-service
+array_push ${components} networking
+array_push ${components} oplog-processor
+array_push ${components} promise
+array_push ${components} rdbms-service
+array_push ${components} rpc
+array_push ${components} runtime-service
+array_push ${components} rust-service/rpc
+array_push ${components} scheduled-invocation
+array_push ${components} shopping-cart
+array_push ${components} update-test-env-var
+array_push ${components} update-test-v2-11
+array_push ${components} update-test-v3-11
+array_push ${components} update-test-v3-sdk
+array_push ${components} update-test-v4
+array_push ${components} wasi-config
+array_push ${components} wasi-http-incoming-request-handler
+array_push ${components} wasi-http-incoming-request-handler-echo
+array_push ${components} wasi-http-incoming-request-handler-state
+
+for component in ${components}
+    echo "Updating wit directory for test component ${component}"
+    rm -r test-components/${component}/wit/deps
+    mkdir test-components/${component}/wit/deps
+    glob_cp wit/deps/**/* test-components/${component}/wit/deps
+end
+"""
+
+[tasks.remove-wit-deps]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -rf golem-wasm/wit/deps
+rm -rf golem-common/wit/deps
+rm -rf cli/golem-cli/wit/deps
+"""
+
+[tasks.diff-wit]
+private = true
+script = "git diff --exit-code wit golem-wasm/wit"
+
+[tasks.check-wit]
+run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
+
+# BUILD
+
+[tasks.build]
+dependencies = ["wit"]
+description = "Builds everything in debug mode"
+command = "cargo"
+args = ["build", "--workspace", "--all-targets"]
+
+[tasks.build-all-bins-including-tests]
+dependencies = ["wit"]
+description = "Builds all executables in debug mode, including the single-executable golem and all tests"
+
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build --profile %{PROFILE}
+exec --fail-on-error cargo test --no-run --profile %{PROFILE}
+'''
+
+
+[tasks.build-bins]
+dependencies = ["wit"]
+description = "Builds all executables in debug mode"
+command = "cargo"
+args = [
+    "build",
+    "--workspace",
+    "--bins",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
+
+[tasks.build-bins-all]
+dependencies = ["wit"]
+description = "Builds all executables in debug mode, including the single-executable golem"
+command = "cargo"
+args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
+
+[tasks.build-bins-all-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-bins-all"] }]
+
+[tasks.build-bins-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-bins"] }]
+
+[tasks.build-worker-service]
+dependencies = ["wit"]
+description = "Builds the worker-service"
+command = "cargo"
+args = ["build", "-p", "golem-worker-service"]
+
+[tasks.build-worker-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-worker-service"] }]
+
+[tasks.build-registry-service]
+description = "Builds registry service"
+command = "cargo"
+args = ["build", "-p", "golem-registry-service"]
+
+[tasks.build-registry-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-registry-service"] }]
+
+[tasks.build-release]
+description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
+to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
+for docker images."""
+dependencies = [
+    "wit",
+    "set-version",
+    "build-release-default",
+    "build-release-override-linux-amd64",
+    "build-release-override-linux-arm64",
+]
+
+# There are three variants of build-release, and only one of them will run based on the value of
+# the PLATFORM_OVERRIDE environment variable
+
+[tasks.build-release-default]
+description = "Build the project in release mode"
+condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
+command = "cargo"
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
+
+[tasks.build-release-override-linux-amd64]
+description = "Build the project in release mode with target platform override to linux/amd64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
+command = "cargo"
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
+
+[tasks.build-release-override-linux-arm64]
+description = "Build the project in release mode with target platform override to linux/arm64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
+install_crate = "cross"
+command = "cross"
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--target",
+    "aarch64-unknown-linux-gnu",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
+
+## ** CHECK **
+
+[tasks.check]
+description = "Runs rustfmt and clippy checks without applying any fix"
+dependencies = ["wit", "check-clippy", "check-rustfmt"]
+
+[tasks.check-rustfmt]
+description = "Runs rustfmt checks without applying any fix"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.check-clippy]
+description = "Runs clippy checks without applying any fix"
+install_crate = "clippy"
+command = "cargo"
+args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
+
+## ** FIX **
+
+[tasks.fix]
+description = "Runs rustfmt and clippy checks and applies fixes"
+#dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
+dependencies = ["fix-clippy", "fix-rustfmt"]
+
+[tasks.fix-rustfmt]
+description = "Runs rustfmt checks and applies fixes"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.fix-clippy]
+description = "Runs clippy checks and applies fixes"
+install_crate = "clippy"
+command = "cargo"
+args = [
+    "clippy",
+    "--all-targets",
+    "--fix",
+    "--allow-dirty",
+    "--allow-staged",
+    "--",
+    "--no-deps",
+    "-Dwarnings",
+]
+
+## ** TEST **
+
+[tasks.test]
+description = "Runs all unit tests, worker executor tests and integration tests"
+dependencies = [
+    "unit-tests",
+    "worker-executor-tests",
+    "api-tests",
+    "integration-tests",
+]
+
+[tasks.unit-tests]
+dependencies = ["wit"]
+description = "Runs unit tests only"
+script = '''
+cargo-test-r run --workspace --lib --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests]
+dependencies = ["wit"]
+description = "Runs worker executor tests only"
+env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
+command = "cargo"
+args = [
+    "test",
+    "--package",
+    "golem-worker-executor",
+    "--test",
+    "*",
+    "--",
+    "--nocapture",
+]
+
+[tasks.worker-executor-tests-misc]
+dependencies = ["wit"]
+description = "Runs only untagged and rdbms worker-executor-tests"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo-test-r run --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-group1]
+dependencies = ["wit"]
+description = "Runs worker executor tests only (group 1/2)"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-group2]
+dependencies = ["wit"]
+description = "Runs worker executor tests only (group 2/2)"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo-test-r run --package golem-worker-executor --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.integration-tests]
+description = "Runs all integration tests"
+dependencies = [
+    "integration-tests-group1",
+    "integration-tests-group2",
+    "integration-tests-group3",
+    "integration-tests-group4",
+    "cli-integration-tests",
+]
+
+[tasks.integration-tests-group1]
+description = "Runs integration tests (group 1/4)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group2]
+description = "Runs integration tests (group 2/4)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group3]
+description = "Runs integration tests (group 3/4)"
+dependencies = ["wit"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group4]
+description = "Runs integration tests (group 4/4)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
+script = '''
+cargo-test-r run --package integration-tests --test sharding -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.cli-integration-tests]
+description = "Runs all CLI integration tests"
+dependencies = [
+    "cli-integration-tests-group1",
+    "cli-integration-tests-group2",
+    "cli-integration-tests-group3",
+]
+
+[tasks.cli-integration-tests-group1]
+dependencies = ["build-bins-all-non-ci"]
+description = "Run CLI integration tests (1/3)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group2]
+dependencies = ["build-bins-all-non-ci"]
+description = "Run CLI integration tests (2/3)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group3]
+dependencies = ["build-bins-all-non-ci"]
+description = "Run CLI integration tests (3/3)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.sharding-tests-debug]
+dependencies = ["build-bins-non-ci"]
+script = '''
+rm -rf logs data
+mkdir -pv logs data
+
+export RUST_LOG=info,golem_test_framework::components=WARN
+export RUST_BACKTRACE=1
+export GOLEM__TRACING__FILE_DIR=../logs
+export GOLEM__TRACING__FILE_TRUNCATE=false
+export GOLEM__TRACING__FILE__ENABLED=true
+export GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS=20
+export GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY="1s"
+
+cargo-test-r run \
+--package integration-tests \
+--test sharding ${@} \
+-- --nocapture --test-threads=1
+'''
+
+[tasks.api-tests]
+description = "Runs all API tests"
+dependencies = ["api-tests-http", "api-tests-grpc"]
+
+[tasks.api-tests-http]
+description = "Runs API HTTP tests only"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.api-tests-grpc]
+description = "Runs API GRPC tests only"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test api  :tag: -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.registry-repo-coverage]
+description = "Run registry service tests with covarage report for repository sources"
+script = '''
+cargo tarpaulin \
+    --skip-clean \
+    --target-dir target-tarpaulin \
+    --package golem-registry-service \
+    --include-files "golem-registry-service/src/repo/*" \
+    --out html \
+    --output-dir target-tarpaulin/reports
+'''
+
+## ** CHECK-OPENAPI **
+
+[tasks.check-openapi]
+description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
+dependencies = ["merge-openapi", "diff-openapi"]
+
+[tasks.diff-openapi]
+description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
+dependencies = ["merge-openapi"]
+script = '''
+  if diff openapi/golem-service.yaml target/golem-service.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem OpenAPI spec version detected."
+    else
+      echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      echo ""
+      diff openapi/golem-service.yaml target/golem-service.yaml
+      exit 1
+  fi
+  if diff openapi/golem-registry-service.yaml target/golem-registry-service.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem Registry Service OpenAPI spec version detected."
+    else
+      echo "openapi/golem-registry-service.yaml is not the same as produced by golem-registry-service." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      exit 1
+  fi
+  if diff openapi/golem-worker-service.yaml target/golem-worker-service.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem Worker Service OpenAPI spec version detected."
+    else
+      echo "openapi/golem-worker-service.yaml is not the same as produced by golem-worker-service." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      exit 1
+  fi
+'''
+
+## ** GENERATE-OPENAPI **
+
+[tasks.generate-openapi]
+dependencies = ["merge-openapi", "store-openapi"]
+description = "Generates openapi spec from the code and saves it to the openapi directory"
+
+[tasks.generate-registry-service-openapi]
+description = "Generates openapi spec for registry service"
+dependencies = ["build-registry-service-non-ci"]
+cwd = "./target/debug"
+script = '''
+mkdir -pv ../data
+./golem-registry-service --dump-openapi-yaml > ../golem-registry-service.yaml
+'''
+
+[tasks.generate-worker-service-openapi]
+description = "Generates openapi spec for worker service"
+dependencies = ["build-worker-service-non-ci"]
+cwd = "./target/debug"
+script = '''
+mkdir -pv ../data
+./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
+'''
+
+[tasks.merge-openapi]
+dependencies = [
+    "generate-registry-service-openapi",
+    "generate-worker-service-openapi"
+]
+install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
+command = "golem-openapi-client-generator"
+args = [
+    "merge",
+    "--spec-yaml",
+    "./target/golem-registry-service.yaml",
+    "./target/golem-worker-service.yaml",
+    "--output-yaml",
+    "./target/golem-service.yaml",
+]
+
+[tasks.store-openapi]
+description = "Stores the generated openapi spec in the openapi directory"
+dependencies = ["merge-openapi"]
+script = [
+    "cp -v ./target/golem-service.yaml ./openapi/golem-service.yaml",
+    "cp -v ./target/golem-registry-service.yaml ./openapi/",
+    "cp -v ./target/golem-worker-service.yaml ./openapi/",
+]
+
+## ** PUBLISH **
+[tasks.publish]
+description = "Publishes packages to crates.io"
+dependencies = [
+    "set-version",
+    "publish-golem-wasm-derive",
+    "publish-golem-wasm",
+]
+
+[tasks.set-version]
+description = "Sets the version in all Cargo.toml files to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+script = '''
+grep -rl --include 'Cargo.toml' '0\.0\.0' | xargs sed -i "s/0\.0\.0/${VERSION}/g"
+'''
+
+[tasks.set-version.mac]
+condition = { env_set = ["VERSION"] }
+script = '''
+grep -rl --include '.*Cargo\.toml' '0\.0\.0' | xargs sed -i "" "s/0\.0\.0/${VERSION}/g"
+'''
+
+[tasks.set-version.windows]
+script_runner = "powershell"
+script_extension = "ps1"
+condition = { env_set = ["VERSION"] }
+script = '''
+$cargoFiles = Get-ChildItem . Cargo.toml -rec
+foreach ($file in $cargoFiles)
+{
+    (Get-Content $file.PSPath) |
+    Foreach-Object { $_ -replace "0.0.0", $Env:VERSION } |
+    Set-Content $file.PSPath
+}
+'''
+
+[tasks.publish-golem-wasm-derive]
+description = "Publishes golem-wasm-derive package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-derive",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-wasm]
+description = "Publishes golem-wasm package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+## ** PACKAGE RELEASE **
+
+# There are three variants of package-release, and only one of them will run based on the value of
+# the PLATFORM_OVERRIDE environment variable
+
+[tasks.package-release]
+description = "Packages the project's release artifact"
+dependencies = [
+    "package-release-default",
+    "package-release-override-linux-amd64",
+    "package-release-override-linux-arm64",
+]
+
+[tasks.package-release-base]
+private = true
+description = "Packages the project's release artifact. Must have the PLATFORM_TARGET env var set."
+cwd = "target"
+command = "tar"
+args = [
+    "-cvf",
+    "${PLATFORM_TARGET}.tar",
+    "${PLATFORM_TARGET}/release/golem-registry-service",
+    "${PLATFORM_TARGET}/release/golem-shard-manager",
+    "${PLATFORM_TARGET}/release/worker-executor",
+    "${PLATFORM_TARGET}/release/golem-debugging-service",
+    "${PLATFORM_TARGET}/release/golem-worker-service",
+    "${PLATFORM_TARGET}/release/golem-component-compilation-service",
+]
+
+
+[tasks.package-release-default]
+description = "Packages the project's release artifact"
+condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
+env = { "PLATFORM_TARGET" = "." }
+extend = "package-release-base"
+dependencies = ["build-release-default"]
+
+[tasks.package-release-override-linux-amd64]
+description = "Packages the project's release artifact with target platform override to linux/amd64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
+env = { "PLATFORM_TARGET" = "x86_64-unknown-linux-gnu" }
+extend = "package-release-base"
+dependencies = ["build-release-override-linux-amd64"]
+
+[tasks.package-release-override-linux-arm64]
+description = "Packages the project in release artifact with target platform override to linux/arm64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
+env = { "PLATFORM_TARGET" = "aarch64-unknown-linux-gnu" }
+extend = "package-release-base"
+dependencies = ["build-release-override-linux-arm64"]
+
+[tasks.run]
+description = "Runs all the services locally"
+dependencies = ["build"]
+
+condition = { fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager" }
+
+condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
+
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "Disabled" }
+
+script = { file = "./local-run/start.sh" }
+
+[tasks.run-with-login-enabled]
+description = "Runs all the services locally with the oauth2 login system enabled"
+dependencies = ["build"]
+
+condition = { env_set = [
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
+
+condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
+
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "OAuth2" }
+
+script = { file = "./local-run/start.sh" }
+
+## ** GENERATE CONFIGS **
+
+[tasks.generate-configs]
+description = "Generates default and example config files"
+dependencies = ["build-bins-non-ci"]
+
+script = '''
+export RUST_BACKTRACE=1
+
+./target/debug/golem-registry-service --dump-config-default-toml > golem-registry-service/config/registry-service.toml
+./target/debug/golem-registry-service --dump-config-default-env-var > golem-registry-service/config/registry-service.sample.env
+
+./target/debug/golem-shard-manager --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
+./target/debug/golem-shard-manager --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
+
+./target/debug/golem-component-compilation-service --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
+./target/debug/golem-component-compilation-service --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env
+
+./target/debug/golem-worker-service --dump-config-default-toml > golem-worker-service/config/worker-service.toml
+./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
+
+./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
+./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+
+./target/debug/golem-debugging-service --dump-config-default-toml > golem-debugging-service/config/debug-worker-executor.toml
+./target/debug/golem-debugging-service --dump-config-default-env-var > golem-debugging-service/config/debug-worker-executor.sample.env
+'''
+
+## ** CHECK CONFIGS **
+
+[tasks.check-configs]
+description = "Generates configs from code and checks if it's committed"
+dependencies = ["generate-configs"]
+
+script = '''
+git diff --exit-code \
+    golem-registry-service/config/registry-service.toml \
+    golem-registry-service/config/registry-service.sample.env \
+    golem-shard-manager/config/shard-manager.toml \
+    golem-shard-manager/config/shard-manager.sample.env \
+    golem-component-compilation-service/config/component-compilation-service.toml \
+    golem-component-compilation-service/config/component-compilation-service.sample.env \
+    golem-worker-service/config/worker-service.toml \
+    golem-worker-service/config/worker-service.sample.env \
+    golem-worker-executor/config/worker-executor.toml \
+    golem-worker-executor/config/worker-executor.sample.env \
+    golem-debugging-service/config/debug-worker-executor.toml \
+    golem-debugging-service/config/debug-worker-executor.sample.env
+'''
+
+## ** Elastic tasks **
+
+[tasks.elastic-up]
+description = "Starts elastic, kibana and filebeat and loads logs into elastic"
+script = '''
+docker compose --project-directory log-tools/elastic up --detach
+'''
+
+[tasks.elastic-stop]
+description = "Stops the elastic environment"
+script = '''
+docker compose --project-directory log-tools/elastic stop
+'''
+
+[tasks.elastic-down]
+description = "Stops and removes the elastic environment, including all data"
+script = '''
+docker compose --project-directory log-tools/elastic down --volumes
+'''
+
+## ** INSTALL - DEBUG **
+[tasks.install-debug]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-debug", "install-golem-debug"]
+
+[tasks.install-golem-cli-debug]
+description = "Install golem-cli (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --debug --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem-debug]
+description = "Install golem (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** INSTALL - RELEASE **
+
+[tasks.install-release]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-release", "install-golem-release"]
+
+[tasks.install-golem-cli-release]
+description = "Install golem-cli (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem-release]
+description = "Install golem (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path cli/golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** DESKTOP APP **
+[tasks.desktop]
+description = "Builds the desktop application"
+dependencies = ["npm-install"]
+command = "npm"
+args = ["run", "tauri", "build"]
+cwd = ".cli//desktop-app"
+
+[tasks.dev-desktop]
+description = "Run the desktop application"
+dependencies = ["npm-install"]
+command = "npm"
+args = ["run", "tauri", "dev"]
+cwd = "./cli/desktop-app"
+
+[tasks.npm-install]
+description = "Install npm dependencies"
+command = "npm"
+args = ["install"]
+cwd = "./cli/desktop-app"
+
+## ** APP MANIFEST SCHEMA **
+[tasks.publish-app-manifest-json-schema]
+description = "Publish application manifest schemas to S3 (https://schema.golem.cloud)"
+command = "aws"
+args = ["s3", "sync", "cli/schema.golem.cloud", "s3://schema.golem.cloud"]
+
+[tasks.serve-app-manifest-json-schema]
+description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
+install_crate = "miniserve"
+command = "miniserve"
+args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
+
+## Cleanup
+[tasks.clear-v8]
+description = "Removes the v8 crate from the target directories"
+script_runner = "@duckscript"
+script = '''
+handle = glob_array ./target/**/build/v8*
+
+for path in ${handle}
+    rm -r ${path}
+end
+
+handle = glob_array ./target/**/deps/libv8*
+
+for path in ${handle}
+    rm -r ${path}
+end
+'''

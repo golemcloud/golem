@@ -1,0 +1,12 @@
+package golem:it;
+
+interface api {
+
+  get-environment: func() -> result<list<tuple<string, string>>, string>;
+
+  get-arguments: func() -> result<list<string>, string>;
+}
+
+world environment-service {
+  export api;
+}

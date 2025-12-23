@@ -1,0 +1,402 @@
+## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
+http_address = "0.0.0.0"
+http_port = 8082
+tracing_file_name_with_port = true
+
+[active_workers]
+drop_when_full = 0.25
+ttl = "8h"
+
+[agent_types_service]
+type = "Grpc"
+
+[agent_types_service.config]
+cache_time_to_idle = "1m"
+
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "../data/blob_storage"
+
+[compiled_component_service]
+type = "Enabled"
+
+[compiled_component_service.config]
+
+[component_cache]
+max_capacity = 32
+max_metadata_capacity = 16384
+max_resolved_component_capacity = 1024
+time_to_idle = "12h"
+
+[engine]
+enable_fs_cache = false
+
+[indexed_storage]
+type = "KVStoreRedis"
+
+[indexed_storage.config]
+
+[key_value_storage]
+type = "Redis"
+
+[key_value_storage.config]
+database = 0
+host = "localhost"
+key_prefix = ""
+pool_size = 8
+port = 6380
+tracing = false
+
+[key_value_storage.config.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[limits]
+epoch_interval = "10ms"
+epoch_ticks = 1
+event_broadcast_capacity = 1024
+event_history_size = 128
+fuel_to_borrow = 10000
+invocation_result_broadcast_capacity = 100000
+max_active_workers = 1024
+max_concurrent_streams = 1024
+max_oplog_query_pages_size = 100
+
+[memory]
+acquire_retry_delay = "500ms"
+worker_estimate_coefficient = 1.1
+worker_memory_ratio = 0.8
+
+[memory.oom_retry_config]
+max_attempts = 4294967295
+max_delay = "5s"
+min_delay = "100ms"
+multiplier = 2.0
+
+[oplog]
+archive_interval = "1day"
+blob_storage_layers = 1
+entry_count_limit = 1024
+indexed_storage_layers = 2
+max_operations_before_commit = 128
+max_operations_before_commit_ephemeral = 1024
+max_payload_size = 65536
+
+[public_worker_api]
+connect_timeout = "10s"
+host = "localhost"
+port = 9007
+
+[public_worker_api.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[public_worker_api.tls]
+type = "Disabled"
+
+[public_worker_api.tls.config]
+
+[rdbms.pool]
+acquire_timeout = "3s"
+eviction_period = "2m"
+eviction_ttl = "10m"
+max_connections = 20
+
+[rdbms.query]
+query_batch = 50
+
+[registry_service]
+connect_timeout = "10s"
+host = "localhost"
+max_message_size = 52428800
+port = 8080
+
+[registry_service.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[registry_service.tls]
+type = "Disabled"
+
+[registry_service.tls.config]
+
+[resource_limits]
+type = "Grpc"
+
+[resource_limits.config]
+batch_update_interval = "1m"
+
+[retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
+[scheduler]
+refresh_interval = "2s"
+
+[suspend]
+suspend_after = "10s"
+
+[tracing]
+console = false
+dtor_friendly = false
+file_name = "worker-executor.log"
+file_truncate = true
+
+[tracing.file]
+ansi = false
+compact = false
+enabled = false
+json = true
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+[tracing.otlp]
+enabled = false
+host = "localhost"
+port = 4318
+service_name = "golem"
+
+[tracing.stderr]
+ansi = false
+compact = false
+enabled = false
+json = false
+json_flatten = false
+json_flatten_span = false
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+[tracing.stdout]
+ansi = true
+compact = false
+enabled = true
+json = false
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+
+## Generated from example config: default-debug-config
+# cors_origin_regex = "https://*.golem.cloud"
+# http_address = "0.0.0.0"
+# http_port = 8082
+# tracing_file_name_with_port = true
+# 
+# [active_workers]
+# drop_when_full = 0.25
+# ttl = "8h"
+# 
+# [agent_types_service]
+# type = "Grpc"
+# 
+# [agent_types_service.config]
+# cache_time_to_idle = "1m"
+# 
+# [blob_storage]
+# type = "LocalFileSystem"
+# 
+# [blob_storage.config]
+# root = "../data/blob_storage"
+# 
+# [compiled_component_service]
+# type = "Enabled"
+# 
+# [compiled_component_service.config]
+# 
+# [component_cache]
+# max_capacity = 32
+# max_metadata_capacity = 16384
+# max_resolved_component_capacity = 1024
+# time_to_idle = "12h"
+# 
+# [engine]
+# enable_fs_cache = false
+# 
+# [indexed_storage]
+# type = "KVStoreRedis"
+# 
+# [indexed_storage.config]
+# 
+# [key_value_storage]
+# type = "Redis"
+# 
+# [key_value_storage.config]
+# database = 0
+# host = "localhost"
+# key_prefix = ""
+# pool_size = 8
+# port = 6380
+# tracing = false
+# 
+# [key_value_storage.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [limits]
+# epoch_interval = "10ms"
+# epoch_ticks = 1
+# event_broadcast_capacity = 1024
+# event_history_size = 128
+# fuel_to_borrow = 10000
+# invocation_result_broadcast_capacity = 100000
+# max_active_workers = 1024
+# max_concurrent_streams = 1024
+# max_oplog_query_pages_size = 100
+# 
+# [memory]
+# acquire_retry_delay = "500ms"
+# worker_estimate_coefficient = 1.1
+# worker_memory_ratio = 0.8
+# 
+# [memory.oom_retry_config]
+# max_attempts = 4294967295
+# max_delay = "5s"
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [oplog]
+# archive_interval = "1day"
+# blob_storage_layers = 1
+# entry_count_limit = 1024
+# indexed_storage_layers = 2
+# max_operations_before_commit = 128
+# max_operations_before_commit_ephemeral = 1024
+# max_payload_size = 65536
+# 
+# [public_worker_api]
+# connect_timeout = "10s"
+# host = "localhost"
+# port = 9007
+# 
+# [public_worker_api.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [public_worker_api.tls]
+# type = "Disabled"
+# 
+# [public_worker_api.tls.config]
+# 
+# [rdbms.pool]
+# acquire_timeout = "3s"
+# eviction_period = "2m"
+# eviction_ttl = "10m"
+# max_connections = 20
+# 
+# [rdbms.query]
+# query_batch = 50
+# 
+# [registry_service]
+# connect_timeout = "10s"
+# host = "localhost"
+# max_message_size = 52428800
+# port = 8080
+# 
+# [registry_service.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [registry_service.tls]
+# type = "Disabled"
+# 
+# [registry_service.tls.config]
+# 
+# [resource_limits]
+# type = "Grpc"
+# 
+# [resource_limits.config]
+# batch_update_interval = "1m"
+# 
+# [retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
+# [scheduler]
+# refresh_interval = "2s"
+# 
+# [suspend]
+# suspend_after = "10s"
+# 
+# [tracing]
+# console = false
+# dtor_friendly = false
+# file_name = "worker-executor.log"
+# file_truncate = true
+# 
+# [tracing.file]
+# ansi = false
+# compact = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [tracing.otlp]
+# enabled = false
+# host = "localhost"
+# port = 4318
+# service_name = "golem"
+# 
+# [tracing.stderr]
+# ansi = false
+# compact = false
+# enabled = false
+# json = false
+# json_flatten = false
+# json_flatten_span = false
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [tracing.stdout]
+# ansi = true
+# compact = false
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false

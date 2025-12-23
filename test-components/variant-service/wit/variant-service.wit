@@ -1,0 +1,15 @@
+package golem:it;
+
+interface api {
+
+  variant bid-result {
+    success,
+    failure(string),
+  }
+
+  bid: func() -> bid-result;
+}
+
+world variant-service {
+  export api;
+}

@@ -1,0 +1,33 @@
+[package]
+name = "golem-api-grpc"
+version = "0.0.0"
+edition = "2021"
+
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "GRPC API for Golem services"
+
+license-file = "../LICENSE"
+
+[lib]
+harness = false
+
+[dependencies]
+golem-rib = { workspace = true }
+golem-wasm = { workspace = true }
+
+desert_rust = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+[build-dependencies]
+cargo_metadata = { workspace = true }
+miette = { workspace = true }
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }

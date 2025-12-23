@@ -1,0 +1,19 @@
+[package]
+description = "Golem Rust tooling library that facilitates writing Golem backends in Rust"
+edition = "2021"
+homepage = "https://golem.cloud"
+license = "Apache-2.0"
+name = "golem-rust-macro"
+repository = "https://github.com/golemcloud/golem-rust"
+version = "0.0.0"
+
+[lib]
+path = "src/lib.rs"
+proc-macro = true
+
+[dependencies]
+heck = "0.5.0"
+proc-macro-crate = "3.4.0"
+proc-macro2 = "1"
+quote = "1"
+syn = {version = "2", features = ["extra-traits", "full", "fold", "parsing"]}

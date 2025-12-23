@@ -1,0 +1,52 @@
+{
+    "$schema": "https://lnav.org/schemas/format-v1.schema.json",
+    "golem_json_log": {
+        "title": "Golem JSON Log",
+        "file-type": "json",
+        "timestamp-field": "timestamp",
+        "level-field": "level",
+        "hide-extra": false,
+        "ordered-by-time": true,
+        "level": {
+            "error": "ERROR",
+            "warning": "WARN",
+            "info": "INFO",
+            "debug": "DEBUG",
+            "trace": "TRACE"
+        },
+        "value": {
+            "level": {
+                "kind": "string",
+                "identifier": true
+            },
+            "target": {
+                "kind": "string",
+                "identifier": true
+            },
+            "message": {
+                "kind": "string"
+            }
+        },
+        "body-field": "message",
+        "line-format": [
+            {
+                "field": "__timestamp__"
+            },
+            " ",
+            {
+                "field": "level",
+                "auto-width": true
+            },
+            " ",
+            {
+                "field": "target",
+                "suffix": ":",
+                "auto-width": true
+            },
+            " ",
+            {
+                "field": "message"
+            }
+        ]
+    }
+}

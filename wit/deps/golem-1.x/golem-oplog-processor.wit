@@ -1,0 +1,28 @@
+package golem:api@1.3.0;
+
+interface oplog-processor {
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use golem:rpc/types@0.2.2.{wit-value};
+
+    use host.{account-id, oplog-index, agent-metadata};
+    use oplog.{oplog-entry};
+    use golem:rpc/types@0.2.2.{component-id, agent-id};
+
+    record account-info {
+        account-id: account-id
+    }
+
+    /// Called when one of the agents the plugin is activated on has written new entries to its oplog.
+    ///
+    /// There are no guarantees for the number of processors running at the same time, and different entries from the same agent
+    /// may be sent to different processor instances.
+    ///
+    /// The `account-info` parameters contains details of the account the installation belongs to.
+    /// The `config` parameter contains the configuration parameters for the plugin, as specified in the plugin installation
+    /// The `component-id` parameter contains the identifier of the component the plugin was installed to.
+    /// The `agent-id` parameter identifies the agent.
+    /// The `metadata` parameter contains the latest metadata of the agent.
+    /// The `first-entry-index` parameter contains the index of the first entry in the list of `entries`.
+    /// The `entries` parameter always contains at least one element.
+    process: func(account-info: account-info, config: list<tuple<string, string>>, component-id: component-id, agent-id: agent-id, metadata: agent-metadata, first-entry-index: oplog-index, entries: list<oplog-entry>) -> result<_, string>;
+}

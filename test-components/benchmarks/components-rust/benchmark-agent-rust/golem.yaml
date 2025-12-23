@@ -1,0 +1,3 @@
+components:
+  benchmark:agent-rust:
+    templates: rust-agent
