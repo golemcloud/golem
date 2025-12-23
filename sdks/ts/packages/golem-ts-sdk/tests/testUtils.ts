@@ -1,0 +1,167 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import {
+  AnalysedType,
+  NameTypePair,
+} from '../src/internal/mapping/types/AnalysedType';
+import { AgentClassName } from '../src';
+import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
+import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
+import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
+
+export const FooAgentClassName = new AgentClassName('FooAgent');
+export const BarAgentClassName = new AgentClassName('BarAgent');
+export const BarAgentCustomClassName = new AgentClassName('my-complex-agent');
+export const EphemeralAgentClassName = new AgentClassName('EphemeralAgent');
+
+export function getTestInterfaceType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('TestInterfaceType');
+}
+
+export function getTestMapType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('MapType');
+}
+
+export function getTestObjectType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('ObjectType');
+}
+
+export function getTestListOfObjectType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('ListComplexType');
+}
+
+export function getUnionType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('UnionType');
+}
+
+export function getResultTypeExact(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('ResultTypeExactBoth');
+}
+
+export function getUnionComplexType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('UnionComplexType');
+}
+
+export function getTupleType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('TupleType');
+}
+
+export function getTupleComplexType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('TupleComplexType');
+}
+
+export function getBooleanType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('boolean');
+}
+
+export function getStringType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('string');
+}
+
+export function getNumberType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('number');
+}
+
+export function getPromiseType(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('PromiseType');
+}
+
+export function getUnionWithLiterals(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('UnionWithLiterals');
+}
+
+export function getUnionWithOnlyLiterals(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('UnionWithOnlyLiterals');
+}
+
+export function getRecordFieldsFromAnalysedType(
+  analysedType: AnalysedType,
+): NameTypePair[] | undefined {
+  return analysedType.kind === 'record' ? analysedType.value.fields : undefined;
+}
+
+function fetchTypeFromBarAgent(
+  typeNameInTestData: string,
+): [AnalysedType, Type.Type] {
+  const complexAgentMetadata = TypeMetadata.get(BarAgentClassName.value);
+
+  if (!complexAgentMetadata) {
+    throw new Error('Class metadata for BarAgent not found');
+  }
+
+  const constructorArg = complexAgentMetadata.constructorArgs.find((arg) => {
+    const typeName = Type.getTypeName(arg.type);
+    return typeName === typeNameInTestData;
+  });
+
+  if (constructorArg) {
+    const typeInfo = AgentConstructorParamRegistry.getParamType(
+      'BarAgent',
+      constructorArg.name,
+    );
+
+    if (!typeInfo || typeInfo.tag !== 'analysed') {
+      throw new Error(
+        `Test failure: Unsupported type for constructor parameter ${constructorArg.name}`,
+      );
+    }
+
+    return [typeInfo.val, constructorArg.type];
+  }
+
+  const methods = Array.from(complexAgentMetadata.methods);
+
+  for (const [name, method] of methods) {
+    if (
+      method.returnType &&
+      Type.getTypeName(method.returnType) === typeNameInTestData
+    ) {
+      const returnType = AgentMethodRegistry.getReturnType('BarAgent', name);
+
+      if (!returnType || returnType.tag !== 'analysed') {
+        throw new Error(
+          `Return type ${returnType?.tag} not supported in test data`,
+        );
+      }
+
+      return [returnType.val, method.returnType];
+    }
+
+    const param = Array.from(method.methodParams.entries()).find(([_, t]) => {
+      const typeName = Type.getTypeName(t);
+      return typeName === typeNameInTestData;
+    });
+
+    if (param) {
+      const typeInfo = AgentMethodParamRegistry.getParamType(
+        'BarAgent',
+        name,
+        param[0],
+      );
+
+      if (!typeInfo || typeInfo.tag !== 'analysed') {
+        throw new Error(
+          `Test failure: Unsupported type for parameter ${param[0]} in method ${name}`,
+        );
+      }
+
+      return [typeInfo.val, param[1]];
+    }
+  }
+  throw new Error(
+    `Test failure: Unresolved type ${typeNameInTestData}. Make sure \`${BarAgentClassName.value}\` use ${typeNameInTestData}`,
+  );
+}

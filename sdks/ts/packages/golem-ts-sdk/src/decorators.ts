@@ -1,0 +1,438 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { AgentType, DataValue, AgentMode } from 'golem:agent/common';
+import { ResolvedAgent } from './internal/resolvedAgent';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import {
+  getNewPhantomRemoteClient,
+  getPhantomRemoteClient,
+  getRemoteClient,
+} from './internal/clientGeneration';
+import { BaseAgent } from './baseAgent';
+import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+import * as Either from './newTypes/either';
+import {
+  getAgentMethodSchema,
+  getConstructorDataSchema,
+} from './internal/schema';
+import * as Option from './newTypes/option';
+import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
+import { AgentClassName } from './newTypes/agentClassName';
+import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
+import { createCustomError } from './internal/agentError';
+import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
+import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
+import {
+  deserializeDataValue,
+  ParameterDetail,
+} from './internal/mapping/values/dataValue';
+import { getRawSelfAgentId } from './host/hostapi';
+
+/**
+ *
+ * The `@agent()` decorator: Marks a class as an Agent, and registers itself internally for discovery by other agents.
+ * The agent-name is the class name by default, but can be overridden by passing a custom name to the decorator.
+ *
+ * It also adds a static `get()` method to the class, which can be used to create a remote client for the agent.
+ *
+ * Only a class that extends `BaseAgent` can be decorated with `@agent()`.
+ *
+ * ### Naming of agents
+ * By default, the agent name is the class name. When using the agent through
+ * Golem's CLI, these names must be provided in kebab-case.
+ *
+ * Example:
+ * ```ts
+ * @agent()
+ * class WeatherAgent {} // -> "weather-agent"
+ * ```
+ * You can override the name using the `name` option.
+ *
+ * ### Durability mode
+ * By default, agents are durable. You can specify the durability mode using the optional parameter:
+ * ```ts
+ * @agent({ mode: "ephemeral" })
+ * class EphemeralAgent extends BaseAgent { ... }
+ * ```
+ * Valid modes are "durable" (default) and "ephemeral".
+ *
+ * ### Options
+ * The decorator accepts an optional configuration object with the following fields:
+ * - `name`: Custom agent name (default: class name)
+ * - `mode`: Agent durability mode, either "durable" or "ephemeral" (default: "durable")
+ *
+ * Example:
+ * ```ts
+ * @agent({ name: "weather-api", mode: "durable" })
+ * class WeatherAgent extends BaseAgent { ... }
+ * ```
+ *
+ * ### Metadata
+ * Prompt and description are **recommended** so that other agents can decide whether to interact with this agent.
+ * ```ts
+ * @prompt("Provide a city name")
+ * @description("Get the current weather for a location")
+ * getWeather(city: string): Promise<WeatherResult> { ... }
+ * ```
+ *
+ * ### Agent parameter types
+ *
+ * - Constructor and method parameters can be any valid TypeScript type.
+ * - **Enums are not supported**.
+ * - Use **type aliases** for clarity and reusability.
+ *
+ * ```ts
+ * type Coordinates = { lat: number; lon: number };
+ * type WeatherReport = { temperature: number; description: string };
+ *
+ * @agent()
+ * class WeatherAgent {
+ *   constructor(apiKey: string) {}
+ *
+ *   getWeather(coords: Coordinates): WeatherReport { ... }
+ * }
+ * ```
+ *
+ * ### Example
+ *
+ * ```ts
+ * @agent()
+ * class CalculatorAgent {
+ *   constructor(baseValue: number) {}
+ *
+ *   add(value: number): number {
+ *     return this.baseValue + value;
+ *   }
+ * }
+ *
+ * ### Remote Client
+ *
+ * The purpose of a remote client is that it allows you to invoke the agent constructor
+ * and methods of an agent (even if it's defined with in the same code) in a different container.
+ *
+ * By passing the constructor parameters to `get()`, the SDK will ensure that an instance of the agent,
+ * is created in a different container, and the method calls are proxied to that container.
+ *
+ * `get` takes the same parameters as the constructor.
+ *
+ * The main difference between `CalculatorAgent.get(10)` and `new CalculatorAgent(10)` is that
+ * the former creates or fetches a remote instance of the agent in a different container, while the latter creates a local instance.
+ * If the remote agent was already created with the same constructor parameter value, `get` will return a reference to the existing agent instead of creating a new one.
+
+ * ```ts
+ * const calcRemote = CalculatorAgent.get(10);
+ * calcRemote.add(5);
+ * ```
+ *
+ * It is possible to create remote clients to phantom agents - agents sharing the same constructor values as a normal agent,
+ * but still having their separate identity. To address a phantom agent, use the `phantom` method instead of `get`:
+ *
+ * ```ts
+ * const phantomRemote = CalculatorAgent.phantom(undefined, 10);
+ * phantomRemote.add(5);
+ *
+ * // or
+ *
+ * const phantomRemote = CalculatorAgent.phantom(parseUuid("A09F61A8-677A-40EA-9EBE-437A0DF51749"), 10);
+ * phantomRemote.add(5);
+ * ```
+ *
+ * The first parameter is the phantom ID. If undefined, a new phantom ID will be generated.
+ */
+interface AgentDecoratorOptions {
+  name?: string;
+  mode?: AgentMode;
+}
+
+export function agent(options?: AgentDecoratorOptions) {
+  return function <T extends new (...args: any[]) => any>(ctor: T) {
+    if (!Object.prototype.isPrototypeOf.call(BaseAgent, ctor)) {
+      throw new Error(
+        `Invalid agent declaration: \`${ctor.name}\` must extend \`BaseAgent\` to be decorated with @agent()`,
+      );
+    }
+
+    // Decorator-time validation of the class name
+    const agentClassName = new AgentClassName(ctor.name);
+
+    if (AgentTypeRegistry.exists(agentClassName)) {
+      return ctor;
+    }
+
+    let classMetadata = Option.getOrElse(
+      Option.fromNullable(TypeMetadata.get(ctor.name)),
+      () => {
+        const availableAgents = Array.from(TypeMetadata.getAll().entries())
+          .map(([key, _]) => key)
+          .join(', ');
+        throw new Error(
+          `Agent class ${agentClassName.value} is not registered. Available agents are ${availableAgents}. Please ensure the class ${ctor.name} is decorated with @agent()`,
+        );
+      },
+    );
+
+    const constructorDataSchema = Either.getOrElse(
+      getConstructorDataSchema(agentClassName.value, classMetadata),
+      (err) => {
+        throw new Error(
+          `Schema generation failed for agent class ${agentClassName.value} due to unsupported types in constructor. ` +
+            err,
+        );
+      },
+    );
+
+    const methodSchemaEither = getAgentMethodSchema(
+      classMetadata,
+      agentClassName.value,
+    );
+
+    // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
+    if (Either.isLeft(methodSchemaEither)) {
+      throw new Error(
+        `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.val}`,
+      );
+    }
+    const methods = methodSchemaEither.val;
+
+    const agentTypeName = new AgentClassName(
+      options?.name || agentClassName.value,
+    );
+
+    if (AgentInitiatorRegistry.exists(agentTypeName.value)) {
+      throw new Error(
+        `Agent name conflict: Another agent with the name "${agentTypeName}" is already registered. Please choose a different agent name for the class \`${agentClassName.value}\` using \`@agent("custom-name")\``,
+      );
+    }
+
+    const agentTypeDescription =
+      AgentConstructorRegistry.lookup(agentClassName.value)?.description ??
+      `Constructs the agent ${agentTypeName.value}`;
+
+    const constructorParameterNames = classMetadata.constructorArgs
+      .map((arg) => arg.name)
+      .join(', ');
+
+    const defaultPromptHint = `Enter the following parameters: ${constructorParameterNames}`;
+
+    const agentTypePromptHint =
+      AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ??
+      defaultPromptHint;
+
+    const agentType: AgentType = {
+      typeName: agentTypeName.value,
+      description: agentTypeDescription,
+      constructor: {
+        name: agentClassName.value,
+        description: agentTypeDescription,
+        promptHint: agentTypePromptHint,
+        inputSchema: constructorDataSchema,
+      },
+      methods,
+      dependencies: [],
+      mode: options?.mode ?? 'durable',
+    };
+
+    AgentTypeRegistry.register(agentClassName, agentType);
+
+    const constructorParamTypes: ParameterDetail[] | undefined =
+      TypeMetadata.get(agentClassName.value)?.constructorArgs.map((arg) => {
+        const typeInfo = AgentConstructorParamRegistry.getParamType(
+          agentClassName.value,
+          arg.name,
+        );
+
+        if (!typeInfo) {
+          throw new Error(
+            `Unsupported type for constructor parameter ${arg.name} in agent ${agentClassName}`,
+          );
+        }
+
+        return { name: arg.name, type: typeInfo };
+      });
+
+    if (!constructorParamTypes) {
+      throw new Error(
+        `Failed to retrieve constructor parameter types for agent ${agentClassName.value}.`,
+      );
+    }
+
+    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
+    (ctor as any).newPhantom = getNewPhantomRemoteClient(
+      agentClassName,
+      agentType,
+      ctor,
+    );
+
+    (ctor as any).getPhantom = getPhantomRemoteClient(
+      agentClassName,
+      agentType,
+      ctor,
+    );
+
+    AgentInitiatorRegistry.register(agentTypeName, {
+      initiate: (constructorInput: DataValue) => {
+        const deserializedConstructorArgs = deserializeDataValue(
+          constructorInput,
+          constructorParamTypes,
+        );
+
+        if (Either.isLeft(deserializedConstructorArgs)) {
+          const error = createCustomError(
+            `Failed to deserialize constructor arguments for agent ${agentClassName.value}: ${deserializedConstructorArgs.val}`,
+          );
+
+          return {
+            tag: 'err',
+            val: error,
+          };
+        }
+
+        const instance = new ctor(...deserializedConstructorArgs.val);
+
+        const agentId = getRawSelfAgentId();
+        if (!agentId.value.startsWith(agentTypeName.asWit)) {
+          const error = createCustomError(
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", got "${agentId.value}"`,
+          );
+
+          return {
+            tag: 'err',
+            val: error,
+          };
+        }
+
+        instance.getId = () => agentId;
+
+        const resolvedAgent = new ResolvedAgent(
+          instance,
+          agentClassName,
+          agentId,
+          constructorInput,
+        );
+
+        return {
+          tag: 'ok',
+          val: resolvedAgent,
+        };
+      },
+    });
+  };
+}
+
+/**
+ * Associates a **prompt** with a method or constructor of an agent
+ *
+ * A prompt is valid only for classes that are decorated with `@agent()`.
+ * A prompt can be specified either at the class level or method level, or both.
+ *
+ * Example of prompt at constructor (class) level and method level
+ *
+ * ```ts
+ * @agent()
+ * @prompt("Provide an API key for the weather service")
+ * class WeatherAgent {
+ *   @prompt("Provide a city name")
+ *   getWeather(city: string): WeatherReport { ... }
+ * }
+ * ```
+ *
+ *
+ * @param prompt  A hint that describes what kind of input the agentic method expects.
+ * They are especially useful for guiding other agents when deciding how to call this method.
+ */
+export function prompt(prompt: string) {
+  return function (
+    target: Object | Function,
+    propertyKey?: string | symbol,
+    descriptor?: PropertyDescriptor,
+  ) {
+    if (propertyKey === undefined) {
+      const className = (target as Function).name;
+
+      const classMetadata = TypeMetadata.get(className);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
+        );
+      }
+
+      AgentConstructorRegistry.setPrompt(className, prompt);
+    } else {
+      const className = target.constructor.name;
+
+      const classMetadata = TypeMetadata.get(className);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
+        );
+      }
+
+      const methodName = String(propertyKey);
+
+      AgentMethodRegistry.setPrompt(className, methodName, prompt);
+    }
+  };
+}
+
+/**
+ * Associates a **description** with a method or constructor of an agent.
+
+ * A `description` is valid only for classes that are decorated with `@agent()`.
+ * A `description` can be specified either at the class level or method level, or both.
+ *
+ * Example:
+ * ```ts
+ * @agent()
+ * @description("An agent that provides weather information")
+ * class WeatherAgent {
+ *   @description("Get the current weather for a location")
+ *   getWeather(city: string): WeatherReport { ... }
+ * }
+ * ```
+ * @param description The details of what exactly the method does.
+ */
+export function description(description: string) {
+  return function (
+    target: Object | Function,
+    propertyKey?: string | symbol,
+    descriptor?: PropertyDescriptor,
+  ) {
+    if (propertyKey === undefined) {
+      const className = (target as Function).name;
+
+      const classMetadata = TypeMetadata.get(className);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
+        );
+      }
+
+      AgentConstructorRegistry.setDescription(className, description);
+    } else {
+      const className = target.constructor.name;
+
+      const classMetadata = TypeMetadata.get(className);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
+        );
+      }
+
+      const methodName = String(propertyKey);
+
+      AgentMethodRegistry.setDescription(className, methodName, description);
+    }
+  };
+}
