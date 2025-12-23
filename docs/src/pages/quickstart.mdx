@@ -56,6 +56,13 @@ It is possible to test Golem locally without installing anything other than the 
 golem server run
 ```
 
+<Callout type="info">
+    If you want to start with a clean state, deleting all previous data, use `--clean`:
+    ```shell copy
+    golem server run --clean
+    ```
+</Callout>
+
 To use the open source version of Golem in production, you will need to deploy it to your own infrastructure. See the [deployment](/deploy) page for available deployment options.
 
 It is also possible to use our _hosted version_ of Golem, available at [https://console.golem.cloud].
@@ -263,15 +270,15 @@ httpApi:
 
   deployments:
     local:
-    - host: localhost:9006
+    - domain: localhost:9006
       definitions:
-       - counter-api
+      - counter-api
 ```
 
-Then use the `golem` CLI to deploy this API:
+Then use the `golem` CLI to deploy again, now including the API:
 
 ```shell copy
-golem api deploy
+golem deploy
 ```
 
 After this command, the API is deployed to our locally running Golem instance and can be tried out by sending POST requests to `http://localhost:9006/{name}/increment`:
