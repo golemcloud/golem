@@ -1,6 +1,7 @@
 import { Callout } from "nextra/components"
 import { Card, Cards } from "nextra/components"
 import { Tabs } from "nextra/components"
+import {ArtifactLink} from "@/components/releaselink"
 
 # Golem CLI Introduction
 
@@ -28,27 +29,28 @@ You can download the precompiled version of `golem` (and `golem-cli`) from the f
 <Tabs items={["golem", "golem-cli"]} storageKey="nextra-tabs-golem|golem-cli">
   <Tabs.Tab>
   ##### Full version, including a locally executable Golem server
-    | Platform | Link |
-    | -------- | ---- |
-    | Mac ARM64| https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-aarch64-apple-darwin |
-    | Mac x86_64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-x86_64-apple-darwin |
-    | Linux ARM64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-aarch64-unknown-linux-gnu |
-    | Linux x86_64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-x86_64-unknown-linux-gnu |
-    | Windows x86_64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-x86_64-pc-windows-msvc.exe |
-
+  
+  | Platform | Link |
+  | -------- | ---- |
+  | Mac ARM64 | <ArtifactLink artifact="golem" platform="mac-arm64" /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem" platform="mac-x64" /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem" platform="linux-arm64" /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem" platform="linux-x64" /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem" platform="windows-x64" /> |
   </Tabs.Tab>
   <Tabs.Tab>
   ##### Lightweight client version, to work with an existing Golem cluster
-    | Platform | Link |
-    | -------- | ---- |
-    | Mac ARM64| https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-cli-aarch64-apple-darwin |
-    | Mac x86_64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-cli-x86_64-apple-darwin |
-    | Linux ARM64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-cli-aarch64-unknown-linux-gnu |
-    | Linux x86_64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-cli-x86_64-unknown-linux-gnu |
-    | Windows x86_64 | https://github.com/golemcloud/golem/releases/download/v1.4.0/golem-cli-x86_64-pc-windows-msvc.exe |
-
+  
+  | Platform | Link |
+  | -------- | ---- |
+  | Mac ARM64 | <ArtifactLink artifact="golem-cli" platform="mac-arm64" /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem-cli" platform="mac-x64" /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem-cli" platform="linux-arm64" /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem-cli" platform="linux-x64" /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem-cli" platform="windows-x64" /> |
+  
   <Callout type="info">
-    Windows is not supported for the current version, and expected to be added in future patch version of Golem 1.3.
+      Windows is not supported for the current version, and is expected to be added in a future patch release.
   </Callout>
   </Tabs.Tab>
 </Tabs>
@@ -61,12 +63,6 @@ You can download the precompiled version of `golem` (and `golem-cli`) from the f
 ### Installing from source
 
 It is also possible to build it from source for yourself using Rust tooling. Refer to [the page about building Golem CLI for yourself](/cli/install-from-source) for more information.
-
-## Profiles
-
-The Golem CLI can have multiple profiles configured, each selecting a specific Golem cluster to connect to, as well as some settings like the default output format.
-
-See the [Golem CLI profiles page](/cli/profiles) for more information.
 
 ## Working with components
 
