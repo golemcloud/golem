@@ -48,6 +48,6 @@ httpApi:
 
   deployments:
     local:
-      - host: localhost:8084
+      - domain: localhost:8084
         definitions:
           - benchmark-direct-rust-api
