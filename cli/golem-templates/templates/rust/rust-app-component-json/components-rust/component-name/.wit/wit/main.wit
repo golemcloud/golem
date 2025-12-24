@@ -5,7 +5,7 @@ world component-name {
     import golem:rpc/types@0.2.2;
     import golem:agent/host;
 
-    import golem:rdbms/postgres@0.0.1;
+    import golem:rdbms/postgres@0.0.2;
     import golem:rdbms/mysql@0.0.2;
     import golem:rdbms/types@0.0.2;
 
