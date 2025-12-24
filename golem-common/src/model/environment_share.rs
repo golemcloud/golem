@@ -17,6 +17,7 @@ use super::auth::EnvironmentRole;
 use super::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use std::collections::BTreeSet;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(EnvironmentShareId);
 

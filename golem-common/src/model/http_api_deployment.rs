@@ -18,6 +18,7 @@ use super::http_api_definition::HttpApiDefinitionName;
 use crate::model::diff;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(HttpApiDeploymentId);
 

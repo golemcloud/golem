@@ -17,6 +17,7 @@ use crate::model::auth::AccountRole;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
 use uuid::uuid;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
 

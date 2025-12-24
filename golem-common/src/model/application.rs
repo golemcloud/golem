@@ -17,6 +17,7 @@ use crate::model::validate_lower_kebab_case_identifier;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
 use std::str::FromStr;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(
     ApplicationId,

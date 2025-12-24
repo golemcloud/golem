@@ -36,6 +36,7 @@ pub mod bindings {
     });
 }
 
+use schemars::JsonSchema; // Added for JsonSchema derive
 use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -70,6 +71,7 @@ use uuid::Uuid;
     IntoValue,
     FromValue,
     poem_openapi::Enum,
+    JsonSchema, // Added JsonSchema
 )]
 #[repr(i32)]
 pub enum AgentMode {
@@ -122,6 +124,7 @@ impl FromStr for AgentMode {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -144,6 +147,7 @@ pub struct AgentConstructor {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -201,6 +205,7 @@ impl Display for AgentError {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -232,6 +237,7 @@ pub struct AgentTypeName(pub String);
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema,
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -262,6 +268,7 @@ impl AgentType {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -280,6 +287,7 @@ pub struct BinaryDescriptor {
     IntoValue,
     FromValue,
     poem_openapi::Union,
+    JsonSchema, // Added JsonSchema
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -308,6 +316,7 @@ impl Display for BinaryReference {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -339,6 +348,7 @@ impl Display for BinarySource {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -358,6 +368,7 @@ pub struct BinaryType {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -378,6 +389,7 @@ pub struct NamedElementSchema {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -405,6 +417,7 @@ impl NamedElementSchemas {
     IntoValue,
     FromValue,
     poem_openapi::Union,
+    JsonSchema, // Added JsonSchema
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -570,6 +583,7 @@ impl IntoValue for DataValue {
 
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -594,6 +608,7 @@ impl Display for ElementValues {
 
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -616,7 +631,7 @@ impl Display for NamedElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object, JsonSchema)] // Added JsonSchema
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -642,15 +657,41 @@ impl IntoValue for NamedElementValue {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Union,
+
+    Debug,
+
+    Clone,
+
+    PartialEq,
+
+    Serialize,
+
+    Deserialize,
+
+    BinaryCodec,
+
+    IntoValue,
+
+    poem_openapi::Union,
+
+    JsonSchema, // Added JsonSchema
+
 )]
+
 #[oai(discriminator_name = "type", one_of = true)]
+
 #[serde(tag = "type")]
+
 #[desert(evolution())]
+
 pub enum ElementValue {
+
     ComponentModel(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
+
     UnstructuredText(TextReference),
+
     UnstructuredBinary(BinaryReference),
+
 }
 
 impl ElementValue {
@@ -767,6 +808,7 @@ impl Display for ElementValue {
     IntoValue,
     FromValue,
     poem_openapi::Union,
+    JsonSchema, // Added JsonSchema
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -788,6 +830,7 @@ pub enum ElementSchema {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -807,6 +850,7 @@ pub struct ComponentModelElementSchema {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -825,6 +869,7 @@ pub struct TextDescriptor {
     IntoValue,
     FromValue,
     poem_openapi::Union,
+    JsonSchema, // Added JsonSchema
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -855,6 +900,7 @@ impl Display for TextReference {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -879,6 +925,7 @@ impl Display for Url {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -910,6 +957,7 @@ impl Display for TextSource {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -929,6 +977,7 @@ pub struct TextType {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -947,6 +996,7 @@ pub struct AgentTypes {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -966,6 +1016,7 @@ pub struct RegisteredAgentTypeImplementer {
     IntoValue,
     FromValue,
     poem_openapi::Object,
+    JsonSchema, // Added JsonSchema
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]

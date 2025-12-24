@@ -22,6 +22,7 @@ use desert_rust::BinaryCodec;
 use openidconnect::IssuerUrl;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(
     SecuritySchemeId,

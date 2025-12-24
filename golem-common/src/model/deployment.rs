@@ -23,6 +23,7 @@ use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision}
 use crate::model::diff;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use derive_more::Display;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 declare_revision!(DeploymentRevision);
 

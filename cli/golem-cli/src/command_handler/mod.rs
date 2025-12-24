@@ -38,6 +38,7 @@ use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::rib_repl::RibReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
+use crate::command_handler::mcp_server::McpServerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{logln, set_log_output, Output};
@@ -61,6 +62,7 @@ mod environment;
 pub(crate) mod interactive;
 mod log;
 mod partial_match;
+mod mcp_server;
 mod plugin;
 mod profile;
 mod rib_repl;
@@ -341,7 +343,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 self.ctx.app_handler().cmd_diagnose(component_name).await
             }
             GolemCliSubcommand::ListAgentTypes {} => {
-                self.ctx.app_handler().cmd_list_agent_types().await
+                self.ctx.app_handler().cmd_list_agent_types().await.map(|_| ())
             }
             GolemCliSubcommand::Exec { subcommand } => {
                 self.ctx.app_handler().exec_custom_command(subcommand).await
@@ -378,6 +380,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     .handler_server_commands(self.ctx.clone(), subcommand)
                     .await
             }
+            GolemCliSubcommand::McpServer { subcommand } => {
+                self.ctx.mcp_server_handler().handle(subcommand).await
+            }
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
@@ -413,6 +418,7 @@ pub trait Handlers {
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
+    fn mcp_server_handler(&self) -> impl McpServerCommandHandler;
     fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
@@ -445,13 +451,7 @@ impl Handlers for Arc<Context> {
         AppCommandHandler::new(self.clone())
     }
 
-    // TODO: atomic
-    /*
-    fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler {
-        CloudAccountGrantCommandHandler::new(self.clone())
-    }
-    */
-
+    // TODO: atomic: fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler;
     fn cloud_account_handler(&self) -> CloudAccountCommandHandler {
         CloudAccountCommandHandler::new(self.clone())
     }
@@ -489,6 +489,10 @@ impl Handlers for Arc<Context> {
 
     fn log_handler(&self) -> LogHandler {
         LogHandler::new(self.clone())
+    }
+
+    fn mcp_server_handler(&self) -> impl McpServerCommandHandler {
+        mcp_server::McpServerCommandHandlerImpl::new(self.clone())
     }
 
     // TODO: atomic:

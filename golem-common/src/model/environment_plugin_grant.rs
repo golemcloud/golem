@@ -16,6 +16,7 @@ use super::account::AccountSummary;
 use super::environment::EnvironmentId;
 use super::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
 use crate::{declare_structs, newtype_uuid};
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(
     EnvironmentPluginGrantId,

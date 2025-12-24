@@ -25,6 +25,7 @@ use std::borrow::Cow;
 use std::fmt::Debug;
 use std::str::FromStr;
 use strum_macros::{EnumIter, FromRepr};
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 #[derive(Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(try_from = "String")]

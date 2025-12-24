@@ -24,6 +24,8 @@ use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
 };
+use crate::command::mcp_server::McpServerSubcommand;
+pub mod mcp_server;
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
@@ -720,6 +722,12 @@ pub enum GolemCliSubcommand {
     Server {
         #[clap(subcommand)]
         subcommand: ServerSubcommand,
+    },
+    /// Run Golem CLI in MCP server mode
+    #[cfg(feature = "server-commands")]
+    McpServer {
+        #[clap(subcommand)]
+        subcommand: McpServerSubcommand,
     },
     /// Manage Golem Cloud accounts and projects
     Cloud {

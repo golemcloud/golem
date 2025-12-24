@@ -14,6 +14,7 @@
 
 use super::environment::EnvironmentId;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(ApiDomainId);
 

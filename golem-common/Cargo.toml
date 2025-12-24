@@ -60,6 +60,7 @@ scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+schemars = { workspace = true, features = ["derive", "uuid1"] }
 shadow-rs = { workspace = true }
 similar = { workspace = true }
 sqlx = { workspace = true }

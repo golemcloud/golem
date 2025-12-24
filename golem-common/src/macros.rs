@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use schemars::JsonSchema; // Added for JsonSchema derive
+
 #[macro_export]
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
-        #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq, desert_rust::BinaryCodec)]
+        #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq, desert_rust::BinaryCodec, JsonSchema)] // Added JsonSchema
         #[derive(serde::Serialize, serde::Deserialize)]
         #[serde(transparent)]
         #[desert(transparent)]
@@ -214,6 +216,7 @@ macro_rules! declare_revision {
             ::golem_wasm_derive::IntoValue,
             ::derive_more::Display,
             poem_openapi::NewType,
+            JsonSchema, // Added JsonSchema
         )]
         #[repr(transparent)]
         pub struct $name(u64);

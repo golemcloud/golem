@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
 

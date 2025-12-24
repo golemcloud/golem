@@ -15,6 +15,7 @@
 use super::environment::EnvironmentId;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(DomainRegistrationId);
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::agent::{AgentType, RegisteredAgentType}; // Added RegisteredAgentType
 use crate::app::error::CustomCommandError;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
@@ -390,7 +391,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
+    pub async fn cmd_list_agent_types(&self) -> anyhow::Result<Vec<RegisteredAgentType>> {
         let environment = self
             .ctx
             .environment_handler()
@@ -416,9 +417,7 @@ impl AppCommandHandler {
             )
             .await?;
 
-        self.ctx.log_handler().log_view(&agent_types);
-
-        Ok(())
+        Ok(agent_types)
     }
 
     pub async fn cmd_diagnose(

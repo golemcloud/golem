@@ -17,6 +17,7 @@ use anyhow::anyhow;
 use chrono::Utc;
 use std::fmt::Display;
 use std::str::FromStr;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(OAuth2WebflowStateId);
 

@@ -19,6 +19,7 @@ use super::ComponentId;
 use crate::model::diff;
 use crate::model::Empty;
 use crate::{declare_structs, declare_transparent_newtypes, declare_unions, newtype_uuid};
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(
     PluginRegistrationId,

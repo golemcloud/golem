@@ -37,6 +37,8 @@ golem-rib-repl = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
 
+rmcp = { version = "0.11.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+
 # External deps
 anyhow = { workspace = true }
 assert2 = { workspace = true }
@@ -83,10 +85,11 @@ quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 semver = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+schemars = { workspace = true, features = ["derive", "uuid1"] } # Added for JsonSchema derive
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }

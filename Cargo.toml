@@ -322,6 +322,8 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
+schemars = { version = "1.1.0", features = ["derive", "uuid1"] }
+
 wasm-rquickjs = "0.0.22"
 wasm-wave = "0.235"
 wasmparser = "0.229.0"

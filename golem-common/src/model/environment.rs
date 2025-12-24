@@ -23,6 +23,7 @@ use crate::{declare_revision, declare_structs, declare_transparent_newtypes, new
 use derive_more::Display;
 use std::collections::BTreeSet;
 use std::str::FromStr;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(
     EnvironmentId,

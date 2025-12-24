@@ -21,6 +21,7 @@ mod tests;
 
 use crate::analysis::AnalysedType;
 use crate::{Value, WitValue};
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 #[cfg(feature = "host")]
 pub use into::IntoValue;
@@ -32,7 +33,7 @@ pub use from::FromValue;
 #[cfg(feature = "host")]
 pub use from::FromValueAndType;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, JsonSchema)] // Added JsonSchema
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 pub struct ValueAndType {
     pub value: Value,

@@ -35,6 +35,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
 use uuid::Uuid;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(
     ComponentId,

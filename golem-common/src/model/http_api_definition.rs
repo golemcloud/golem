@@ -25,6 +25,7 @@ use derive_more::Display;
 use desert_rust::BinaryCodec;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 newtype_uuid!(
     HttpApiDefinitionId,

@@ -55,6 +55,7 @@ mod hooks {
     }
 }
 
+
 #[cfg(not(feature = "server-commands"))]
 mod hooks {
     use golem_cli::command_handler::CommandHandlerHooks;

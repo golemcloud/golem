@@ -137,6 +137,7 @@ pub use golem_rpc_0_2_x::types::{
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use schemars::JsonSchema; // Added for JsonSchema derive
 
 impl From<Uuid> for uuid::Uuid {
     fn from(value: Uuid) -> Self {
@@ -206,7 +207,7 @@ impl PartialEq for Uri {
 }
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, JsonSchema)] // Added JsonSchema
 #[cfg_attr(feature = "host", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 pub enum Value {

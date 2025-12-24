@@ -32,6 +32,7 @@ poem-openapi = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+schemars = { workspace = true, features = ["derive", "uuid1"] }
 prost = { workspace = true, optional = true }
 uuid = { workspace = true }
 url = { workspace = true, optional = true }
