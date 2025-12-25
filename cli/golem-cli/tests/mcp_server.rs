@@ -582,4 +582,29 @@ async fn test_describe_component() {
     assert_eq!(components.len(), 1);
     assert_eq!(components[0].name.0, "component1");
 }
+
+#[tokio::test]
+async fn test_get_golem_yaml() {
+    let mock_component_client = Arc::new(MockComponentClient::new(false, false, false));
+    let mock_environment_client = Arc::new(MockEnvironmentClient);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
+
+    let tools = Tools::new(ctx.clone());
+
+    let content = "components: []";
+    std::fs::write("golem.yaml", content).unwrap();
+
+    let req = Request {
+        tool_name: "get_golem_yaml".to_string(),
+        parameters: serde_json::Value::Null,
+    };
+
+    let result = tools.call(req).await.unwrap();
+
+    let yaml_content: String = serde_json::from_value(result).unwrap();
+
+    assert_eq!(yaml_content, content);
+
+    std::fs::remove_file("golem.yaml").unwrap();
+}
 }

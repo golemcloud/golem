@@ -135,7 +135,7 @@ impl Tools {
         &self,
         worker_name: golem_cli::model::worker::WorkerName,
         function_name: String,
-        arguments: Vec<String>,
+        arguments: String,
     ) -> Result<String, String> {
         let worker_name_match = self.ctx.worker_handler().match_worker_name(worker_name).await.map_err(|e| e.to_string())?;
 
@@ -146,10 +146,11 @@ impl Tools {
         ).await.map_err(|e| e.to_string())?;
 
         if let Some(component) = component {
-            let parsed_args = arguments
+            let parsed_args: Vec<serde_json::Value> = serde_json::from_str(&arguments).map_err(|e| e.to_string())?;
+            let parsed_args = parsed_args
                 .into_iter()
-                .map(|s| serde_json::from_str(&s).map(golem_wasm::json::OptionallyValueAndTypeJson::Json).map_err(|e| e.to_string()))
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|v| golem_wasm::json::OptionallyValueAndTypeJson::Json(v))
+                .collect::<Vec<_>>();
 
             let result = self
                 .ctx
@@ -169,6 +170,16 @@ impl Tools {
             Ok(format!("{:?}", result))
         } else {
             Err(format!("Component {} not found", worker_name_match.component_name))
+        }
+    }
+
+    #[tool]
+    async fn get_golem_yaml(&self) -> Result<String, String> {
+        let path = std::path::Path::new("golem.yaml");
+        if path.exists() {
+            std::fs::read_to_string(path).map_err(|e| e.to_string())
+        } else {
+            Err("golem.yaml not found in the current directory".to_string())
         }
     }
 }
