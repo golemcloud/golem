@@ -1,10 +1,9 @@
 use crate::command::mcp_server::{RunArgs, McpServerSubcommand};
-use crate::mcp_server_service::GolemCliMcpService;
+use crate::mcp_server_service::Tools;
 use crate::context::Context;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use rmcp::transport;
-use rmcp::ServiceExt;
 use std::sync::Arc;
 
 #[async_trait]
@@ -33,7 +32,7 @@ impl McpServerCommandHandler for McpServerCommandHandlerImpl {
 
 impl McpServerCommandHandlerImpl {
     async fn handle_run(&self, args: RunArgs) -> anyhow::Result<()> {
-        let service = GolemCliMcpService::new(self.ctx.clone());
+        let tools = Tools::new(self.ctx.clone());
 
         println!(
             "Starting Golem CLI MCP server with transport {}...",
@@ -43,7 +42,7 @@ impl McpServerCommandHandlerImpl {
         match args.transport.as_str() {
             "stdio" => {
                 let transport = transport::stdio();
-                service.serve(transport).await?;
+                crate::mcp_server_service::serve_router(tools, transport).await?;
             }
             "sse" => {
                 // Not supported yet, returning an error.

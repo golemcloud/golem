@@ -1,57 +1,50 @@
-use rmcp::{
-    handler::server::router::tool::ToolRouter,
-    model::{CallToolResult},
-    tool, tool_handler, tool_router, ServerHandler,
-    ErrorData as McpError,
-};
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::Arc;
 use crate::context::Context;
-use async_trait::async_trait;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use golem_common::model::agent::RegisteredAgentType;
+use golem_client::model::ComponentDto;
 use crate::command_handler::Handlers;
-use golem_common::model::agent::RegisteredAgentType; // Corrected import
+use rmcp_macros::{tool, tool_router};
 
-#[derive(Clone)]
-pub struct GolemCliMcpService {
+pub struct Tools {
     ctx: Arc<Context>,
-    tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
-impl GolemCliMcpService {
+impl Tools {
     pub fn new(ctx: Arc<Context>) -> Self {
-        Self {
-            ctx,
-            tool_router: Self::tool_router(),
-        }
+        Self { ctx }
     }
 
-    /// Ping the Golem CLI MCP server
-    #[tool(description = "Ping the Golem CLI MCP server")]
-    pub async fn ping(&self) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::structured(serde_json::json!({ "status": "ok" })))}
+    #[tool]
+    async fn list_agent_types(&self) -> Result<Vec<RegisteredAgentType>, String> {
+        self.ctx
+            .app_handler()
+            .cmd_list_agent_types()
+            .await
+            .map_err(|e: anyhow::Error| e.to_string())
+    }
 
-    /// Lists all deployed agent types
-    #[tool(description = "Lists all deployed agent types.")]
-    pub async fn list_agent_types(&self) -> Result<CallToolResult, McpError> {
-        let result = self.ctx.app_handler().cmd_list_agent_types().await;
-
-        match result {
-            Ok(agent_types) => {
-                Ok(CallToolResult::structured(serde_json::to_value(agent_types).unwrap()))
-            }
-            Err(e) => Err(McpError::internal_error(format!("Failed to list agent types: {}", e), None)),
-        }
+    #[tool]
+    async fn list_components(&self) -> Result<Vec<ComponentDto>, String> {
+        self.ctx
+            .component_handler()
+            .cmd_list_components()
+            .await
+            .map_err(|e: anyhow::Error| e.to_string())
     }
 }
-
-#[async_trait]
-#[tool_handler]
-impl ServerHandler for GolemCliMcpService {}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ListAgentTypesOutput(pub Vec<RegisteredAgentType>);
-
-
 

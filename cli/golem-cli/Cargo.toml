@@ -38,6 +38,7 @@ golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
 
 rmcp = { version = "0.11.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+rmcp-macros = "0.11.0"
 
 # External deps
 anyhow = { workspace = true }

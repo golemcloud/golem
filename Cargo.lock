@@ -4168,6 +4168,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.24",
  "rmcp",
+ "rmcp-macros",
  "schemars 1.1.0",
  "semver",
  "serde",

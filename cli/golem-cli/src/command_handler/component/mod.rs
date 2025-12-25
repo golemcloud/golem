@@ -262,8 +262,17 @@ impl ComponentCommandHandler {
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
-        let show_sensitive = self.ctx.show_sensitive();
+        let components = self.cmd_list_components().await?;
+        let views: Vec<ComponentView> = components
+            .into_iter()
+            .map(|c| ComponentView::new_wit_style(self.ctx.show_sensitive(), c))
+            .collect();
+        self.ctx.log_handler().log_view(&views);
 
+        Ok(())
+    }
+
+    pub async fn cmd_list_components(&self) -> anyhow::Result<Vec<ComponentDto>> {
         let environment = self
             .ctx
             .environment_handler()
@@ -283,18 +292,14 @@ impl ComponentCommandHandler {
                             current_deployment_revision.into(),
                         )
                         .await?
-                        .values
-                        .into_iter()
-                        .map(|component| ComponentView::new_wit_style(show_sensitive, component))
-                        .collect::<Vec<_>>())
+                        .values)
                 },
             )
             .await?;
 
-        self.ctx.log_handler().log_view(&components);
-
-        Ok(())
+        Ok(components)
     }
+
 
     async fn cmd_get(
         &self,
