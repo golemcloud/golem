@@ -38,7 +38,25 @@ use golem_common::model::deployment::CurrentDeployment;
 
 
 // Mock ComponentClient for testing
-struct MockComponentClient;
+struct MockComponentClient {
+    should_fail_component_list: bool,
+    should_fail_get_deployment_component: bool,
+    should_fail_get_component_revision: bool,
+}
+
+impl MockComponentClient {
+    fn new(
+        should_fail_component_list: bool,
+        should_fail_get_deployment_component: bool,
+        should_fail_get_component_revision: bool,
+    ) -> Self {
+        Self {
+            should_fail_component_list,
+            should_fail_get_deployment_component,
+            should_fail_get_component_revision,
+        }
+    }
+}
 
 #[async_trait]
 impl ComponentClient for MockComponentClient {
@@ -68,22 +86,86 @@ impl ComponentClient for MockComponentClient {
         _deployment_id: &str,
         _component_name: Option<&str>,
     ) -> Result<Vec<ComponentDto>, golem_client::Error> {
-        Ok(vec![
-            ComponentDto {
+        if self.should_fail_component_list {
+            Err(golem_client::Error::InternalError {
+                uri: "/components".to_string(),
+                method: http::Method::GET,
+                payload: Some("Forced failure for testing".to_string()),
+            })
+        } else {
+            Ok(vec![
+                ComponentDto {
+                    id: ComponentId("a5347275-4347-430a-9528-7634c44b360b".to_string()),
+                    name: ComponentName("component1".to_string()),
+                    revision: ComponentRevision(1),
+                    size: 123,
+                    protected_id: ProtectedComponentId("protected_id_1".to_string()),
+                },
+                ComponentDto {
+                    id: ComponentId("b6347275-4347-430a-9528-7634c44b360c".to_string()),
+                    name: ComponentName("component2".to_string()),
+                    revision: ComponentRevision(2),
+                    size: 456,
+                    protected_id: ProtectedComponentId("protected_id_2".to_string()),
+                },
+            ])
+        }
+    }
+
+    async fn get_deployment_component(
+        &self,
+        _deployment_id: &str,
+        component_name: &str,
+    ) -> Result<ComponentDto, golem_client::Error> {
+        if self.should_fail_get_deployment_component {
+            Err(golem_client::Error::InternalError {
+                uri: format!("/components/{}", component_name),
+                method: http::Method::GET,
+                payload: Some("Forced failure for testing".to_string()),
+            })
+        } else if component_name == "component1" {
+            Ok(ComponentDto {
                 id: ComponentId("a5347275-4347-430a-9528-7634c44b360b".to_string()),
                 name: ComponentName("component1".to_string()),
                 revision: ComponentRevision(1),
                 size: 123,
                 protected_id: ProtectedComponentId("protected_id_1".to_string()),
-            },
-            ComponentDto {
-                id: ComponentId("b6347275-4347-430a-9528-7634c44b360c".to_string()),
-                name: ComponentName("component2".to_string()),
-                revision: ComponentRevision(2),
-                size: 456,
-                protected_id: ProtectedComponentId("protected_id_2".to_string()),
-            },
-        ])
+            })
+        } else {
+            Err(golem_client::Error::NotFound {
+                uri: format!("/components/{}", component_name),
+                method: http::Method::GET,
+                payload: None,
+            })
+        }
+    }
+
+    async fn get_component_revision(
+        &self,
+        component_id: &str,
+        revision: golem_client::model::ComponentRevision,
+    ) -> Result<ComponentDto, golem_client::Error> {
+        if self.should_fail_get_component_revision {
+            Err(golem_client::Error::InternalError {
+                uri: format!("/components/{}/revisions/{}", component_id, revision.0),
+                method: http::Method::GET,
+                payload: Some("Forced failure for testing".to_string()),
+            })
+        } else if component_id == "a5347275-4347-430a-9528-7634c44b360b" && revision.0 == 1 {
+            Ok(ComponentDto {
+                id: ComponentId("a5347275-4347-430a-9528-7634c44b360b".to_string()),
+                name: ComponentName("component1".to_string()),
+                revision: ComponentRevision(1),
+                size: 123,
+                protected_id: ProtectedComponentId("protected_id_1".to_string()),
+            })
+        } else {
+            Err(golem_client::Error::NotFound {
+                uri: format!("/components/{}/revisions/{}", component_id, revision.0),
+                method: http::Method::GET,
+                payload: None,
+            })
+        }
     }
 }
 
@@ -334,9 +416,9 @@ impl From<MockContext> for Context {
 
 #[tokio::test]
 async fn test_list_components() {
-    let mock_component_client = Arc::new(MockComponentClient);
+    let mock_component_client = Arc::new(MockComponentClient::new(false, false, false));
     let mock_environment_client = Arc::new(MockEnvironmentClient);
-    let ctx = create_mock_context(mock_component_client, mock_environment_client);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
 
     let tools = Tools::new(ctx.clone());
 
@@ -356,9 +438,9 @@ async fn test_list_components() {
 
 #[tokio::test]
 async fn test_list_agent_types() {
-    let mock_component_client = Arc::new(MockComponentClient);
+    let mock_component_client = Arc::new(MockComponentClient::new(false, false, false));
     let mock_environment_client = Arc::new(MockEnvironmentClient);
-    let ctx = create_mock_context(mock_component_client, mock_environment_client);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
 
     let tools = Tools::new(ctx.clone());
 
@@ -374,4 +456,106 @@ async fn test_list_agent_types() {
     assert_eq!(agent_types.len(), 2);
     assert_eq!(agent_types[0].name, "AgentType1");
     assert_eq!(agent_types[1].name, "AgentType2");
+}
+
+#[tokio::test]
+async fn test_get_component() {
+    let mock_component_client = Arc::new(MockComponentClient::new(false, false, false));
+    let mock_environment_client = Arc::new(MockEnvironmentClient);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
+
+    let tools = Tools::new(ctx.clone());
+
+    let req = Request {
+        tool_name: "get_component".to_string(),
+        parameters: serde_json::json!({
+            "component_name": "component1",
+            "revision": null
+        }),
+    };
+
+    let result = tools.call(req).await.unwrap();
+
+    let component: Option<ComponentDto> = serde_json::from_value(result).unwrap();
+
+    assert!(component.is_some());
+    assert_eq!(component.unwrap().name.0, "component1");
+
+    let req = Request {
+        tool_name: "get_component".to_string(),
+        parameters: serde_json::json!({
+            "component_name": "non_existent_component",
+            "revision": null
+        }),
+    };
+
+    let result = tools.call(req).await.unwrap();
+    let component: Option<ComponentDto> = serde_json::from_value(result).unwrap();
+    assert!(component.is_none());
+}
+
+#[tokio::test]
+async fn test_list_components_error() {
+    let mock_component_client = Arc::new(MockComponentClient::new(true, false, false)); // Force component list to fail
+    let mock_environment_client = Arc::new(MockEnvironmentClient);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
+
+    let tools = Tools::new(ctx.clone());
+
+    let req = Request {
+        tool_name: "list_components".to_string(),
+        parameters: serde_json::Value::Null,
+    };
+
+    let result = tools.call(req).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Forced failure for testing"));
+}
+
+#[tokio::test]
+async fn test_get_component_error() {
+    let mock_component_client = Arc::new(MockComponentClient::new(false, true, false)); // Force get_deployment_component to fail
+    let mock_environment_client = Arc::new(MockEnvironmentClient);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
+
+    let tools = Tools::new(ctx.clone());
+
+    let req = Request {
+        tool_name: "get_component".to_string(),
+        parameters: serde_json::json!({
+            "component_name": "component1",
+            "revision": null
+        }),
+    };
+
+    let result = tools.call(req).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Forced failure for testing"));
+}
+
+#[tokio::test]
+async fn test_get_component_with_revision() {
+    let mock_component_client = Arc::new(MockComponentClient::new(false, false, false));
+    let mock_environment_client = Arc::new(MockEnvironmentClient);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
+
+    let tools = Tools::new(ctx.clone());
+
+    let req = Request {
+        tool_name: "get_component".to_string(),
+        parameters: serde_json::json!({
+            "component_name": "component1",
+            "revision": 1
+        }),
+    };
+
+    let result = tools.call(req).await.unwrap();
+
+    let component: Option<ComponentDto> = serde_json::from_value(result).unwrap();
+
+    assert!(component.is_some());
+    let component = component.unwrap();
+    assert_eq!(component.name.0, "component1");
+    assert_eq!(component.revision.0, 1);
+}
 }
