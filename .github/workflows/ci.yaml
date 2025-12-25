@@ -291,6 +291,21 @@ jobs:
       - name: Install wit-bindgen
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
+      - uses: actions/setup-node@v4
+        if: startsWith(matrix.group.name, 'cli-integration-tests-group3')
+        with:
+          node-version: "20.x"
+          registry-url: "https://registry.npmjs.org"
+      - name: Update npm
+        if: startsWith(matrix.group.name, 'cli-integration-tests-group3')
+        run: npm install -g npm@latest
+      - uses: pnpm/action-setup@v2
+        if: startsWith(matrix.group.name, 'cli-integration-tests-group3')
+        with:
+          version: latest
+      - name: Install wasm-rquickjs
+        if: startsWith(matrix.group.name, 'cli-integration-tests-group3')
+        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
 
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
