@@ -16,7 +16,9 @@ use std::sync::Arc;
 use crate::context::Context;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_client::model::ComponentDto;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use crate::command_handler::Handlers;
+use crate::model::environment::EnvironmentResolveMode;
 use rmcp_macros::{tool, tool_router};
 
 pub struct Tools {
@@ -43,6 +45,22 @@ impl Tools {
         self.ctx
             .component_handler()
             .cmd_list_components()
+            .await
+            .map_err(|e: anyhow::Error| e.to_string())
+    }
+
+    #[tool]
+    async fn get_component(
+        &self,
+        component_name: ComponentName,
+        revision: Option<ComponentRevision>,
+    ) -> Result<Option<golem_client::model::ComponentDto>, String> {
+        let environment = self.ctx.environment_handler().resolve_environment(crate::model::environment::EnvironmentResolveMode::Any).await
+            .map_err(|e: anyhow::Error| e.to_string())?;
+
+        self.ctx
+            .component_handler()
+            .resolve_component(&environment, &component_name, revision.map(|r| r.into()))
             .await
             .map_err(|e: anyhow::Error| e.to_string())
     }
