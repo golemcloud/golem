@@ -136,6 +136,7 @@ impl Tools {
         worker_name: golem_cli::model::worker::WorkerName,
         function_name: String,
         arguments: String,
+        await_result: bool,
     ) -> Result<String, String> {
         let worker_name_match = self.ctx.worker_handler().match_worker_name(worker_name).await.map_err(|e| e.to_string())?;
 
@@ -161,7 +162,7 @@ impl Tools {
                     &function_name,
                     parsed_args,
                     golem_common::model::IdempotencyKey::fresh(),
-                    false,
+                    !await_result, // trigger = !await_result
                     None,
                 )
                 .await
