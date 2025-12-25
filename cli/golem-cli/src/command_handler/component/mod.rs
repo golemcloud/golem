@@ -35,7 +35,7 @@ use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::component::ComponentGetView;
+use crate::model::text::component::{ComponentDescribeView, ComponentGetView};
 use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
@@ -99,6 +99,10 @@ impl ComponentCommandHandler {
                 component_name,
                 revision,
             } => self.cmd_get(component_name.component_name, revision).await,
+            ComponentSubcommand::Describe {
+                component_name,
+                revision,
+            } => self.cmd_describe(component_name.component_name, revision).await,
 
             ComponentSubcommand::UpdateAgents {
                 component_name,
@@ -126,12 +130,52 @@ impl ComponentCommandHandler {
         template: Option<ComponentTemplateName>,
         component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
+        let (template, component_name) =
+            match (template, component_name) {
+                (Some(template), Some(component_package_name)) => {
+                    (template, component_package_name)
+                }
+                _ => {
+                    self.ctx.silence_app_context_init().await;
+
+                    let existing_component_names = {
+                        let app_ctx = self.ctx.app_context_lock().await;
+                        let app_ctx = app_ctx.some_or_err()?;
+                        app_ctx
+                            .application
+                            .component_names()
+                            .map(|name| name.to_string())
+                            .collect::<HashSet<_>>()
+                    };
+
+                    let Some((template, component_name)) = self
+                        .ctx
+                        .interactive_handler()
+                        .select_new_component_template_and_package_name(
+                            existing_component_names.clone(),
+                        )? else {
+                            log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
+                            logln("");
+                            self.ctx
+                                .app_handler()
+                                .log_templates_help(None, None, self.ctx.dev_mode());
+                            logln("");
+                            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
+                        };
+                    (template, component_name)
+                }
+            };
+
+        self.cmd_new_component(template, component_name).await
+    }
+
+    pub async fn cmd_new_component(
+        &self,
+        template: ComponentTemplateName,
+        component_name: ComponentName,
+    ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        // Loading app for:
-        //   - checking that we are inside an application
-        //   - switching to the root dir as a side effect
-        //   - getting existing component names
         let (existing_component_names, application_name) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
@@ -143,28 +187,6 @@ impl ComponentCommandHandler {
                     .collect::<HashSet<_>>(),
                 app_ctx.application.application_name().clone(),
             )
-        };
-
-        let Some((template, component_name)) = ({
-            match (template, component_name) {
-                (Some(template), Some(component_package_name)) => {
-                    Some((template, component_package_name))
-                }
-                _ => self
-                    .ctx
-                    .interactive_handler()
-                    .select_new_component_template_and_package_name(
-                        existing_component_names.clone(),
-                    )?,
-            }
-        }) else {
-            log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
-            logln("");
-            self.ctx
-                .app_handler()
-                .log_templates_help(None, None, self.ctx.dev_mode());
-            logln("");
-            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
 
         if existing_component_names.contains(component_name.as_str()) {
@@ -390,6 +412,106 @@ impl ComponentCommandHandler {
 
         Ok(())
     }
+
+    async fn cmd_describe(
+        &self,
+        component_name: Option<ComponentName>,
+        revision: Option<ComponentRevision>,
+    ) -> anyhow::Result<()> {
+        let components = self.cmd_describe_component(component_name, revision).await?;
+
+        for component_view in components {
+            self.ctx
+                .log_handler()
+                .log_view(&ComponentDescribeView(component_view));
+            logln("");
+        }
+
+        Ok(())
+    }
+
+    pub async fn cmd_describe_component(
+        &self,
+        component_name: Option<ComponentName>,
+        revision: Option<ComponentRevision>,
+    ) -> anyhow::Result<Vec<ComponentView>> {
+        let selected_components = self
+            .must_select_components_by_app_dir_or_name(component_name.as_ref())
+            .await?;
+
+        if revision.is_some() && selected_components.component_names.len() > 1 {
+            log_error("Version cannot be specified when multiple components are selected!");
+            logln("");
+            logln(format!(
+                "Selected components: {}",
+                selected_components
+                    .component_names
+                    .iter()
+                    .map(|cn| cn.0.log_color_highlight())
+                    .join(", ")
+            ));
+            logln("");
+            logln("Specify the requested component name or switch to an application directory with exactly one component!");
+            logln("");
+            bail!(NonSuccessfulExit);
+        }
+
+        let mut component_views = Vec::<ComponentView>::new();
+
+        for component_name in &selected_components.component_names {
+            let component = self
+                .resolve_component(
+                    &selected_components.environment,
+                    component_name,
+                    revision.map(|revision| revision.into()),
+                )
+                .await?;
+            if let Some(component) = component {
+                component_views.push(ComponentView::new_wit_style(
+                    self.ctx.show_sensitive(),
+                    component,
+                ));
+            }
+        }
+
+        if component_views.is_empty() && component_name.is_some() {
+            // Retry selection (this time with not allowing "not founds")
+            // so we get error messages for app component names.
+            self.ctx
+                .app_handler()
+                .opt_select_components(
+                    component_name.iter().cloned().collect(),
+                    &ApplicationComponentSelectMode::CurrentDir,
+                )
+                .await?;
+        }
+
+        if component_views.is_empty() {
+            if revision.is_some() && selected_components.component_names.len() == 1 {
+                let current = self
+                    .get_current_deployed_server_component_by_name(
+                        &selected_components.environment,
+                        &selected_components.component_names[0],
+                    )
+                    .await;
+                if let Ok(Some(current)) = current {
+                    log_error(format!(
+                        "Component revision not found, current deployed revision: {}",
+                        current.revision.to_string().log_color_highlight()
+                    ));
+                } else {
+                    log_error("Component revision not found");
+                }
+            } else {
+                log_error("Component not found");
+            }
+
+            bail!(NonSuccessfulExit)
+        }
+
+        Ok(component_views)
+    }
+
 
     async fn cmd_update_workers(
         &self,

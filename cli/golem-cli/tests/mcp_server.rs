@@ -558,4 +558,28 @@ async fn test_get_component_with_revision() {
     assert_eq!(component.name.0, "component1");
     assert_eq!(component.revision.0, 1);
 }
+
+#[tokio::test]
+async fn test_describe_component() {
+    let mock_component_client = Arc::new(MockComponentClient::new(false, false, false));
+    let mock_environment_client = Arc::new(MockEnvironmentClient);
+    let ctx = create_mock_context(mock_component_client.clone(), mock_environment_client.clone());
+
+    let tools = Tools::new(ctx.clone());
+
+    let req = Request {
+        tool_name: "describe_component".to_string(),
+        parameters: serde_json::json!({
+            "component_name": "component1",
+            "revision": null
+        }),
+    };
+
+    let result = tools.call(req).await.unwrap();
+
+    let components: Vec<ComponentDto> = serde_json::from_value(result).unwrap();
+
+    assert_eq!(components.len(), 1);
+    assert_eq!(components[0].name.0, "component1");
+}
 }

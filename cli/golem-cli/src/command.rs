@@ -965,6 +965,13 @@ pub mod component {
             /// Optional component revision to get
             revision: Option<ComponentRevision>,
         },
+        /// Describe the latest or selected revision of deployed component metadata
+        Describe {
+            #[command(flatten)]
+            component_name: ComponentOptionalComponentName,
+            /// Optional component revision to get
+            revision: Option<ComponentRevision>,
+        },
         /// Try to automatically update all existing agents of the selected component to the latest version
         UpdateAgents {
             #[command(flatten)]
