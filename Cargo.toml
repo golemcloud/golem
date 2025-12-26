@@ -243,6 +243,7 @@ range-set-blaze = "0.1.16"
 rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
+rmcp = { version = "0.11.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
@@ -323,6 +324,8 @@ warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
 schemars = { version = "1.1.0", features = ["derive", "uuid1"] }
+
+windows-sys = { version = "0.52.0", features = ["Win32_Storage_FileSystem"] }
 
 wasm-rquickjs = "0.0.22"
 wasm-wave = "0.235"
