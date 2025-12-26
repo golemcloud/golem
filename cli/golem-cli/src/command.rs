@@ -106,18 +106,15 @@ pub struct GolemCliGlobalFlags {
     pub format: Option<Format>,
 
     /// Select Golem environment by name
-    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102
-    )]
+    #[arg(long, short = 'E', global = true, display_order = 102)]
     pub environment: Option<EnvironmentReference>,
 
-    /// Select" local" environment from the manifest, or "local" profile
-    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103
-    )]
+    /// Select "local" environment from the manifest, or "local" profile
+    #[arg(long, short = 'L', global = true, conflicts_with_all = ["cloud"], display_order = 103)]
     pub local: bool,
 
     /// Select "cloud" environment from the manifest, or "cloud" profile
-    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104
-    )]
+    #[arg(long, short = 'C', global = true, conflicts_with_all = ["local"], display_order = 104)]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
