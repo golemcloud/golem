@@ -48,7 +48,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -65,7 +65,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -82,7 +82,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -97,7 +97,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -189,7 +189,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
