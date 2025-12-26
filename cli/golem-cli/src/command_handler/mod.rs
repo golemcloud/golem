@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::app::error::AppValidationError;
-#[cfg(feature = "server-commands")]
-use crate::command::server::ServerSubcommand;
 use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
@@ -32,13 +30,13 @@ use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
+use crate::command_handler::mcp_server::{McpServerCommandHandler, McpServerCommandHandlerDefault};
 use crate::command_handler::partial_match::ErrorHandler;
 use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::rib_repl::RibReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
-use crate::command_handler::mcp_server::McpServerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{logln, set_log_output, Output};
@@ -47,12 +45,17 @@ use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;
 use clap_complete::Shell;
-#[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
 use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{debug, Level};
+
+pub trait CommandHandlerHooks: Send + Sync {
+    fn override_verbosity(&self, verbosity: Verbosity) -> Verbosity {
+        verbosity
+    }
+}
 
 mod api;
 mod app;
@@ -61,34 +64,14 @@ mod component;
 mod environment;
 pub(crate) mod interactive;
 mod log;
-mod partial_match;
 mod mcp_server;
+mod partial_match;
 mod plugin;
 mod profile;
 mod rib_repl;
 mod worker;
 
-// NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
-// on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
-// error which is possibly due to a compiler bug (https://github.com/rust-lang/rust/issues/64552).
-pub trait CommandHandlerHooks: Sync + Send {
-    #[cfg(feature = "server-commands")]
-    fn handler_server_commands(
-        &self,
-        ctx: Arc<Context>,
-        subcommand: ServerSubcommand,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>>;
 
-    // Used for auto starting the default server
-    #[cfg(feature = "server-commands")]
-    fn run_server() -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
-
-    #[cfg(feature = "server-commands")]
-    fn override_verbosity(verbosity: Verbosity) -> Verbosity;
-
-    #[cfg(feature = "server-commands")]
-    fn override_pretty_mode() -> bool;
-}
 
 // CommandHandler is responsible for matching commands and producing CLI output using Context,
 // but NOT responsible for storing state (apart from Context and Hooks itself), those should be part of Context.
@@ -139,22 +122,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     {
         let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
             GolemCliCommandParseResult::FullMatch(command) => {
-                #[cfg(feature = "server-commands")]
-                let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
-                    Hooks::override_verbosity(command.global_flags.verbosity())
-                } else {
-                    command.global_flags.verbosity()
-                };
-                #[cfg(feature = "server-commands")]
-                let pretty_mode = if matches!(command.subcommand, GolemCliSubcommand::Server { .. })
-                {
-                    Hooks::override_pretty_mode()
-                } else {
-                    false
-                };
-                #[cfg(not(feature = "server-commands"))]
                 let verbosity = command.global_flags.verbosity();
-                #[cfg(not(feature = "server-commands"))]
                 let pretty_mode = false;
 
                 init_tracing(verbosity, pretty_mode);
@@ -374,15 +342,16 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::Profile { subcommand } => {
                 self.ctx.profile_handler().handle_command(subcommand).await
             }
+            GolemCliSubcommand::McpServer { subcommand } => {
+                self.ctx.mcp_server_handler().handle(subcommand).await
+            }
             #[cfg(feature = "server-commands")]
             GolemCliSubcommand::Server { subcommand } => {
                 self.hooks
                     .handler_server_commands(self.ctx.clone(), subcommand)
                     .await
             }
-            GolemCliSubcommand::McpServer { subcommand } => {
-                self.ctx.mcp_server_handler().handle(subcommand).await
-            }
+
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
@@ -418,7 +387,7 @@ pub trait Handlers {
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
-    fn mcp_server_handler(&self) -> impl McpServerCommandHandler;
+    fn mcp_server_handler(&self) -> Box<dyn McpServerCommandHandler + Send + Sync>;
     fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
@@ -491,8 +460,8 @@ impl Handlers for Arc<Context> {
         LogHandler::new(self.clone())
     }
 
-    fn mcp_server_handler(&self) -> impl McpServerCommandHandler {
-        mcp_server::McpServerCommandHandlerImpl::new(self.clone())
+    fn mcp_server_handler(&self) -> Box<dyn McpServerCommandHandler + Send + Sync> {
+        Box::new(McpServerCommandHandlerDefault::new(self.clone()))
     }
 
     // TODO: atomic:

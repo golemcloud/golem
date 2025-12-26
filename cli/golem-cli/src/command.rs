@@ -12,21 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod mcp_server;
+
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::mcp_server::McpServerSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
-use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
 };
-use crate::command::mcp_server::McpServerSubcommand;
-pub mod mcp_server;
 use crate::command::worker::AgentSubcommand;
+use crate::command::shared_args::{
+    AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
+};
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
@@ -717,18 +720,13 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ProfileSubcommand,
     },
-    /// Run and manage the local Golem server
-    #[cfg(feature = "server-commands")]
-    Server {
-        #[clap(subcommand)]
-        subcommand: ServerSubcommand,
-    },
-    /// Run Golem CLI in MCP server mode
-    #[cfg(feature = "server-commands")]
+
+    /// Starts the Golem MCP server
     McpServer {
         #[clap(subcommand)]
         subcommand: McpServerSubcommand,
     },
+
     /// Manage Golem Cloud accounts and projects
     Cloud {
         #[clap(subcommand)]

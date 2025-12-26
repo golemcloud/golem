@@ -32,9 +32,9 @@ pub mod fs;
 pub mod fuzzy;
 pub mod log;
 pub mod model;
+pub mod service;
 pub mod validation;
 pub mod wasm_rpc_stubgen;
-pub mod mcp_server_service;
 
 #[allow(unused)]
 mod wasm_metadata;
