@@ -151,29 +151,29 @@ impl Display for DeserializationError {
         if self.json_schema_validation_errors_by_path.is_empty() {
             write!(f, "{}", self.serde_yaml_error)
         } else {
-            write!(f, "Failed to deserialize application manifest:\n")?;
-            write!(
+            writeln!(f, "Failed to deserialize application manifest:")?;
+            writeln!(
                 f,
-                "  {}\n",
+                "  {}",
                 "YAML deserialization error:".log_color_help_group()
             )?;
-            write!(
+            writeln!(
                 f,
-                "    {}\n",
+                "    {}",
                 self.serde_yaml_error
                     .to_string()
                     .log_color_error_highlight()
             )?;
-            write!(
+            writeln!(
                 f,
-                "  {}\n",
+                "  {}",
                 "Schema validation hint(s):".log_color_help_group()
             )?;
             for (path, errors) in &self.json_schema_validation_errors_by_path {
-                write!(f, "    path: {}\n", path.log_color_highlight())?;
+                writeln!(f, "    path: {}", path.log_color_highlight())?;
                 for error in errors {
-                    write!(f, "      - schema: {}\n", error.schema)?;
-                    write!(f, "        error: {}\n", error.error.log_color_warn())?;
+                    writeln!(f, "      - schema: {}", error.schema)?;
+                    writeln!(f, "        error: {}", error.error.log_color_warn())?;
                 }
             }
             Ok(())
@@ -738,8 +738,10 @@ mod test {
 
         #[test]
         fn schema_is_loadable_and_validates_empty_app() {
-            let mut app = Application::default();
-            app.app = Some("app-name".to_string());
+            let app = Application {
+                app: Some("app-name".to_string()),
+                ..Default::default()
+            };
 
             assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
         }
