@@ -912,8 +912,7 @@ pub mod environment {
 
 pub mod component {
     use crate::command::shared_args::{
-        BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplateName,
+        ComponentOptionalComponentName, ComponentOptionalComponentNames, ComponentTemplateName,
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
@@ -932,18 +931,6 @@ pub mod component {
         Templates {
             /// Optional filter for language or template name
             filter: Option<String>,
-        },
-        /// Build component(s) based on the current directory or by selection
-        Build {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
-            #[command(flatten)]
-            build: BuildArgs,
-        },
-        /// Clean component(s) based on the current directory or by selection
-        Clean {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
         },
         /// List deployed component versions' metadata
         List,

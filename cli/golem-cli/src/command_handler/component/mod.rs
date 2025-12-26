@@ -16,7 +16,7 @@ use crate::app::context::{to_anyhow, ApplicationContext};
 
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
+    ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
 };
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
@@ -89,11 +89,6 @@ impl ComponentCommandHandler {
                 self.cmd_templates(filter);
                 Ok(())
             }
-            ComponentSubcommand::Build {
-                component_name,
-                build: build_args,
-            } => self.cmd_build(component_name, build_args).await,
-            ComponentSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             ComponentSubcommand::List => self.cmd_list().await,
             ComponentSubcommand::Get {
                 component_name,
@@ -207,34 +202,6 @@ impl ComponentCommandHandler {
         }
 
         Ok(())
-    }
-
-    async fn cmd_build(
-        &self,
-        component_name: ComponentOptionalComponentNames,
-        build_args: BuildArgs,
-    ) -> anyhow::Result<()> {
-        self.ctx
-            .app_handler()
-            .build(
-                component_name.component_name,
-                Some(build_args),
-                &ApplicationComponentSelectMode::CurrentDir,
-            )
-            .await
-    }
-
-    async fn cmd_clean(
-        &self,
-        component_name: ComponentOptionalComponentNames,
-    ) -> anyhow::Result<()> {
-        self.ctx
-            .app_handler()
-            .clean(
-                component_name.component_name,
-                &ApplicationComponentSelectMode::CurrentDir,
-            )
-            .await
     }
 
     fn cmd_templates(&self, filter: Option<String>) {
