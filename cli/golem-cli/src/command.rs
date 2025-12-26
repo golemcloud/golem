@@ -27,9 +27,6 @@ use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
 };
 use crate::command::worker::AgentSubcommand;
-use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
-};
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;

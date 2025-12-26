@@ -345,12 +345,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::McpServer { subcommand } => {
                 self.ctx.mcp_server_handler().handle(subcommand).await
             }
-            #[cfg(feature = "server-commands")]
-            GolemCliSubcommand::Server { subcommand } => {
-                self.hooks
-                    .handler_server_commands(self.ctx.clone(), subcommand)
-                    .await
-            }
+
 
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await

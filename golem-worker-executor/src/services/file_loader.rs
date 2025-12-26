@@ -27,6 +27,8 @@ use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE};
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
@@ -271,7 +273,15 @@ impl FileLoader {
             .map_err(|e| anyhow!(e))?
             .ok_or_else(|| anyhow!("File not found"))?;
 
-        let file = tokio::fs::File::create(path).await?;
+        let file = {
+            let mut options = tokio::fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            #[cfg(target_os = "windows")]
+            {
+                options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+            }
+            options.open(path).await
+        }?;
         let mut writer = tokio::io::BufWriter::new(file);
 
         while let Some(chunk) = data.try_next().await.map_err(|e| anyhow!(e))? {

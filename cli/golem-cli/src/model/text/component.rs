@@ -14,10 +14,10 @@
 
 use crate::model::component::ComponentView;
 use crate::model::text::fmt::*;
-use cli_table::{format::Justify, Table};
+use cli_table::{ format::Justify, Table };
 
 use golem_common::model::component::ComponentName;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
 #[derive(Table)]
 struct ComponentTableView {
@@ -70,19 +70,19 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
             "Dynamic WASM RPC links",
             &view.dynamic_linking,
             !view.dynamic_linking.is_empty(),
-            format_dynamic_links,
+            format_dynamic_links
         )
         .fmt_field_optional(
             "Initial file system",
             view.files.as_slice(),
             !view.files.is_empty(),
-            format_files,
+            format_files
         )
         .fmt_field_optional(
             "Plugins",
             view.plugins.as_slice(),
             !view.plugins.is_empty(),
-            format_plugins,
+            format_plugins
         );
 
     fields.build()
@@ -93,10 +93,7 @@ pub struct ComponentCreateView(pub ComponentView);
 
 impl MessageWithFields for ComponentCreateView {
     fn message(&self) -> String {
-        format!(
-            "Created new component {}",
-            format_message_highlight(&self.0.component_name)
-        )
+        format!("Created new component {}", format_message_highlight(&self.0.component_name))
     }
 
     fn fields(&self) -> Vec<(String, String)> {
@@ -112,7 +109,7 @@ impl MessageWithFields for ComponentUpdateView {
         format!(
             "Updated component {} to revision {}",
             format_message_highlight(&self.0.component_name),
-            format_message_highlight(&self.0.component_revision),
+            format_message_highlight(&self.0.component_revision)
         )
     }
 
@@ -126,10 +123,7 @@ pub struct ComponentGetView(pub ComponentView);
 
 impl MessageWithFields for ComponentGetView {
     fn message(&self) -> String {
-        format!(
-            "Got metadata for component {}",
-            format_message_highlight(&self.0.component_name)
-        )
+        format!("Got metadata for component {}", format_message_highlight(&self.0.component_name))
     }
 
     fn fields(&self) -> Vec<(String, String)> {
@@ -142,10 +136,7 @@ pub struct ComponentDescribeView(pub ComponentView);
 
 impl MessageWithFields for ComponentDescribeView {
     fn message(&self) -> String {
-        format!(
-            "Description for component {}",
-            format_message_highlight(&self.0.component_name)
-        )
+        format!("Description for component {}", format_message_highlight(&self.0.component_name))
     }
 
     fn fields(&self) -> Vec<(String, String)> {
@@ -159,7 +150,6 @@ fn component_describe_view_fields(view: &ComponentView) -> Vec<(String, String)>
     fields
         .fmt_field("Component name", &view.component_name, format_main_id)
         .fmt_field("Component ID", &view.component_id, format_id)
-        .fmt_field("Protected ID", &view.protected_id, format_id)
         .fmt_field("Component revision", &view.component_revision, format_id)
         .fmt_field_option("Component version", &view.component_version, format_id)
         .fmt_field("Environment ID", &view.environment_id, format_id)
@@ -173,24 +163,23 @@ fn component_describe_view_fields(view: &ComponentView) -> Vec<(String, String)>
             "Dynamic WASM RPC links",
             &view.dynamic_linking,
             !view.dynamic_linking.is_empty(),
-            format_dynamic_links,
+            format_dynamic_links
         )
         .fmt_field_optional(
             "Initial file system",
             view.files.as_slice(),
             !view.files.is_empty(),
-            format_files,
+            format_files
         )
         .fmt_field_optional(
             "Plugins",
             view.plugins.as_slice(),
             !view.plugins.is_empty(),
-            format_plugins,
+            format_plugins
         );
 
     fields.build()
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentReplStartedView(pub ComponentView);
@@ -200,7 +189,7 @@ impl MessageWithFields for ComponentReplStartedView {
         format!(
             "Started Rib REPL for component {} using revision {}",
             format_message_highlight(&self.0.component_name),
-            format_message_highlight(&self.0.component_revision),
+            format_message_highlight(&self.0.component_revision)
         )
     }
 
@@ -225,8 +214,6 @@ pub fn is_sensitive_env_var_name(show_sensitive: bool, name: &str) -> bool {
     if show_sensitive {
         false
     } else {
-        SENSITIVE_ENV_VAR_NAME_PATTERNS
-            .iter()
-            .any(|pattern| name.contains(pattern))
+        SENSITIVE_ENV_VAR_NAME_PATTERNS.iter().any(|pattern| name.contains(pattern))
     }
 }

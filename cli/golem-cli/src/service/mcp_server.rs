@@ -59,7 +59,7 @@ impl ServerHandler for McpServerImpl {
 
     fn list_tools(
         &self,
-        request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
         async move {

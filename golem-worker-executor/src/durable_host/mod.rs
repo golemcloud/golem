@@ -108,6 +108,8 @@ use golem_wasm::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE};
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -2412,9 +2414,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
 
         let path_clone = path.clone();
 
-        let stream = tokio::fs::File::open(target)
-            .map_ok(|file| FramedRead::new(file, BytesCodec::new()).map_ok(BytesMut::freeze))
-            .try_flatten_stream()
+        let file = {
+            let mut options = tokio::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(target_os = "windows")]
+            {
+                options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+            }
+            options.open(target).await?
+        };
+
+        let stream = FramedRead::new(file, BytesCodec::new())
+            .map_ok(BytesMut::freeze)
             .map_err(move |e| WorkerExecutorError::FileSystemError {
                 path: path_clone.to_string(),
                 reason: format!("Failed to open file: {e}"),

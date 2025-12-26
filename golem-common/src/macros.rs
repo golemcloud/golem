@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use schemars::JsonSchema; // Added for JsonSchema derive
-
 #[macro_export]
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
