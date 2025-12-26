@@ -146,7 +146,8 @@
                   }
                 },
                 "required": [
-                  "url"
+                  "url",
+                  "auth"
                 ]
               }
             ]

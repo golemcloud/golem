@@ -20,12 +20,12 @@ use crate::model::{
 };
 use anyhow::Context;
 use include_dir::{include_dir, Dir, DirEntry};
-use indoc::{formatdoc, indoc};
+use indoc::formatdoc;
 use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use std::{fs, io};
 
 pub mod model;
@@ -33,23 +33,24 @@ pub mod model;
 #[cfg(test)]
 test_r::enable!();
 
-static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
-static WIT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/wit/deps");
-
-static APP_MANIFEST_HEADER: &str = indoc! {"
-# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json
-# Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json
-
-# Field reference: https://learn.golem.cloud/app-manifest#field-reference
-# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
-"};
-
+macro_rules! app_manifest_version {
+    () => {
+        "1.4.2"
+    };
+}
 static GOLEM_RUST_VERSION: &str = "1.10.4";
 static GOLEM_TS_VERSION: &str = "0.0.74";
 static GOLEM_AI_VERSION: &str = "v0.4.0";
 static GOLEM_AI_SUFFIX: &str = ".wasm";
+
+static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
+static WIT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/wit/deps");
+pub static APP_MANIFEST_JSON_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../schema.golem.cloud/app/golem/",
+    app_manifest_version!(),
+    "/golem.schema.json"
+));
 
 fn all_templates(dev_mode: bool) -> Vec<Template> {
     let mut result: Vec<Template> = vec![];
@@ -412,20 +413,20 @@ fn transform(
     };
 
     let transform_manifest_hints = |str: &str| -> String {
-        str.replace("# golem-app-manifest-header\n", APP_MANIFEST_HEADER)
+        str.replace("# golem-app-manifest-header\n", &APP_MANIFEST_HEADER)
             .replace("    # golem-app-manifest-env-doc",
-                concat!(
-                    "    # Component environment variables can reference system environment variables with minijinja syntax:\n",
-                    "    #\n",
-                    "    #   env:\n",
-                    "    #     ENV_VAR_1: \"{{ ENV_VAR_1 }}\"\n",
-                    "    #     RENAMED_VAR_2: \"{{ ENV_VAR_2 }}\"\n",
-                    "    #     COMPOSED_VAR_3: \"{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}\"\n",
-                    "    #",
-                )
+                     concat!(
+                     "    # Component environment variables can reference system environment variables with minijinja syntax:\n",
+                     "    #\n",
+                     "    #   env:\n",
+                     "    #     ENV_VAR_1: \"{{ ENV_VAR_1 }}\"\n",
+                     "    #     RENAMED_VAR_2: \"{{ ENV_VAR_2 }}\"\n",
+                     "    #     COMPOSED_VAR_3: \"{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}\"\n",
+                     "    #",
+                     ),
             )
-            .replace("    # golem-app-manifest-dep-env-vars-doc", dep_env_vars_doc())
-            .replace("    # golem-app-manifest-deps-doc", deps_doc())
+            .replace("    # golem-app-manifest-dep-env-vars-doc", &DEP_ENV_VARS_DOC)
+            .replace("    # golem-app-manifest-deps-doc", &DEPS_DOC)
             .replace("    # golem-app-manifest-env-presets",
                      "", // "    # TODO: atomic\n"
             )
@@ -702,9 +703,21 @@ fn parse_template(
     }
 }
 
-static DOC_DEPENDENCIES: OnceLock<Vec<DocDependencyGroup>> = OnceLock::new();
+static APP_MANIFEST_HEADER: LazyLock<String> = LazyLock::new(|| {
+    formatdoc! {"
+                # Schema for IDEA:
+                # $schema: https://schema.golem.cloud/app/golem/{version}/golem.schema.json
+                # Schema for vscode-yaml:
+                # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/{version}/golem.schema.json
 
-fn doc_dependencies() -> &'static Vec<DocDependencyGroup> {
+                # Field reference: https://learn.golem.cloud/app-manifest#field-reference
+                # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+            ",
+        version = app_manifest_version!()
+    }
+});
+
+static DOC_DEPENDENCIES: LazyLock<Vec<DocDependencyGroup>> = LazyLock::new(|| {
     fn golem_ai(name: &str) -> String {
         format!(
             "https://github.com/golemcloud/golem-ai/releases/download/{}/{}{}",
@@ -732,395 +745,381 @@ fn doc_dependencies() -> &'static Vec<DocDependencyGroup> {
         DocDependencyGroup { name, dependencies }
     }
 
-    fn init() -> Vec<DocDependencyGroup> {
-        vec![
-            dep_group(
-                "LLM providers",
-                vec![
-                    dep(
-                        "Common",
-                        vec![env("GOLEM_LLM_LOG", "trace", "Optional, defaults to warn")],
-                        "".to_string(),
-                    ),
-                    dep(
-                        "Anthropic",
-                        vec![env("ANTHROPIC_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_llm_anthropic"),
-                    ),
-                    dep(
-                        "OpenAI",
-                        vec![env("OPENAI_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_llm_openai"),
-                    ),
-                    dep(
-                        "OpenRouter",
-                        vec![env("OPENROUTER_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_llm_openrouter"),
-                    ),
-                    dep(
-                        "Amazon Bedrock",
-                        vec![
-                            env("AWS_ACCESS_KEY_ID", "<KEY>", ""),
-                            env("AWS_REGION", "<REGION>", ""),
-                            env("AWS_SECRET_ACCESS_KEY", "<KEY>", ""),
-                            env("AWS_SESSION_TOKEN", "<TOKEN>", "Optional"),
-                        ],
-                        golem_ai("golem_llm_bedrock"),
-                    ),
-                    dep(
-                        "Grok",
-                        vec![env("XAI_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_llm_grok"),
-                    ),
-                    dep(
-                        "Ollama",
-                        vec![env(
-                            "GOLEM_OLLAMA_BASE_URL",
-                            "<URL>",
-                            "Optional, defaults to http://localhost:11434",
-                        )],
-                        golem_ai("golem_llm_ollama"),
-                    ),
-                ],
-            ),
-            dep_group(
-                "Code execution providers",
-                vec![
-                    dep("Python and JavaScript", vec![], golem_ai("golem_exec")),
-                    dep("Python only", vec![], golem_ai("golem_exec_python")),
-                    dep("JavaScript only", vec![], golem_ai("golem_exec_javascript")),
-                ],
-            ),
-            dep_group(
-                "Embedding providers",
-                vec![
-                    dep(
-                        "OpenAI",
-                        vec![env("OPENAI_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_embed_openai"),
-                    ),
-                    dep(
-                        "Cohere",
-                        vec![env("COHERE_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_embed_cohere"),
-                    ),
-                    dep(
-                        "HuggingFace",
-                        vec![env("HUGGING_FACE_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_embed_hugging_face"),
-                    ),
-                    dep(
-                        "VoyageAI",
-                        vec![env("VOYAGEAI_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_embed_voyageai"),
-                    ),
-                ],
-            ),
-            dep_group(
-                "Graph database providers",
-                vec![
-                    dep(
-                        "ArangoDB",
-                        vec![
-                            env("ARANGODB_HOST", "<HOST>", ""),
-                            env("ARANGODB_PORT", "<PORT>", "Optional, defaults to 8529"),
-                            env("ARANGODB_USER", "<USER>", ""),
-                            env("ARANGODB_PASSWORD", "<PASS>", ""),
-                            env("ARANGO_DATABASE", "<DB>", ""),
-                        ],
-                        golem_ai("golem_graph_arangodb"),
-                    ),
-                    dep(
-                        "JanusGraph",
-                        vec![
-                            env("JANUSGRAPH_HOST", "<HOST>", ""),
-                            env("JANUSGRAPH_PORT", "<PORT>", "Optional, defaults to 8182"),
-                            env("JANUSGRAPH_USER", "<USER>", ""),
-                            env("JANUSGRAPH_PASSWORD", "<PASS>", ""),
-                        ],
-                        golem_ai("golem_graph_janusgraph"),
-                    ),
-                    dep(
-                        "Neo4j",
-                        vec![
-                            env("NEO4J_HOST", "<HOST>", ""),
-                            env("NEO4J_PORT", "<PORT>", "Optional, defaults to 7687"),
-                            env("NEO4J_USER", "<USER>", ""),
-                            env("NEO4J_PASSWORD", "<PASS>", ""),
-                        ],
-                        golem_ai("golem_graph_neo4j"),
-                    ),
-                ],
-            ),
-            dep_group(
-                "Search providers",
-                vec![
-                    dep(
-                        "Common",
-                        vec![env(
-                            "GOLEM_SEARCH_LOG",
+    vec![
+        dep_group(
+            "LLM providers",
+            vec![
+                dep(
+                    "Common",
+                    vec![env("GOLEM_LLM_LOG", "trace", "Optional, defaults to warn")],
+                    "".to_string(),
+                ),
+                dep(
+                    "Anthropic",
+                    vec![env("ANTHROPIC_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_llm_anthropic"),
+                ),
+                dep(
+                    "OpenAI",
+                    vec![env("OPENAI_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_llm_openai"),
+                ),
+                dep(
+                    "OpenRouter",
+                    vec![env("OPENROUTER_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_llm_openrouter"),
+                ),
+                dep(
+                    "Amazon Bedrock",
+                    vec![
+                        env("AWS_ACCESS_KEY_ID", "<KEY>", ""),
+                        env("AWS_REGION", "<REGION>", ""),
+                        env("AWS_SECRET_ACCESS_KEY", "<KEY>", ""),
+                        env("AWS_SESSION_TOKEN", "<TOKEN>", "Optional"),
+                    ],
+                    golem_ai("golem_llm_bedrock"),
+                ),
+                dep(
+                    "Grok",
+                    vec![env("XAI_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_llm_grok"),
+                ),
+                dep(
+                    "Ollama",
+                    vec![env(
+                        "GOLEM_OLLAMA_BASE_URL",
+                        "<URL>",
+                        "Optional, defaults to http://localhost:11434",
+                    )],
+                    golem_ai("golem_llm_ollama"),
+                ),
+            ],
+        ),
+        dep_group(
+            "Code execution providers",
+            vec![
+                dep("Python and JavaScript", vec![], golem_ai("golem_exec")),
+                dep("Python only", vec![], golem_ai("golem_exec_python")),
+                dep("JavaScript only", vec![], golem_ai("golem_exec_javascript")),
+            ],
+        ),
+        dep_group(
+            "Embedding providers",
+            vec![
+                dep(
+                    "OpenAI",
+                    vec![env("OPENAI_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_embed_openai"),
+                ),
+                dep(
+                    "Cohere",
+                    vec![env("COHERE_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_embed_cohere"),
+                ),
+                dep(
+                    "HuggingFace",
+                    vec![env("HUGGING_FACE_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_embed_hugging_face"),
+                ),
+                dep(
+                    "VoyageAI",
+                    vec![env("VOYAGEAI_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_embed_voyageai"),
+                ),
+            ],
+        ),
+        dep_group(
+            "Graph database providers",
+            vec![
+                dep(
+                    "ArangoDB",
+                    vec![
+                        env("ARANGODB_HOST", "<HOST>", ""),
+                        env("ARANGODB_PORT", "<PORT>", "Optional, defaults to 8529"),
+                        env("ARANGODB_USER", "<USER>", ""),
+                        env("ARANGODB_PASSWORD", "<PASS>", ""),
+                        env("ARANGO_DATABASE", "<DB>", ""),
+                    ],
+                    golem_ai("golem_graph_arangodb"),
+                ),
+                dep(
+                    "JanusGraph",
+                    vec![
+                        env("JANUSGRAPH_HOST", "<HOST>", ""),
+                        env("JANUSGRAPH_PORT", "<PORT>", "Optional, defaults to 8182"),
+                        env("JANUSGRAPH_USER", "<USER>", ""),
+                        env("JANUSGRAPH_PASSWORD", "<PASS>", ""),
+                    ],
+                    golem_ai("golem_graph_janusgraph"),
+                ),
+                dep(
+                    "Neo4j",
+                    vec![
+                        env("NEO4J_HOST", "<HOST>", ""),
+                        env("NEO4J_PORT", "<PORT>", "Optional, defaults to 7687"),
+                        env("NEO4J_USER", "<USER>", ""),
+                        env("NEO4J_PASSWORD", "<PASS>", ""),
+                    ],
+                    golem_ai("golem_graph_neo4j"),
+                ),
+            ],
+        ),
+        dep_group(
+            "Search providers",
+            vec![
+                dep(
+                    "Common",
+                    vec![env(
+                        "GOLEM_SEARCH_LOG",
+                        "trace",
+                        "Optional, defaults to warn",
+                    )],
+                    "".to_string(),
+                ),
+                dep(
+                    "Algolia",
+                    vec![
+                        env("ALGOLIA_APPLICATION_ID", "<ID>", ""),
+                        env("ALGOLIA_API_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_search_algolia"),
+                ),
+                dep(
+                    "ElasticSearch",
+                    vec![
+                        env("ELASTICSEARCH_URL", "<URL>", ""),
+                        env("ELASTICSEARCH_USERNAME", "<USERNAME>", ""),
+                        env("ELASTICSEARCH_PASSWORD", "<PASSWORD>", ""),
+                        env("ELASTICSEARCH_API_KEY", "<API_KEY>", ""),
+                    ],
+                    golem_ai("golem_search_elasticsearch"),
+                ),
+                dep(
+                    "Meilisearch",
+                    vec![
+                        env("MEILISEARCH_BASE_URL", "<URL>", ""),
+                        env("MEILISEARCH_API_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_search_meilisearch"),
+                ),
+                dep(
+                    "OpenSearch",
+                    vec![
+                        env("OPENSEARCH_BASE_URL", "<URL>", ""),
+                        env("OPENSEARCH_USERNAME", "<USER>", ""),
+                        env("OPENSEARCH_PASSWORD", "<PASS>", ""),
+                        env("OPENSEARCH_API_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_search_opensearch"),
+                ),
+                dep(
+                    "Typesense",
+                    vec![
+                        env("TYPESENSE_BASE_URL", "<URL>", ""),
+                        env("TYPESENSE_API_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_search_typesense"),
+                ),
+            ],
+        ),
+        dep_group(
+            "Speech-to-text providers",
+            vec![
+                dep(
+                    "Common",
+                    vec![
+                        env(
+                            "STT_PROVIDER_LOG_LEVEL",
                             "trace",
                             "Optional, defaults to warn",
-                        )],
-                        "".to_string(),
-                    ),
-                    dep(
-                        "Algolia",
-                        vec![
-                            env("ALGOLIA_APPLICATION_ID", "<ID>", ""),
-                            env("ALGOLIA_API_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_search_algolia"),
-                    ),
-                    dep(
-                        "ElasticSearch",
-                        vec![
-                            env("ELASTICSEARCH_URL", "<URL>", ""),
-                            env("ELASTICSEARCH_USERNAME", "<USERNAME>", ""),
-                            env("ELASTICSEARCH_PASSWORD", "<PASSWORD>", ""),
-                            env("ELASTICSEARCH_API_KEY", "<API_KEY>", ""),
-                        ],
-                        golem_ai("golem_search_elasticsearch"),
-                    ),
-                    dep(
-                        "Meilisearch",
-                        vec![
-                            env("MEILISEARCH_BASE_URL", "<URL>", ""),
-                            env("MEILISEARCH_API_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_search_meilisearch"),
-                    ),
-                    dep(
-                        "OpenSearch",
-                        vec![
-                            env("OPENSEARCH_BASE_URL", "<URL>", ""),
-                            env("OPENSEARCH_USERNAME", "<USER>", ""),
-                            env("OPENSEARCH_PASSWORD", "<PASS>", ""),
-                            env("OPENSEARCH_API_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_search_opensearch"),
-                    ),
-                    dep(
-                        "Typesense",
-                        vec![
-                            env("TYPESENSE_BASE_URL", "<URL>", ""),
-                            env("TYPESENSE_API_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_search_typesense"),
-                    ),
-                ],
-            ),
-            dep_group(
-                "Speech-to-text providers",
-                vec![
-                    dep(
-                        "Common",
-                        vec![
-                            env(
-                                "STT_PROVIDER_LOG_LEVEL",
-                                "trace",
-                                "Optional, defaults to warn",
-                            ),
-                            env("STT_PROVIDER_MAX_RETRIES", "10", "Optional, defaults to 10"),
-                        ],
-                        "".to_string(),
-                    ),
-                    dep(
-                        "AWS",
-                        vec![
-                            env("AWS_REGION", "<REGION>", ""),
-                            env("AWS_ACCESS_KEY", "<KEY>", ""),
-                            env("AWS_SECRET_KEY", "<KEY>", ""),
-                            env("AWS_BUCKET_NAME", "<BUCKET>", ""),
-                        ],
-                        golem_ai("golem_stt_aws"),
-                    ),
-                    dep(
-                        "Azure",
-                        vec![
-                            env("AZURE_REGION", "<REGION>", ""),
-                            env("AZURE_SUBSCRIPTION_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_stt_azure"),
-                    ),
-                    dep(
-                        "Deepgram",
-                        vec![
-                            env("DEEPGRAM_API_TOKEN", "<TOKEN>", ""),
-                            env("DEEPGRAM_ENDPOINT", "<URL>", "Optional"),
-                        ],
-                        golem_ai("golem_stt_deepgram"),
-                    ),
-                    dep(
-                        "Google",
-                        vec![
-                            env("GOOGLE_LOCATION", "", ""),
-                            env("GOOGLE_BUCKET_NAME", "", ""),
-                            env(
-                                "GOOGLE_APPLICATION_CREDENTIALS",
-                                "<CRED>",
-                                "or use the vars below",
-                            ),
-                            env("GOOGLE_PROJECT_ID", "<ID>", ""),
-                            env("GOOGLE_CLIENT_EMAIL", "<EMAIL>", ""),
-                            env("GOOGLE_PRIVATE_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_stt_google"),
-                    ),
-                    dep(
-                        "Whisper",
-                        vec![env("OPENAI_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_stt_whisper"),
-                    ),
-                ],
-            ),
-            dep_group(
-                "Video generation providers",
-                vec![
-                    dep(
-                        "Kling",
-                        vec![
-                            env("KLING_ACCESS_KEY", "<KEY>", ""),
-                            env("KLING_SECRET_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_video_kling"),
-                    ),
-                    dep(
-                        "Runway",
-                        vec![env("RUNWAY_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_video_runway"),
-                    ),
-                    dep(
-                        "Stability",
-                        vec![env("STABILITY_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_video_stability"),
-                    ),
-                    dep(
-                        "Veo",
-                        vec![
-                            env("VEO_PROJECT_ID", "<ID>", ""),
-                            env("VEO_CLIENT_EMAIL", "<EMAIL>", ""),
-                            env("VEO_PRIVATE_KEY", "<KEY>", ""),
-                        ],
-                        golem_ai("golem_video_veo"),
-                    ),
-                ],
-            ),
-            dep_group(
-                "WebSearch providers",
-                vec![
-                    dep(
-                        "Brave",
-                        vec![env("BRAVE_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_web_search_brave"),
-                    ),
-                    dep(
-                        "Google",
-                        vec![
-                            env("GOOGLE_API_KEY", "<KEY>", ""),
-                            env("GOOGLE_SEARCH_ENGINE_ID", "<ID>", ""),
-                        ],
-                        golem_ai("golem_web_search_google"),
-                    ),
-                    dep(
-                        "Serper",
-                        vec![env("SERPER_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_web_search_serper"),
-                    ),
-                    dep(
-                        "Tavily",
-                        vec![env("TAVILY_API_KEY", "<KEY>", "")],
-                        golem_ai("golem_web_search_tavily"),
-                    ),
-                ],
-            ),
-        ]
-    }
+                        ),
+                        env("STT_PROVIDER_MAX_RETRIES", "10", "Optional, defaults to 10"),
+                    ],
+                    "".to_string(),
+                ),
+                dep(
+                    "AWS",
+                    vec![
+                        env("AWS_REGION", "<REGION>", ""),
+                        env("AWS_ACCESS_KEY", "<KEY>", ""),
+                        env("AWS_SECRET_KEY", "<KEY>", ""),
+                        env("AWS_BUCKET_NAME", "<BUCKET>", ""),
+                    ],
+                    golem_ai("golem_stt_aws"),
+                ),
+                dep(
+                    "Azure",
+                    vec![
+                        env("AZURE_REGION", "<REGION>", ""),
+                        env("AZURE_SUBSCRIPTION_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_stt_azure"),
+                ),
+                dep(
+                    "Deepgram",
+                    vec![
+                        env("DEEPGRAM_API_TOKEN", "<TOKEN>", ""),
+                        env("DEEPGRAM_ENDPOINT", "<URL>", "Optional"),
+                    ],
+                    golem_ai("golem_stt_deepgram"),
+                ),
+                dep(
+                    "Google",
+                    vec![
+                        env("GOOGLE_LOCATION", "", ""),
+                        env("GOOGLE_BUCKET_NAME", "", ""),
+                        env(
+                            "GOOGLE_APPLICATION_CREDENTIALS",
+                            "<CRED>",
+                            "or use the vars below",
+                        ),
+                        env("GOOGLE_PROJECT_ID", "<ID>", ""),
+                        env("GOOGLE_CLIENT_EMAIL", "<EMAIL>", ""),
+                        env("GOOGLE_PRIVATE_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_stt_google"),
+                ),
+                dep(
+                    "Whisper",
+                    vec![env("OPENAI_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_stt_whisper"),
+                ),
+            ],
+        ),
+        dep_group(
+            "Video generation providers",
+            vec![
+                dep(
+                    "Kling",
+                    vec![
+                        env("KLING_ACCESS_KEY", "<KEY>", ""),
+                        env("KLING_SECRET_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_video_kling"),
+                ),
+                dep(
+                    "Runway",
+                    vec![env("RUNWAY_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_video_runway"),
+                ),
+                dep(
+                    "Stability",
+                    vec![env("STABILITY_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_video_stability"),
+                ),
+                dep(
+                    "Veo",
+                    vec![
+                        env("VEO_PROJECT_ID", "<ID>", ""),
+                        env("VEO_CLIENT_EMAIL", "<EMAIL>", ""),
+                        env("VEO_PRIVATE_KEY", "<KEY>", ""),
+                    ],
+                    golem_ai("golem_video_veo"),
+                ),
+            ],
+        ),
+        dep_group(
+            "WebSearch providers",
+            vec![
+                dep(
+                    "Brave",
+                    vec![env("BRAVE_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_web_search_brave"),
+                ),
+                dep(
+                    "Google",
+                    vec![
+                        env("GOOGLE_API_KEY", "<KEY>", ""),
+                        env("GOOGLE_SEARCH_ENGINE_ID", "<ID>", ""),
+                    ],
+                    golem_ai("golem_web_search_google"),
+                ),
+                dep(
+                    "Serper",
+                    vec![env("SERPER_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_web_search_serper"),
+                ),
+                dep(
+                    "Tavily",
+                    vec![env("TAVILY_API_KEY", "<KEY>", "")],
+                    golem_ai("golem_web_search_tavily"),
+                ),
+            ],
+        ),
+    ]
+});
 
-    DOC_DEPENDENCIES.get_or_init(init)
-}
+static DEP_ENV_VARS_DOC: LazyLock<String> = LazyLock::new(|| {
+    let indent = "    ";
+    let mut out = String::new();
 
-static DEP_ENV_VARS_DOC: OnceLock<String> = OnceLock::new();
+    for group in DOC_DEPENDENCIES.iter() {
+        if !group
+            .dependencies
+            .iter()
+            .any(|dep| !dep.env_vars.is_empty())
+        {
+            continue;
+        }
 
-fn dep_env_vars_doc() -> &'static str {
-    fn init(groups: &[DocDependencyGroup], indent: &str) -> String {
-        let mut out = String::new();
+        out.push_str(&doc_group_header(indent, group));
 
-        for group in groups {
-            if !group
-                .dependencies
-                .iter()
-                .any(|dep| !dep.env_vars.is_empty())
-            {
+        for dep in &group.dependencies {
+            if dep.env_vars.is_empty() {
                 continue;
             }
 
-            out.push_str(&doc_group_header(indent, group));
+            out.push_str(&doc_dep_header(indent, dep));
 
-            for dep in &group.dependencies {
-                if dep.env_vars.is_empty() {
-                    continue;
+            for v in &dep.env_vars {
+                let mut line = format!("{indent}# {key}", indent = indent, key = v.name);
+                line.push_str(&format!(": \"{}\"", v.value));
+                if !v.comment.is_empty() {
+                    line.push_str(&format!(" # {}", v.comment));
                 }
-
-                out.push_str(&doc_dep_header(indent, dep));
-
-                for v in &dep.env_vars {
-                    let mut line = format!("{indent}# {key}", indent = indent, key = v.name);
-                    line.push_str(&format!(": \"{}\"", v.value));
-                    if !v.comment.is_empty() {
-                        line.push_str(&format!(" # {}", v.comment));
-                    }
-                    line.push('\n');
-                    out.push_str(&line);
-                }
-
-                out.push('\n');
+                line.push('\n');
+                out.push_str(&line);
             }
 
             out.push('\n');
         }
 
-        out.trim_end().to_string()
+        out.push('\n');
     }
 
-    DEP_ENV_VARS_DOC.get_or_init(move || init(doc_dependencies(), "    "))
-}
+    out.trim_end().to_string()
+});
 
-static DEPS_DOC: OnceLock<String> = OnceLock::new();
+static DEPS_DOC: LazyLock<String> = LazyLock::new(|| {
+    let indent = "    ";
+    let mut out = String::new();
 
-fn deps_doc() -> &'static str {
-    fn init(groups: &[DocDependencyGroup], indent: &str) -> String {
-        let mut out = String::new();
-
-        out.push_str(&formatdoc! {"
+    out.push_str(&formatdoc! {"
         {indent}# The following block contains commented-out dependencies for various Golem AI libraries.
         {indent}# For each area (such as LLM, Search, etc) only one of the providers can be commented out.
         {indent}# If no provider dependency is commented out, then using that AI API will be a runtime failure.
         ",
         });
 
-        for group in groups {
-            out.push_str(&doc_group_header(indent, group));
+    for group in DOC_DEPENDENCIES.iter() {
+        out.push_str(&doc_group_header(indent, group));
 
-            for dep in &group.dependencies {
-                if dep.url.is_empty() {
-                    continue;
-                }
-
-                out.push_str(&doc_dep_header(indent, dep));
-                out.push_str(&format!("{indent}# - type: wasm\n", indent = indent));
-                out.push_str(&format!("{indent}#   url: {}\n", dep.url, indent = indent));
-                out.push('\n');
+        for dep in &group.dependencies {
+            if dep.url.is_empty() {
+                continue;
             }
 
+            out.push_str(&doc_dep_header(indent, dep));
+            out.push_str(&format!("{indent}# - type: wasm\n", indent = indent));
+            out.push_str(&format!("{indent}#   url: {}\n", dep.url, indent = indent));
             out.push('\n');
         }
 
-        out.trim_end().to_string()
+        out.push('\n');
     }
 
-    DEPS_DOC.get_or_init(move || init(doc_dependencies(), "    "))
-}
+    out.trim_end().to_string()
+});
 
 fn doc_group_header(indent: &str, group: &DocDependencyGroup) -> String {
     format!(

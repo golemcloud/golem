@@ -24,11 +24,22 @@ use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::http_api_definition::{GatewayBindingType, HttpApiDefinitionName};
+use golem_templates::APP_MANIFEST_JSON_SCHEMA;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use url::Url;
+
+static JSON_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+    let schema = serde_json::from_str::<serde_json::Value>(APP_MANIFEST_JSON_SCHEMA)
+        .expect("Invalid Application manifest JSON schema: cannot parse as JSON");
+    jsonschema::validator_for(&schema)
+        .expect("Invalid Application manifest JSON schema: cannot create validator")
+});
 
 #[derive(Clone, Debug)]
 pub struct ApplicationWithSource {
@@ -42,7 +53,7 @@ impl ApplicationWithSource {
             .with_context(|| anyhow!("Failed to load source {}", file.log_color_highlight()))
     }
 
-    pub fn from_yaml_string(source: PathBuf, string: &str) -> serde_yaml::Result<Self> {
+    pub fn from_yaml_string(source: PathBuf, string: &str) -> anyhow::Result<Self> {
         Ok(Self {
             source,
             application: Application::from_yaml_str(string)?,
@@ -54,7 +65,7 @@ impl ApplicationWithSource {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Application {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,9 +90,111 @@ pub struct Application {
     pub environments: IndexMap<String, Environment>,
 }
 
+#[derive(Debug)]
+struct JsonSchemaValidationError {
+    schema: String,
+    error: String,
+}
+
+#[derive(Debug)]
+pub struct DeserializationError {
+    serde_yaml_error: serde_yaml::Error,
+    json_schema_validation_errors_by_path: BTreeMap<String, Vec<JsonSchemaValidationError>>,
+}
+
+impl DeserializationError {
+    fn new(
+        serde_yaml_error: serde_yaml::Error,
+        json_schema_evaluation: Option<jsonschema::Evaluation>,
+    ) -> Self {
+        match json_schema_evaluation {
+            Some(evaluation) => {
+                if evaluation.flag().valid {
+                    serde_yaml_error.into()
+                } else {
+                    let mut schema_errors =
+                        BTreeMap::<String, Vec<JsonSchemaValidationError>>::new();
+
+                    for error in evaluation.iter_errors() {
+                        let path = format!(".{}", error.instance_location);
+                        schema_errors
+                            .entry(path)
+                            .or_default()
+                            .push(JsonSchemaValidationError {
+                                schema: error.schema_location.to_string(),
+                                error: error.error.to_string(),
+                            })
+                    }
+
+                    Self {
+                        serde_yaml_error,
+                        json_schema_validation_errors_by_path: schema_errors,
+                    }
+                }
+            }
+            None => serde_yaml_error.into(),
+        }
+    }
+}
+
+impl From<serde_yaml::Error> for DeserializationError {
+    fn from(value: serde_yaml::Error) -> Self {
+        Self {
+            serde_yaml_error: value,
+            json_schema_validation_errors_by_path: BTreeMap::new(),
+        }
+    }
+}
+
+impl Display for DeserializationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.json_schema_validation_errors_by_path.is_empty() {
+            write!(f, "{}", self.serde_yaml_error)
+        } else {
+            write!(f, "Failed to deserialize application manifest:\n")?;
+            write!(
+                f,
+                "  {}\n",
+                "YAML deserialization error:".log_color_help_group()
+            )?;
+            write!(
+                f,
+                "    {}\n",
+                self.serde_yaml_error
+                    .to_string()
+                    .log_color_error_highlight()
+            )?;
+            write!(
+                f,
+                "  {}\n",
+                "Schema validation hint(s):".log_color_help_group()
+            )?;
+            for (path, errors) in &self.json_schema_validation_errors_by_path {
+                write!(f, "    path: {}\n", path.log_color_highlight())?;
+                for error in errors {
+                    write!(f, "      - schema: {}\n", error.schema)?;
+                    write!(f, "        error: {}\n", error.error.log_color_warn())?;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+impl Error for DeserializationError {}
+
 impl Application {
-    pub fn from_yaml_str(yaml: &str) -> serde_yaml::Result<Self> {
-        serde_yaml::from_str(yaml)
+    pub fn from_yaml_str(yaml: &str) -> Result<Self, DeserializationError> {
+        match serde_yaml::from_str(yaml) {
+            Ok(app) => Ok(app),
+            Err(err) => Err(DeserializationError::new(
+                err,
+                serde_yaml::from_str::<serde_json::Value>(yaml)
+                    .ok()
+                    .map(json_value_without_null_fields)
+                    .map(|app| JSON_SCHEMA_VALIDATOR.evaluate(&app)),
+            )),
+        }
     }
 
     pub fn to_yaml_string(&self) -> String {
@@ -237,8 +350,13 @@ pub struct CustomServer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
 pub enum CustomServerAuth {
-    OAuth2 { oauth2: Marker },
-    Static { static_token: String },
+    OAuth2 {
+        oauth2: Marker,
+    },
+    #[serde[rename_all = "camelCase"]]
+    Static {
+        static_token: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -582,6 +700,48 @@ impl<'de> Deserialize<'de> for Marker {
             false => Err(serde::de::Error::custom(
                 "value must be `true`, `false` is not allowed",
             )),
+        }
+    }
+}
+
+fn json_value_without_null_fields(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => value,
+        serde_json::Value::Array(array) => array
+            .into_iter()
+            .map(json_value_without_null_fields)
+            .collect::<Vec<_>>()
+            .into(),
+        serde_json::Value::Object(map) => map
+            .into_iter()
+            .filter_map(|(k, v)| {
+                if v != serde_json::Value::Null {
+                    Some((k, json_value_without_null_fields(v)))
+                } else {
+                    None
+                }
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into(),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    mod app_manifest_json_schema_validation {
+        use crate::model::app_raw::{Application, JSON_SCHEMA_VALIDATOR};
+        use assert2::assert;
+        use test_r::test;
+
+        #[test]
+        fn schema_is_loadable_and_validates_empty_app() {
+            let mut app = Application::default();
+            app.app = Some("app-name".to_string());
+
+            assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
         }
     }
 }
