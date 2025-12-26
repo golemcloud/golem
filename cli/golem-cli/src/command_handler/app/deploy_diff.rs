@@ -827,7 +827,7 @@ impl<'a, Name, Entity> RollbackEntityDetails<Name, &'a Entity> {
     ) -> Self {
         match entity_diff {
             diff::BTreeMapDiffValue::Create => Self {
-                new: Some(get_current(rollback_diff, &name)),
+                new: Some(get_new(rollback_diff, &name)),
                 current: None,
                 name,
             },
