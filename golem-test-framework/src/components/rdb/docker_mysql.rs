@@ -32,8 +32,19 @@ impl DockerMysqlRdb {
     const DEFAULT_USERNAME: &'static str = "root";
     const DEFAULT_PASSWORD: &'static str = "mysql";
     const DEFAULT_DATABASE: &'static str = "mysql";
+    const DEFAULT_IMAGE_NAME: &'static str = "mysql";
+    const DEFAULT_IMAGE_TAG: &'static str = "8";
 
     pub async fn new(unique_network_id: &str) -> Self {
+        Self::new_with_image(
+            unique_network_id,
+            Self::DEFAULT_IMAGE_NAME,
+            Self::DEFAULT_IMAGE_TAG,
+        )
+        .await
+    }
+
+    pub async fn new_with_image(unique_network_id: &str, image: &str, tag: &str) -> Self {
         info!("Starting Mysql container");
 
         let database = Self::DEFAULT_DATABASE;
@@ -43,7 +54,8 @@ impl DockerMysqlRdb {
 
         let container = tryhard::retry_fn(|| {
             Mysql::default()
-                .with_tag("8")
+                .with_name(image)
+                .with_tag(tag)
                 .with_env_var("MYSQL_ROOT_PASSWORD", password)
                 .with_env_var("MYSQL_DATABASE", database)
                 .with_network(network(unique_network_id))

@@ -4856,6 +4856,7 @@ dependencies = [
  "golem-wasm",
  "golem-wasm-derive",
  "golem-worker-executor-test-utils",
+ "half",
  "heck 0.5.0",
  "hex",
  "http 1.3.1",
@@ -4871,6 +4872,7 @@ dependencies = [
  "md5",
  "metrohash",
  "nonempty-collections",
+ "pgvector",
  "pretty_assertions",
  "prometheus",
  "proptest",
@@ -7937,6 +7939,16 @@ checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset 0.5.7",
  "indexmap 2.12.0",
+]
+
+[[package]]
+name = "pgvector"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc58e2d255979a31caa7cabfa7aac654af0354220719ab7a68520ae7a91e8c0b"
+dependencies = [
+ "half",
+ "sqlx",
 ]
 
 [[package]]

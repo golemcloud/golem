@@ -35,8 +35,25 @@ impl DockerPostgresRdb {
     const DEFAULT_USERNAME: &'static str = "postgres";
     const DEFAULT_PASSWORD: &'static str = "postgres";
     const DEFAULT_DATABASE: &'static str = "postgres";
+    const DEFAULT_IMAGE_NAME: &'static str = "postgres";
+    const DEFAULT_IMAGE_TAG: &'static str = "14";
 
     pub async fn new(unique_network_id: &str, enable_stats: bool) -> Self {
+        Self::new_with_image(
+            unique_network_id,
+            enable_stats,
+            Self::DEFAULT_IMAGE_NAME,
+            Self::DEFAULT_IMAGE_TAG,
+        )
+        .await
+    }
+
+    pub async fn new_with_image(
+        unique_network_id: &str,
+        enable_stats: bool,
+        image: &str,
+        tag: &str,
+    ) -> Self {
         info!("Starting Postgres container");
 
         let database = Self::DEFAULT_DATABASE;
@@ -55,7 +72,8 @@ impl DockerPostgresRdb {
         };
         let container = tryhard::retry_fn(move || {
             Postgres::default()
-                .with_tag("14")
+                .with_name(image)
+                .with_tag(tag)
                 .with_env_var("POSTGRES_DB", database)
                 .with_env_var("POSTGRES_PASSWORD", password)
                 .with_env_var("POSTGRES_USER", username)

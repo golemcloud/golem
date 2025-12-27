@@ -1,4 +1,4 @@
-declare module 'golem:rdbms/types@0.0.1' {
+declare module 'golem:rdbms/types@0.0.2' {
   export type Uuid = {
     highBits: bigint;
     lowBits: bigint;

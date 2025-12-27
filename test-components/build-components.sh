@@ -75,12 +75,12 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
     pushd "$subdir" || exit
 
     if [ "$rebuild" = true ]; then
-      golem-cli app --preset release clean
+      golem-cli clean
       cargo clean
     fi
 
-    golem-cli app --preset release build
-    golem-cli app --preset release copy
+    golem-cli --preset release  build
+    golem-cli --preset release exec copy
 
     popd || exit
   done
@@ -122,7 +122,7 @@ if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
     fi
 
     golem-cli build
-    golem-cli copy
+    golem-cli exec copy
 
     popd || exit
   done
@@ -142,7 +142,7 @@ if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
     fi
 
     golem-cli build
-    golem-cli copy
+    golem-cli exec copy
 
     popd || exit
   done
