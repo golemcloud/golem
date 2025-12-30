@@ -1,3 +1,0 @@
-   Compiling golem-cli v0.0.0 (C:\Users\matias.magni2\Documents\dev\mine\Algora\golem\cli\golem-cli)
-    Checking golem v0.0.0 (C:\Users\matias.magni2\Documents\dev\mine\Algora\golem\cli\golem)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 21.56s
