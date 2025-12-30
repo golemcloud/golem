@@ -5,8 +5,7 @@ use crate::command::mcp_server::{McpServerStartArgs, McpServerSubcommand};
 use crate::context::Context;
 use crate::log::logln;
 use crate::service::mcp_server::McpServerImpl;
-use tokio::io::{stdin, stdout};
-use rmcp::ServiceExt;
+
 
 #[async_trait]
 pub trait McpServerCommandHandler {
@@ -35,13 +34,29 @@ impl McpServerCommandHandler for McpServerCommandHandlerDefault {
     }
 }
 
+use rmcp::transport::streamable_http_server::{session::local::LocalSessionManager, StreamableHttpService};
+use axum::Router;
+use axum::routing::get;
+
 impl McpServerCommandHandlerDefault {
     async fn run(&self, args: McpServerStartArgs) -> Result<()> {
         let addr = format!("{}:{}", args.host, args.port);
         logln(format!("Starting MCP server on {}", addr));
 
         let service = McpServerImpl::new(self.ctx.clone());
-        service.serve((stdin(), stdout())).await?;
+
+        let mcp_service = StreamableHttpService::new(
+            move || Ok(service.clone()),
+            LocalSessionManager::default().into(),
+            Default::default(),
+        );
+
+        let app = Router::new()
+            .nest_service("/mcp", mcp_service)
+            .route("/", get(|| async { "Hello from Golem CLI MCP Server!" }));
+
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
 
         Ok(())
     }
