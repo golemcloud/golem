@@ -58,7 +58,7 @@ pub trait CommandHandlerHooks: Send + Sync {
 }
 
 mod api;
-mod app;
+pub mod app;
 mod cloud;
 mod component;
 mod environment;

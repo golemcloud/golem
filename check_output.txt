@@ -1,0 +1,6 @@
+   Compiling golem-cli v0.0.0 (C:\Users\matias.magni2\Documents\dev\mine\Algora\golem\cli\golem-cli)
+cli\golem-cli\src\command_handler\mcp_server.rs:8:17: warning: unused imports: `stdin` and `stdout`
+cli\golem-cli\src\command_handler\mcp_server.rs:9:5: warning: unused import: `rmcp::ServiceExt`
+cli\golem-cli\src\command_handler\mcp_server.rs:56:47: error[E0599]: no method named `into_service` found for struct `StreamableHttpService<S, M>` in the current scope
+warning: `golem-cli` (lib) generated 2 warnings
+error: could not compile `golem-cli` (lib) due to 1 previous error; 2 warnings emitted

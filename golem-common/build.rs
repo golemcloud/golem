@@ -76,7 +76,6 @@ fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
                 .strip_prefix("v")
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| version);
-            println!("cargo::warning=git describe result: {version}");
             version
         }
     };

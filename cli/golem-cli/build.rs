@@ -72,7 +72,6 @@ fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
             "0.0.0".to_string()
         } else {
             let version = String::from_utf8(output.stdout)?.trim().to_string();
-            println!("cargo::warning=git describe result: {version}");
             version
         }
     };

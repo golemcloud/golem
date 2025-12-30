@@ -1,0 +1,25 @@
+On branch feature/1926-mcp-server-mode
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   Cargo.lock
+	modified:   Cargo.toml
+	modified:   cli/golem-cli/Cargo.toml
+	modified:   cli/golem-cli/build.rs
+	modified:   cli/golem-cli/src/command_handler/mod.rs
+	modified:   cli/golem-cli/src/service/mcp_server.rs
+	modified:   cli/golem-cli/tests/mcp_server.rs
+	modified:   cli/golem/src/command_handler.rs
+	modified:   golem-common/build.rs
+	modified:   golem-wasm/Cargo.toml
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	check_output.txt
+	check_output2.txt
+	commit_changes.bat
+	commit_output.txt
+	git_status.txt
+	run_check.bat
+
+no changes added to commit (use "git add" and/or "git commit -a")

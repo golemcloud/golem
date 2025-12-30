@@ -103,6 +103,8 @@ golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
 
+schemars = "1.2.0"
+
 
 anyhow = "1.0.97"
 applying = "1.0.1"
@@ -323,7 +325,7 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
-schemars = { version = "1.1.0", features = ["derive", "uuid1"] }
+
 
 windows-sys = { version = "0.52.0", features = ["Win32_Storage_FileSystem"] }
 

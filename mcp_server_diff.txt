@@ -1,0 +1,179 @@
+warning: in the working copy of 'cli/golem-cli/src/service/mcp_server.rs', LF will be replaced by CRLF the next time Git touches it
+diff --git a/cli/golem-cli/src/service/mcp_server.rs b/cli/golem-cli/src/service/mcp_server.rs
+index 75f0fa076..98e90132c 100644
+--- a/cli/golem-cli/src/service/mcp_server.rs
++++ b/cli/golem-cli/src/service/mcp_server.rs
+@@ -1,37 +1,82 @@
+-// Copyright 2024-2025 Golem Cloud
+-//
+-// Licensed under the Golem Source License v1.0 (the "License");
+-// you may not use this file except in compliance with the License.
+-// You may obtain a copy of the License at
+-//
+-//     http://license.golem.cloud/LICENSE
+-//
+-// Unless required by applicable law or agreed to in writing, software
+-// distributed under the License is distributed on an "AS IS" BASIS,
+-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-// See the License for the specific language governing permissions and
+-// limitations under the License.
+-
+-use crate::context::Context;
+-use rmcp::handler::server::ServerHandler;
+-use rmcp::model::{InitializeResult, ServerCapabilities, Implementation, ProtocolVersion, CallToolRequestParam, CallToolResult, ErrorData, Content, PaginatedRequestParam, ListToolsResult};
+-use rmcp::service::{RequestContext, RoleServer};
++use rmcp::model::{InitializeResult, ServerCapabilities, Implementation, ProtocolVersion, ErrorData, ErrorCode, CallToolResult, Content};
++use rmcp::service::{RequestContext, NotificationContext};
++use rmcp::service::{RoleServer, ServiceRole};
+ use std::sync::Arc;
+-use anyhow::Result;
++use schemars::JsonSchema;
++use serde::{Deserialize, Serialize};
++use golem_client::model::ComponentDto;
++use rmcp_macros::{tool_router, tool};
++use crate::command_handler::app::AppCommandHandler;
++use crate::command_handler::Handlers;
++use crate::context::Context;
++use std::future::Future;
++
++#[derive(JsonSchema, Deserialize, Serialize)]
++pub struct ListAgentTypesRequest {}
++
++#[derive(JsonSchema, Deserialize, Serialize)]
++pub struct ListAgentTypesResponse {
++    pub agent_types: Vec<String>,
++}
++
++#[derive(JsonSchema, Deserialize, Serialize, Clone, Debug)]
++pub struct McpComponentDto {
++    pub id: String,
++    pub name: String,
++    pub revision: u64,
++    pub size: u64,
++}
++
++impl From<ComponentDto> for McpComponentDto {
++    fn from(dto: ComponentDto) -> Self {
++        McpComponentDto {
++            id: dto.id.to_string(),
++            name: dto.component_name.0,
++            revision: dto.revision.into(),
++            size: dto.component_size,
++        }
++    }
++}
++
++#[derive(JsonSchema, Deserialize, Serialize)]
++pub struct ListComponentsRequest {}
++
++#[derive(JsonSchema, Deserialize, Serialize)]
++pub struct ListComponentsResponse {
++    pub components: Vec<McpComponentDto>,
++}
+ 
+ #[derive(Clone)]
+ pub struct McpServerImpl {
+     pub ctx: Arc<Context>,
+ }
+ 
+-impl McpServerImpl {
+-    pub fn new(ctx: Arc<Context>) -> Self {
+-        Self { ctx }
++impl rmcp::service::Service<RoleServer> for McpServerImpl {
++    fn handle_request(
++        &self,
++        _request: <RoleServer as rmcp::service::ServiceRole>::PeerReq,
++        _context: RequestContext<RoleServer>,
++    ) -> impl Future<Output = std::result::Result<<RoleServer as ServiceRole>::Resp, ErrorData>> + Send + '_ {
++        async {
++            Err(ErrorData::new(
++                ErrorCode::METHOD_NOT_FOUND,
++                "Request not handled".to_string(),
++                None,
++            ))
++        }
+     }
+-}
+ 
+-impl ServerHandler for McpServerImpl {
+-    fn get_info(&self) -> InitializeResult {
++    fn handle_notification(
++        &self,
++        _notification: <RoleServer as rmcp::service::ServiceRole>::PeerNot,
++        _context: NotificationContext<RoleServer>,
++    ) -> impl Future<Output = std::result::Result<(), ErrorData>> + Send + '_ {
++        async {
++            Ok(())
++        }
++    }
++
++    fn get_info(&self) -> <RoleServer as rmcp::service::ServiceRole>::Info {
+         InitializeResult {
+             protocol_version: ProtocolVersion::V_2024_11_05,
+             capabilities: ServerCapabilities::builder().build(),
+@@ -43,31 +88,44 @@ impl ServerHandler for McpServerImpl {
+             instructions: None,
+         }
+     }
++}
++
++#[tool_router]
++impl McpServerImpl {
++    pub fn new(ctx: Arc<Context>) -> Self {
++        Self { ctx }
++    }
+ 
+-    fn call_tool(
++    #[tool(
++        name = "list_agent_types",
++        description = "List all available agent types"
++    )]
++    async fn list_agent_types(
+         &self,
+-        tool_call_request: CallToolRequestParam,
+-        _context: RequestContext<RoleServer>,
+-    ) -> impl std::future::Future<Output = Result<CallToolResult, ErrorData>> + Send + '_ {
+-        async move {
+-            Ok(CallToolResult::success(vec![Content::text(format!(
+-                "Tool call received: {:?}",
+-                tool_call_request
+-            ))]))
+-        }
++    ) -> std::result::Result<CallToolResult, ErrorData> {
++        let app_command_handler = AppCommandHandler::new(self.ctx.clone());
++        let registered_agent_types = app_command_handler.cmd_list_agent_types().await.map_err(|e: anyhow::Error| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
++        let agent_types = registered_agent_types.into_iter().map(|rat| rat.agent_type.type_name).collect();
++        let response = ListAgentTypesResponse {
++            agent_types,
++        };
++        let content = serde_json::to_value(response).map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
++        Ok(CallToolResult::success(vec![Content::json(content)?]))
+     }
+ 
+-    fn list_tools(
++    #[tool(
++        name = "list_components",
++        description = "List all available components"
++    )]
++    async fn list_components(
+         &self,
+-        _request: Option<PaginatedRequestParam>,
+-        _context: RequestContext<RoleServer>,
+-    ) -> impl std::future::Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
+-        async move {
+-            Ok(ListToolsResult {
+-                tools: vec![],
+-                next_cursor: None,
+-                meta: Default::default(),
+-            })
+-        }
++    ) -> std::result::Result<CallToolResult, ErrorData> {
++        let components: Vec<McpComponentDto> = self.ctx.component_handler().cmd_list_components().await.map_err(|e: anyhow::Error| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?
++            .into_iter()
++            .map(|c: ComponentDto| c.into())
++            .collect();
++        let response = ListComponentsResponse { components };
++        let content = serde_json::to_value(response).map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
++        Ok(CallToolResult::success(vec![Content::json(content)?]))
+     }
+ }

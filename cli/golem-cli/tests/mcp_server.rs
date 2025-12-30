@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use golem_cli::context::Context;
 use golem_cli::mcp_server_service::Tools;
 use golem_client::api::{ComponentClient, EnvironmentClient};
-use golem_client::model::{ComponentDto, Components, RegisteredAgentType, RegisteredAgentTypes};
+use golem_client::model::{ComponentDto, Components, RegisteredAgentTypes};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision, ProtectedComponentId};
 use golem_common::model::environment::EnvironmentId;
 use rmcp::{Request, Service};
@@ -35,6 +35,7 @@ use golem_cli::config::NamedProfile;
 use golem_cli::model::environment::EnvironmentReference;
 use golem_cli::model::environment::{ResolvedEnvironmentIdentity, ServerEnvironment};
 use golem_common::model::deployment::CurrentDeployment;
+use golem_common::model::agent::{RegisteredAgentType, RegisteredAgentTypeImplementer, AgentType, AgentMode, AgentConstructor, DataSchema, NamedElementSchemas, ElementSchema, ComponentModelElementSchema, AgentMethod};
 
 
 // Mock ComponentClient for testing
@@ -182,12 +183,42 @@ impl EnvironmentClient for MockEnvironmentClient {
         Ok(RegisteredAgentTypes {
             values: vec![
                 RegisteredAgentType {
-                    agent_type_id: "agent-type-1".to_string(),
-                    name: "AgentType1".to_string(),
+                    agent_type: AgentType {
+                        type_name: "AgentType1".to_string(),
+                        description: "Description 1".to_string(),
+                        constructor: AgentConstructor {
+                            name: None,
+                            description: "Constructor 1".to_string(),
+                            prompt_hint: None,
+                            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                        },
+                        methods: vec![],
+                        dependencies: vec![],
+                        mode: AgentMode::Durable,
+                    },
+                    implemented_by: RegisteredAgentTypeImplementer {
+                        component_id: ComponentId("a5347275-4347-430a-9528-7634c44b360b".to_string()),
+                        component_revision: ComponentRevision(1),
+                    },
                 },
                 RegisteredAgentType {
-                    agent_type_id: "agent-type-2".to_string(),
-                    name: "AgentType2".to_string(),
+                    agent_type: AgentType {
+                        type_name: "AgentType2".to_string(),
+                        description: "Description 2".to_string(),
+                        constructor: AgentConstructor {
+                            name: None,
+                            description: "Constructor 2".to_string(),
+                            prompt_hint: None,
+                            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                        },
+                        methods: vec![],
+                        dependencies: vec![],
+                        mode: AgentMode::Durable,
+                    },
+                    implemented_by: RegisteredAgentTypeImplementer {
+                        component_id: ComponentId("b6347275-4347-430a-9528-7634c44b360c".to_string()),
+                        component_revision: ComponentRevision(2),
+                    },
                 },
             ],
         })
@@ -451,11 +482,11 @@ async fn test_list_agent_types() {
 
     let result = tools.call(req).await.unwrap();
 
-    let agent_types: Vec<RegisteredAgentType> = serde_json::from_value(result).unwrap();
+    let agent_types: Vec<String> = serde_json::from_value(result).unwrap();
 
     assert_eq!(agent_types.len(), 2);
-    assert_eq!(agent_types[0].name, "AgentType1");
-    assert_eq!(agent_types[1].name, "AgentType2");
+    assert_eq!(agent_types[0], "AgentType1");
+    assert_eq!(agent_types[1], "AgentType2");
 }
 
 #[tokio::test]

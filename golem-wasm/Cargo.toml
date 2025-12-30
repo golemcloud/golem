@@ -43,7 +43,7 @@ wasm-wave = { workspace = true, optional = true }
 wasm-metadata = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
-wasi = { version = "=0.14.1+wasi-0.2.3", optional = true }
+wasi = { version = "=0.14.1", optional = true }
 wstd = { version = "=0.5.4", optional = true }
 
 [dev-dependencies]
