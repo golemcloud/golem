@@ -1,15 +1,16 @@
-use rmcp::model::{InitializeResult, ServerCapabilities, Implementation, ProtocolVersion, ErrorData, ErrorCode, CallToolResult, Content};
-use rmcp::service::{RequestContext, NotificationContext};
-use rmcp::service::{RoleServer, ServiceRole};
+use rmcp::handler::server::tool::ToolRouter;
+use rmcp::handler::server::ServerHandler;
+use rmcp::model::{ErrorData, ErrorCode, CallToolResult, Content};
+
 use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use golem_client::model::ComponentDto;
-use rmcp_macros::{tool_router, tool};
+use rmcp_macros::{tool_router, tool, tool_handler};
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use std::future::Future;
+
 
 #[derive(JsonSchema, Deserialize, Serialize)]
 pub struct ListAgentTypesRequest {}
@@ -49,51 +50,19 @@ pub struct ListComponentsResponse {
 #[derive(Clone)]
 pub struct McpServerImpl {
     pub ctx: Arc<Context>,
+    tool_router: ToolRouter<Self>,
 }
 
-impl rmcp::service::Service<RoleServer> for McpServerImpl {
-    fn handle_request(
-        &self,
-        _request: <RoleServer as rmcp::service::ServiceRole>::PeerReq,
-        _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = std::result::Result<<RoleServer as ServiceRole>::Resp, ErrorData>> + Send + '_ {
-        async {
-            Err(ErrorData::new(
-                ErrorCode::METHOD_NOT_FOUND,
-                "Request not handled".to_string(),
-                None,
-            ))
-        }
-    }
-
-    fn handle_notification(
-        &self,
-        _notification: <RoleServer as rmcp::service::ServiceRole>::PeerNot,
-        _context: NotificationContext<RoleServer>,
-    ) -> impl Future<Output = std::result::Result<(), ErrorData>> + Send + '_ {
-        async {
-            Ok(())
-        }
-    }
-
-    fn get_info(&self) -> <RoleServer as rmcp::service::ServiceRole>::Info {
-        InitializeResult {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().build(),
-            server_info: Implementation {
-                name: "Golem CLI MCP Server".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                ..Default::default()
-            },
-            instructions: None,
-        }
-    }
-}
+#[tool_handler]
+impl ServerHandler for McpServerImpl {}
 
 #[tool_router]
 impl McpServerImpl {
     pub fn new(ctx: Arc<Context>) -> Self {
-        Self { ctx }
+        Self {
+            ctx,
+            tool_router: Self::tool_router(),
+        }
     }
 
     #[tool(
