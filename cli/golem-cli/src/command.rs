@@ -22,7 +22,6 @@ use crate::command::exec::ExecSubcommand;
 use crate::command::mcp_server::McpServerSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
-#[cfg(feature = "server-commands")]
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
 };
