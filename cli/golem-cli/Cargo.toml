@@ -22,11 +22,20 @@ name = "golem-cli"
 path = "src/main.rs"
 test = false
 
+
+
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
 test = true
 harness = false
+
+[[test]]
+name = "mcp_integration_test"
+path = "tests/mcp_integration_test.rs"
+test = true
+harness = false
+
 
 [dependencies]
 golem-templates = { workspace = true }
@@ -137,6 +146,7 @@ openssl-sys = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+defer = "0.1.0"
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
