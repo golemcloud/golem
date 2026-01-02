@@ -570,22 +570,39 @@ mod test {
     use std::path::PathBuf;
     use test_r::test;
 
+    fn normalize_path_separators(path: PathBuf) -> String {
+        let mut s = path.to_string_lossy().replace('\\', "/");
+        if s.ends_with('/') && s != "/" {
+            s.pop();
+        }
+        s
+    }
+
     #[test]
     fn resolve_relative_globs() {
         let base_dir = PathBuf::from("somedir/somewhere");
 
-        check!(resolve_relative_glob(&base_dir, "").unwrap() == (base_dir.clone(), "".to_string()));
         check!(
-            resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap()
-                == (base_dir.clone(), "somepath/a/b/c".to_string())
+            resolve_relative_glob(&base_dir, "").unwrap()
+                == (base_dir.clone(), "".to_string())
         );
         check!(
-            resolve_relative_glob(&base_dir, "../../target").unwrap()
-                == (base_dir.join("../.."), "target".to_string())
+            normalize_path_separators(resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap().0) == normalize_path_separators(base_dir.clone())
         );
         check!(
-            resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap()
-                == (base_dir.join("../../../"), "target/a".to_string())
+            normalize_path_separators(resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap().1.into()) == "somepath/a/b/c".to_string()
+        );
+        check!(
+            normalize_path_separators(resolve_relative_glob(&base_dir, "../../target").unwrap().0) == normalize_path_separators(base_dir.join("../.."))
+        );
+        check!(
+            normalize_path_separators(resolve_relative_glob(&base_dir, "../../target").unwrap().1.into()) == "target".to_string()
+        );
+        check!(
+            normalize_path_separators(resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap().0) == normalize_path_separators(base_dir.join("../../../"))
+        );
+        check!(
+            normalize_path_separators(resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap().1.into()) == "target/a".to_string()
         );
     }
 }

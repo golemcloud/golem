@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::mem;
 use wasm_encoder::ComponentSection as _;
 use wasm_encoder::{ComponentSectionId, Encode, Section};
-use wasmparser::{KnownCustom, Parser, Payload::*};
+use wasmparser::{KnownCustom, Parser, Payload};
 
 pub(crate) fn rewrite_wasm(
     metadata: &AddMetadata,
@@ -20,17 +20,17 @@ pub(crate) fn rewrite_wasm(
 
         // Track nesting depth, so that we don't mess with inner producer sections:
         match payload {
-            Version { encoding, .. } => {
+            Payload::Version { encoding, .. } => {
                 output.extend_from_slice(match encoding {
                     wasmparser::Encoding::Component => &wasm_encoder::Component::HEADER,
                     wasmparser::Encoding::Module => &wasm_encoder::Module::HEADER,
                 });
             }
-            ModuleSection { .. } | ComponentSection { .. } => {
+            Payload::ModuleSection { .. } | Payload::ComponentSection { .. } => {
                 stack.push(mem::take(&mut output));
                 continue;
             }
-            End { .. } => {
+            Payload::End { .. } => {
                 let mut parent = match stack.pop() {
                     Some(c) => c,
                     None => break,
@@ -48,7 +48,7 @@ pub(crate) fn rewrite_wasm(
         }
 
         // Only rewrite the outermost custom sections
-        if let CustomSection(c) = &payload {
+        if let Payload::CustomSection(c) = &payload {
             if stack.is_empty() {
                 match c.as_known() {
                     KnownCustom::Producers(_) => {

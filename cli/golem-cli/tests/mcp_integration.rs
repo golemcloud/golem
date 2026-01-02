@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use serde_json::json;
 
-const TEST_PORT: u16 = 13337;
+
 const SERVER_URL: &str = "http://127.0.0.1:13337";
 const MCP_ENDPOINT: &str = "http://127.0.0.1:13337/mcp";
 
@@ -282,7 +282,7 @@ async fn test_mcp_concurrent_requests() {
     }
     
     // Wait for all requests to complete
-    let results = futures::future::join_all(tasks).await;
+    let results = futures_util::future::join_all(tasks).await;
     
     // All requests should complete (successfully or with expected errors)
     for result in results {

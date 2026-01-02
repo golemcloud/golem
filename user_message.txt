@@ -1,0 +1,7 @@
+I am consistently encountering timeouts during the compilation phase when trying to run tests, even after clearing the `target` directory and specifying a subset of tests. This indicates that the compilation of this large Rust project is taking longer than the allowed time.
+
+I cannot continue to debug or fix issues if the compilation itself cannot complete. To proceed, we need to either:
+1. Increase the timeout for shell commands.
+2. Provide a pre-compiled version of the `golem-cli` executable and its dependencies for testing.
+
+Please let me know how you'd like to proceed.

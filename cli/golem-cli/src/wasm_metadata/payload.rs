@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use anyhow::Result;
 use serde_derive::Serialize;
-use wasmparser::{KnownCustom, Parser, Payload::*};
+use wasmparser::{KnownCustom, Parser, Payload};
 
 use crate::wasm_metadata::{
     Authors, ComponentNames, Description, Homepage, Licenses, Metadata, ModuleNames, Producers,
@@ -16,19 +16,19 @@ use crate::wasm_metadata::{
 /// with it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Payload {
+pub enum WasmMetadataPayload {
     /// A representation of a Wasm Component
     Component {
         /// The metadata associated with the Component
         metadata: Metadata,
         /// The metadata of nested Components or Modules
-        children: Vec<Payload>,
+        children: Vec<WasmMetadataPayload>,
     },
     /// A representation of a Wasm Module
     Module(Metadata),
 }
 
-impl Payload {
+impl WasmMetadataPayload {
     /// Parse metadata from a WebAssembly binary. Supports both core WebAssembly modules, and
     /// WebAssembly components.
     pub fn from_binary(input: &[u8]) -> Result<Self> {
@@ -36,7 +36,7 @@ impl Payload {
 
         for payload in Parser::new(0).parse_all(input) {
             match payload? {
-                Version { encoding, .. } => {
+                Payload::Version { encoding, .. } => {
                     if output.is_empty() {
                         match encoding {
                             wasmparser::Encoding::Module => {
@@ -48,15 +48,15 @@ impl Payload {
                         }
                     }
                 }
-                ModuleSection {
+                Payload::ModuleSection {
                     unchecked_range: range,
                     ..
                 } => output.push(Self::empty_module(range)),
-                ComponentSection {
+                Payload::ComponentSection {
                     unchecked_range: range,
                     ..
                 } => output.push(Self::empty_component(range)),
-                End { .. } => {
+                Payload::End { .. } => {
                     let finished = output.pop().expect("non-empty metadata stack");
                     if output.is_empty() {
                         return Ok(finished);
@@ -64,7 +64,7 @@ impl Payload {
                         output.last_mut().unwrap().push_child(finished);
                     }
                 }
-                CustomSection(c) => match c.as_known() {
+                Payload::CustomSection(c) => match c.as_known() {
                     KnownCustom::Name(_) => {
                         let names = ModuleNames::from_bytes(c.data(), c.data_offset())?;
                         if let Some(name) = names.get_name() {
@@ -96,7 +96,7 @@ impl Payload {
                     KnownCustom::Unknown if c.name() == "authors" => {
                         let a = Authors::parse_custom_section(&c)?;
                         let Metadata {
-                            authors: author, ..
+                            authors: ref mut author, ..
                         } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
@@ -105,7 +105,7 @@ impl Payload {
                     }
                     KnownCustom::Unknown if c.name() == "description" => {
                         let a = Description::parse_custom_section(&c)?;
-                        let Metadata { description, .. } = output
+                        let Metadata { description: ref mut description, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -113,7 +113,7 @@ impl Payload {
                     }
                     KnownCustom::Unknown if c.name() == "licenses" => {
                         let a = Licenses::parse_custom_section(&c)?;
-                        let Metadata { licenses, .. } = output
+                        let Metadata { licenses: ref mut licenses, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -121,7 +121,7 @@ impl Payload {
                     }
                     KnownCustom::Unknown if c.name() == "source" => {
                         let a = Source::parse_custom_section(&c)?;
-                        let Metadata { source, .. } = output
+                        let Metadata { source: ref mut source, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -129,7 +129,7 @@ impl Payload {
                     }
                     KnownCustom::Unknown if c.name() == "homepage" => {
                         let a = Homepage::parse_custom_section(&c)?;
-                        let Metadata { homepage, .. } = output
+                        let Metadata { homepage: ref mut homepage, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -137,7 +137,7 @@ impl Payload {
                     }
                     KnownCustom::Unknown if c.name() == "revision" => {
                         let a = Revision::parse_custom_section(&c)?;
-                        let Metadata { revision, .. } = output
+                        let Metadata { revision: ref mut revision, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -145,7 +145,7 @@ impl Payload {
                     }
                     KnownCustom::Unknown if c.name() == "version" => {
                         let a = crate::wasm_metadata::Version::parse_custom_section(&c)?;
-                        let Metadata { version, .. } = output
+                        let Metadata { version: ref mut version, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -153,7 +153,7 @@ impl Payload {
                     }
                     KnownCustom::Unknown if c.name() == ".dep-v0" => {
                         let a = crate::wasm_metadata::Dependencies::parse_custom_section(&c)?;
-                        let Metadata { dependencies, .. } = output
+                        let Metadata { dependencies: ref mut dependencies, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -172,16 +172,16 @@ impl Payload {
     /// Get a reference te the metadata
     pub fn metadata(&self) -> &Metadata {
         match self {
-            Payload::Component { metadata, .. } => metadata,
-            Payload::Module(metadata) => metadata,
+            WasmMetadataPayload::Component { metadata, .. } => metadata,
+            WasmMetadataPayload::Module(metadata) => metadata,
         }
     }
 
     /// Get a mutable reference te the metadata
     pub fn metadata_mut(&mut self) -> &mut Metadata {
         match self {
-            Payload::Component { metadata, .. } => metadata,
-            Payload::Module(metadata) => metadata,
+            WasmMetadataPayload::Component { metadata, .. } => metadata,
+            WasmMetadataPayload::Module(metadata) => metadata,
         }
     }
 

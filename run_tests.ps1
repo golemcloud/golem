@@ -8,6 +8,8 @@ Write-Host ""
 
 $ErrorActionPreference = "Continue"
 $testsFailed = $false
+$colorGreen = "Green"
+$colorRed = "Red"
 
 # Step 1: Run unit tests
 Write-Host "[1/3] Running unit tests..." -ForegroundColor Yellow
@@ -17,9 +19,9 @@ $unitTestResult = cargo test --package golem-cli --test mcp_server 2>&1
 $unitTestExitCode = $LASTEXITCODE
 
 if ($unitTestExitCode -eq 0) {
-    Write-Host "✓ Unit tests PASSED" -ForegroundColor Green
+    Write-Host "✓ Unit tests PASSED" -ForegroundColor $colorGreen
 } else {
-    Write-Host "✗ Unit tests FAILED" -ForegroundColor Red
+    Write-Host "✗ Unit tests FAILED" -ForegroundColor $colorRed
     Write-Host $unitTestResult
     $testsFailed = $true
 }
@@ -39,12 +41,14 @@ if (-not (Test-Path $binaryPath)) {
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host "Test Summary" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "Unit tests: $(if ($unitTestExitCode -eq 0) {'PASSED'} else {'FAILED'})" -ForegroundColor $(if ($unitTestExitCode -eq 0) {'Green'} else {'Red'})
+    $unitTestStatus = if ($unitTestExitCode -eq 0) {'PASSED'} else {'FAILED'}
+    $unitTestSummaryColor = if ($unitTestExitCode -eq 0) {$colorGreen} else {$colorRed}
+    Write-Host "Unit tests: $unitTestStatus" -ForegroundColor $unitTestSummaryColor
     Write-Host "Integration tests: SKIPPED (no binary)" -ForegroundColor Yellow
     exit 1
 }
 
-Write-Host "✓ Using binary: $binaryPath" -ForegroundColor Green
+Write-Host "✓ Using binary: $binaryPath" -ForegroundColor $colorGreen
 Write-Host ""
 
 # Step 3: Run integration tests
@@ -64,9 +68,9 @@ Start-Sleep -Seconds 3
 # Check if server is running
 try {
     $healthCheck = Invoke-WebRequest -Uri "http://127.0.0.1:13337" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-    Write-Host "✓ Server is running" -ForegroundColor Green
+    Write-Host "✓ Server is running" -ForegroundColor $colorGreen
 } catch {
-    Write-Host "✗ Server failed to start" -ForegroundColor Red
+    Write-Host "✗ Server failed to start" -ForegroundColor $colorRed
     Write-Host "Server output:"
     Receive-Job $serverJob
     Stop-Job $serverJob
@@ -76,8 +80,10 @@ try {
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host "Test Summary" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "Unit tests: $(if ($unitTestExitCode -eq 0) {'PASSED'} else {'FAILED'})" -ForegroundColor $(if ($unitTestExitCode -eq 0) {'Green'} else {'Red'})
-    Write-Host "Integration tests: FAILED (server didn't start)" -ForegroundColor Red
+    $unitTestStatus = if ($unitTestExitCode -eq 0) {'PASSED'} else {'FAILED'}
+    $unitTestSummaryColor = if ($unitTestExitCode -eq 0) {$colorGreen} else {$colorRed}
+    Write-Host "Unit tests: $unitTestStatus" -ForegroundColor $unitTestSummaryColor
+    Write-Host "Integration tests: FAILED (server didn't start)" -ForegroundColor $colorRed
     exit 1
 }
 
@@ -88,9 +94,9 @@ $integrationTestResult = cargo test --package golem-cli --test mcp_integration -
 $integrationTestExitCode = $LASTEXITCODE
 
 if ($integrationTestExitCode -eq 0) {
-    Write-Host "✓ Integration tests PASSED" -ForegroundColor Green
+    Write-Host "✓ Integration tests PASSED" -ForegroundColor $colorGreen
 } else {
-    Write-Host "✗ Integration tests FAILED" -ForegroundColor Red
+    Write-Host "✗ Integration tests FAILED" -ForegroundColor $colorRed
     Write-Host $integrationTestResult
     $testsFailed = $true
 }
@@ -106,14 +112,19 @@ Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "Test Summary" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "Unit tests: $(if ($unitTestExitCode -eq 0) {'PASSED'} else {'FAILED'})" -ForegroundColor $(if ($unitTestExitCode -eq 0) {'Green'} else {'Red'})
-Write-Host "Integration tests: $(if ($integrationTestExitCode -eq 0) {'PASSED'} else {'FAILED'})" -ForegroundColor $(if ($integrationTestExitCode -eq 0) {'Green'} else {'Red'})
+$unitTestStatus = if ($unitTestExitCode -eq 0) {'PASSED'} else {'FAILED'}
+$unitTestSummaryColor = if ($unitTestExitCode -eq 0) {$colorGreen} else {$colorRed}
+Write-Host "Unit tests: $unitTestStatus" -ForegroundColor $unitTestSummaryColor
+
+$integrationTestStatus = if ($integrationTestExitCode -eq 0) {'PASSED'} else {'FAILED'}
+$integrationTestSummaryColor = if ($integrationTestExitCode -eq 0) {$colorGreen} else {$colorRed}
+Write-Host "Integration tests: $integrationTestStatus" -ForegroundColor $integrationTestSummaryColor
 Write-Host ""
 
 if ($testsFailed) {
-    Write-Host "SOME TESTS FAILED" -ForegroundColor Red
+    Write-Host "SOME TESTS FAILED" -ForegroundColor $colorRed
     exit 1
 } else {
-    Write-Host "ALL TESTS PASSED ✓" -ForegroundColor Green
+    Write-Host "ALL TESTS PASSED ✓" -ForegroundColor $colorGreen
     exit 0
 }

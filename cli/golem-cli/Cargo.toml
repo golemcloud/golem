@@ -32,9 +32,8 @@ harness = false
 
 [[test]]
 name = "mcp_integration_test"
-path = "tests/mcp_integration_test.rs"
+path = "tests/mcp_integration.rs"
 test = true
-harness = false
 
 
 [dependencies]

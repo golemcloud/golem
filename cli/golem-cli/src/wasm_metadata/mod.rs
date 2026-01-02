@@ -7,7 +7,7 @@
 //! ```no_run
 //! # #![allow(unused)]
 //! # fn main() -> Result<(), anyhow::Error> {
-//! use wasm_metadata::Payload;
+//! use wasm_metadata::WasmMetadataPayload;
 //! use std::fs;
 //!
 //! let wasm = fs::read("program.wasm")?;
@@ -66,4 +66,4 @@ pub use oci_annotations::{Authors, Description, Homepage, Licenses, Revision, So
 mod metadata;
 pub use metadata::Metadata;
 mod payload;
-pub use payload::Payload;
+pub use payload::WasmMetadataPayload;

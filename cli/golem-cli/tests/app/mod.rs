@@ -307,14 +307,22 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: {
-                let path = workspace_path().join("target/debug/golem");
+                let path = if cfg!(windows) {
+                    workspace_path().join("target/debug/golem-cli.exe")
+                } else {
+                    workspace_path().join("target/debug/golem-cli")
+                };
                 if !path.exists() {
                     panic!("golem binary not found at {}", path.display());
                 }
                 path
             },
             golem_cli_path: {
-                let path = workspace_path().join("target/debug/golem-cli");
+                let path = if cfg!(windows) {
+                    workspace_path().join("target/debug/golem-cli.exe")
+                } else {
+                    workspace_path().join("target/debug/golem-cli")
+                };
                 if !path.exists() {
                     panic!("golem-cli binary not found at {}", path.display());
                 }
@@ -422,7 +430,7 @@ impl TestContext {
         );
 
         let mut args = vec![
-            "server",
+            "mcp-server",
             "run",
             "--config-dir",
             self.config_dir.path().to_str().unwrap(),

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use indexmap::{map::Entry, IndexMap};
 use wasm_encoder::Encode;
-use wasmparser::{BinaryReader, KnownCustom, Parser, ProducersSectionReader};
+use wasmparser::{BinaryReader, KnownCustom, Parser, ProducersSectionReader, Payload};
 
 use crate::wasm_metadata::{rewrite_wasm, AddMetadata};
 /// A representation of a WebAssembly producers section.
@@ -38,11 +38,11 @@ impl Producers {
         let mut depth = 0;
         for payload in Parser::new(0).parse_all(bytes) {
             let payload = payload?;
-            use wasmparser::Payload::*;
+
             match payload {
-                ModuleSection { .. } | ComponentSection { .. } => depth += 1,
-                End { .. } => depth -= 1,
-                CustomSection(c) if depth == 0 => {
+                Payload::ModuleSection { .. } | Payload::ComponentSection { .. } => depth += 1,
+                Payload::End { .. } => depth -= 1,
+                Payload::CustomSection(c) if depth == 0 => {
                     if let KnownCustom::Producers(_) = c.as_known() {
                         let producers = Self::from_bytes(c.data(), c.data_offset())?;
                         return Ok(Some(producers));
@@ -168,7 +168,7 @@ impl<'a> ProducersField<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::wasm_metadata::{Metadata, Payload};
+    use crate::wasm_metadata::{Metadata, WasmMetadataPayload};
     use wasm_encoder::Module;
 
     #[test]
@@ -180,8 +180,8 @@ mod test {
 
         let module = producers.add_to_wasm(&module).unwrap();
 
-        match Payload::from_binary(&module).unwrap() {
-            Payload::Module(Metadata {
+        match WasmMetadataPayload::from_binary(&module).unwrap() {
+            WasmMetadataPayload::Module(Metadata {
                 name, producers, ..
             }) => {
                 assert_eq!(name, None);
@@ -208,8 +208,8 @@ mod test {
         producers.add("language", "waaat", "");
         let module = producers.add_to_wasm(&module).unwrap();
 
-        match Payload::from_binary(&module).unwrap() {
-            Payload::Module(Metadata {
+        match WasmMetadataPayload::from_binary(&module).unwrap() {
+            WasmMetadataPayload::Module(Metadata {
                 name, producers, ..
             }) => {
                 assert_eq!(name, None);
@@ -236,8 +236,8 @@ mod test {
         producers.add("processed-by", "baz", "420");
         let module = producers.add_to_wasm(&module).unwrap();
 
-        match Payload::from_binary(&module).unwrap() {
-            Payload::Module(Metadata { producers, .. }) => {
+        match WasmMetadataPayload::from_binary(&module).unwrap() {
+            WasmMetadataPayload::Module(Metadata { producers, .. }) => {
                 let producers = producers.expect("some producers");
                 assert_eq!(
                     producers.get("processed-by").unwrap().get("baz").unwrap(),
