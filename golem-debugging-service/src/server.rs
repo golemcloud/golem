@@ -23,6 +23,10 @@ use tracing::info;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match make_debug_config_loader().load_or_dump_config() {
         Some(debug_config) => {
+            rustls::crypto::ring::default_provider()
+                .install_default()
+                .expect("Failed to install crypto provider");
+
             init_tracing_with_default_env_filter(&debug_config.tracing);
             info!(
                 "Using configuration:\n{}",
