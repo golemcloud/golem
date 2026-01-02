@@ -31,6 +31,10 @@ fn main() -> anyhow::Result<()> {
             .build()?
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_worker_service_config_loader().load_or_dump_config() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install crypto provider");
+
         let tracer = init_tracing_with_default_env_filter(&config.tracing);
         info!("Using configuration:\n{}", config.to_safe_string_indented());
 
