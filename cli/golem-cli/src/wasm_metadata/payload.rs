@@ -105,7 +105,7 @@ impl WasmMetadataPayload {
                     }
                     KnownCustom::Unknown if c.name() == "description" => {
                         let a = Description::parse_custom_section(&c)?;
-                        let Metadata { description: ref mut description, .. } = output
+                        let Metadata { ref mut description, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -113,7 +113,7 @@ impl WasmMetadataPayload {
                     }
                     KnownCustom::Unknown if c.name() == "licenses" => {
                         let a = Licenses::parse_custom_section(&c)?;
-                        let Metadata { licenses: ref mut licenses, .. } = output
+                        let Metadata { ref mut licenses, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -121,7 +121,7 @@ impl WasmMetadataPayload {
                     }
                     KnownCustom::Unknown if c.name() == "source" => {
                         let a = Source::parse_custom_section(&c)?;
-                        let Metadata { source: ref mut source, .. } = output
+                        let Metadata { ref mut source, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -129,7 +129,7 @@ impl WasmMetadataPayload {
                     }
                     KnownCustom::Unknown if c.name() == "homepage" => {
                         let a = Homepage::parse_custom_section(&c)?;
-                        let Metadata { homepage: ref mut homepage, .. } = output
+                        let Metadata { ref mut homepage, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -137,7 +137,7 @@ impl WasmMetadataPayload {
                     }
                     KnownCustom::Unknown if c.name() == "revision" => {
                         let a = Revision::parse_custom_section(&c)?;
-                        let Metadata { revision: ref mut revision, .. } = output
+                        let Metadata { ref mut revision, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -145,7 +145,7 @@ impl WasmMetadataPayload {
                     }
                     KnownCustom::Unknown if c.name() == "version" => {
                         let a = crate::wasm_metadata::Version::parse_custom_section(&c)?;
-                        let Metadata { version: ref mut version, .. } = output
+                        let Metadata { ref mut version, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();
@@ -153,7 +153,7 @@ impl WasmMetadataPayload {
                     }
                     KnownCustom::Unknown if c.name() == ".dep-v0" => {
                         let a = crate::wasm_metadata::Dependencies::parse_custom_section(&c)?;
-                        let Metadata { dependencies: ref mut dependencies, .. } = output
+                        let Metadata { ref mut dependencies, .. } = output
                             .last_mut()
                             .expect("non-empty metadata stack")
                             .metadata_mut();

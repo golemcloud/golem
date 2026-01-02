@@ -4,7 +4,43 @@
 use std::time::Duration;
 use tokio::time::sleep;
 use serde_json::json;
+use tokio::process::Command;
 
+
+struct McpServerHandle {
+    child: tokio::process::Child,
+}
+
+impl Drop for McpServerHandle {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+async fn spawn_mcp_server() -> McpServerHandle {
+    let cargo_bin_path = match std::env::var("CARGO_BIN_EXE_golem-cli") {
+        Ok(path) => path,
+        Err(_) => "cargo".to_string(), // Fallback to cargo if not running via `cargo test`
+    };
+
+    let mut command = Command::new(cargo_bin_path); // Use tokio::process::Command
+    if std::env::var("CARGO_BIN_EXE_golem-cli").is_err() {
+        command.arg("run").arg("--bin").arg("golem-cli").args(["--"]);
+    }
+    command
+        .arg("--serve")
+        .arg("--serve-port")
+        .arg("13337")
+        .kill_on_drop(true) // Ensure the process is killed when the command drops
+        .stdout(std::process::Stdio::null()) // Suppress stdout to avoid polluting test output
+        .stderr(std::process::Stdio::null()); // Suppress stderr
+
+    let child = command.spawn().expect("Failed to spawn golem-cli --serve");
+
+    assert!(wait_for_server(50).await, "MCP Server did not start");
+
+    McpServerHandle { child }
+}
 
 const SERVER_URL: &str = "http://127.0.0.1:13337";
 const MCP_ENDPOINT: &str = "http://127.0.0.1:13337/mcp";
@@ -48,8 +84,9 @@ async fn mcp_request(method: &str, params: serde_json::Value, id: i32) -> Result
 }
 
 #[tokio::test]
-#[ignore] // Run with: cargo test --package golem-cli --test mcp_integration -- --ignored
+ // Run with: cargo test --package golem-cli --test mcp_integration -- --ignored
 async fn test_server_health_endpoint() {
+    let _server = spawn_mcp_server().await;
     let response = reqwest::get(SERVER_URL).await;
     
     assert!(response.is_ok(), "Health endpoint should respond");
@@ -62,8 +99,9 @@ async fn test_server_health_endpoint() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_initialize() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     let params = json!({
@@ -88,8 +126,9 @@ async fn test_mcp_initialize() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_list_tools() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     let response = mcp_request("tools/list", json!({}), 2).await;
@@ -115,8 +154,9 @@ async fn test_mcp_list_tools() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_call_list_agent_types() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     let params = json!({
@@ -163,8 +203,9 @@ async fn test_mcp_call_list_agent_types() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_call_list_components() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     let params = json!({
@@ -208,8 +249,9 @@ async fn test_mcp_call_list_components() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_call_nonexistent_tool() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     let params = json!({
@@ -229,8 +271,9 @@ async fn test_mcp_call_nonexistent_tool() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_invalid_json_rpc() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     let client = reqwest::Client::new();
@@ -261,8 +304,9 @@ async fn test_mcp_invalid_json_rpc() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_concurrent_requests() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     // Send multiple concurrent requests
@@ -293,8 +337,9 @@ async fn test_mcp_concurrent_requests() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn test_mcp_tool_schemas() {
+    let _server = spawn_mcp_server().await;
     assert!(wait_for_server(50).await, "Server should be running");
     
     let response = mcp_request("tools/list", json!({}), 6).await;
