@@ -28,8 +28,11 @@ async fn spawn_mcp_server() -> McpServerHandle {
         command.arg("run").arg("--bin").arg("golem-cli").args(["--"]);
     }
     command
-        .arg("--serve")
-        .arg("--serve-port")
+        .arg("mcp-server")
+        .arg("start")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
         .arg("13337")
         .kill_on_drop(true) // Ensure the process is killed when the command drops
         .stdout(std::process::Stdio::null()) // Suppress stdout to avoid polluting test output
