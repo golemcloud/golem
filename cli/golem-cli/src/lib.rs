@@ -35,6 +35,9 @@ pub mod model;
 pub mod validation;
 pub mod wasm_rpc_stubgen;
 
+#[cfg(feature = "mcp")]
+pub mod mcp_server;
+
 #[allow(unused)]
 mod wasm_metadata;
 

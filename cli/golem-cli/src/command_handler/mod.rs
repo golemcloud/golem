@@ -256,6 +256,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     }
 
     async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
+        // Check if MCP server mode is enabled
+        #[cfg(feature = "mcp")]
+        if command.global_flags.serve {
+            let mcp_server = crate::mcp_server::GolemMcpServer::new(self.ctx.clone());
+            return mcp_server.start().await;
+        }
+
         match command.subcommand {
             // App scoped root commands
             GolemCliSubcommand::New {
