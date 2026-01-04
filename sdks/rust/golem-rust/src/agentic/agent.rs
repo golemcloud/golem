@@ -16,7 +16,7 @@ use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, 
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 
 #[async_trait::async_trait(?Send)]
-pub trait Agent {
+pub trait BaseAgent {
     /// Gets the agent ID string of this agent.
     ///
     /// The agent ID consists of the agent type name, constructor parameter values and optional
