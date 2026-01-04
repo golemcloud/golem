@@ -24,11 +24,32 @@ mod tests {
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
-    use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
+    use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
     use golem_rust_macro::{description, prompt};
     use std::fmt::Debug;
     use test_r::test;
+
+    #[agent_definition]
+    trait SampleAgent: BaseAgent {
+        fn new(init: String) -> Self;
+        fn num(&self, i: String) -> u32;
+    }
+
+    struct SampleAgentImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl SampleAgent for SampleAgentImpl {
+        fn new(init: String) -> Self {
+            SampleAgentImpl { _id: init }
+        }
+
+        fn num(&self, _i: String) -> u32 {
+            42
+        }
+    }
 
     struct AgentWithTypeParameterImpl<T> {
         _request_id: T,
