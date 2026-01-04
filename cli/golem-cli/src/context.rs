@@ -29,7 +29,9 @@ use crate::model::app::{
     WithSource,
 };
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
-use crate::model::app_raw::{BuiltinServer, DeploymentOptions, Environment, Marker, Server};
+use crate::model::app_raw::{
+    BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker, Server,
+};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
 use crate::model::text::plugin::PluginNameAndVersion;
@@ -105,7 +107,15 @@ impl Context {
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
     ) -> anyhow::Result<Self> {
-        let (environment_reference, env_ref_can_be_builtin_server) = {
+        if matches!(
+            global_flags.environment,
+            Some(EnvironmentReference::Environment { .. })
+        ) && (global_flags.local || global_flags.cloud)
+        {
+            bail!(ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags);
+        }
+
+        let (environment_reference, env_ref_can_be_builtin_profile) = {
             if let Some(environment) = &global_flags.environment {
                 (Some(environment.clone()), false)
             } else if global_flags.local {
@@ -167,7 +177,7 @@ impl Context {
                                 }
                             },
                             None => {
-                                if env_ref_can_be_builtin_server {
+                                if env_ref_can_be_builtin_profile {
                                     None
                                 } else {
                                     bail!(ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
@@ -498,13 +508,19 @@ impl Context {
                         server_url: server.url.clone(),
                     };
 
+                    let authentication = match &server.auth {
+                        CustomServerAuth::OAuth2 { .. } => {
+                            Config::get_application_environment(&self.config_dir, &app_env_cfg_id)?
+                                .map(|cfg| AuthenticationConfig::OAuth2(cfg.auth))
+                                .unwrap_or_default()
+                        }
+                        CustomServerAuth::Static { static_token } => {
+                            AuthenticationConfig::static_token(static_token.clone())
+                        }
+                    };
+
                     Ok(AuthenticationConfigWithSource {
-                        authentication: Config::get_application_environment(
-                            &self.config_dir,
-                            &app_env_cfg_id,
-                        )?
-                        .map(|cfg| AuthenticationConfig::OAuth2(cfg.auth))
-                        .unwrap_or_default(),
+                        authentication,
                         source: AuthenticationSource::ApplicationEnvironment(app_env_cfg_id),
                     })
                 }

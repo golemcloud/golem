@@ -44,7 +44,7 @@ impl ShardManagement {
         health_check: Arc<dyn HealthCheck + Send + Sync>,
         threshold: f64,
     ) -> Result<Self, ShardManagerError> {
-        let routing_table = persistence_service.read().await.unwrap();
+        let routing_table = persistence_service.read().await?;
 
         info!("Initial healthcheck started");
 

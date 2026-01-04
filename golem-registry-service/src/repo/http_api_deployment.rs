@@ -514,9 +514,9 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         had.created_at as entity_created_at
                     FROM http_api_deployments had
                     JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
-                    JOIN deployment_http_api_definition_revisions dhadr
-                        ON dhadr.http_api_definition_id = hadr.http_api_deployment_id
-                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                    JOIN deployment_http_api_deployment_revisions dhadr
+                        ON dhadr.http_api_deployment_id = hadr.http_api_deployment_id
+                            AND dhadr.http_api_deployment_revision_id = hadr.revision_id
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.domain
                 "#})
@@ -541,9 +541,9 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         had.created_at as entity_created_at
                     FROM http_api_deployments had
                     JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
-                    JOIN deployment_http_api_definition_revisions dhadr
-                        ON dhadr.http_api_definition_id = hadr.http_api_deployment_id
-                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                    JOIN deployment_http_api_deployment_revisions dhadr
+                        ON dhadr.http_api_deployment_id = hadr.http_api_deployment_id
+                            AND dhadr.http_api_deployment_revision_id = hadr.revision_id
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2 AND had.domain = $3
                 "#})
                     .bind(environment_id)

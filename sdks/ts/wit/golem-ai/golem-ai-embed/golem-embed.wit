@@ -1,0 +1,143 @@
+package golem:embed@1.0.0;
+
+interface embed {
+  // --- Enums ---
+
+  enum task-type {
+    retrieval-query,
+    retrieval-document,
+    semantic-similarity,
+    classification,
+    clustering,
+    question-answering,
+    fact-verification,
+    code-retrieval,
+  }
+
+  enum output-format {
+    float-array,
+    binary,
+    base64,
+  }
+
+  enum output-dtype {
+    float-array,
+    int8,
+    uint8,
+    binary,
+    ubinary,
+  }
+
+  enum error-code {
+    invalid-request,
+    model-not-found,
+    unsupported,
+    authentication-failed, 
+    provider-error,
+    rate-limit-exceeded,
+    internal-error,
+    unknown,
+  }
+
+  // --- Content ---
+
+  record image-url {
+    url: string,
+  }
+
+  variant content-part {
+    text(string),
+    image(image-url),
+  }
+
+  // --- Configuration ---
+
+  record kv {
+    key: string,
+    value: string,
+  }
+
+  record config {
+    model: option<string>,
+    task-type: option<task-type>,
+    dimensions: option<u32>,
+    truncation: option<bool>,
+    output-format: option<output-format>,
+    output-dtype: option<output-dtype>,
+    user: option<string>,
+    provider-options: list<kv>,
+  }
+
+  // --- Embedding Response ---
+
+  record usage {
+    input-tokens: option<u32>,
+    total-tokens: option<u32>,
+  }
+
+  /// Supported encoding types by the provider
+  /// Cohere:       float-array, int8, uint8, binary, ubinary, base64.
+  /// VoyageAI:     float-array, int8, uint8, binary, ubinary, base64.
+  /// Hugging Face: float-array.
+  /// OpenAI :      float-array, base64.
+  variant vector-data {
+    float(list<f32>),
+    int8(list<s8>),
+    uint8(list<u8>),
+    binary(list<s8>),
+    ubinary(list<u8>),
+    base64(string),
+  }
+
+  record embedding {
+    index: u32,
+    vector: vector-data
+  }
+
+  record embedding-response {
+    embeddings: list<embedding>,
+    usage: option<usage>,
+    model: string,
+    provider-metadata-json: option<string>,
+  }
+
+  // --- Rerank Response ---
+
+  record rerank-result {
+    index: u32,
+    relevance-score: f32,
+    document: option<string>,
+  }
+
+  record rerank-response {
+    results: list<rerank-result>,
+    usage: option<usage>,
+    model: string,
+    provider-metadata-json: option<string>,
+  }
+
+  // --- Error Handling ---
+
+  record error {
+    code: error-code,
+    message: string,
+    provider-error-json: option<string>,
+  }
+
+  // --- Core Functions ---
+
+  generate: func(
+    inputs: list<content-part>,
+    config: config
+  ) -> result<embedding-response, error>;
+
+  rerank: func(
+    query: string,
+    documents: list<string>,
+    config: config
+  ) -> result<rerank-response, error>;
+}
+
+world embed-library {
+   export embed;
+}

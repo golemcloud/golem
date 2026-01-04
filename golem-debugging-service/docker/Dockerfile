@@ -16,10 +16,10 @@ WORKDIR /app
 COPY /target/$RUST_TARGET/release/golem-debugging-service ./
 COPY /golem-debugging-service/config/debug-worker-executor.toml ./config/debug-worker-executor.toml
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
 RUN update-ca-certificates
 
 EXPOSE 8080
 EXPOSE 9090
 
-ENTRYPOINT ["./golem-debugging-service"]
+ENTRYPOINT ["/usr/bin/tini", "--", "./golem-debugging-service"]

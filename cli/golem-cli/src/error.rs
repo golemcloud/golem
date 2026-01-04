@@ -38,6 +38,7 @@ impl Error for HintError {}
 
 #[derive(Debug, Display)]
 pub enum ContextInitHintError {
+    CannotUseShortEnvRefWithLocalOrCloudFlags,
     CannotSelectEnvironmentWithoutManifest {
         requested_environment_name: EnvironmentName,
     },

@@ -16,10 +16,10 @@ WORKDIR /app
 COPY /target/$RUST_TARGET/release/golem-component-compilation-service ./
 COPY /golem-component-compilation-service/config/ ./config/
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
 RUN update-ca-certificates
 
 EXPOSE 8080
 EXPOSE 9090
 
-ENTRYPOINT ["./golem-component-compilation-service"]
+ENTRYPOINT ["/usr/bin/tini", "--", "./golem-component-compilation-service"]

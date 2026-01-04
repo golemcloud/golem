@@ -383,6 +383,8 @@ impl MessageWithFields for EnvironmentNameHelp {
 
                 If there is no available application, then a more specific from has to be used.
 
+                It is not compatible with the --cloud and --local flags.
+
             "},
         );
         fields.field(

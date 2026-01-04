@@ -10,7 +10,6 @@ components:
   benchmark:direct-rust-rpc-parent:
     templates: rust
 
-dependencies:
-  benchmark:direct-rust-rpc-parent:
-    - type: wasm-rpc
-      target: benchmark:direct-rust-rpc-child
+    dependencies:
+      - type: wasm-rpc
+        target: benchmark:direct-rust-rpc-child

@@ -169,6 +169,7 @@ gag = "1.0.0"
 gethostname = "1.0.0"
 git-version = "0.3.9"
 goldenfile = "1.8.0"
+half = "2"
 headers = "0.4.0"
 heck = "0.5.0"
 hex = "0.4.3"
@@ -186,6 +187,7 @@ inquire = "0.7.5"
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
+jsonschema = "0.38.1"
 jsonwebtoken = "9.2.0"
 k8s-openapi = { version = "0.24.0", features = ["earliest"] }
 kill_tree = "0.2.4"
@@ -221,6 +223,7 @@ opentelemetry-prometheus-text-exporter = "=0.2.0"
 opentelemetry_sdk = "0.30.0"
 phf = { version = "0.11.3", features = ["macros"] }
 pin-project = "1.1.10"
+pgvector = { version = "0.4", features = ["sqlx", "halfvec"] }
 poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry", "prometheus", "requestid", "test", ] }
 poem-derive = { version = "=3.1.12" }
 poem-openapi = { version = "=5.1.16", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }

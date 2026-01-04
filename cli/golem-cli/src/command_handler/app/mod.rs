@@ -266,7 +266,7 @@ impl AppCommandHandler {
         self.build(
             component_name.component_name,
             Some(build_args),
-            &ApplicationComponentSelectMode::All,
+            &ApplicationComponentSelectMode::CurrentDir,
         )
         .await
     }
@@ -274,7 +274,7 @@ impl AppCommandHandler {
     pub async fn cmd_clean(&self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
         self.clean(
             component_name.component_name,
-            &ApplicationComponentSelectMode::All,
+            &ApplicationComponentSelectMode::CurrentDir,
         )
         .await
     }

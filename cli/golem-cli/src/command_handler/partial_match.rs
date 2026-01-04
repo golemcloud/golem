@@ -25,7 +25,7 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
-use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
+use crate::model::text::help::{AvailableFunctionNamesHelp, EnvironmentNameHelp, WorkerNameHelp};
 use colored::Colorize;
 use indoc::indoc;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -65,7 +65,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -82,7 +82,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -97,7 +97,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -189,7 +189,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -270,6 +270,12 @@ impl ErrorHandler {
         hint_error: &ContextInitHintError,
     ) -> anyhow::Result<()> {
         match hint_error {
+            ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags => {
+                log_error("Cannot use short (name only) environment reference with --local or --cloud flags!");
+                logln("");
+                log_text_view(&EnvironmentNameHelp);
+                Ok(())
+            }
             ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
                 requested_environment_name,
             } => {

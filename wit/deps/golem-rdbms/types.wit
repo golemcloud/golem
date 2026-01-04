@@ -1,4 +1,4 @@
-package golem:rdbms@0.0.1;
+package golem:rdbms@0.0.2;
 
 interface types {
 

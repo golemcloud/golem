@@ -17,7 +17,7 @@ use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{
-    Enumeration, EnumerationType, Interval, TimeTz, ValuesRange,
+    Enumeration, EnumerationType, Interval, SparseVec, TimeTz, ValuesRange,
 };
 use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
@@ -45,7 +45,7 @@ use uuid::Uuid;
 #[test_dep]
 async fn postgres() -> DockerPostgresRdb {
     let unique_network_id = Uuid::new_v4().to_string();
-    DockerPostgresRdb::new(&unique_network_id, false).await
+    DockerPostgresRdb::new_with_image(&unique_network_id, false, "pgvector/pgvector", "pg14").await
 }
 
 #[test_dep]
@@ -339,6 +339,33 @@ async fn postgres_create_insert_select_test(
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
+    let db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_simple_db", 1, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
+
+    let db_address = db_addresses[0].clone();
+
+    let statements = vec![
+        r#"
+             CREATE EXTENSION IF NOT EXISTS vector;
+        "#,
+    ];
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
+            None,
+        ),
+    )
+    .await;
+
     let statements = vec![
         r#"
              CREATE TYPE test_enum AS ENUM ('regular', 'special');
@@ -403,7 +430,10 @@ async fn postgres_create_insert_select_test(
                 tsquery_col TSQUERY,
                 inventory_item_col inventory_item,
                 posint4_col posint4,
-                float8range_col float8range
+                float8range_col float8range,
+                vector_col vector(5),
+                halfvec_col halfvec(5),
+                sparsevec_col sparsevec(5)
             );
         "#,
     ];
@@ -465,7 +495,10 @@ async fn postgres_create_insert_select_test(
             tsquery_col,
             inventory_item_col,
             posint4_col,
-            float8range_col
+            float8range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
             )
             VALUES
             (
@@ -473,7 +506,7 @@ async fn postgres_create_insert_select_test(
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
                 $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector, $39::tsquery,
-                $40, $41, $42
+                $40, $41, $42, $43, $44, $45
             );
         "#;
 
@@ -619,9 +652,16 @@ async fn postgres_create_insert_select_test(
                         Bound::Excluded(postgres_types::DbValue::Float8(4.55)),
                     ),
                 ))),
+                postgres_types::DbValue::Vector(vec![1.0, 2.0, 3.0, 4.0, 5.0]),
+                postgres_types::DbValue::Halfvec(half::vec::HalfFloatVecExt::from_f32_slice(&[
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                ])),
+                postgres_types::DbValue::Sparsevec(
+                    SparseVec::try_new(5, vec![1, 2, 4], vec![1.0, 2.0, 4.0]).unwrap(),
+                ),
             ]);
         } else {
-            for _ in 0..41 {
+            for _ in 0..44 {
                 params.push(postgres_types::DbValue::Null);
             }
         }
@@ -919,6 +959,24 @@ async fn postgres_create_insert_select_test(
             )),
             db_type_name: "float8range".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "vector_col".to_string(),
+            ordinal: 42,
+            db_type: postgres_types::DbColumnType::Vector,
+            db_type_name: "VECTOR".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "halfvec_col".to_string(),
+            ordinal: 43,
+            db_type: postgres_types::DbColumnType::Halfvec,
+            db_type_name: "HALFVEC".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "sparsevec_col".to_string(),
+            ordinal: 44,
+            db_type: postgres_types::DbColumnType::Sparsevec,
+            db_type_name: "SPARSEVEC".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -964,7 +1022,10 @@ async fn postgres_create_insert_select_test(
             tsquery_col::text,
             inventory_item_col,
             posint4_col,
-            float8range_col
+            float8range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
            FROM data_types ORDER BY id ASC;
         "#;
 
@@ -994,6 +1055,33 @@ async fn postgres_create_insert_select_array_test(
 ) {
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
+
+    let db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_array_db", 1, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
+
+    let db_address = db_addresses[0].clone();
+
+    let statements = vec![
+        r#"
+             CREATE EXTENSION IF NOT EXISTS vector;
+        "#,
+    ];
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
+            None,
+        ),
+    )
+    .await;
 
     let statements = vec![
         r#"
@@ -1131,7 +1219,10 @@ async fn postgres_create_insert_select_array_test(
                 inventory_item_col a_inventory_item[],
                 posint8_col posint8[],
                 float4range_col float4range[],
-                a_custom_type_range_col a_custom_type_range[]
+                a_custom_type_range_col a_custom_type_range[],
+                vector_col vector[],
+                halfvec_col halfvec[],
+                sparsevec_col sparsevec[]
             );
         "#,
     ];
@@ -1194,7 +1285,10 @@ async fn postgres_create_insert_select_array_test(
             inventory_item_col,
             posint8_col,
             float4range_col,
-            a_custom_type_range_col
+            a_custom_type_range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
             )
             VALUES
             (
@@ -1202,7 +1296,7 @@ async fn postgres_create_insert_select_array_test(
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
                 $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector[], $39::tsquery[],
-                $40, $41, $42, $43
+                $40, $41, $42, $43, $44, $45, $46
             );
         "#;
 
@@ -1476,9 +1570,18 @@ async fn postgres_create_insert_select_array_test(
                         ),
                     ))),
                 ]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Vector(vec![
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                ])]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Halfvec(
+                    half::vec::HalfFloatVecExt::from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Sparsevec(
+                    SparseVec::try_new(5, vec![1, 2, 4], vec![1.0, 2.0, 4.0]).unwrap(),
+                )]),
             ]);
         } else {
-            for _ in 0..42 {
+            for _ in 0..45 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1790,6 +1893,24 @@ async fn postgres_create_insert_select_array_test(
             .into_array(),
             db_type_name: "a_custom_type_range[]".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "vector_col".to_string(),
+            ordinal: 43,
+            db_type: postgres_types::DbColumnType::Vector.into_array(),
+            db_type_name: "VECTOR[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "halfvec_col".to_string(),
+            ordinal: 44,
+            db_type: postgres_types::DbColumnType::Halfvec.into_array(),
+            db_type_name: "HALFVEC[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "sparsevec_col".to_string(),
+            ordinal: 45,
+            db_type: postgres_types::DbColumnType::Sparsevec.into_array(),
+            db_type_name: "SPARSEVEC[]".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1836,7 +1957,10 @@ async fn postgres_create_insert_select_array_test(
             inventory_item_col,
             posint8_col,
             float4range_col,
-            a_custom_type_range_col
+            a_custom_type_range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
            FROM array_data_types ORDER BY id ASC;
         "#;
 
@@ -2951,10 +3075,11 @@ fn test_rdbms_pool_key_masked_address() {
 async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
-    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
-        mysql.public_connection_string_to_db(&db_name)
-    })
-    .await;
+    let mut db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_db", 3, |db_name| {
+            mysql.public_connection_string_to_db(&db_name)
+        })
+        .await;
     db_addresses.push(db_address);
 
     rdbms_par_test(
@@ -2973,10 +3098,11 @@ async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefa
 async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsServiceDefault) {
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
-    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
-        postgres.public_connection_string_to_db(&db_name)
-    })
-    .await;
+    let mut db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_db", 3, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
     db_addresses.push(db_address);
 
     rdbms_par_test(
@@ -2994,6 +3120,7 @@ async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsSe
 async fn create_test_databases<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
+    db_name_prefix: &str,
     count: u8,
     to_db_address: impl Fn(String) -> String,
 ) -> Vec<String> {
@@ -3006,7 +3133,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
     let mut values: Vec<String> = Vec::with_capacity(count as usize);
 
     for i in 0..count {
-        let db_name = format!("test_db_{i}");
+        let db_name = format!("{db_name_prefix}_{i}");
 
         let r = rdbms
             .execute(
@@ -3091,7 +3218,19 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         let _ = rdbms.remove(&pool_key, &worker_id).await;
     }
 
-    check!(rdbms_status.pools.len() == db_addresses.len());
+    let pool_keys = db_addresses
+        .iter()
+        .map(|a| RdbmsPoolKey::from(a.as_str()))
+        .collect::<Result<Vec<RdbmsPoolKey>, String>>();
+
+    check!(pool_keys.is_ok(), "pool keys are ok");
+    check!(
+        pool_keys
+            .unwrap()
+            .iter()
+            .all(|key| rdbms_status.pools.contains_key(key)),
+        "pool keys match"
+    );
 
     for (worker_id, pool_key) in workers_pools {
         let worker_ids = rdbms_status.pools.get(&pool_key);

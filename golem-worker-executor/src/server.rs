@@ -24,6 +24,10 @@ use tracing::info;
 fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
+            rustls::crypto::ring::default_provider()
+                .install_default()
+                .expect("Failed to install crypto provider");
+
             config.add_port_to_tracing_file_name_if_enabled();
             init_tracing_with_default_env_filter(&config.tracing);
             info!("Using configuration:\n{}", config.to_safe_string_indented());
