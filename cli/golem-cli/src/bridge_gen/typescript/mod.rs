@@ -99,29 +99,51 @@ impl TypeScriptBridgeGenerator {
     fn generate_ts(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let mut writer = TsWriter::new();
 
+        let config_var = self.global_config_var_name();
+
         writer.import_item("v4", "uuidv4", "uuid");
         writer.import_module("base", "./base"); // TODO: replace to dependency
 
         writer.declare_global(
-            &self.global_config_var_name(),
-            "base.GolemServer",
-            Some("\"local\""),
+            &config_var,
+            "base.Configuration | undefined",
+            Some("undefined"),
         );
 
         let types = super::collect_all_wit_types(&self.agent_type);
         for typ in types {
-            self.generate_ts_wit_type_def(&mut writer, &typ)?;
+            if let Some(ts_name) = self.generate_ts_wit_type_def(&mut writer, &typ)? {
+                self.generate_ts_wit_type_encode(&mut writer, &ts_name, &typ)?;
+                self.generate_ts_wit_type_decode(&mut writer, &ts_name, &typ)?;
+            }
         }
 
         let class_name = self.agent_type.type_name.0.to_upper_camel_case();
         writer.begin_export_class(&class_name);
+
+        writer.declare_field("parameters", "base.DataValue", None);
+        writer.declare_field("phantomId", "base.PhantomId | undefined", None);
+
+        {
+            let mut constructor = writer.begin_private_constructor();
+            constructor.param("parameters", "base.DataValue");
+            constructor.param("phantomId", "base.PhantomId | undefined");
+            constructor.write_line("this.parameters = parameters;");
+            constructor.write_line("this.phantomId = phantomId;");
+        }
 
         if self.agent_type.mode == AgentMode::Durable {
             let mut get = writer.begin_static_method("get");
             Self::write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
             get.result(&class_name);
 
-            get.write_line("throw new Error(\"Not implemented\");")
+            get.write_line("const parameters: base.DataValue = ");
+            Self::write_encode_data_value(
+                &mut get,
+                &self.agent_type.constructor.input_schema,
+            )?;
+            get.write_line("const phantomId = undefined;");
+            get.write_line(format!("return new {class_name}(parameters, phantomId);"));
         }
 
         {
@@ -133,7 +155,12 @@ impl TypeScriptBridgeGenerator {
             )?;
             get_phantom.result(&class_name);
 
-            get_phantom.write_line("throw new Error(\"Not implemented\");")
+            get_phantom.write_line("const parameters: base.DataValue = ");
+            Self::write_encode_data_value(
+                &mut get_phantom,
+                &self.agent_type.constructor.input_schema,
+            )?;
+            get_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
         }
 
         {
@@ -144,13 +171,59 @@ impl TypeScriptBridgeGenerator {
             )?;
             new_phantom.result(&class_name);
 
-            new_phantom.write_line("throw new Error(\"Not implemented\");")
+            new_phantom.write_line("const parameters: base.DataValue = ");
+            Self::write_encode_data_value(
+                &mut new_phantom,
+                &self.agent_type.constructor.input_schema,
+            )?;
+            new_phantom.write_line("const phantomId = uuidv4();");
+            new_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
         }
 
         for method_def in &self.agent_type.methods {
             let mut method = writer.begin_async_method(&method_def.name);
             Self::write_parameter_list(&mut method, &method_def.input_schema)?;
             Self::write_result(&mut method, &method_def.output_schema)?;
+
+            // assert on configuration set
+            method.write_line(format!("if (!{config_var}) {{"));
+            method.indent();
+            method.write_line(&format!(
+                "  throw new Error(\"{} configuration is not set\");",
+                self.agent_type.type_name.0
+            ));
+            method.unindent();
+            method.write_line("}");
+
+            // encode parameters
+            method.write_line("const methodParameters: base.DataValue = ");
+            Self::write_encode_data_value(
+                &mut method,
+                &method_def.input_schema,
+            )?;
+
+            // invoke
+            method.write_line(format!(
+                "const result = await base.invokeAgent({config_var}.server, {{"
+            ));
+            method.indent();
+            method.write_line(format!("appName: {config_var}.application,"));
+            method.write_line(format!("envName: {config_var}.environment,"));
+            method.write_line(format!(
+                "agentTypeName: \"{}\",",
+                self.agent_type.type_name.0
+            ));
+            method.write_line("parameters: this.parameters,");
+            method.write_line("phantomId: this.phantomId,");
+            method.write_line(format!("methodName: \"{}\",", method_def.name));
+            method.write_line("methodParameters,");
+            method.write_line("mode: \"await\"");
+
+            method.unindent();
+            method.write_line("});");
+
+            // decode result
+
             method.write_line("throw new Error(\"Not implemented\");")
 
             // TODO: trigger, schedule
@@ -160,26 +233,135 @@ impl TypeScriptBridgeGenerator {
 
         {
             let mut configure = writer.begin_export_function("configure");
-            configure.param("server", "base.GolemServer");
+            configure.param("config", "base.Configuration");
 
-            configure.write_line(format!("{} = server;", self.global_config_var_name()));
+            configure.write_line(format!("{} = config;", config_var));
         }
 
         writer.finish(path)
+    }
+
+    fn generate_ts_wit_type_encode(
+        &self,
+        writer: &mut TsWriter,
+        ts_name: &str,
+        typ: &AnalysedType,
+    ) -> anyhow::Result<()> {
+        let encode_fn_name = format!("encode{ts_name}");
+
+        let mut func = writer.begin_function(&encode_fn_name);
+        func.param("value", ts_name);
+        func.result("unknown");
+        func.write_line("throw new Error(\"Not implemented\");");
+
+        Ok(())
+    }
+
+    fn generate_ts_wit_type_decode(
+        &self,
+        writer: &mut TsWriter,
+        ts_name: &str,
+        typ: &AnalysedType,
+    ) -> anyhow::Result<()> {
+        let decode_fn_name = format!("decode{ts_name}");
+
+        let mut func = writer.begin_function(&decode_fn_name);
+        func.param("value", "unknown");
+        func.result(ts_name);
+        func.write_line("throw new Error(\"Not implemented\");");
+
+        Ok(())
     }
 
     fn generate_ts_wit_type_def(
         &self,
         writer: &mut TsWriter,
         typ: &AnalysedType,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<String>> {
         if let Some(name) = typ.name() {
             let name = name.to_upper_camel_case(); // TODO: use owner too?
             let def = Self::type_definition(typ)?;
             writer.export_type(&name, &def);
+            Ok(Some(name))
+        } else {
+            Ok(None)
         }
+    }
 
-        Ok(())
+    fn write_encode_data_value(
+        writer: &mut TsFunctionWriter<'_>,
+        schema: &DataSchema,
+    ) -> anyhow::Result<()> {
+        match schema {
+            DataSchema::Tuple(params) => {
+                writer.indent();
+                writer.write_line("{ type: \"tuple\", elements: [");
+                writer.indent();
+                for param in &params.elements {
+                    let param_name = param.name.to_lower_camel_case();
+                    match &param.schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            writer.write_line(format!(
+                                "{{ \"type\": \"componentModel\", value: {{ value: {} }} }},",
+                                Self::encode_wit_value(&param_name, &component_model.element_type)
+                            ));
+                        }
+                        ElementSchema::UnstructuredText(_) => {
+                            todo!()
+                        }
+                        ElementSchema::UnstructuredBinary(_) => {
+                            todo!()
+                        }
+                    }
+                }
+
+                writer.unindent();
+                writer.write_line("]};");
+                writer.unindent();
+                Ok(())
+            }
+            DataSchema::Multimodal(_) => {
+                todo!()
+            }
+        }
+    }
+
+    fn encode_wit_value(value: &str, typ: &AnalysedType) -> String {
+        if let Some(name) = typ.name() {
+            let ts_name = name.to_upper_camel_case();
+            format!("encode{}({})", ts_name, value)
+        } else {
+            match typ {
+                AnalysedType::Str(_) => format!("{}", value),
+                AnalysedType::Chr(_) => format!("{}", value),
+                AnalysedType::F64(_) => format!("{}", value),
+                AnalysedType::F32(_) => format!("{}", value),
+                AnalysedType::U64(_) => format!("{}", value),
+                AnalysedType::S64(_) => format!("{}", value),
+                AnalysedType::U32(_) => format!("{}", value),
+                AnalysedType::S32(_) => format!("{}", value),
+                AnalysedType::U16(_) => format!("{}", value),
+                AnalysedType::S16(_) => format!("{}", value),
+                AnalysedType::U8(_) => format!("{}", value),
+                AnalysedType::S8(_) => format!("{}", value),
+                AnalysedType::Bool(_) => format!("{}", value),
+                AnalysedType::Option(inner) => {
+                    let inner_encode = Self::encode_wit_value("item", &*inner.inner);
+                    format!("base.encodeOption({value}, (item) => {})", inner_encode)
+                }
+                AnalysedType::List(inner) => {
+                    let inner_encode = Self::encode_wit_value("item", &*inner.inner);
+                    format!("{}.map((item) => {})", value, inner_encode)
+                }
+                AnalysedType::Variant(_) => todo!(),
+                AnalysedType::Result(_) => todo!(),
+                AnalysedType::Enum(_) => todo!(),
+                AnalysedType::Flags(_) => todo!(),
+                AnalysedType::Record(_) => todo!(),
+                AnalysedType::Tuple(_) => todo!(),
+                AnalysedType::Handle(_) => todo!(),
+            }
+        }
     }
 
     fn write_parameter_list(

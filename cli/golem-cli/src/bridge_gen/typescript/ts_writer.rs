@@ -61,6 +61,18 @@ impl TsWriter {
         self.indented_write_line("}");
     }
 
+    pub fn begin_function<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+        self.indented_write(format!("function {name}("));
+        TsFunctionWriter {
+            writer: self,
+            param_count: 0,
+            return_type: Some("void".to_string()),
+            returns_promise: false,
+            body: vec![],
+            indent_level: 1,
+        }
+    }
+
     pub fn begin_export_function<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
         self.indented_write(format!("export function {name}("));
         TsFunctionWriter {
@@ -145,6 +157,18 @@ impl TsWriter {
         }
     }
 
+    pub fn begin_private_constructor<'a>(&'a mut self) -> TsFunctionWriter<'a> {
+        self.indented_write("private constructor(");
+        TsFunctionWriter {
+            writer: self,
+            param_count: 0,
+            return_type: None,
+            returns_promise: false,
+            body: vec![],
+            indent_level: 1,
+        }
+    }
+
     pub fn begin_export_class(&mut self, name: &str) {
         self.indented_write(format!("export class {name} {{\n"));
         self.current_indent += 1;
@@ -164,6 +188,15 @@ impl TsWriter {
             self.indented_write_line(format!("var {name}: {typ} = {default_value};"));
         } else {
             self.indented_write_line(format!("var {name}: {typ};"));
+        }
+    }
+
+
+    pub fn declare_field(&mut self, name: &str, typ: &str, default_value: Option<&str>) {
+        if let Some(default_value) = default_value {
+            self.indented_write_line(format!("readonly {name}: {typ} = {default_value};"));
+        } else {
+            self.indented_write_line(format!("readonly {name}: {typ};"));
         }
     }
 
@@ -228,8 +261,34 @@ impl<'a> TsFunctionWriter<'a> {
         self.return_type = Some(typ.to_string());
     }
 
+    pub fn write(&mut self, content: impl AsRef<str>) {
+        let lines = content.as_ref().lines().collect::<Vec<_>>();
+        if self.body.is_empty() {
+            for line in lines {
+                self.body.push(indent(line, self.indent_level * 2));
+            }
+        } else {
+            let last_line = self.body.last_mut().unwrap();
+            let (new_head, new_rest) = lines.split_first().unwrap();
+            last_line.push_str(content.as_ref());
+            for line in new_rest {
+                self.body.push(indent(line, self.indent_level * 2));
+            }
+        }
+    }
+
     pub fn write_line(&mut self, line: impl AsRef<str>) {
         self.body.push(indent(line.as_ref(), self.indent_level * 2));
+    }
+
+    pub fn indent(&mut self) {
+        self.indent_level += 1;
+    }
+
+    pub fn unindent(&mut self) {
+        if self.indent_level > 0 {
+            self.indent_level -= 1;
+        }
     }
 }
 

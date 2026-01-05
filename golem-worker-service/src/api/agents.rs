@@ -3,7 +3,7 @@ use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
-use golem_common::model::agent::{AgentTypeName, DataValue};
+use golem_common::model::agent::{AgentTypeName, DataValue, UntypedDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::{Empty, IdempotencyKey};
@@ -95,7 +95,7 @@ pub struct AgentInvocationRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: DataValue,
+    pub parameters: UntypedDataValue,
     pub phantom_id: Option<Uuid>,
     pub method_name: String,
     pub method_parameters: DataValue,
@@ -108,5 +108,5 @@ pub struct AgentInvocationRequest {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
-    pub result: Option<DataValue>,
+    pub result: Option<UntypedDataValue>,
 }
