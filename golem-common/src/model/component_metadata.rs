@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::agent::wit_naming::ToWitNaming;
-use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
+use crate::model::agent::{AgentConstructor, AgentMethod, AgentType, AgentTypeName};
 use crate::model::base64::Base64;
 use crate::model::diff;
 use crate::{virtual_exports, SafeDisplay};
@@ -134,7 +134,7 @@ impl ComponentMetadata {
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
             .unwrap()
@@ -143,7 +143,7 @@ impl ComponentMetadata {
 
     pub fn find_agent_type_by_wrapper_name(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
@@ -153,7 +153,7 @@ impl ComponentMetadata {
 
     pub fn find_wrapper_function_by_agent_constructor(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<InvokableFunction>, String> {
         self.cache
             .lock()
@@ -367,28 +367,28 @@ impl ComponentMetadataInnerData {
             ))
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
-            .find(|t| t.type_name == agent_type)
+            .find(|t| &t.type_name == agent_type)
             .cloned())
     }
 
     pub fn find_agent_type_by_wrapper_name(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
-            .find(|t| t.type_name.to_wit_naming() == agent_type)
+            .find(|t| &t.type_name.to_wit_naming() == agent_type)
             .cloned())
     }
 
     pub fn find_wrapper_function_by_agent_constructor(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<InvokableFunction>, String> {
         let agent_type = self
             .find_agent_type_by_name(agent_type)?
@@ -574,9 +574,9 @@ struct ComponentMetadataInnerCache {
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types_by_type_name: HashMap<String, Result<Option<AgentType>, String>>,
-    agent_types_by_wrapper_type_name: HashMap<String, Result<Option<AgentType>, String>>,
-    functions_by_agent_constructor: HashMap<String, Result<Option<InvokableFunction>, String>>,
+    agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
+    agent_types_by_wrapper_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
+    functions_by_agent_constructor: HashMap<AgentTypeName, Result<Option<InvokableFunction>, String>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -639,14 +639,14 @@ impl ComponentMetadataInnerCache {
     pub fn find_agent_type_by_name(
         &mut self,
         data: &ComponentMetadataInnerData,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
             cached.clone()
         } else {
             let result = data.find_agent_type_by_name(agent_type);
             self.agent_types_by_type_name
-                .insert(agent_type.to_string(), result.clone());
+                .insert(agent_type.clone(), result.clone());
             result
         }
     }
@@ -654,14 +654,14 @@ impl ComponentMetadataInnerCache {
     pub fn find_agent_type_by_wrapper_name(
         &mut self,
         data: &ComponentMetadataInnerData,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         if let Some(cached) = self.agent_types_by_wrapper_type_name.get(agent_type) {
             cached.clone()
         } else {
             let result = data.find_agent_type_by_wrapper_name(agent_type);
             self.agent_types_by_wrapper_type_name
-                .insert(agent_type.to_string(), result.clone());
+                .insert(agent_type.clone(), result.clone());
             result
         }
     }
@@ -669,14 +669,14 @@ impl ComponentMetadataInnerCache {
     pub fn find_wrapper_function_by_agent_constructor(
         &mut self,
         data: &ComponentMetadataInnerData,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<InvokableFunction>, String> {
         if let Some(cached) = self.functions_by_agent_constructor.get(agent_type) {
             cached.clone()
         } else {
             let result = data.find_wrapper_function_by_agent_constructor(agent_type);
             self.functions_by_agent_constructor
-                .insert(agent_type.to_string(), result.clone());
+                .insert(agent_type.clone(), result.clone());
             result
         }
     }

@@ -19,7 +19,6 @@ use crate::service::worker::ConnectWorkerStream;
 use crate::service::worker::{proxy_worker_connection, InvocationParameters, WorkerService};
 use futures::StreamExt;
 use futures::TryStreamExt;
-// use golem_common::model::auth::{AuthCtx, Namespace};
 use crate::service::auth::AuthService;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{

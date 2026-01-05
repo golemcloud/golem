@@ -41,7 +41,7 @@ fn wit_types_in_data_schema(schema: &DataSchema) -> Vec<AnalysedType> {
     let mut result = Vec::new();
     match schema {
         DataSchema::Tuple(items) => {
-            for named_item in items.elements {
+            for named_item in &items.elements {
                 result.extend(wit_types_in_element_schema(&named_item.schema));
             }
         }
@@ -83,30 +83,30 @@ fn named_types_in_analysed_type(typ: &AnalysedType) -> Vec<AnalysedType> {
 
         match typ {
             AnalysedType::Variant(variant) => {
-                for case in variant.cases {
-                    if let Some(typ) = case.typ {
+                for case in &variant.cases {
+                    if let Some(typ) = &case.typ {
                         stack.push_back(&typ);
                     }
                 }
             }
             AnalysedType::Result(result) => {
-                if let Some(ok) = result.ok {
+                if let Some(ok) = &result.ok {
                     stack.push_back(&*ok);
                 }
-                if let Some(err) = result.err {
+                if let Some(err) = &result.err {
                     stack.push_back(&*err);
                 }
             }
             AnalysedType::Option(inner) => {
-                stack.push_back(&**inner.inner);
+                stack.push_back(&*inner.inner);
             }
             AnalysedType::Record(fields) => {
-                for item in fields.fields {
+                for item in &fields.fields {
                     stack.push_back(&item.typ);
                 }
             }
             AnalysedType::Tuple(items) => {
-                for item in items.items {
+                for item in &items.items {
                     stack.push_back(&item);
                 }
             }

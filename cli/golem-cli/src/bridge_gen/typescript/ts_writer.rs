@@ -16,20 +16,20 @@ use anyhow::anyhow;
 use camino::Utf8Path;
 use std::collections::BTreeSet;
 
-struct DtsModuleState {
+struct TsModuleState {
     imports: BTreeSet<String>,
     content: String,
 }
 
-pub struct DtsWriter {
+pub struct TsWriter {
     content: String,
     current_indent: usize,
-    module_stack: Vec<DtsModuleState>,
+    module_stack: Vec<TsModuleState>,
 }
 
-impl DtsWriter {
+impl TsWriter {
     pub fn new() -> Self {
-        DtsWriter {
+        TsWriter {
             content: String::new(),
             current_indent: 0,
             module_stack: Vec::new(),
@@ -38,108 +38,110 @@ impl DtsWriter {
 
     pub fn finish(self, target: &Utf8Path) -> anyhow::Result<()> {
         std::fs::write(target, self.content)
-            .map_err(|e| anyhow!("Failed to write TypeScript definitions: {e}"))
-    }
-
-    pub fn begin_declare_module(&mut self, name: &str) {
-        self.indented_write_line(format!("declare module '{name}' {{"));
-        self.current_indent += 1;
-        self.module_stack.push(DtsModuleState {
-            imports: BTreeSet::new(),
-            content: String::new(),
-        })
+            .map_err(|e| anyhow!("Failed to write TypeScript file: {e}"))
     }
 
     pub fn begin_export_namespace(&mut self, name: &str) {
         self.indented_write_line(format!("export namespace {name} {{"));
         self.current_indent += 1;
+        self.module_stack.push(TsModuleState {
+            imports: BTreeSet::new(),
+            content: String::new(),
+        })
     }
 
-    pub fn end_declare_module(&mut self) {
+    pub fn end_export_namespace(&mut self) {
         let module = self.module_stack.pop().expect("No module state to end");
-        // Write all imports collected in this module
         for import in module.imports {
             self.indented_write_line(import);
         }
-        // Write all lines collected in this module
         self.write(module.content);
 
         self.current_indent -= 1;
         self.indented_write_line("}");
     }
 
-    pub fn end_export_module(&mut self) {
-        self.current_indent -= 1;
-        self.indented_write_line("}");
-    }
-
-    pub fn begin_export_function<'a>(&'a mut self, name: &str) -> DtsFunctionWriter<'a> {
+    pub fn begin_export_function<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
         self.indented_write(format!("export function {name}("));
-        DtsFunctionWriter {
+        TsFunctionWriter {
             writer: self,
             param_count: 0,
             return_type: Some("void".to_string()),
             returns_promise: false,
+            body: vec![],
+            indent_level: 1,
         }
     }
 
-    pub fn begin_export_async_function<'a>(&'a mut self, name: &str) -> DtsFunctionWriter<'a> {
-        self.indented_write(format!("export function {name}("));
-        DtsFunctionWriter {
+    pub fn begin_export_async_function<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+        self.indented_write(format!("export async function {name}("));
+        TsFunctionWriter {
             writer: self,
             param_count: 0,
             return_type: Some("void".to_string()),
             returns_promise: true,
+            body: vec![],
+            indent_level: 1,
         }
     }
 
-    pub fn begin_method<'a>(&'a mut self, name: &str) -> DtsFunctionWriter<'a> {
+    pub fn begin_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
         self.indented_write(format!("{name}("));
-        DtsFunctionWriter {
+        TsFunctionWriter {
             writer: self,
             param_count: 0,
             return_type: Some("void".to_string()),
             returns_promise: false,
+            body: vec![],
+            indent_level: 1,
         }
     }
 
-    pub fn begin_async_method<'a>(&'a mut self, name: &str) -> DtsFunctionWriter<'a> {
-        self.indented_write(format!("{name}("));
-        DtsFunctionWriter {
+    pub fn begin_async_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+        self.indented_write(format!("async {name}("));
+        TsFunctionWriter {
             writer: self,
             param_count: 0,
             return_type: Some("void".to_string()),
             returns_promise: true,
+            body: vec![],
+            indent_level: 1,
         }
     }
 
-    pub fn begin_static_method<'a>(&'a mut self, name: &str) -> DtsFunctionWriter<'a> {
+    pub fn begin_static_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
         self.indented_write(format!("static {name}("));
-        DtsFunctionWriter {
+        TsFunctionWriter {
             writer: self,
             param_count: 0,
             return_type: Some("void".to_string()),
             returns_promise: false,
+            body: vec![],
+            indent_level: 1,
         }
     }
 
-    pub fn begin_static_async_method<'a>(&'a mut self, name: &str) -> DtsFunctionWriter<'a> {
-        self.indented_write(format!("static {name}("));
-        DtsFunctionWriter {
+    pub fn begin_static_async_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+        self.indented_write(format!("static async {name}("));
+        TsFunctionWriter {
             writer: self,
             param_count: 0,
             return_type: Some("void".to_string()),
             returns_promise: true,
+            body: vec![],
+            indent_level: 1,
         }
     }
 
-    pub fn begin_constructor<'a>(&'a mut self) -> DtsFunctionWriter<'a> {
+    pub fn begin_constructor<'a>(&'a mut self) -> TsFunctionWriter<'a> {
         self.indented_write("constructor(");
-        DtsFunctionWriter {
+        TsFunctionWriter {
             writer: self,
             param_count: 0,
             return_type: None,
             returns_promise: false,
+            body: vec![],
+            indent_level: 1,
         }
     }
 
@@ -157,8 +159,25 @@ impl DtsWriter {
         self.indented_write_line(format!("export type {name} = {definition};"));
     }
 
+    pub fn declare_global(&mut self, name: &str, typ: &str, default_value: Option<&str>) {
+        if let Some(default_value) = default_value {
+            self.indented_write_line(format!("var {name}: {typ} = {default_value};"));
+        } else {
+            self.indented_write_line(format!("var {name}: {typ};"));
+        }
+    }
+
     pub fn import_module(&mut self, name: &str, from: &str) {
         let import_line = format!("import * as {name} from '{from}';");
+        if let Some(module) = self.module_stack.last_mut() {
+            module.imports.insert(import_line);
+        } else {
+            self.indented_write_line(import_line);
+        }
+    }
+
+    pub fn import_item(&mut self, item: &str, alias: &str, from: &str) {
+        let import_line = format!("import {{ {item} as {alias} }} from '{from}';");
         if let Some(module) = self.module_stack.last_mut() {
             module.imports.insert(import_line);
         } else {
@@ -187,14 +206,16 @@ impl DtsWriter {
     }
 }
 
-pub struct DtsFunctionWriter<'a> {
-    writer: &'a mut DtsWriter,
+pub struct TsFunctionWriter<'a> {
+    writer: &'a mut TsWriter,
     param_count: usize,
     return_type: Option<String>,
     returns_promise: bool,
+    body: Vec<String>,
+    indent_level: usize,
 }
 
-impl<'a> DtsFunctionWriter<'a> {
+impl<'a> TsFunctionWriter<'a> {
     pub fn param(&mut self, name: &str, typ: &str) {
         if self.param_count > 0 {
             self.writer.write(", ");
@@ -206,9 +227,13 @@ impl<'a> DtsFunctionWriter<'a> {
     pub fn result(&mut self, typ: &str) {
         self.return_type = Some(typ.to_string());
     }
+
+    pub fn write_line(&mut self, line: impl AsRef<str>) {
+        self.body.push(indent(line.as_ref(), self.indent_level * 2));
+    }
 }
 
-impl<'a> Drop for DtsFunctionWriter<'a> {
+impl<'a> Drop for TsFunctionWriter<'a> {
     fn drop(&mut self) {
         self.writer.write(")");
         if let Some(return_type) = &self.return_type {
@@ -222,7 +247,12 @@ impl<'a> Drop for DtsFunctionWriter<'a> {
                 self.writer.write(">");
             }
         }
-        self.writer.write(";\n");
+
+        self.writer.write(" {\n");
+        for line in &self.body {
+            self.writer.indented_write_line(line);
+        }
+        self.writer.indented_write_line("}");
     }
 }
 

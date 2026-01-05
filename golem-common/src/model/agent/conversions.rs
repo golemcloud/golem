@@ -13,13 +13,7 @@
 // limitations under the License.
 
 use crate::model::agent::bindings::golem::agent::host;
-use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
-    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
-    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
-    NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
-    TextDescriptor, TextReference, TextSource, TextType, Url,
-};
+use crate::model::agent::{AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, Url};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
 
@@ -156,7 +150,7 @@ impl From<AgentMethod> for super::bindings::golem::agent::common::AgentMethod {
 impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
     fn from(value: crate::model::agent::bindings::golem::agent::common::AgentType) -> Self {
         Self {
-            type_name: value.type_name,
+            type_name: AgentTypeName(value.type_name),
             description: value.description,
             constructor: AgentConstructor::from(value.constructor),
             methods: value.methods.into_iter().map(AgentMethod::from).collect(),
@@ -173,7 +167,7 @@ impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
 impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
     fn from(value: AgentType) -> Self {
         Self {
-            type_name: value.type_name,
+            type_name: value.type_name.0,
             description: value.description,
             constructor: value.constructor.into(),
             methods: value.methods.into_iter().map(AgentMethod::into).collect(),

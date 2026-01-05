@@ -22,7 +22,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 pub mod app;
 pub mod auth;
 pub mod bridge_gen;
-pub mod client;b
+pub mod client;
 pub mod command;
 pub mod command_handler;
 pub mod config;
