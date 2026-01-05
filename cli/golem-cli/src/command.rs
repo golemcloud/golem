@@ -58,7 +58,7 @@ pub struct GolemCliCommand {
     pub global_flags: GolemCliGlobalFlags,
 
     #[clap(subcommand)]
-    pub subcommand: GolemCliSubcommand,
+    pub subcommand: Option<GolemCliSubcommand>,
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,
@@ -197,6 +197,14 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub enable_wasmtime_fs_cache: bool,
+
+    /// Start Golem CLI as an MCP server (serve mode)
+    #[arg(long, global = true, display_order = 1)]
+    pub serve: bool,
+
+    /// Port for the MCP server (used with --serve)
+    #[arg(long, global = true, default_value_t = 3000, display_order = 2)]
+    pub serve_port: u16,
 }
 
 impl GolemCliGlobalFlags {

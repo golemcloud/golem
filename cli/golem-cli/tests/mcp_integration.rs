@@ -42,14 +42,17 @@ struct McpClient {
 
 impl McpClient {
     fn new_with_port(port: u16) -> Self {
-        // Create a client for MCP requests with aggressive connection reuse
-        // Session management uses Mcp-Session-Id headers, but LocalSessionManager
-        // may still be connection-based, so we need to maximize connection reuse
+        // Create a client for MCP requests with maximum connection reuse
+        // The rmcp LocalSessionManager tracks sessions per connection, so we need
+        // to ensure all requests use the same underlying TCP connection
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .http1_title_case_headers() // Use HTTP/1.1
-            .pool_max_idle_per_host(1) // Keep one connection per host
-            .tcp_keepalive(Duration::from_secs(60)) // Keep connections alive
+            .http1_title_case_headers() // Use HTTP/1.1 explicitly
+            .http1_allow_obsolete_multiline_headers_in_responses(true)
+            .pool_max_idle_per_host(1) // Keep exactly one connection per host
+            .pool_idle_timeout(Duration::from_secs(90)) // Keep connections alive longer
+            .tcp_keepalive(Duration::from_secs(60)) // TCP keepalive
+            .tcp_nodelay(false) // Allow Nagle's algorithm (may help with connection reuse)
             .build()
             .expect("Failed to create HTTP client");
         
@@ -209,11 +212,8 @@ impl McpClient {
         
         let _ = request.json(&notification).send().await;
         
-        // Small delay to ensure session is fully established
-        // Note: LocalSessionManager may still be connection-based, so this might not help
-        // but it's worth trying
-        sleep(Duration::from_millis(200)).await;
-        
+        // No delay needed - the session should be immediately available on the same connection
+        // The key is ensuring all subsequent requests use the same HTTP connection
         Ok(())
     }
 }

@@ -226,7 +226,20 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     }
 
     async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
-        match command.subcommand {
+        // Handle --serve flag: automatically start MCP server
+        if command.global_flags.serve {
+            use crate::command::mcp_server::McpServerStartArgs;
+            use crate::command::mcp_server::McpServerSubcommand;
+            let args = McpServerStartArgs {
+                host: "127.0.0.1".to_string(),
+                port: command.global_flags.serve_port,
+            };
+            return self.ctx.mcp_server_handler().handle(McpServerSubcommand::Start(args)).await;
+        }
+
+        let subcommand = command.subcommand.ok_or_else(|| anyhow::anyhow!("No subcommand specified. Use --help for available commands."))?;
+        
+        match subcommand {
             // App scoped root commands
             GolemCliSubcommand::New {
                 application_name,
