@@ -64,5 +64,5 @@
     "vitest": "^3.2.4"
   },
   "private": false,
-  "repository": "https://github.com/golemcloud/golem-agentic"
+  "repository": "https://github.com/golemcloud/golem"
 }
