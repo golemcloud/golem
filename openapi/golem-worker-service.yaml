@@ -7,6 +7,8 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: Agent
+  description: API working on agent instances
 - name: AgentTypes
   description: API working on registered agent types
 - name: ApiCertificate
@@ -1794,11 +1796,127 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       operationId: worker_connect
+  /v1/agents/invoke-agent:
+    post:
+      tags:
+      - Agent
+      parameters:
+      - name: Idempotency-Key
+        schema:
+          type: string
+        in: header
+        required: false
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AgentInvocationRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentInvocationResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: invoke_agent
 components:
   schemas:
     ActivatePluginResponse:
       type: object
       title: ActivatePluginResponse
+    AgentInvocationMode:
+      type: string
+      enum:
+      - await
+      - schedule
+    AgentInvocationRequest:
+      type: object
+      title: AgentInvocationRequest
+      required:
+      - appName
+      - envName
+      - agentTypeName
+      - parameters
+      - methodName
+      - methodParameters
+      - mode
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentTypeName:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/DataValue'
+        phantomId:
+          type: string
+          format: uuid
+        methodName:
+          type: string
+        methodParameters:
+          $ref: '#/components/schemas/DataValue'
+        mode:
+          $ref: '#/components/schemas/AgentInvocationMode'
+        scheduleAt:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+    AgentInvocationResult:
+      type: object
+      title: AgentInvocationResult
+      properties:
+        result:
+          $ref: '#/components/schemas/DataValue'
     AnalysedResourceMode:
       type: string
       enum:
@@ -2118,6 +2236,62 @@ components:
             - Variant
             example: Variant
       - $ref: '#/components/schemas/TypeVariant'
+    BinaryReference:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/BinaryReference_Url'
+      - $ref: '#/components/schemas/BinaryReference_BinarySource'
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/BinaryReference_Url'
+          Inline: '#/components/schemas/BinaryReference_BinarySource'
+    BinaryReference_BinarySource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Inline
+            example: Inline
+      - $ref: '#/components/schemas/BinarySource'
+    BinaryReference_Url:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Url
+            example: Url
+      - $ref: '#/components/schemas/Url'
+    BinarySource:
+      type: object
+      title: BinarySource
+      required:
+      - data
+      - binaryType
+      properties:
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        binaryType:
+          $ref: '#/components/schemas/BinaryType'
+    BinaryType:
+      type: object
+      title: BinaryType
+      required:
+      - mimeType
+      properties:
+        mimeType:
+          type: string
     CancelInvocationResponse:
       type: object
       title: CancelInvocationResponse
@@ -2146,12 +2320,104 @@ components:
       enum:
       - read-only
       - read-write
+    DataValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataValue_ElementValues'
+      - $ref: '#/components/schemas/DataValue_NamedElementValues'
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataValue_ElementValues'
+          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
+    DataValue_ElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tuple
+            example: Tuple
+      - $ref: '#/components/schemas/ElementValues'
+    DataValue_NamedElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Multimodal
+            example: Multimodal
+      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginResponse:
       type: object
       title: DeactivatePluginResponse
     DeleteWorkerResponse:
       type: object
       title: DeleteWorkerResponse
+    ElementValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementValue_ValueAndType'
+      - $ref: '#/components/schemas/ElementValue_TextReference'
+      - $ref: '#/components/schemas/ElementValue_BinaryReference'
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementValue_ValueAndType'
+          UnstructuredText: '#/components/schemas/ElementValue_TextReference'
+          UnstructuredBinary: '#/components/schemas/ElementValue_BinaryReference'
+    ElementValue_BinaryReference:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredBinary
+            example: UnstructuredBinary
+      - $ref: '#/components/schemas/BinaryReference'
+    ElementValue_TextReference:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredText
+            example: UnstructuredText
+      - $ref: '#/components/schemas/TextReference'
+    ElementValue_ValueAndType:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentModel
+            example: ComponentModel
+      - $ref: '#/components/schemas/ValueAndType'
+    ElementValues:
+      type: object
+      title: ElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementValue'
     Empty:
       type: object
       title: Empty
@@ -2383,6 +2649,27 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
+    NamedElementValue:
+      type: object
+      title: NamedElementValue
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/ElementValue'
+    NamedElementValues:
+      type: object
+      title: NamedElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementValue'
     OplogCursor:
       type: object
       title: OplogCursor
@@ -3342,6 +3629,58 @@ components:
         targetVersion:
           type: integer
           format: uint64
+    TextReference:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/TextReference_Url'
+      - $ref: '#/components/schemas/TextReference_TextSource'
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/TextReference_Url'
+          Inline: '#/components/schemas/TextReference_TextSource'
+    TextReference_TextSource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Inline
+            example: Inline
+      - $ref: '#/components/schemas/TextSource'
+    TextReference_Url:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Url
+            example: Url
+      - $ref: '#/components/schemas/Url'
+    TextSource:
+      type: object
+      title: TextSource
+      required:
+      - data
+      properties:
+        data:
+          type: string
+        textType:
+          $ref: '#/components/schemas/TextType'
+    TextType:
+      type: object
+      title: TextType
+      required:
+      - languageCode
+      properties:
+        languageCode:
+          type: string
     TypeBool:
       type: object
       title: TypeBool
@@ -3566,6 +3905,14 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
+    Url:
+      type: object
+      title: Url
+      required:
+      - value
+      properties:
+        value:
+          type: string
     ValueAndOptionalType:
       type: object
       required:

@@ -12,24 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agents;
 pub mod common;
 mod custom_http_request;
 mod worker;
-mod agents;
 
 use self::custom_http_request::CustomHttpRequestApi;
+use crate::api::agents::AgentsApi;
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
 
-pub type Apis = (HealthcheckApi, WorkerApi);
+pub type Apis = (HealthcheckApi, WorkerApi, AgentsApi);
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             HealthcheckApi,
             WorkerApi::new(
+                services.component_service.clone(),
+                services.worker_service.clone(),
+                services.auth_service.clone(),
+            ),
+            AgentsApi::new(
                 services.component_service.clone(),
                 services.worker_service.clone(),
                 services.auth_service.clone(),

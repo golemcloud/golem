@@ -50,11 +50,9 @@ use golem_wasm::{
     parse_value_and_type, print_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
-use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
 use poem_openapi::NewType;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -1134,7 +1132,7 @@ impl AgentId {
         Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
     }
 
-    pub fn parse_agent_type_name(s: &str) -> Result<&str, String> {
+    pub fn parse_agent_type_name(s: &str) -> Result<AgentTypeName, String> {
         static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
         });
@@ -1143,7 +1141,7 @@ impl AgentId {
             format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
         })?;
 
-        Ok(captures.get(1).unwrap().as_str())
+        Ok(AgentTypeName(captures.get(1).unwrap().as_str().to_string()))
     }
 
     pub fn parse_and_resolve_type(
@@ -1168,7 +1166,8 @@ impl AgentId {
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
 
-        let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type_name)?;
+        let agent_type = resolver
+            .resolve_agent_type_by_wrapper_name(&AgentTypeName(agent_type_name.to_string()))?;
         let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
 
         let mut agent_id = AgentId {
@@ -1215,12 +1214,18 @@ impl Display for AgentId {
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String>;
+    fn resolve_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentType, String>;
 }
 
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
-    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentType, String> {
         let result = self
             .find_agent_type_by_wrapper_name(agent_type)?
             .to_wit_naming();

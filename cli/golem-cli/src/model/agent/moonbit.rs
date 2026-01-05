@@ -116,7 +116,7 @@ pub fn generate_moonbit_wrapper(
 
     for agent in &ctx.agent_types {
         let agent_stub = generate_agent_stub(&ctx, agent)?;
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         component.set_warning_control(
             &format!(
@@ -407,7 +407,7 @@ fn setup_dependencies(
     }
 
     for agent in agent_types {
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         depends_on_golem_agent_common(
             component,

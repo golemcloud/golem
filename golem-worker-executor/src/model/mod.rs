@@ -16,7 +16,7 @@ use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -98,7 +98,7 @@ impl WorkerConfig {
     pub(crate) fn enrich_env(
         worker_env: &mut Vec<(String, String)>,
         worker_id: &WorkerId,
-        agent_type: &Option<String>,
+        agent_type: &Option<AgentTypeName>,
         target_component_revision: ComponentRevision,
     ) {
         let worker_name = worker_id.worker_name.clone();
@@ -111,7 +111,7 @@ impl WorkerConfig {
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
         worker_env.push((String::from("GOLEM_COMPONENT_REVISION"), component_revision));
         if let Some(agent_type) = agent_type {
-            worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.clone()));
+            worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.to_string()));
         }
     }
 }

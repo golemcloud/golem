@@ -181,7 +181,7 @@ impl AgentWrapperGeneratorContextState {
         result: &mut String,
         agent: &AgentType,
     ) -> anyhow::Result<String> {
-        let interface_name = escape_wit_keyword(&agent.type_name.to_wit_naming());
+        let interface_name = escape_wit_keyword(&agent.type_name.to_wit_naming().to_string());
 
         writeln!(result, "/// {}", agent.description)?;
         writeln!(result, "interface {interface_name} {{")?;
@@ -877,7 +877,7 @@ mod tests {
         .named("location");
 
         let agent_types = vec![AgentType {
-            type_name: "agent1".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
             description: "An example agent".to_string(),
             constructor: AgentConstructor {
                 name: None,

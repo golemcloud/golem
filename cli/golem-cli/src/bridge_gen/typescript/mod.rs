@@ -91,7 +91,8 @@ impl TypeScriptBridgeGenerator {
 
     fn generate_base_ts(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let base_ts_content = include_str!("../../../ts_bridge/base.ts");
-        std::fs::write(path, base_ts_content).map_err(|e| anyhow!("Failed to write base.ts file: {e}"))?;
+        std::fs::write(path, base_ts_content)
+            .map_err(|e| anyhow!("Failed to write base.ts file: {e}"))?;
         Ok(())
     }
 
@@ -101,14 +102,18 @@ impl TypeScriptBridgeGenerator {
         writer.import_item("v4", "uuidv4", "uuid");
         writer.import_module("base", "./base"); // TODO: replace to dependency
 
-        writer.declare_global("configuredServer", "base.GolemServer", Some("\"local\""));
+        writer.declare_global(
+            &self.global_config_var_name(),
+            "base.GolemServer",
+            Some("\"local\""),
+        );
 
         let types = super::collect_all_wit_types(&self.agent_type);
         for typ in types {
             self.generate_ts_wit_type_def(&mut writer, &typ)?;
         }
 
-        let class_name = self.agent_type.type_name.to_upper_camel_case();
+        let class_name = self.agent_type.type_name.0.to_upper_camel_case();
         writer.begin_export_class(&class_name);
 
         if self.agent_type.mode == AgentMode::Durable {
@@ -122,7 +127,10 @@ impl TypeScriptBridgeGenerator {
         {
             let mut get_phantom = writer.begin_static_method("getPhantom");
             get_phantom.param("phantomId", "base.PhantomId");
-            Self::write_parameter_list(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
+            Self::write_parameter_list(
+                &mut get_phantom,
+                &self.agent_type.constructor.input_schema,
+            )?;
             get_phantom.result(&class_name);
 
             get_phantom.write_line("throw new Error(\"Not implemented\");")
@@ -130,7 +138,10 @@ impl TypeScriptBridgeGenerator {
 
         {
             let mut new_phantom = writer.begin_static_method("newPhantom");
-            Self::write_parameter_list(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
+            Self::write_parameter_list(
+                &mut new_phantom,
+                &self.agent_type.constructor.input_schema,
+            )?;
             new_phantom.result(&class_name);
 
             new_phantom.write_line("throw new Error(\"Not implemented\");")
@@ -151,7 +162,7 @@ impl TypeScriptBridgeGenerator {
             let mut configure = writer.begin_export_function("configure");
             configure.param("server", "base.GolemServer");
 
-            configure.write_line("configuredServer = server;")
+            configure.write_line(format!("{} = server;", self.global_config_var_name()));
         }
 
         writer.finish(path)
@@ -368,7 +379,14 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn library_name(&self) -> String {
-        self.agent_type.type_name.to_snake_case()
+        self.agent_type.type_name.0.to_snake_case()
+    }
+
+    fn global_config_var_name(&self) -> String {
+        format!(
+            "{}Configuration",
+            self.agent_type.type_name.0.to_lower_camel_case()
+        )
     }
 }
 

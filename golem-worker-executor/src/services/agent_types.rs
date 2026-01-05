@@ -16,7 +16,7 @@ use crate::services::component::ComponentService;
 use crate::services::golem_config::AgentTypesServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::RegistryService;
@@ -38,7 +38,7 @@ pub trait AgentTypesService: Send + Sync {
         owner_environment: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        name: &str,
+        name: &AgentTypeName,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError>;
 }
 
@@ -50,7 +50,7 @@ pub fn configured(
     match config {
         AgentTypesServiceConfig::Grpc(config) => {
             let client = CachedAgentTypes::new(
-                Arc::new(self::grpc::AgentTypesServiceGrpc::new(registry_service)),
+                Arc::new(grpc::AgentTypesServiceGrpc::new(registry_service)),
                 config.cache_time_to_idle,
             );
             Arc::new(client)
@@ -72,7 +72,7 @@ struct CachedAgentTypes {
 }
 
 impl CachedAgentTypes {
-    pub fn new(inner: Arc<dyn AgentTypesService>, cache_time_to_idle: std::time::Duration) -> Self {
+    pub fn new(inner: Arc<dyn AgentTypesService>, cache_time_to_idle: Duration) -> Self {
         Self {
             inner,
             cached_registered_agent_types: Cache::new(
@@ -107,7 +107,7 @@ impl AgentTypesService for CachedAgentTypes {
         owner_environment: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        name: &str,
+        name: &AgentTypeName,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
         // Getting a particular agent type is cached with a short TTL because
         // it is used in RPC to find the invocation target
@@ -144,7 +144,7 @@ impl AgentTypesService for CachedAgentTypes {
 mod grpc {
     use crate::services::agent_types::AgentTypesService;
     use async_trait::async_trait;
-    use golem_common::model::agent::RegisteredAgentType;
+    use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::SafeDisplay;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -185,7 +185,7 @@ mod grpc {
             owner_environment: EnvironmentId,
             component_id: ComponentId,
             component_revision: ComponentRevision,
-            name: &str,
+            name: &AgentTypeName,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
             let result = self
                 .client
@@ -208,7 +208,7 @@ mod local {
     use crate::services::agent_types::AgentTypesService;
     use crate::services::component::ComponentService;
     use async_trait::async_trait;
-    use golem_common::model::agent::{RegisteredAgentType, RegisteredAgentTypeImplementer};
+    use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -263,13 +263,13 @@ mod local {
             owner_environment: EnvironmentId,
             component_id: ComponentId,
             component_revision: ComponentRevision,
-            name: &str,
+            name: &AgentTypeName,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
             Ok(self
                 .get_all(owner_environment, component_id, component_revision)
                 .await?
                 .iter()
-                .find(|r| r.agent_type.type_name == name)
+                .find(|r| &r.agent_type.type_name == name)
                 .cloned())
         }
     }

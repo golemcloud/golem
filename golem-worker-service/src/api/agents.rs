@@ -15,12 +15,13 @@ use poem_openapi::payload::Json;
 use poem_openapi_derive::{Enum, Object, OpenApi, Union};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use poem_openapi::types::Type;
 use tracing::Instrument;
 use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, ApiEndpointError>;
 
-struct AgentsApi {
+pub struct AgentsApi {
     component_service: Arc<dyn ComponentService>,
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
@@ -43,13 +44,15 @@ impl AgentsApi {
     #[oai(path = "/invoke-agent", method = "post", operation_id = "invoke_agent")]
     async fn invoke_agent(
         &self,
-        mut request: AgentInvocationRequest,
+        mut request: Json<AgentInvocationRequest>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<AgentInvocationResult>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        request.idempotency_key = request.idempotency_key.or(idempotency_key.0);
+        if request.idempotency_key.is_empty() {
+            request.idempotency_key = idempotency_key.0;
+        }
 
         let record = recorded_http_api_request!(
             "invoke_agent",
@@ -61,7 +64,7 @@ impl AgentsApi {
         );
 
         let response = self
-            .invoke_agent_internal(request, auth)
+            .invoke_agent_internal(request.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -78,8 +81,8 @@ impl AgentsApi {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub enum AgentInvocationMode {
     Await,
     Schedule,

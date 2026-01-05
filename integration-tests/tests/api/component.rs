@@ -555,7 +555,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let (_, env) = user.app_and_env().await?;
 
     let agent_type = AgentType {
-        type_name: "CounterAgent".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("CounterAgent".to_string()),
         description: "".to_string(),
         constructor: AgentConstructor {
             name: None,

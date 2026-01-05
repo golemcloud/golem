@@ -35,7 +35,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentDto;
@@ -143,7 +143,7 @@ pub trait RegistryService: Send + Sync {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        name: &str,
+        name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
     async fn get_active_routes_for_domain(
@@ -600,7 +600,7 @@ impl RegistryService for GrpcRegistryService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        name: &str,
+        name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, RegistryServiceError> {
         let response = self
             .client

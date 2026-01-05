@@ -24,7 +24,7 @@ use golem_wasm::analysis::analysed_type::{
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent1".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -117,7 +117,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
 
     let agent_types = vec![
         AgentType {
-            type_name: "agent1".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
             description: "An example agent".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -164,7 +164,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "agent2".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("agent2".to_string()),
             description: "Another example agent".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -227,7 +227,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
 
 pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent1".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
         description: "An example agent using WIT keywords as names".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -291,7 +291,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
 pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
     vec![
         AgentType {
-            type_name: "assistant-agent".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("assistant-agent".to_string()),
             description: "AssistantAgent".to_string(),
             constructor: AgentConstructor {
                 name: Some("AssistantAgent".to_string()),
@@ -324,7 +324,7 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "weather-agent".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("weather-agent".to_string()),
             description: "WeatherAgent".to_string(),
             constructor: AgentConstructor {
                 name: Some("WeatherAgent".to_string()),
@@ -379,7 +379,7 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
 
 pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "foo-agent".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("foo-agent".to_string()),
         description: "FooAgent".to_string(),
         constructor: AgentConstructor {
             name: Some("FooAgent".to_string()),
@@ -424,7 +424,7 @@ pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
 
 pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "bar-agent".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("bar-agent".to_string()),
         description: "Constructs the agent bar-agent".to_string(),
         constructor: AgentConstructor {
             name: Some("BarAgent".to_string()),
@@ -460,7 +460,7 @@ pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
 
 pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "test-agent".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("test-agent".to_string()),
         description: "Test".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -512,7 +512,7 @@ pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
 
 pub fn char_type() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent-using-char".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent-using-char".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -548,7 +548,7 @@ pub fn char_type() -> Vec<AgentType> {
 
 pub fn unit_result_type() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent-unit-result".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent-unit-result".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
             name: None,

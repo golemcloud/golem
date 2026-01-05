@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::agent::{
-    AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeResolver, BinaryDescriptor,
+    AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeResolver, AgentTypeName, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
     ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
     NamedElementValue, NamedElementValues, TextDescriptor, TextReference, TextSource, TextType,
@@ -164,7 +164,7 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new("agent-6".to_string(), parameters, None);
+        let id = AgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
         let s = id.to_string();
         println!("{s}");
         let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -187,7 +187,7 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new("agent-6".to_string(), parameters, None);
+        let id = AgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
         let s = id.to_string();
         println!("{s}");
         let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -408,7 +408,7 @@ fn roundtrip_with_non_kebab_metadata() {
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = AgentId::new(agent_type.to_string(), parameters, None);
+    let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
     let s = id.to_string();
     println!("{s}");
     let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -416,7 +416,7 @@ fn roundtrip_test(agent_type: &str, parameters: DataValue) {
 }
 
 fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: Option<Uuid>) {
-    let id = AgentId::new(agent_type.to_string(), parameters, phantom_id);
+    let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, phantom_id);
     let s = id.to_string();
     println!("{s}");
     let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -425,7 +425,7 @@ fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: O
 }
 
 fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = AgentId::new(agent_type.to_string(), parameters, None);
+    let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
     let s = id.to_string();
     let id2 = AgentId::parse(s, TestAgentTypes::new()).err().unwrap();
     assert_eq!(id2, expected_failure.to_string());
@@ -439,7 +439,7 @@ fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
 }
 
 struct TestAgentTypes {
-    types: HashMap<String, AgentType>,
+    types: HashMap<AgentTypeName, AgentType>,
 }
 
 impl TestAgentTypes {
@@ -452,7 +452,7 @@ impl TestAgentTypes {
 
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
-    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
         self.types
             .get(agent_type)
             .cloned()
@@ -460,10 +460,10 @@ impl AgentTypeResolver for TestAgentTypes {
     }
 }
 
-fn test_agent_types() -> HashMap<String, AgentType> {
+fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
     let agent_types = &[
         AgentType {
-            type_name: "agent-1".to_string(),
+            type_name: AgentTypeName("agent-1".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -476,7 +476,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "agent-2".to_string(),
+            type_name: AgentTypeName("agent-2".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -496,7 +496,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "agent-3".to_string(),
+            type_name: AgentTypeName("agent-3".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -528,7 +528,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "agent-4".to_string(),
+            type_name: AgentTypeName("agent-4".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -556,7 +556,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "agent-5".to_string(),
+            type_name: AgentTypeName("agent-5".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -584,7 +584,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "agent-6".to_string(),
+            type_name: AgentTypeName("agent-6".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -618,7 +618,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "agent-7".to_string(),
+            type_name: AgentTypeName("agent-7".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -638,7 +638,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             mode: AgentMode::Durable,
         },
         AgentType {
-            type_name: "non-kebab-agent".to_string(),
+            type_name: AgentTypeName("non-kebab-agent".to_string()),
             description: "".to_string(),
             constructor: AgentConstructor {
                 name: None,
