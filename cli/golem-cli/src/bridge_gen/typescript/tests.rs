@@ -20,11 +20,20 @@ use test_r::test;
 
 // TODO: write real tests
 #[test]
-fn playground() {
+fn playground1() {
     let agent_type =
-        // super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
+        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen");
+
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, &target_dir);
+}
+
+#[test]
+fn playground2() {
+    let agent_type =
+        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
+    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen2");
 
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, &target_dir);

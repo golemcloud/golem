@@ -16,6 +16,15 @@ use anyhow::anyhow;
 use camino::Utf8Path;
 use std::collections::BTreeSet;
 
+pub trait FunctionWriter {
+    fn param(&mut self, name: &str, typ: &str);
+    fn result(&mut self, typ: &str);
+    fn write(&mut self, content: impl AsRef<str>);
+    fn write_line(&mut self, line: impl AsRef<str>);
+    fn indent(&mut self);
+    fn unindent(&mut self);
+}
+
 struct TsModuleState {
     imports: BTreeSet<String>,
     content: String,
@@ -203,7 +212,6 @@ impl TsWriter {
         }
     }
 
-
     pub fn declare_field(&mut self, name: &str, typ: &str, default_value: Option<&str>) {
         if let Some(default_value) = default_value {
             self.indented_write_line(format!("readonly {name}: {typ} = {default_value};"));
@@ -304,6 +312,32 @@ impl<'a> TsFunctionWriter<'a> {
     }
 }
 
+impl<'a> FunctionWriter for TsFunctionWriter<'a> {
+    fn param(&mut self, name: &str, typ: &str) {
+        TsFunctionWriter::param(self, name, typ);
+    }
+
+    fn result(&mut self, typ: &str) {
+        TsFunctionWriter::result(self, typ);
+    }
+
+    fn write(&mut self, content: impl AsRef<str>) {
+        TsFunctionWriter::write(self, content);
+    }
+
+    fn write_line(&mut self, line: impl AsRef<str>) {
+        TsFunctionWriter::write_line(self, line);
+    }
+
+    fn indent(&mut self) {
+        TsFunctionWriter::indent(self);
+    }
+
+    fn unindent(&mut self) {
+        TsFunctionWriter::unindent(self);
+    }
+}
+
 impl<'a> Drop for TsFunctionWriter<'a> {
     fn drop(&mut self) {
         self.writer.write(")");
@@ -333,3 +367,129 @@ pub fn indent(s: &str, spaces: usize) -> String {
         .map(|line| format!("{indent}{line}\n"))
         .collect::<String>()
 }
+
+pub struct TsAnonymousFunctionWriter {
+    params: Vec<String>,
+    return_type: Option<String>,
+    returns_promise: bool,
+    body: Vec<String>,
+    indent_level: usize,
+}
+
+impl TsAnonymousFunctionWriter {
+    pub fn new() -> Self {
+        TsAnonymousFunctionWriter {
+            params: Vec::new(),
+            return_type: None,
+            returns_promise: false,
+            body: vec![],
+            indent_level: 1,
+        }
+    }
+
+    pub fn async_fn() -> Self {
+        TsAnonymousFunctionWriter {
+            params: Vec::new(),
+            return_type: None,
+            returns_promise: true,
+            body: vec![],
+            indent_level: 1,
+        }
+    }
+
+    pub fn param(&mut self, name: &str, typ: &str) {
+        self.params.push(format!("{name}: {typ}"));
+    }
+
+    pub fn result(&mut self, typ: &str) {
+        self.return_type = Some(typ.to_string());
+    }
+
+    pub fn write(&mut self, content: impl AsRef<str>) {
+        let lines = content.as_ref().lines().collect::<Vec<_>>();
+        if self.body.is_empty() {
+            for line in lines {
+                self.body.push(indent(line, self.indent_level * 2));
+            }
+        } else {
+            let last_line = self.body.last_mut().unwrap();
+            let (new_head, new_rest) = lines.split_first().unwrap();
+            last_line.push_str(*new_head);
+            for line in new_rest {
+                self.body.push(indent(line, self.indent_level * 2));
+            }
+        }
+    }
+
+    pub fn write_line(&mut self, line: impl AsRef<str>) {
+        self.body.push(indent(line.as_ref(), self.indent_level * 2));
+    }
+
+    pub fn indent(&mut self) {
+        self.indent_level += 1;
+    }
+
+    pub fn unindent(&mut self) {
+        if self.indent_level > 0 {
+            self.indent_level -= 1;
+        }
+    }
+
+    pub fn build(self) -> String {
+        let mut result = String::new();
+
+        // Write function signature
+        result.push('(');
+        result.push_str(&self.params.join(", "));
+        result.push(')');
+
+        // Write return type
+        if let Some(return_type) = &self.return_type {
+            result.push_str(": ");
+            if self.returns_promise {
+                result.push_str("Promise<");
+            }
+            result.push_str(return_type);
+            if self.returns_promise {
+                result.push('>');
+            }
+        }
+
+        result.push_str(" => {\n");
+
+        // Write body
+        for line in &self.body {
+            result.push_str(line);
+        }
+
+        result.push_str("}\n");
+
+        result
+        }
+        }
+
+        impl FunctionWriter for TsAnonymousFunctionWriter {
+        fn param(&mut self, name: &str, typ: &str) {
+        TsAnonymousFunctionWriter::param(self, name, typ);
+        }
+
+        fn result(&mut self, typ: &str) {
+        TsAnonymousFunctionWriter::result(self, typ);
+        }
+
+        fn write(&mut self, content: impl AsRef<str>) {
+        TsAnonymousFunctionWriter::write(self, content);
+        }
+
+        fn write_line(&mut self, line: impl AsRef<str>) {
+        TsAnonymousFunctionWriter::write_line(self, line);
+        }
+
+        fn indent(&mut self) {
+        TsAnonymousFunctionWriter::indent(self);
+        }
+
+        fn unindent(&mut self) {
+        TsAnonymousFunctionWriter::unindent(self);
+        }
+        }

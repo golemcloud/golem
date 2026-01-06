@@ -19,7 +19,9 @@ mod ts_writer;
 mod tests;
 
 use crate::bridge_gen::typescript::javascript::escape_js_ident;
-use crate::bridge_gen::typescript::ts_writer::{indent, TsFunctionWriter, TsWriter};
+use crate::bridge_gen::typescript::ts_writer::{
+    indent, FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter,
+};
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -29,6 +31,7 @@ use golem_common::model::agent::{
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use indoc::formatdoc;
+use minijinja::functions::Function;
 use serde_json::json;
 
 struct TypeScriptBridgeGenerator {
@@ -195,6 +198,48 @@ impl TypeScriptBridgeGenerator {
         }
 
         for method_def in &self.agent_type.methods {
+            // Build the getServerConfig function: () => this.__getConfig().server
+            let mut get_server_config = TsAnonymousFunctionWriter::new();
+            get_server_config.write_line("return this.__getConfig().server;");
+            let get_server_config_fn = get_server_config.build();
+
+            // Build the getMethodRequest function: () => { return { ... } }
+            let mut get_method_request = TsAnonymousFunctionWriter::new();
+            get_method_request.write_line("return {");
+            get_method_request.indent();
+            get_method_request.write_line("appName: this.__getConfig().application,");
+            get_method_request.write_line("envName: this.__getConfig().environment,");
+            get_method_request.write_line(&format!(
+                "agentTypeName: \"{}\",",
+                self.agent_type.type_name.0
+            ));
+            get_method_request.write_line("parameters: this.parameters,");
+            get_method_request.write_line("phantomId: this.phantomId,");
+            get_method_request.write_line(&format!("methodName: \"{}\",", method_def.name));
+            get_method_request.write_line("mode: \"await\",");
+            get_method_request.write_line("methodParameters: { type: \"tuple\", elements: [] }");
+            get_method_request.unindent();
+            get_method_request.write_line("};");
+            let get_method_request_fn = get_method_request.build();
+
+            // Build the encodeArgs function: (args) => { ... }
+            let mut encode_args = TsAnonymousFunctionWriter::new();
+            encode_args.param(
+                "args",
+                &format!("[{}]", Self::schema_as_type_list(&method_def.input_schema)),
+            );
+            Self::destructure_args_tuple(&mut encode_args, "args", &method_def.input_schema)?;
+            encode_args.write_line("const methodParameters: base.DataValue = ");
+            Self::write_encode_data_value(&mut encode_args, &method_def.input_schema)?;
+            encode_args.write_line("return methodParameters;");
+            let encode_args_fn = encode_args.build();
+
+            // Build the decodeResult function: (result) => { ... }
+            let mut decode_result = TsAnonymousFunctionWriter::new();
+            decode_result.param("result", "base.AgentInvocationResult");
+            Self::write_decode_data_value(&mut decode_result, &method_def.output_schema)?;
+            let decode_result_fn = decode_result.build();
+
             writer.declare_field(
                 &method_def.name,
                 &format!(
@@ -205,74 +250,18 @@ impl TypeScriptBridgeGenerator {
                 Some(&formatdoc!(
                     "
                 base.createRemoteMethod(
-                    () => this.__getConfig().server,
-                    () => {{
-                      return {{
-                        appName: this.__getConfig().application,
-                        envName: this.__getConfig().environment,
-                        agentTypeName: \"{}\",
-                        parameters: this.parameters,
-                        phantomId: this.phantomId,
-                        methodName: \"{}\",
-                        mode: \"await\",
-                        methodParameters: {{ type: \"tuple\", elements: [] }}
-                      }}
-                    }},
-                    (args) => {{
-                        throw new Error(\"TODO\")
-                    }},
-                    (result) => {{
-                        throw new Error(\"TODO\")
-                    }}
+                    {},
+                    {},
+                    {},
+                    {}
                 )
                 ",
-                self.agent_type.type_name.0,
-                method_def.name,
+                    get_server_config_fn.trim(),
+                    get_method_request_fn.trim(),
+                    encode_args_fn.trim(),
+                    decode_result_fn.trim(),
                 )),
             );
-
-            // let mut method = writer.begin_async_method(&method_def.name);
-            // Self::write_parameter_list(&mut method, &method_def.input_schema)?;
-            // Self::write_result(&mut method, &method_def.output_schema)?;
-            //
-            // // assert on configuration set
-            // method.write_line(format!("if (!{config_var}) {{"));
-            // method.indent();
-            // method.write_line(&format!(
-            //     "  throw new Error(\"{} configuration is not set\");",
-            //     self.agent_type.type_name.0
-            // ));
-            // method.unindent();
-            // method.write_line("}");
-            //
-            // // encode parameters
-            // method.write_line("const methodParameters: base.DataValue = ");
-            // Self::write_encode_data_value(&mut method, &method_def.input_schema)?;
-            //
-            // // invoke
-            // method.write_line(format!(
-            //     "const result = await base.invokeAgent({config_var}.server, {{"
-            // ));
-            // method.indent();
-            // method.write_line(format!("appName: {config_var}.application,"));
-            // method.write_line(format!("envName: {config_var}.environment,"));
-            // method.write_line(format!(
-            //     "agentTypeName: \"{}\",",
-            //     self.agent_type.type_name.0
-            // ));
-            // method.write_line("parameters: this.parameters,");
-            // method.write_line("phantomId: this.phantomId,");
-            // method.write_line(format!("methodName: \"{}\",", method_def.name));
-            // method.write_line("methodParameters,");
-            // method.write_line("mode: \"await\"");
-            //
-            // method.unindent();
-            // method.write_line("});");
-            //
-            // // decode result
-            // Self::write_decode_data_value(&mut method, &method_def.output_schema)?;
-            //
-            // // TODO: trigger, schedule
         }
 
         writer.end_export_class();
@@ -336,8 +325,8 @@ impl TypeScriptBridgeGenerator {
 
     /// writes a return statement that decodes the JSON DataValue value in `result` to
     /// the expected TS representation
-    fn write_decode_data_value(
-        writer: &mut TsFunctionWriter<'_>,
+    fn write_decode_data_value<Result: FunctionWriter>(
+        writer: &mut Result,
         schema: &DataSchema,
     ) -> anyhow::Result<()> {
         match schema {
@@ -416,8 +405,29 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
-    fn write_encode_data_value(
-        writer: &mut TsFunctionWriter<'_>,
+    fn destructure_args_tuple<Target: FunctionWriter>(
+        writer: &mut Target,
+        tuple: &str,
+        schema: &DataSchema,
+    ) -> anyhow::Result<()> {
+        match schema {
+            DataSchema::Tuple(params) => {
+                let param_names: Vec<String> = params
+                    .elements
+                    .iter()
+                    .map(|param| escape_js_ident(&param.name.to_lower_camel_case()))
+                    .collect();
+                writer.write_line(format!("const [{}] = {};", param_names.join(", "), tuple));
+                Ok(())
+            }
+            DataSchema::Multimodal(_) => {
+                todo!()
+            }
+        }
+    }
+
+    fn write_encode_data_value<Target: FunctionWriter>(
+        writer: &mut Target,
         schema: &DataSchema,
     ) -> anyhow::Result<()> {
         match schema {
@@ -576,7 +586,8 @@ impl TypeScriptBridgeGenerator {
                 .iter()
                 .map(|param| match &param.schema {
                     ElementSchema::ComponentModel(component_model) => {
-                        Self::type_reference(&component_model.element_type).unwrap_or("any".to_string())
+                        Self::type_reference(&component_model.element_type)
+                            .unwrap_or("any".to_string())
                     }
                     ElementSchema::UnstructuredText(descriptor) => {
                         Self::unstructured_text_type(descriptor)
@@ -630,7 +641,8 @@ impl TypeScriptBridgeGenerator {
                 } else if params.elements.len() == 1 {
                     match &params.elements[0].schema {
                         ElementSchema::ComponentModel(component_model) => {
-                            Self::type_reference(&component_model.element_type).unwrap_or("any".to_string())
+                            Self::type_reference(&component_model.element_type)
+                                .unwrap_or("any".to_string())
                         }
                         ElementSchema::UnstructuredText(descriptor) => {
                             Self::unstructured_text_type(descriptor)
@@ -645,7 +657,8 @@ impl TypeScriptBridgeGenerator {
                         .iter()
                         .map(|param| match &param.schema {
                             ElementSchema::ComponentModel(component_model) => {
-                                Self::type_reference(&component_model.element_type).unwrap_or("any".to_string())
+                                Self::type_reference(&component_model.element_type)
+                                    .unwrap_or("any".to_string())
                             }
                             ElementSchema::UnstructuredText(descriptor) => {
                                 Self::unstructured_text_type(descriptor)
