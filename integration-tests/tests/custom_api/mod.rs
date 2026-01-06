@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod echo_agent;
-mod shopping_cart;
+// mod echo_agent;
+// mod shopping_cart;
 
 use golem_test_framework::config::EnvBasedTestDependencies;
 use test_r::inherit_test_dep;

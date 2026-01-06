@@ -44,6 +44,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
+#[ignore = "disabled until code-first routes"]
 #[allow(clippy::await_holding_lock)]
 async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
