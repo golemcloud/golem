@@ -22,7 +22,8 @@ use test_r::test;
 #[test]
 fn playground() {
     let agent_type =
-        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
+        // super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
+        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen");
 
     std::fs::remove_dir_all(target_dir).ok();

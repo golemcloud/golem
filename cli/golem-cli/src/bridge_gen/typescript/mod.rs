@@ -23,7 +23,9 @@ use crate::bridge_gen::typescript::ts_writer::{indent, TsFunctionWriter, TsWrite
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{AgentMode, AgentType, DataSchema, ElementSchema};
+use golem_common::model::agent::{
+    AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema, TextDescriptor,
+};
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use serde_json::json;
@@ -138,10 +140,7 @@ impl TypeScriptBridgeGenerator {
             get.result(&class_name);
 
             get.write_line("const parameters: base.DataValue = ");
-            Self::write_encode_data_value(
-                &mut get,
-                &self.agent_type.constructor.input_schema,
-            )?;
+            Self::write_encode_data_value(&mut get, &self.agent_type.constructor.input_schema)?;
             get.write_line("const phantomId = undefined;");
             get.write_line(format!("return new {class_name}(parameters, phantomId);"));
         }
@@ -197,10 +196,7 @@ impl TypeScriptBridgeGenerator {
 
             // encode parameters
             method.write_line("const methodParameters: base.DataValue = ");
-            Self::write_encode_data_value(
-                &mut method,
-                &method_def.input_schema,
-            )?;
+            Self::write_encode_data_value(&mut method, &method_def.input_schema)?;
 
             // invoke
             method.write_line(format!(
@@ -223,8 +219,7 @@ impl TypeScriptBridgeGenerator {
             method.write_line("});");
 
             // decode result
-
-            method.write_line("throw new Error(\"Not implemented\");")
+            Self::write_decode_data_value(&mut method, &method_def.output_schema)?;
 
             // TODO: trigger, schedule
         }
@@ -288,6 +283,88 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
+    /// writes a return statement that decodes the JSON DataValue value in `result` to
+    /// the expected TS representation
+    fn write_decode_data_value(
+        writer: &mut TsFunctionWriter<'_>,
+        schema: &DataSchema,
+    ) -> anyhow::Result<()> {
+        match schema {
+            DataSchema::Tuple(params) => {
+                if params.elements.is_empty() {
+                    // Expected unit result
+                    writer.write_line("return;");
+                    Ok(())
+                } else if params.elements.len() == 1 {
+                    let element_schema = &params.elements[0].schema;
+                    match element_schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
+                            writer.indent();
+                            writer.write_line(format!(
+                                "return {};",
+                                Self::decode_wit_value(
+                                    "result.result.elements[0].value",
+                                    &component_model.element_type
+                                )
+                            ));
+                            writer.unindent();
+                            writer.write_line("} else {");
+                            writer.indent();
+                            writer.write_line("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);");
+                            writer.unindent();
+                            writer.write_line("}");
+                            Ok(())
+                        }
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
+                            writer.indent();
+                            writer.write_line(format!(
+                                "return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|tt| {
+                                        format!("'{}'", tt.language_code)
+                                    }).collect::<Vec<_>>().join(", ")
+                                }
+                                )));
+                            writer.unindent();
+                            writer.write_line("} else {");
+                            writer.indent();
+                            writer.write_line("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);");
+                            writer.unindent();
+                            writer.write_line("}");
+                            Ok(())
+                        }
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
+                            writer.indent();
+                            writer.write_line(format!(
+                                "return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|bt| {
+                                        format!("'{}'", bt.mime_type)
+                                    }).collect::<Vec<_>>().join(", ")
+                                }
+                                )));
+                            writer.unindent();
+                            writer.write_line("} else {");
+                            writer.indent();
+                            writer.write_line("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);");
+                            writer.unindent();
+                            writer.write_line("}");
+                            Ok(())
+                        }
+                    }
+                } else {
+                    Err(anyhow!("Multiple result values are not supported"))
+                }
+            }
+            DataSchema::Multimodal(_) => {
+                todo!()
+            }
+        }
+    }
+
     fn write_encode_data_value(
         writer: &mut TsFunctionWriter<'_>,
         schema: &DataSchema,
@@ -307,10 +384,14 @@ impl TypeScriptBridgeGenerator {
                             ));
                         }
                         ElementSchema::UnstructuredText(_) => {
-                            todo!()
+                            writer.write_line(format!(
+                                "{{ \"type\": \"unstructuredText\", value: base.TextReference.fromUnstructuredText({param_name}) }},",
+                            ))
                         }
                         ElementSchema::UnstructuredBinary(_) => {
-                            todo!()
+                            writer.write_line(format!(
+                                "{{ \"type\": \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary({param_name}) }},",
+                            ))
                         }
                     }
                 }
@@ -322,6 +403,49 @@ impl TypeScriptBridgeGenerator {
             }
             DataSchema::Multimodal(_) => {
                 todo!()
+            }
+        }
+    }
+
+    fn decode_wit_value(value: &str, typ: &AnalysedType) -> String {
+        if let Some(name) = typ.name() {
+            let ts_name = name.to_upper_camel_case();
+            format!("decode{}({})", ts_name, value)
+        } else {
+            match typ {
+                AnalysedType::Str(_) | AnalysedType::Chr(_) => {
+                    format!("((v: unknown) => {{ if (typeof v === 'string') {{ return v; }} else {{ throw new Error(`Expected string, got ${{v}}`); }} }})({value})")
+                }
+                AnalysedType::F64(_)
+                | AnalysedType::F32(_)
+                | AnalysedType::U64(_)
+                | AnalysedType::S64(_)
+                | AnalysedType::U32(_)
+                | AnalysedType::S32(_)
+                | AnalysedType::U16(_)
+                | AnalysedType::S16(_)
+                | AnalysedType::U8(_)
+                | AnalysedType::S8(_) => {
+                    format!("((v: unknown) => {{ if (typeof v === 'number') {{ return v; }} else {{ throw new Error(`Expected number, got ${{v}}`); }} }})({value})")
+                }
+                AnalysedType::Bool(_) => {
+                    format!("((v: unknown) => {{ if (typeof v === 'boolean') {{ return v; }} else {{ throw new Error(`Expected boolean, got ${{v}}`); }} }})({value})")
+                }
+                AnalysedType::Option(inner) => {
+                    let inner_decode = Self::decode_wit_value("item", &*inner.inner);
+                    format!("base.decodeOption({value}, (item) => {})", inner_decode)
+                }
+                AnalysedType::List(inner) => {
+                    let inner_decode = Self::decode_wit_value("item", &*inner.inner);
+                    format!("{}.map((item) => {})", value, inner_decode)
+                }
+                AnalysedType::Variant(_) => todo!(),
+                AnalysedType::Result(_) => todo!(),
+                AnalysedType::Enum(_) => todo!(),
+                AnalysedType::Flags(_) => todo!(),
+                AnalysedType::Record(_) => todo!(),
+                AnalysedType::Tuple(_) => todo!(),
+                AnalysedType::Handle(_) => todo!(),
             }
         }
     }
@@ -364,6 +488,36 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
+    fn unstructured_text_type(descriptor: &TextDescriptor) -> String {
+        if let Some(restrictions) = &descriptor.restrictions {
+            format!(
+                "base.UnstructuredText<[{}]>",
+                restrictions
+                    .iter()
+                    .map(|tt| { format!("'{}'", tt.language_code) })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            "base.UnstructuredText".to_string()
+        }
+    }
+
+    fn unstructured_binary_type(descriptor: &BinaryDescriptor) -> String {
+        if let Some(restrictions) = &descriptor.restrictions {
+            format!(
+                "base.UnstructuredBinary<[{}]>",
+                restrictions
+                    .iter()
+                    .map(|bt| { format!("'{}'", bt.mime_type) })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            "base.UnstructuredBinary".to_string()
+        }
+    }
+
     fn write_parameter_list(
         writer: &mut TsFunctionWriter<'_>,
         schema: &DataSchema,
@@ -377,11 +531,11 @@ impl TypeScriptBridgeGenerator {
                             &param_name,
                             &Self::type_reference(&component_model.element_type)?,
                         ),
-                        ElementSchema::UnstructuredText(_) => {
-                            todo!()
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            writer.param(&param_name, &Self::unstructured_text_type(descriptor));
                         }
-                        ElementSchema::UnstructuredBinary(_) => {
-                            todo!()
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            writer.param(&param_name, &Self::unstructured_binary_type(&descriptor));
                         }
                     }
                 }
@@ -401,11 +555,11 @@ impl TypeScriptBridgeGenerator {
                         ElementSchema::ComponentModel(component_model) => {
                             writer.result(&Self::type_reference(&component_model.element_type)?)
                         }
-                        ElementSchema::UnstructuredText(_) => {
-                            todo!()
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            writer.result(&Self::unstructured_text_type(descriptor));
                         }
-                        ElementSchema::UnstructuredBinary(_) => {
-                            todo!()
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            writer.result(&Self::unstructured_binary_type(&descriptor));
                         }
                     }
                 }

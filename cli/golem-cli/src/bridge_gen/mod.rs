@@ -34,6 +34,7 @@ fn collect_all_wit_types(agent_type: &AgentType) -> Vec<AnalysedType> {
         result.extend(wit_types_in_data_schema(&method.input_schema));
         result.extend(wit_types_in_data_schema(&method.output_schema));
     }
+    result.dedup();
     result
 }
 
@@ -71,17 +72,17 @@ fn named_types_in_analysed_type(typ: &AnalysedType) -> Vec<AnalysedType> {
     let mut visited = HashSet::new();
 
     while let Some(current) = stack.pop_front() {
-        if !visited.contains(&current) {
-            visited.insert(current);
-        } else {
-            break;
+        if visited.contains(&current) {
+            continue;
         }
+        visited.insert(current);
 
+        println!("Visiting type: {:?}", current);
         if current.name().is_some() {
             result.push(current.clone());
         }
 
-        match typ {
+        match current {
             AnalysedType::Variant(variant) => {
                 for case in &variant.cases {
                     if let Some(typ) = &case.typ {
@@ -113,7 +114,7 @@ fn named_types_in_analysed_type(typ: &AnalysedType) -> Vec<AnalysedType> {
             AnalysedType::List(inner) => {
                 stack.push_back(&*inner.inner);
             }
-            _ => break,
+            _ => {},
         }
     }
     result
