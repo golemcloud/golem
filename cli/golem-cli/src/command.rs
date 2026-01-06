@@ -718,6 +718,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ServerSubcommand,
     },
+    /// Run the Golem MCP Server
+    Serve {
+        #[clap(flatten)]
+        args: crate::command::serve::ServeArgs,
+    },
     /// Manage Golem Cloud accounts and projects
     Cloud {
         #[clap(subcommand)]
@@ -1534,6 +1539,8 @@ pub mod cloud {
         }
     }
 }
+
+pub mod serve;
 
 pub mod server {
     use clap::{Args, Subcommand};
