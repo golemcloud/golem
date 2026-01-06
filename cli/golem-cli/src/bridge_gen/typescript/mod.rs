@@ -131,24 +131,8 @@ impl TypeScriptBridgeGenerator {
             let mut encode_input = writer.begin_export_async_function(&format!("encode{}Input", method_name_pascal));
             encode_input.result("void");
             encode_input.write_line("const json = await readStdin();");
-            let mut code_buf = String::new();
-            code_buf.push_str("const result: base.DataValue = ");
-            Self::build_encode_data_value_code(&method_def.input_schema, &mut code_buf)?;
-            // Remove trailing newline if present
-            if code_buf.ends_with('\n') {
-                code_buf.pop();
-            }
-            // Split into lines and write each line
-            let lines: Vec<&str> = code_buf.lines().collect();
-            for (idx, line) in lines.iter().enumerate() {
-                if idx == 0 {
-                    encode_input.write(line);
-                } else {
-                    encode_input.write_line("");
-                    encode_input.write(line);
-                }
-            }
-            encode_input.write_line("");
+            encode_input.write("const result: base.DataValue = ");
+            Self::build_encode_data_value_code(&method_def.input_schema, &mut encode_input)?;
             encode_input.write_line("console.log(JSON.stringify(result));");
             drop(encode_input);
 
@@ -161,23 +145,7 @@ impl TypeScriptBridgeGenerator {
             decode_input.write_line("const result = { result: jsonResult };");
             decode_input.write_line("const decoded = (() => {");
             decode_input.indent();
-            let mut code_buf = String::new();
-            Self::build_decode_data_value_code(&method_def.input_schema, &mut code_buf)?;
-            // Remove trailing newline if present
-            if code_buf.ends_with('\n') {
-                code_buf.pop();
-            }
-            // Split into lines and write each line
-            let lines: Vec<&str> = code_buf.lines().collect();
-            for (idx, line) in lines.iter().enumerate() {
-                if idx == 0 {
-                    decode_input.write(line);
-                } else {
-                    decode_input.write_line("");
-                    decode_input.write(line);
-                }
-            }
-            decode_input.write_line("");
+            Self::build_decode_data_value_code(&method_def.input_schema, &mut decode_input)?;
             decode_input.unindent();
             decode_input.write_line("})();");
             decode_input.write_line("console.log(JSON.stringify(decoded));");
@@ -189,24 +157,8 @@ impl TypeScriptBridgeGenerator {
             let mut encode_output = writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
             encode_output.result("void");
             encode_output.write_line("const json = await readStdin();");
-            let mut code_buf = String::new();
-            code_buf.push_str("const result: base.DataValue = ");
-            Self::build_encode_data_value_code(&method_def.output_schema, &mut code_buf)?;
-            // Remove trailing newline if present
-            if code_buf.ends_with('\n') {
-                code_buf.pop();
-            }
-            // Split into lines and write each line
-            let lines: Vec<&str> = code_buf.lines().collect();
-            for (idx, line) in lines.iter().enumerate() {
-                if idx == 0 {
-                    encode_output.write(line);
-                } else {
-                    encode_output.write_line("");
-                    encode_output.write(line);
-                }
-            }
-            encode_output.write_line("");
+            encode_output.write("const result: base.DataValue = ");
+            Self::build_encode_data_value_code(&method_def.output_schema, &mut encode_output)?;
             encode_output.write_line("console.log(JSON.stringify(result));");
             drop(encode_output);
 
@@ -219,23 +171,7 @@ impl TypeScriptBridgeGenerator {
             decode_output.write_line("const result = { result: jsonResult };");
             decode_output.write_line("const decoded = (() => {");
             decode_output.indent();
-            let mut code_buf = String::new();
-            Self::build_decode_data_value_code(&method_def.output_schema, &mut code_buf)?;
-            // Remove trailing newline if present
-            if code_buf.ends_with('\n') {
-                code_buf.pop();
-            }
-            // Split into lines and write each line
-            let lines: Vec<&str> = code_buf.lines().collect();
-            for (idx, line) in lines.iter().enumerate() {
-                if idx == 0 {
-                    decode_output.write(line);
-                } else {
-                    decode_output.write_line("");
-                    decode_output.write(line);
-                }
-            }
-            decode_output.write_line("");
+            Self::build_decode_data_value_code(&method_def.output_schema, &mut decode_output)?;
             decode_output.unindent();
             decode_output.write_line("})();");
             decode_output.write_line("console.log(JSON.stringify(decoded));");
@@ -1722,143 +1658,167 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
-    fn build_encode_data_value_code(
+    fn build_encode_data_value_code<W: FunctionWriter>(
         schema: &DataSchema,
-        content: &mut String,
+        writer: &mut W,
     ) -> anyhow::Result<()> {
         match schema {
             DataSchema::Tuple(params) => {
-                content.push_str("{ type: \"tuple\", elements: [\n");
-                content.push_str("  ...(() => {\n");
-                content.push_str("    const elements: any[] = [];\n");
+                writer.write_line("{ type: \"tuple\", elements: [");
+                writer.indent();
+                writer.write_line("...(() => {");
+                writer.indent();
+                writer.write_line("const elements: any[] = [];");
                 for param in &params.elements {
                     let param_name = param.name.to_lower_camel_case();
                     match &param.schema {
                         ElementSchema::ComponentModel(component_model) => {
-                            content.push_str(&format!(
-                                "    if (json.{} !== undefined) elements.push({{ type: \"componentModel\", value: {{ value: {} }} }});\n",
+                            writer.write_line(format!(
+                                "if (json.{} !== undefined) elements.push({{ type: \"componentModel\", value: {{ value: {} }} }});",
                                 param_name,
                                 Self::encode_wit_value(&format!("json.{}", param_name), &component_model.element_type)
                             ));
                         }
                         ElementSchema::UnstructuredText(_) => {
-                            content.push_str(&format!(
-                                "    if (json.{} !== undefined) elements.push({{ type: \"unstructuredText\", value: base.TextReference.fromUnstructuredText(json.{}) }});\n",
+                            writer.write_line(format!(
+                                "if (json.{} !== undefined) elements.push({{ type: \"unstructuredText\", value: base.TextReference.fromUnstructuredText(json.{}) }});",
                                 param_name, param_name
                             ));
                         }
                         ElementSchema::UnstructuredBinary(_) => {
-                            content.push_str(&format!(
-                                "    if (json.{} !== undefined) elements.push({{ type: \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary(json.{}) }});\n",
+                            writer.write_line(format!(
+                                "if (json.{} !== undefined) elements.push({{ type: \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary(json.{}) }});",
                                 param_name, param_name
                             ));
                         }
                     }
                 }
-                content.push_str("    return elements;\n");
-                content.push_str("  })()\n");
-                content.push_str("] };\n");
+                writer.write_line("return elements;");
+                writer.unindent();
+                writer.write_line("})()");
+                writer.unindent();
+                writer.write_line("] };");
                 Ok(())
             }
             DataSchema::Multimodal(multimodal) => {
-                content.push_str("{ type: \"multimodal\", elements: json.map((item: any) => {\n");
+                writer.write_line("{ type: \"multimodal\", elements: json.map((item: any) => {");
+                writer.indent();
                 for (idx, element) in multimodal.elements.iter().enumerate() {
                     let if_or_else = if idx == 0 { "if" } else { "else if" };
-                    content.push_str(&format!("  {}(item.type === '{}') {{\n", if_or_else, element.name));
+                    writer.write_line(format!("{}(item.type === '{}') {{", if_or_else, element.name));
+                    writer.indent();
                     match &element.schema {
                         ElementSchema::ComponentModel(component_model) => {
-                            content.push_str(&format!(
-                                "    return {{ name: '{}', value: {{ type: 'componentModel', value: {{ value: {} }} }} }};\n",
+                            writer.write_line(format!(
+                                "return {{ name: '{}', value: {{ type: 'componentModel', value: {{ value: {} }} }} }};",
                                 element.name,
                                 Self::encode_wit_value("item.value", &component_model.element_type)
                             ));
                         }
                         ElementSchema::UnstructuredText(_) => {
-                            content.push_str(&format!(
-                                "    return {{ name: '{}', value: {{ type: 'unstructuredText', value: base.TextReference.fromUnstructuredText(item.value) }} }};\n",
+                            writer.write_line(format!(
+                                "return {{ name: '{}', value: {{ type: 'unstructuredText', value: base.TextReference.fromUnstructuredText(item.value) }} }};",
                                 element.name
                             ));
                         }
                         ElementSchema::UnstructuredBinary(_) => {
-                            content.push_str(&format!(
-                                "    return {{ name: '{}', value: {{ type: 'unstructuredBinary', value: base.BinaryReference.fromUnstructuredBinary(item.value) }} }};\n",
+                            writer.write_line(format!(
+                                "return {{ name: '{}', value: {{ type: 'unstructuredBinary', value: base.BinaryReference.fromUnstructuredBinary(item.value) }} }};",
                                 element.name
                             ));
                         }
                     }
-                    content.push_str("  }\n");
+                    writer.unindent();
+                    writer.write_line("}");
                 }
-                content.push_str("  throw new Error(`Unknown multimodal type: ${item.type}`);\n");
-                content.push_str("}) };\n");
+                writer.write_line("throw new Error(`Unknown multimodal type: ${item.type}`);");
+                writer.unindent();
+                writer.write_line("}) };");
                 Ok(())
             }
         }
     }
 
-    fn build_decode_data_value_code(
+    fn build_decode_data_value_code<W: FunctionWriter>(
         schema: &DataSchema,
-        content: &mut String,
+        writer: &mut W,
     ) -> anyhow::Result<()> {
         match schema {
             DataSchema::Tuple(params) => {
                 if params.elements.is_empty() {
-                    content.push_str("return;\n");
+                    writer.write_line("return;");
                     Ok(())
                 } else if params.elements.len() == 1 {
                     let element_schema = &params.elements[0].schema;
                     match element_schema {
                         ElementSchema::ComponentModel(component_model) => {
-                            content.push_str("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {\n");
-                            content.push_str(&format!(
-                                "  return {};\n",
+                            writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
+                            writer.indent();
+                            writer.write_line(format!(
+                                "return {};",
                                 Self::decode_wit_value(
                                     "result.result.elements[0].value",
                                     &component_model.element_type
                                 )
                             ));
-                            content.push_str("} else {\n");
-                            content.push_str("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);\n");
-                            content.push_str("}\n");
+                            writer.unindent();
+                            writer.write_line("} else {");
+                            writer.indent();
+                            writer.write_line("throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);");
+                            writer.unindent();
+                            writer.write_line("}");
                             Ok(())
                         }
                         ElementSchema::UnstructuredText(descriptor) => {
-                            content.push_str("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {\n");
-                            content.push_str(&format!(
-                                "  return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);\n",
+                            writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
+                            writer.indent();
+                            writer.write_line(format!(
+                                "return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
                                 descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
                                     restrictions.iter().map(|tt| {
                                         format!("'{}'", tt.language_code)
                                     }).collect::<Vec<_>>().join(", ")
                                 }
                                 )));
-                            content.push_str("} else {\n");
-                            content.push_str("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);\n");
-                            content.push_str("}\n");
+                            writer.unindent();
+                            writer.write_line("} else {");
+                            writer.indent();
+                            writer.write_line("throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);");
+                            writer.unindent();
+                            writer.write_line("}");
                             Ok(())
                         }
                         ElementSchema::UnstructuredBinary(descriptor) => {
-                            content.push_str("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {\n");
-                            content.push_str(&format!(
-                                "  return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);\n",
+                            writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
+                            writer.indent();
+                            writer.write_line(format!(
+                                "return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
                                 descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
                                     restrictions.iter().map(|bt| {
                                         format!("'{}'", bt.mime_type)
                                     }).collect::<Vec<_>>().join(", ")
                                 }
                                 )));
-                            content.push_str("} else {\n");
-                            content.push_str("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);\n");
-                            content.push_str("}\n");
+                            writer.unindent();
+                            writer.write_line("} else {");
+                            writer.indent();
+                            writer.write_line("throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);");
+                            writer.unindent();
+                            writer.write_line("}");
                             Ok(())
                         }
                     }
                 } else {
                     // Multiple result values - return as array
-                    content.push_str("if (result.result && result.result.type === \"tuple\") {\n");
-                    content.push_str(&format!("  if (result.result.elements.length !== {}) {{\n", params.elements.len()));
-                    content.push_str(&format!("    throw new Error(`Expected {} result elements, got ${{result.result.elements.length}}`);\n", params.elements.len()));
-                    content.push_str("  }\n");
-                    content.push_str("  return [\n");
+                    writer.write_line("if (result.result && result.result.type === \"tuple\") {");
+                    writer.indent();
+                    writer.write_line(format!("if (result.result.elements.length !== {}) {{", params.elements.len()));
+                    writer.indent();
+                    writer.write_line(format!("throw new Error(`Expected {} result elements, got ${{result.result.elements.length}}`);", params.elements.len()));
+                    writer.unindent();
+                    writer.write_line("}");
+                    writer.write_line("return [");
+                    writer.indent();
                     for (idx, param) in params.elements.iter().enumerate() {
                         let element_schema = &param.schema;
                         let decode_expr = match element_schema {
@@ -1894,24 +1854,32 @@ impl TypeScriptBridgeGenerator {
                             }
                         };
                         let comma = if idx < params.elements.len() - 1 { "," } else { "" };
-                        content.push_str(&format!("    {}{}\n", decode_expr, comma));
+                        writer.write_line(format!("{}{}", decode_expr, comma));
                     }
-                    content.push_str("  ];\n");
-                    content.push_str("} else {\n");
-                    content.push_str(&format!(
-                        "  throw new Error(`Invalid result value. Expected tuple DataValue with {} elements, got ${{JSON.stringify(result)}}`);\n",
+                    writer.unindent();
+                    writer.write_line("];");
+                    writer.unindent();
+                    writer.write_line("} else {");
+                    writer.indent();
+                    writer.write_line(format!(
+                        "throw new Error(`Invalid result value. Expected tuple DataValue with {} elements, got ${{JSON.stringify(result)}}`);",
                         params.elements.len()
                     ));
-                    content.push_str("}\n");
+                    writer.unindent();
+                    writer.write_line("}");
                     Ok(())
                 }
             }
             DataSchema::Multimodal(_) => {
-                content.push_str("if (result.result && result.result.type === \"multimodal\") {\n");
-                content.push_str("  return result.result.elements;\n");
-                content.push_str("} else {\n");
-                content.push_str("  throw new Error(`Invalid result value. Expected multimodal DataValue, got ${JSON.stringify(result)}`);\n");
-                content.push_str("}\n");
+                writer.write_line("if (result.result && result.result.type === \"multimodal\") {");
+                writer.indent();
+                writer.write_line("return result.result.elements;");
+                writer.unindent();
+                writer.write_line("} else {");
+                writer.indent();
+                writer.write_line("throw new Error(`Invalid result value. Expected multimodal DataValue, got ${JSON.stringify(result)}`);");
+                writer.unindent();
+                writer.write_line("}");
                 Ok(())
             }
         }
