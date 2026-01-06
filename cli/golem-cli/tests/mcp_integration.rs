@@ -73,7 +73,53 @@ impl McpClient {
     }
 
     /// Make an MCP JSON-RPC request with proper session management
+    /// Automatically re-initializes if session is not found (workaround for connection-based session tracking)
+    /// 
+    /// NOTE: Due to LocalSessionManager tracking sessions per connection (not by session ID),
+    /// we may need to re-initialize on each request when connections change. This is a limitation
+    /// of testing with separate HTTP requests rather than long-lived connections.
     async fn request(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+        // Skip auto-init for initialize method itself
+        if method == "initialize" {
+            return self.request_internal(method, params, false).await;
+        }
+        
+        // Try request, and if we get "Session not found", re-initialize and retry
+        // We allow up to 2 retries to handle connection changes
+        for attempt in 0..3 {
+            let result = self.request_internal(method, params.clone(), true).await;
+            match result {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    // Check if this is a session error
+                    let is_session_error = err.contains("Session not found") 
+                        || err.contains("401") 
+                        || err.to_lowercase().contains("unauthorized");
+                    
+                    if is_session_error && attempt < 2 {
+                        // Session was lost (likely due to connection change), re-initialize and retry
+                        // Clear the old session ID first
+                        self.session_id = None;
+                        if let Err(init_err) = self.initialize().await {
+                            return Err(format!("Failed to re-initialize after session loss: {}", init_err));
+                        }
+                        // Small delay to ensure session is ready
+                        sleep(Duration::from_millis(50)).await;
+                        // Continue loop to retry
+                        continue;
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        
+        // Should never reach here, but just in case
+        Err("Max retries exceeded".to_string())
+    }
+    
+    /// Internal request method that doesn't handle re-initialization
+    async fn request_internal(&mut self, method: &str, params: serde_json::Value, include_session: bool) -> Result<serde_json::Value, String> {
         let id = self.request_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         
         let request_body = json!({
@@ -91,9 +137,11 @@ impl McpClient {
             .header("Connection", "keep-alive"); // Explicitly request connection reuse
         
         // Include session ID in header if we have one (required for all requests after initialize)
-        if let Some(ref session_id) = self.session_id {
-            // Use lowercase header name to match what server sends
-            request = request.header("mcp-session-id", session_id);
+        if include_session {
+            if let Some(ref session_id) = self.session_id {
+                // Use lowercase header name to match what server sends
+                request = request.header("mcp-session-id", session_id);
+            }
         }
         
         let response = request
@@ -347,7 +395,6 @@ async fn test_mcp_initialize() {
 }
 
 #[tokio::test]
-#[ignore] // Ignored due to LocalSessionManager being connection-based, not session-ID-based
 async fn test_mcp_list_tools() {
     // NOTE: This test may fail with "Session not found" because rmcp's LocalSessionManager
     // tracks sessions per HTTP connection, not by session ID. Even though we properly
@@ -378,7 +425,6 @@ async fn test_mcp_list_tools() {
 }
 
 #[tokio::test]
-#[ignore] // Ignored due to LocalSessionManager being connection-based
 async fn test_mcp_call_list_agent_types() {
     // NOTE: May fail due to session management limitation (see test_mcp_list_tools)
     let (_server, mut client) = spawn_server_and_client().await;
@@ -427,7 +473,6 @@ async fn test_mcp_call_list_agent_types() {
 }
 
 #[tokio::test]
-#[ignore] // Ignored due to LocalSessionManager being connection-based
 async fn test_mcp_call_list_components() {
     // NOTE: May fail due to session management limitation (see test_mcp_list_tools)
     let (_server, mut client) = spawn_server_and_client().await;
@@ -473,7 +518,6 @@ async fn test_mcp_call_list_components() {
 }
 
 #[tokio::test]
-#[ignore] // Ignored due to LocalSessionManager being connection-based
 async fn test_mcp_call_nonexistent_tool() {
     // NOTE: May fail due to session management limitation (see test_mcp_list_tools)
     let (_server, mut client) = spawn_server_and_client().await;
@@ -495,7 +539,6 @@ async fn test_mcp_call_nonexistent_tool() {
 }
 
 #[tokio::test]
-#[ignore] // Ignored due to LocalSessionManager being connection-based
 async fn test_mcp_invalid_json_rpc() {
     // NOTE: May fail due to session management limitation (see test_mcp_list_tools)
     let (_server, client) = spawn_server_and_client().await;
@@ -546,7 +589,6 @@ async fn test_mcp_invalid_json_rpc() {
 }
 
 #[tokio::test]
-#[ignore] // Ignored due to LocalSessionManager being connection-based
 async fn test_mcp_concurrent_requests() {
     // NOTE: May fail due to session management limitation (see test_mcp_list_tools)
     let (_server, client) = spawn_server_and_client().await;
@@ -585,7 +627,6 @@ async fn test_mcp_concurrent_requests() {
 }
 
 #[tokio::test]
-#[ignore] // Ignored due to LocalSessionManager being connection-based
 async fn test_mcp_tool_schemas() {
     // NOTE: May fail due to session management limitation (see test_mcp_list_tools)
     let (_server, mut client) = spawn_server_and_client().await;
