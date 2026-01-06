@@ -238,6 +238,20 @@ impl TsWriter {
         }
     }
 
+    pub fn write_line(&mut self, line: impl AsRef<str>) {
+        self.indented_write_line(line);
+    }
+
+    pub fn indent(&mut self) {
+        self.current_indent += 1;
+    }
+
+    pub fn unindent(&mut self) {
+        if self.current_indent > 0 {
+            self.current_indent -= 1;
+        }
+    }
+
     fn indented_write_line(&mut self, line: impl AsRef<str>) {
         for line in line.as_ref().lines() {
             self.indented_write(line);

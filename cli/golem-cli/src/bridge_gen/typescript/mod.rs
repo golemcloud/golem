@@ -105,120 +105,204 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn generate_test(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let mut content = String::new();
+        let mut writer = TsWriter::new();
 
-        content.push_str("import * as base from './base';\n\n");
+        writer.import_module("base", "./base");
 
         // Helper function to read JSON from stdin
-        content.push_str("async function readStdin(): Promise<any> {\n");
-        content.push_str("  let input = '';\n");
-        content.push_str("  for await (const chunk of process.stdin) {\n");
-        content.push_str("    input += chunk;\n");
-        content.push_str("  }\n");
-        content.push_str("  return JSON.parse(input);\n");
-        content.push_str("}\n\n");
+        let mut read_stdin = writer.begin_export_async_function("readStdin");
+        read_stdin.result("any");
+        read_stdin.write_line("let input = '';");
+        read_stdin.write_line("for await (const chunk of process.stdin) {");
+        read_stdin.indent();
+        read_stdin.write_line("input += chunk;");
+        read_stdin.unindent();
+        read_stdin.write_line("}");
+        read_stdin.write_line("return JSON.parse(input);");
+        drop(read_stdin);
+
+        writer.write_line("");
 
         // Generate test functions for each method
         for method_def in &self.agent_type.methods {
             let method_name_pascal = method_def.name.to_upper_camel_case();
 
             // encodeInput function
-            content.push_str(&format!(
-                "async function encode{}Input(): Promise<void> {{\n",
-                method_name_pascal
-            ));
-            content.push_str("  const json = await readStdin();\n");
-            content.push_str("  const result: base.DataValue = ");
-            Self::build_encode_data_value_code(&method_def.input_schema, &mut content)?;
-            content.push_str("  console.log(JSON.stringify(result));\n");
-            content.push_str("}\n\n");
+            let mut encode_input = writer.begin_export_async_function(&format!("encode{}Input", method_name_pascal));
+            encode_input.result("void");
+            encode_input.write_line("const json = await readStdin();");
+            let mut code_buf = String::new();
+            code_buf.push_str("const result: base.DataValue = ");
+            Self::build_encode_data_value_code(&method_def.input_schema, &mut code_buf)?;
+            // Remove trailing newline if present
+            if code_buf.ends_with('\n') {
+                code_buf.pop();
+            }
+            // Split into lines and write each line
+            let lines: Vec<&str> = code_buf.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if idx == 0 {
+                    encode_input.write(line);
+                } else {
+                    encode_input.write_line("");
+                    encode_input.write(line);
+                }
+            }
+            encode_input.write_line("");
+            encode_input.write_line("console.log(JSON.stringify(result));");
+            drop(encode_input);
+
+            writer.write_line("");
 
             // decodeInput function
-            content.push_str(&format!(
-                "async function decode{}Input(): Promise<void> {{\n",
-                method_name_pascal
-            ));
-            content.push_str("  const jsonResult = await readStdin();\n");
-            content.push_str("  const result = { result: jsonResult };\n");
-            content.push_str("  const decoded = (() => {\n");
-            Self::build_decode_data_value_code(&method_def.input_schema, &mut content)?;
-            content.push_str("  })();\n");
-            content.push_str("  console.log(JSON.stringify(decoded));\n");
-            content.push_str("}\n\n");
+            let mut decode_input = writer.begin_export_async_function(&format!("decode{}Input", method_name_pascal));
+            decode_input.result("void");
+            decode_input.write_line("const jsonResult = await readStdin();");
+            decode_input.write_line("const result = { result: jsonResult };");
+            decode_input.write_line("const decoded = (() => {");
+            decode_input.indent();
+            let mut code_buf = String::new();
+            Self::build_decode_data_value_code(&method_def.input_schema, &mut code_buf)?;
+            // Remove trailing newline if present
+            if code_buf.ends_with('\n') {
+                code_buf.pop();
+            }
+            // Split into lines and write each line
+            let lines: Vec<&str> = code_buf.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if idx == 0 {
+                    decode_input.write(line);
+                } else {
+                    decode_input.write_line("");
+                    decode_input.write(line);
+                }
+            }
+            decode_input.write_line("");
+            decode_input.unindent();
+            decode_input.write_line("})();");
+            decode_input.write_line("console.log(JSON.stringify(decoded));");
+            drop(decode_input);
+
+            writer.write_line("");
 
             // encodeOutput function
-            content.push_str(&format!(
-                "async function encode{}Output(): Promise<void> {{\n",
-                method_name_pascal
-            ));
-            content.push_str("  const json = await readStdin();\n");
-            content.push_str("  const result: base.DataValue = ");
-            Self::build_encode_data_value_code(&method_def.output_schema, &mut content)?;
-            content.push_str("  console.log(JSON.stringify(result));\n");
-            content.push_str("}\n\n");
+            let mut encode_output = writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
+            encode_output.result("void");
+            encode_output.write_line("const json = await readStdin();");
+            let mut code_buf = String::new();
+            code_buf.push_str("const result: base.DataValue = ");
+            Self::build_encode_data_value_code(&method_def.output_schema, &mut code_buf)?;
+            // Remove trailing newline if present
+            if code_buf.ends_with('\n') {
+                code_buf.pop();
+            }
+            // Split into lines and write each line
+            let lines: Vec<&str> = code_buf.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if idx == 0 {
+                    encode_output.write(line);
+                } else {
+                    encode_output.write_line("");
+                    encode_output.write(line);
+                }
+            }
+            encode_output.write_line("");
+            encode_output.write_line("console.log(JSON.stringify(result));");
+            drop(encode_output);
+
+            writer.write_line("");
 
             // decodeOutput function
-            content.push_str(&format!(
-                "async function decode{}Output(): Promise<void> {{\n",
-                method_name_pascal
-            ));
-            content.push_str("  const jsonResult = await readStdin();\n");
-            content.push_str("  const result = { result: jsonResult };\n");
-            content.push_str("  const decoded = (() => {\n");
-            Self::build_decode_data_value_code(&method_def.output_schema, &mut content)?;
-            content.push_str("  })();\n");
-            content.push_str("  console.log(JSON.stringify(decoded));\n");
-            content.push_str("}\n\n");
+            let mut decode_output = writer.begin_export_async_function(&format!("decode{}Output", method_name_pascal));
+            decode_output.result("void");
+            decode_output.write_line("const jsonResult = await readStdin();");
+            decode_output.write_line("const result = { result: jsonResult };");
+            decode_output.write_line("const decoded = (() => {");
+            decode_output.indent();
+            let mut code_buf = String::new();
+            Self::build_decode_data_value_code(&method_def.output_schema, &mut code_buf)?;
+            // Remove trailing newline if present
+            if code_buf.ends_with('\n') {
+                code_buf.pop();
+            }
+            // Split into lines and write each line
+            let lines: Vec<&str> = code_buf.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if idx == 0 {
+                    decode_output.write(line);
+                } else {
+                    decode_output.write_line("");
+                    decode_output.write(line);
+                }
+            }
+            decode_output.write_line("");
+            decode_output.unindent();
+            decode_output.write_line("})();");
+            decode_output.write_line("console.log(JSON.stringify(decoded));");
+            drop(decode_output);
+
+            writer.write_line("");
         }
 
         // Create a map of available functions
-        content.push_str("const testFunctions: { [key: string]: () => Promise<void> | void } = {\n");
+        writer.write_line("const testFunctions: { [key: string]: () => Promise<void> | void } = {");
+        writer.indent();
         for method_def in &self.agent_type.methods {
             let method_name_pascal = method_def.name.to_upper_camel_case();
-            content.push_str(&format!("  encode{}Input,\n", method_name_pascal));
-            content.push_str(&format!("  decode{}Input,\n", method_name_pascal));
-            content.push_str(&format!("  encode{}Output,\n", method_name_pascal));
-            content.push_str(&format!("  decode{}Output,\n", method_name_pascal));
+            writer.write_line(format!("encode{}Input,", method_name_pascal));
+            writer.write_line(format!("decode{}Input,", method_name_pascal));
+            writer.write_line(format!("encode{}Output,", method_name_pascal));
+            writer.write_line(format!("decode{}Output,", method_name_pascal));
         }
-        content.push_str("};\n\n");
+        writer.unindent();
+        writer.write_line("};");
+        writer.write_line("");
 
         // CLI handler
-        content.push_str("async function main() {\n");
-        content.push_str("  const args = process.argv.slice(2);\n");
-        content.push_str("  if (args.length === 0) {\n");
-        content.push_str("    console.error('Usage: npx tsx test.ts <function-name>');\n");
-        content.push_str("    console.error('Available functions:');\n");
+        let mut main = writer.begin_export_async_function("main");
+        main.result("void");
+        main.write_line("const args = process.argv.slice(2);");
+        main.write_line("if (args.length === 0) {");
+        main.indent();
+        main.write_line("console.error('Usage: npx tsx test.ts <function-name>');");
+        main.write_line("console.error('Available functions:');");
 
         for method_def in &self.agent_type.methods {
             let method_name_pascal = method_def.name.to_upper_camel_case();
-            content.push_str(&format!(
-                "    console.error('  encode{}Input, decode{}Input, encode{}Output, decode{}Output');\n",
+            main.write_line(format!(
+                "console.error('  encode{}Input, decode{}Input, encode{}Output, decode{}Output');",
                 method_name_pascal, method_name_pascal, method_name_pascal, method_name_pascal
             ));
         }
 
-        content.push_str("    process.exit(1);\n");
-        content.push_str("  }\n");
-        content.push_str("  const functionName = args[0];\n");
-        content.push_str("  const fn = testFunctions[functionName];\n");
-        content.push_str("  if (!fn) {\n");
-        content.push_str("    console.error(`Unknown function: ${functionName}`);\n");
-        content.push_str("    console.error('Available functions:', Object.keys(testFunctions).join(', '));\n");
-        content.push_str("    process.exit(1);\n");
-        content.push_str("  }\n");
-        content.push_str("  try {\n");
-        content.push_str("    await fn();\n");
-        content.push_str("  } catch (error) {\n");
-        content.push_str("    console.error('Error:', error);\n");
-        content.push_str("    process.exit(1);\n");
-        content.push_str("  }\n");
-        content.push_str("}\n\n");
-        content.push_str("main();\n");
+        main.write_line("process.exit(1);");
+        main.unindent();
+        main.write_line("}");
+        main.write_line("const functionName = args[0];");
+        main.write_line("const fn = testFunctions[functionName];");
+        main.write_line("if (!fn) {");
+        main.indent();
+        main.write_line("console.error(`Unknown function: ${functionName}`);");
+        main.write_line("console.error('Available functions:', Object.keys(testFunctions).join(', '));");
+        main.write_line("process.exit(1);");
+        main.unindent();
+        main.write_line("}");
+        main.write_line("try {");
+        main.indent();
+        main.write_line("await fn();");
+        main.unindent();
+        main.write_line("} catch (error) {");
+        main.indent();
+        main.write_line("console.error('Error:', error);");
+        main.write_line("process.exit(1);");
+        main.unindent();
+        main.write_line("}");
+        drop(main);
 
-        std::fs::write(path, content)
-            .map_err(|e| anyhow!("Failed to write test file: {e}"))?;
+        writer.write_line("");
+        writer.write_line("main();");
 
-        Ok(())
+        writer.finish(path)
     }
 
     fn generate_ts(&self, path: &Utf8Path) -> anyhow::Result<()> {
