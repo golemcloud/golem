@@ -31,7 +31,7 @@ use golem_common::model::agent::{
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use indoc::formatdoc;
-use minijinja::functions::Function;
+
 use serde_json::json;
 
 struct TypeScriptBridgeGenerator {
@@ -287,8 +287,135 @@ impl TypeScriptBridgeGenerator {
         let mut func = writer.begin_function(&encode_fn_name);
         func.param("value", ts_name);
         func.result("unknown");
-        func.write_line("throw new Error(\"Not implemented\");");
 
+        // For the function body, we need to encode the actual structure, not delegate to itself
+        // So we strip the name and encode the inner type directly
+        let inner_typ = typ.clone().with_optional_name(None);
+
+        Self::write_encode_body(&mut func, "value", &inner_typ)?;
+
+        Ok(())
+    }
+
+    fn write_encode_body(
+        writer: &mut TsFunctionWriter<'_>,
+        value: &str,
+        typ: &AnalysedType,
+    ) -> anyhow::Result<()> {
+        match typ {
+            AnalysedType::Record(_) | AnalysedType::Variant(_) | AnalysedType::Result(_) | AnalysedType::Flags(_) => {
+                // For complex types, write multi-line encode logic
+                Self::write_encode_logic(writer, value, typ)?;
+            }
+            AnalysedType::Enum(_) => {
+                // Enums are just returned as-is (they're already strings)
+                writer.write_line(format!("return {};", value));
+            }
+            AnalysedType::Tuple(tuple) => {
+                // For tuples, write readable array construction
+                writer.write_line("return [".to_string());
+                writer.indent();
+                for (idx, item_type) in tuple.items.iter().enumerate() {
+                    let item_encode = Self::encode_wit_value(&format!("{}[{}]", value, idx), item_type);
+                    let comma = if idx < tuple.items.len() - 1 { "," } else { "" };
+                    writer.write_line(format!("{}{}", item_encode, comma));
+                }
+                writer.unindent();
+                writer.write_line("];".to_string());
+            }
+            _ => {
+                // For simpler primitive types, just return the encoded value
+                let encode_expr = Self::encode_wit_value(value, typ);
+                writer.write_line(format!("return {};", encode_expr));
+            }
+        }
+        Ok(())
+    }
+
+    fn write_encode_logic(
+        writer: &mut TsFunctionWriter<'_>,
+        value: &str,
+        typ: &AnalysedType,
+    ) -> anyhow::Result<()> {
+        match typ {
+            AnalysedType::Record(record) => {
+                writer.write_line("return {".to_string());
+                writer.indent();
+                for (idx, field) in record.fields.iter().enumerate() {
+                    let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                    let wit_field_name = &field.name;
+                    let field_encode = Self::encode_wit_value(&format!("{}.{}", value, js_field_name), &field.typ);
+                    let comma = if idx < record.fields.len() - 1 { "," } else { "" };
+                    writer.write_line(format!("\"{}\": {}{}", wit_field_name, field_encode, comma));
+                }
+                writer.unindent();
+                writer.write_line("};".to_string());
+            }
+            AnalysedType::Variant(variant) => {
+                // Use nested ternary operators for conciseness, but split across lines
+                writer.write_line("return (".to_string());
+                writer.indent();
+                for (idx, case) in variant.cases.iter().enumerate() {
+                    let condition = format!("{}.tag === '{}'", value, case.name);
+                    let value_expr = match &case.typ {
+                        Some(case_type) => {
+                            let encoded = Self::encode_wit_value(&format!("{}.val", value), case_type);
+                            format!("{{ \"{}\": {} }}", case.name, encoded)
+                        }
+                        None => {
+                            format!("{{ \"{}\": null }}", case.name)
+                        }
+                    };
+                    let connector = if idx == 0 { "" } else { ":" };
+                    if idx == variant.cases.len() - 1 {
+                        writer.write_line(format!("{} {} ? {} : null", connector, condition, value_expr));
+                    } else {
+                        writer.write_line(format!("{} {} ? {} ", connector, condition, value_expr));
+                    }
+                }
+                writer.unindent();
+                writer.write_line(");".to_string());
+            }
+            AnalysedType::Result(result) => {
+                writer.write_line("return (".to_string());
+                writer.indent();
+                writer.write_line(format!("{}.ok !== undefined ?", value));
+                writer.indent();
+                let ok_expr = match &result.ok {
+                    Some(ok_type) => {
+                        let encoded = Self::encode_wit_value(&format!("{}.ok", value), ok_type);
+                        format!("{{ ok: {} }}", encoded)
+                    }
+                    None => "{ ok: null }".to_string(),
+                };
+                writer.write_line(format!("{} :", ok_expr));
+                writer.unindent();
+                let err_expr = match &result.err {
+                    Some(err_type) => {
+                        let encoded = Self::encode_wit_value(&format!("{}.err", value), err_type);
+                        format!("{{ err: {} }}", encoded)
+                    }
+                    None => "{ err: null }".to_string(),
+                };
+                writer.write_line(format!("{})", err_expr));
+                writer.unindent();
+                writer.write_line(");".to_string());
+            }
+            AnalysedType::Flags(flags) => {
+                writer.write_line("return [".to_string());
+                writer.indent();
+                for flag in &flags.names {
+                    let flag_name = escape_js_ident(flag.to_lower_camel_case());
+                    writer.write_line(format!("({}[\"{}\"] ? \"{}\" : undefined),", value, flag_name, flag));
+                }
+                writer.unindent();
+                writer.write_line("].filter((f) => f !== undefined);".to_string());
+            }
+            _ => {
+                // This shouldn't be reached for complex types
+                writer.write_line("throw new Error(\"Unsupported type in encode\");".to_string());
+            }
+        }
         Ok(())
     }
 
@@ -303,8 +430,175 @@ impl TypeScriptBridgeGenerator {
         let mut func = writer.begin_function(&decode_fn_name);
         func.param("value", "unknown");
         func.result(ts_name);
-        func.write_line("throw new Error(\"Not implemented\");");
 
+        // For the function body, we need to decode the actual structure, not delegate to itself
+        // So we strip the name and decode the inner type directly
+        let inner_typ = typ.clone().with_optional_name(None);
+
+        Self::write_decode_body(&mut func, "value", &inner_typ)?;
+
+        Ok(())
+    }
+
+    fn write_decode_body(
+        writer: &mut TsFunctionWriter<'_>,
+        value: &str,
+        typ: &AnalysedType,
+    ) -> anyhow::Result<()> {
+        match typ {
+            AnalysedType::Record(_) | AnalysedType::Variant(_) | AnalysedType::Result(_) | AnalysedType::Flags(_) => {
+                // For complex types, write multi-line decode logic
+                writer.write_line(format!("const obj = {} as any;", value));
+                Self::write_decode_logic(writer, typ)?;
+            }
+            AnalysedType::Enum(enum_type) => {
+                // For enums, write a readable multi-line check
+                writer.write_line(format!("if (typeof {} !== 'string') {{", value));
+                writer.indent();
+                writer.write_line(format!("throw new Error(`Expected string for enum, got ${{{}}})`);", value));
+                writer.unindent();
+                writer.write_line("}".to_string());
+                let cases = enum_type.cases
+                    .iter()
+                    .map(|case| format!("\"{}\"", case))
+                    .collect::<Vec<_>>();
+                writer.write_line(format!("const validCases = [{}];", cases.join(", ")));
+                writer.write_line(format!("if (!validCases.includes({})) {{", value));
+                writer.indent();
+                writer.write_line(format!("throw new Error(`Invalid enum value ${{{}}}. Expected one of: ${{validCases.join(', ')}})`);", value));
+                writer.unindent();
+                writer.write_line("}".to_string());
+                writer.write_line(format!("return {} as any;", value));
+            }
+            AnalysedType::Tuple(tuple) => {
+                // For tuples, write readable validation
+                writer.write_line(format!("if (!Array.isArray({})) {{", value));
+                writer.indent();
+                writer.write_line(format!("throw new Error(`Expected array for tuple, got ${{{}}}`);", value));
+                writer.unindent();
+                writer.write_line("}".to_string());
+                writer.write_line(format!("if ({}.length !== {}) {{", value, tuple.items.len()));
+                writer.indent();
+                writer.write_line(format!("throw new Error(`Expected tuple of length {}, got length ${{{}}}.length`);", tuple.items.len(), value));
+                writer.unindent();
+                writer.write_line("}".to_string());
+                writer.write_line("return [".to_string());
+                writer.indent();
+                for (idx, item_type) in tuple.items.iter().enumerate() {
+                    let item_decode = Self::decode_wit_value(&format!("{}[{}]", value, idx), item_type);
+                    let comma = if idx < tuple.items.len() - 1 { "," } else { "" };
+                    writer.write_line(format!("{}{}", item_decode, comma));
+                }
+                writer.unindent();
+                writer.write_line("] as any;".to_string());
+            }
+            _ => {
+                // For simpler primitive types, just return the decoded value
+                let decode_expr = Self::decode_wit_value(value, typ);
+                writer.write_line(format!("return {};", decode_expr));
+            }
+        }
+        Ok(())
+    }
+
+    fn write_decode_logic(writer: &mut TsFunctionWriter<'_>, typ: &AnalysedType) -> anyhow::Result<()> {
+        match typ {
+            AnalysedType::Record(record) => {
+                writer.write_line("return {".to_string());
+                writer.indent();
+                for (idx, field) in record.fields.iter().enumerate() {
+                    let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                    let wit_field_name = &field.name;
+                    let field_decode = Self::decode_wit_value(&format!("obj[\"{}\"]", wit_field_name), &field.typ);
+                    let comma = if idx < record.fields.len() - 1 { "," } else { "" };
+                    writer.write_line(format!("{}: {}{}", js_field_name, field_decode, comma));
+                }
+                writer.unindent();
+                writer.write_line("};".to_string());
+            }
+            AnalysedType::Variant(variant) => {
+                for (idx, case) in variant.cases.iter().enumerate() {
+                    let if_or_else = if idx == 0 { "if" } else { "else if" };
+                    writer.write_line(format!("{}(\"{}\" in obj) {{", if_or_else, case.name));
+                    writer.indent();
+                    match &case.typ {
+                        Some(case_type) => {
+                            let value_decode = Self::decode_wit_value(&format!("obj[\"{}\"]", case.name), case_type);
+                            writer.write_line(format!("return {{ tag: '{}', val: {} }};", case.name, value_decode));
+                        }
+                        None => {
+                            writer.write_line(format!("return {{ tag: '{}' }};", case.name));
+                        }
+                    }
+                    writer.unindent();
+                    writer.write_line("}".to_string());
+                }
+                writer.write_line("throw new Error(`Unknown variant case in ${obj}`);".to_string());
+            }
+            AnalysedType::Result(result) => {
+                writer.write_line("if ('ok' in obj) {".to_string());
+                writer.indent();
+                let ok_value = match &result.ok {
+                    Some(ok_type) => Self::decode_wit_value("obj.ok", ok_type),
+                    None => "null".to_string(),
+                };
+                writer.write_line(format!("return {{ ok: {} }};", ok_value));
+                writer.unindent();
+                writer.write_line("} else if ('err' in obj) {".to_string());
+                writer.indent();
+                let err_value = match &result.err {
+                    Some(err_type) => Self::decode_wit_value("obj.err", err_type),
+                    None => "null".to_string(),
+                };
+                writer.write_line(format!("return {{ err: {} }};", err_value));
+                writer.unindent();
+                writer.write_line("} else {".to_string());
+                writer.indent();
+                writer.write_line("throw new Error(`Expected result object with 'ok' or 'err' key, got ${obj}`);".to_string());
+                writer.unindent();
+                writer.write_line("}".to_string());
+            }
+            AnalysedType::Flags(flags) => {
+                writer.write_line("if (!Array.isArray(obj)) {".to_string());
+                writer.indent();
+                writer.write_line("throw new Error(`Expected array of flag names, got ${obj}`);".to_string());
+                writer.unindent();
+                writer.write_line("}".to_string());
+                writer.write_line("const result = {".to_string());
+                writer.indent();
+                for flag in &flags.names {
+                    let flag_name = escape_js_ident(flag.to_lower_camel_case());
+                    writer.write_line(format!("{}: false,", flag_name));
+                }
+                writer.unindent();
+                writer.write_line("};".to_string());
+                writer.write_line("for (const flag of obj) {".to_string());
+                writer.indent();
+                writer.write_line("if (typeof flag !== 'string') {".to_string());
+                writer.indent();
+                writer.write_line("throw new Error(`Expected string flag name, got ${flag}`);".to_string());
+                writer.unindent();
+                writer.write_line("}".to_string());
+                let flag_names_str = flags.names
+                    .iter()
+                    .map(|name| format!("'{}'", escape_js_ident(name.to_lower_camel_case())))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writer.write_line(format!("if (![{}].includes(flag)) {{", flag_names_str));
+                writer.indent();
+                writer.write_line("throw new Error(`Unknown flag name ${flag}`);".to_string());
+                writer.unindent();
+                writer.write_line("}".to_string());
+                writer.write_line("result[flag as keyof typeof result] = true;".to_string());
+                writer.unindent();
+                writer.write_line("}".to_string());
+                writer.write_line("return result;".to_string());
+            }
+            _ => {
+                // This shouldn't be reached for complex types
+                writer.write_line("throw new Error(\"Unsupported type in decode\");".to_string());
+            }
+        }
         Ok(())
     }
 
@@ -497,16 +791,131 @@ impl TypeScriptBridgeGenerator {
                     format!("base.decodeOption({value}, (item) => {})", inner_decode)
                 }
                 AnalysedType::List(inner) => {
-                    let inner_decode = Self::decode_wit_value("item", &*inner.inner);
-                    format!("{}.map((item) => {})", value, inner_decode)
+                    // Special handling for lists of u8 which are Uint8Array
+                    if matches!(*inner.inner, AnalysedType::U8(_)) {
+                        format!("((v: unknown) => {{ if (v instanceof Uint8Array) {{ return v; }} else if (Array.isArray(v)) {{ return new Uint8Array(v); }} else {{ throw new Error(`Expected Uint8Array or array, got ${{v}}`); }} }})({value})")
+                    } else {
+                        let inner_decode = Self::decode_wit_value("item", &*inner.inner);
+                        format!("((v: unknown) => {{ if (!Array.isArray(v)) {{ throw new Error(`Expected array, got ${{v}}`); }} return v.map((item) => {}); }})({value})", inner_decode)
+                    }
                 }
-                AnalysedType::Variant(_) => todo!(),
-                AnalysedType::Result(_) => todo!(),
-                AnalysedType::Enum(_) => todo!(),
-                AnalysedType::Flags(_) => todo!(),
-                AnalysedType::Record(_) => todo!(),
-                AnalysedType::Tuple(_) => todo!(),
-                AnalysedType::Handle(_) => todo!(),
+                AnalysedType::Enum(enum_type) => {
+                    // Enum: decoded as a string, validate it's a known case
+                    let cases_array = enum_type.cases
+                        .iter()
+                        .map(|case| format!("\"{}\"", case))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let cases_union = enum_type.cases
+                        .iter()
+                        .map(|case| format!("\"{}\"", case))
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    format!("((v: unknown) => {{ if (typeof v === 'string' && [{cases_array}].includes(v)) {{ return v as {cases_union}; }} else {{ throw new Error(`Expected one of [{cases_array}], got ${{v}}`); }} }})({value})")
+                }
+                AnalysedType::Flags(flags) => {
+                    // Flags: decoded as an array of flag names, convert to boolean object
+                    let flag_names = flags.names
+                        .iter()
+                        .map(|name| {
+                            let flag_name = escape_js_ident(name.to_lower_camel_case());
+                            format!("'{}'", flag_name)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let flag_initializers = flags.names
+                        .iter()
+                        .map(|name| {
+                            let flag_name = escape_js_ident(name.to_lower_camel_case());
+                            format!("{flag_name}: false")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "((v: unknown) => {{ if (!Array.isArray(v)) {{ throw new Error(`Expected array of flag names, got ${{v}}`); }} const result = {{ {flag_initializers} }}; for (const flag of v) {{ if (typeof flag !== 'string') {{ throw new Error(`Expected string flag name, got ${{flag}}`); }} if (![{flag_names}].includes(flag)) {{ throw new Error(`Unknown flag name ${{flag}}`); }} result[flag as keyof typeof result] = true; }} return result; }})({value})"
+                    )
+                }
+                AnalysedType::Tuple(tuple) => {
+                    // Tuple: decoded from an array
+                    let items: Vec<String> = tuple.items
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, item_type)| {
+                            let item_decode = Self::decode_wit_value(&format!("v[{}]", idx), item_type);
+                            item_decode
+                        })
+                        .collect();
+                    format!(
+                        "((v: unknown) => {{ if (!Array.isArray(v) || v.length !== {}) {{ throw new Error(`Expected array of length {}, got ${{v}}`); }} return [{}]; }})({value})",
+                        tuple.items.len(),
+                        tuple.items.len(),
+                        items.join(", ")
+                    )
+                }
+                AnalysedType::Record(record) => {
+                    // Record: decoded from an object
+                    let field_decoders: Vec<String> = record.fields
+                        .iter()
+                        .map(|field| {
+                            let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                            let wit_field_name = &field.name;
+                            let field_decode = Self::decode_wit_value(&format!("(v as any)[\"{}\"]", wit_field_name), &field.typ);
+                            format!("{js_field_name}: {field_decode}")
+                        })
+                        .collect();
+                    format!(
+                        "((v: unknown) => {{ if (typeof v !== 'object' || v === null) {{ throw new Error(`Expected object, got ${{v}}`); }} return {{ {} }}; }})({value})",
+                        field_decoders.join(", ")
+                    )
+                }
+                AnalysedType::Variant(variant) => {
+                    // Variant: decoded from an object with a single key (case name)
+                    // Create a series of checks: if 'case1' in v { ... } else if 'case2' in v { ... }
+                    let cases = variant.cases
+                        .iter()
+                        .map(|case| {
+                            match &case.typ {
+                                Some(case_type) => {
+                                    let value_decode = Self::decode_wit_value(&format!("(obj as any)[\"{}\"]", case.name), case_type);
+                                    format!("if (\"{}\" in obj) {{ return {{ tag: '{}', val: {} }}; }}", case.name, case.name, value_decode)
+                                }
+                                None => {
+                                    format!("if (\"{}\" in obj) {{ return {{ tag: '{}' }}; }}", case.name, case.name)
+                                }
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" else ");
+                    format!(
+                        "((v: unknown) => {{ if (typeof v !== 'object' || v === null || Array.isArray(v)) {{ throw new Error(`Expected variant object, got ${{v}}`); }} const obj = v as Record<string, any>; {} else {{ throw new Error(`Unknown variant case in ${{v}}`); }} }})({value})",
+                        cases
+                    )
+                }
+                AnalysedType::Result(result) => {
+                    // Result: decoded from an object with either 'ok' or 'err' key
+                    let ok_expr = match &result.ok {
+                        Some(ok_type) => {
+                            let decoded = Self::decode_wit_value("(obj as any).ok", ok_type);
+                            format!("{{ ok: {} }}", decoded)
+                        }
+                        None => "{ ok: null }".to_string(),
+                    };
+                    let err_expr = match &result.err {
+                        Some(err_type) => {
+                            let decoded = Self::decode_wit_value("(obj as any).err", err_type);
+                            format!("{{ err: {} }}", decoded)
+                        }
+                        None => "{ err: null }".to_string(),
+                    };
+                    format!(
+                        "((v: unknown) => {{ if (typeof v !== 'object' || v === null || Array.isArray(v)) {{ throw new Error(`Expected result object, got ${{v}}`); }} const obj = v as Record<string, any>; if ('ok' in obj) {{ return {}; }} else if ('err' in obj) {{ return {}; }} else {{ throw new Error(`Expected result object with 'ok' or 'err' key, got ${{v}}`); }} }})({value})",
+                        ok_expr, err_expr
+                    )
+                }
+                AnalysedType::Handle(_) => {
+                    // Handles are not supported in decoding
+                    "undefined".to_string()
+                }
             }
         }
     }
@@ -538,13 +947,102 @@ impl TypeScriptBridgeGenerator {
                     let inner_encode = Self::encode_wit_value("item", &*inner.inner);
                     format!("{}.map((item) => {})", value, inner_encode)
                 }
-                AnalysedType::Variant(_) => todo!(),
-                AnalysedType::Result(_) => todo!(),
-                AnalysedType::Enum(_) => todo!(),
-                AnalysedType::Flags(_) => todo!(),
-                AnalysedType::Record(_) => todo!(),
-                AnalysedType::Tuple(_) => todo!(),
-                AnalysedType::Handle(_) => todo!(),
+                AnalysedType::Enum(_) => {
+                    // Enum: encoded as a string
+                    format!("{}", value)
+                }
+                AnalysedType::Flags(flags) => {
+                    // Flags: encoded as an array of flag names that are true
+                    let flag_names: Vec<String> = flags.names
+                        .iter()
+                        .map(|name| {
+                            let flag_name = escape_js_ident(name.to_lower_camel_case());
+                            format!("({}[\"{}\"]) ? \"{}\" : undefined", value, flag_name, name)
+                        })
+                        .collect();
+                    format!("[{}].filter((f) => f !== undefined)", flag_names.join(", "))
+                }
+                AnalysedType::Tuple(tuple) => {
+                    // Tuple: encoded as an array
+                    let items: Vec<String> = tuple.items
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, item_type)| {
+                            let item_encode = Self::encode_wit_value(&format!("{}[{}]", value, idx), item_type);
+                            item_encode
+                        })
+                        .collect();
+                    format!("[{}]", items.join(", "))
+                }
+                AnalysedType::Record(record) => {
+                    // Record: encoded as an object
+                    let fields: Vec<String> = record.fields
+                        .iter()
+                        .map(|field| {
+                            let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                            let field_encode = Self::encode_wit_value(
+                                &format!("{}.{}", value, js_field_name),
+                                &field.typ,
+                            );
+                            format!("\"{}\": {}", field.name, field_encode)
+                        })
+                        .collect();
+                    format!("{{ {} }}", fields.join(", "))
+                }
+                AnalysedType::Variant(variant) => {
+                    // Variant: encoded as an object with a single key (case name)
+                    // Generate nested ternary: case1 ? obj1 : (case2 ? obj2 : (case3 ? obj3 : null))
+                    let cases: Vec<(String, String)> = variant.cases
+                        .iter()
+                        .map(|case| {
+                            let condition = format!("{}.tag === '{}'", value, case.name);
+                            let value_expr = match &case.typ {
+                                Some(case_type) => {
+                                    let encoded = Self::encode_wit_value(&format!("{}.val", value), case_type);
+                                    format!("{{ \"{}\": {} }}", case.name, encoded)
+                                }
+                                None => {
+                                    format!("{{ \"{}\": null }}", case.name)
+                                }
+                            };
+                            (condition, value_expr)
+                        })
+                        .collect();
+                    
+                    // Nest the ternary operators properly from right to left
+                    if cases.is_empty() {
+                        "null".to_string()
+                    } else {
+                        let mut result = "null".to_string();
+                        for (cond, expr) in cases.iter().rev() {
+                            result = format!("({} ? {} : {})", cond, expr, result);
+                        }
+                        result
+                    }
+                }
+                AnalysedType::Result(result) => {
+                    // Result: encoded as { ok: value } or { err: error }
+                    // value has structure: { ok: T } | { err: E }
+                    let ok_expr = match &result.ok {
+                        Some(ok_type) => {
+                            let encoded = Self::encode_wit_value(&format!("{}.ok", value), ok_type);
+                            format!("{{ ok: {} }}", encoded)
+                        }
+                        None => "{ ok: null }".to_string(),
+                    };
+                    let err_expr = match &result.err {
+                        Some(err_type) => {
+                            let encoded = Self::encode_wit_value(&format!("{}.err", value), err_type);
+                            format!("{{ err: {} }}", encoded)
+                        }
+                        None => "{ err: null }".to_string(),
+                    };
+                    format!("({}.ok !== undefined ? {} : {})", value, ok_expr, err_expr)
+                }
+                AnalysedType::Handle(_) => {
+                    // Handles are not supported in encoding
+                    "undefined".to_string()
+                }
             }
         }
     }
