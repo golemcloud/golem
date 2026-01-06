@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::{convert::Infallible, sync::Arc};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
-use crate::client::GolemClients;
+use crate::context::Context;
 use crate::mcp::tools::{handle_tool_call, list_tools};
 
 // --- PROTOCOL STRUCTS ---
@@ -41,15 +41,15 @@ struct JsonRpcError {
 
 #[derive(Clone)]
 struct AppState {
-    client: Arc<GolemClients>,
+    ctx: Arc<Context>,
     tx: broadcast::Sender<String>,
 }
 
 // --- ROUTER LOGIC ---
 
-pub fn create_router(client: Arc<GolemClients>) -> Router {
+pub fn create_router(ctx: Arc<Context>) -> Router {
     let (tx, _rx) = broadcast::channel(100);
-    let state = AppState { client, tx };
+    let state = AppState { ctx, tx };
 
     Router::new()
         .route("/sse", get(sse_handler))
@@ -99,7 +99,7 @@ async fn message_handler(
         },
 
         "tools/call" => {
-            match handle_tool_call(&state.client, req.params).await {
+            match handle_tool_call(&state.ctx, req.params).await {
                 Ok(res) => success_response(req.id, res),
                 Err(e) => error_response(req.id, -32000, &e.to_string()),
             }
