@@ -109,6 +109,18 @@ impl TsWriter {
         }
     }
 
+    pub fn begin_private_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+        self.indented_write(format!("private {name}("));
+        TsFunctionWriter {
+            writer: self,
+            param_count: 0,
+            return_type: Some("void".to_string()),
+            returns_promise: false,
+            body: vec![],
+            indent_level: 1,
+        }
+    }
+
     pub fn begin_async_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
         self.indented_write(format!("async {name}("));
         TsFunctionWriter {

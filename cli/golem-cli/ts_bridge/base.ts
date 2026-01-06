@@ -140,8 +140,48 @@ export async function invokeAgent(
     return await (response.json() as Promise<AgentInvocationResult>);
 }
 
+/// The Result type representation in Golem's JSON type mapping
 export type JsonResult<Ok, Err> = { ok: Ok } | { err: Err };
 
+export type RemoteMethod<Args extends any[], R> = {
+    (...args: Args): Promise<R>;
+    trigger: (...args: Args) => void;
+    schedule: (scheduleAt: string, ...args: Args) => void;
+};
+
+export function createRemoteMethod<Args extends any[], R>(
+    getServer: () => GolemServer,
+    getRequest: () => AgentInvocationRequest,
+    encode: (args: Args) => DataValue,
+    decode: (result: AgentInvocationResult) => R
+): RemoteMethod<Args, R> {
+    const result = async function (...args: Args): Promise<R> {
+        const invokeResult = await invokeAgent(getServer(), {
+            ...getRequest(),
+            methodParameters: encode(args),
+            mode: "await",
+            scheduleAt: undefined
+        })
+        return decode(invokeResult);
+    }
+    result.trigger = function (...args: Args): void {
+        const _ = invokeAgent(getServer(), {
+            ...getRequest(),
+            methodParameters: encode(args),
+            mode: "schedule",
+            scheduleAt: undefined,
+        });
+    }
+    result.schedule = function (scheduleAt: string, ...args: Args): void {
+        const _ = invokeAgent(getServer(), {
+            ...getRequest(),
+            methodParameters: encode(args),
+            mode: "schedule",
+            scheduleAt,
+        });
+    }
+    return result;
+}
 
 type LanguageCode = string;
 

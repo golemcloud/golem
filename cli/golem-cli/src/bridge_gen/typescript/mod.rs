@@ -28,6 +28,7 @@ use golem_common::model::agent::{
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
+use indoc::formatdoc;
 use serde_json::json;
 
 struct TypeScriptBridgeGenerator {
@@ -82,7 +83,7 @@ impl TypeScriptBridgeGenerator {
                 },
                 "include": [
                     format!("{}.ts", self.library_name()),
-                    "base.ts" // TODO: publish this as a base package
+                    "base.ts"
                 ]
             }
         };
@@ -104,7 +105,7 @@ impl TypeScriptBridgeGenerator {
         let config_var = self.global_config_var_name();
 
         writer.import_item("v4", "uuidv4", "uuid");
-        writer.import_module("base", "./base"); // TODO: replace to dependency
+        writer.import_module("base", "./base");
 
         writer.declare_global(
             &config_var,
@@ -179,49 +180,99 @@ impl TypeScriptBridgeGenerator {
             new_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
         }
 
-        for method_def in &self.agent_type.methods {
-            let mut method = writer.begin_async_method(&method_def.name);
-            Self::write_parameter_list(&mut method, &method_def.input_schema)?;
-            Self::write_result(&mut method, &method_def.output_schema)?;
-
-            // assert on configuration set
-            method.write_line(format!("if (!{config_var}) {{"));
-            method.indent();
-            method.write_line(&format!(
+        {
+            let mut get_config = writer.begin_private_method("__getConfig");
+            get_config.result("base.Configuration");
+            get_config.write_line(format!("if (!{config_var}) {{"));
+            get_config.indent();
+            get_config.write_line(&format!(
                 "  throw new Error(\"{} configuration is not set\");",
                 self.agent_type.type_name.0
             ));
-            method.unindent();
-            method.write_line("}");
+            get_config.unindent();
+            get_config.write_line("}");
+            get_config.write_line(format!("return {};", config_var));
+        }
 
-            // encode parameters
-            method.write_line("const methodParameters: base.DataValue = ");
-            Self::write_encode_data_value(&mut method, &method_def.input_schema)?;
+        for method_def in &self.agent_type.methods {
+            writer.declare_field(
+                &method_def.name,
+                &format!(
+                    "base.RemoteMethod<[{}], {}>",
+                    Self::schema_as_type_list(&method_def.input_schema),
+                    Self::schemas_as_result_type(&method_def.output_schema)
+                ),
+                Some(&formatdoc!(
+                    "
+                base.createRemoteMethod(
+                    () => this.__getConfig().server,
+                    () => {{
+                      return {{
+                        appName: this.__getConfig().application,
+                        envName: this.__getConfig().environment,
+                        agentTypeName: \"{}\",
+                        parameters: this.parameters,
+                        phantomId: this.phantomId,
+                        methodName: \"{}\",
+                        mode: \"await\",
+                        methodParameters: {{ type: \"tuple\", elements: [] }}
+                      }}
+                    }},
+                    (args) => {{
+                        throw new Error(\"TODO\")
+                    }},
+                    (result) => {{
+                        throw new Error(\"TODO\")
+                    }}
+                )
+                ",
+                self.agent_type.type_name.0,
+                method_def.name,
+                )),
+            );
 
-            // invoke
-            method.write_line(format!(
-                "const result = await base.invokeAgent({config_var}.server, {{"
-            ));
-            method.indent();
-            method.write_line(format!("appName: {config_var}.application,"));
-            method.write_line(format!("envName: {config_var}.environment,"));
-            method.write_line(format!(
-                "agentTypeName: \"{}\",",
-                self.agent_type.type_name.0
-            ));
-            method.write_line("parameters: this.parameters,");
-            method.write_line("phantomId: this.phantomId,");
-            method.write_line(format!("methodName: \"{}\",", method_def.name));
-            method.write_line("methodParameters,");
-            method.write_line("mode: \"await\"");
-
-            method.unindent();
-            method.write_line("});");
-
-            // decode result
-            Self::write_decode_data_value(&mut method, &method_def.output_schema)?;
-
-            // TODO: trigger, schedule
+            // let mut method = writer.begin_async_method(&method_def.name);
+            // Self::write_parameter_list(&mut method, &method_def.input_schema)?;
+            // Self::write_result(&mut method, &method_def.output_schema)?;
+            //
+            // // assert on configuration set
+            // method.write_line(format!("if (!{config_var}) {{"));
+            // method.indent();
+            // method.write_line(&format!(
+            //     "  throw new Error(\"{} configuration is not set\");",
+            //     self.agent_type.type_name.0
+            // ));
+            // method.unindent();
+            // method.write_line("}");
+            //
+            // // encode parameters
+            // method.write_line("const methodParameters: base.DataValue = ");
+            // Self::write_encode_data_value(&mut method, &method_def.input_schema)?;
+            //
+            // // invoke
+            // method.write_line(format!(
+            //     "const result = await base.invokeAgent({config_var}.server, {{"
+            // ));
+            // method.indent();
+            // method.write_line(format!("appName: {config_var}.application,"));
+            // method.write_line(format!("envName: {config_var}.environment,"));
+            // method.write_line(format!(
+            //     "agentTypeName: \"{}\",",
+            //     self.agent_type.type_name.0
+            // ));
+            // method.write_line("parameters: this.parameters,");
+            // method.write_line("phantomId: this.phantomId,");
+            // method.write_line(format!("methodName: \"{}\",", method_def.name));
+            // method.write_line("methodParameters,");
+            // method.write_line("mode: \"await\"");
+            //
+            // method.unindent();
+            // method.write_line("});");
+            //
+            // // decode result
+            // Self::write_decode_data_value(&mut method, &method_def.output_schema)?;
+            //
+            // // TODO: trigger, schedule
         }
 
         writer.end_export_class();
@@ -320,13 +371,13 @@ impl TypeScriptBridgeGenerator {
                             writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
                             writer.indent();
                             writer.write_line(format!(
-                                "return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
-                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
-                                    restrictions.iter().map(|tt| {
-                                        format!("'{}'", tt.language_code)
-                                    }).collect::<Vec<_>>().join(", ")
-                                }
-                                )));
+                                    "return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
+                                    descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                        restrictions.iter().map(|tt| {
+                                            format!("'{}'", tt.language_code)
+                                        }).collect::<Vec<_>>().join(", ")
+                                    }
+                                    )));
                             writer.unindent();
                             writer.write_line("} else {");
                             writer.indent();
@@ -339,13 +390,13 @@ impl TypeScriptBridgeGenerator {
                             writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
                             writer.indent();
                             writer.write_line(format!(
-                                "return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
-                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
-                                    restrictions.iter().map(|bt| {
-                                        format!("'{}'", bt.mime_type)
-                                    }).collect::<Vec<_>>().join(", ")
-                                }
-                                )));
+                                    "return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
+                                    descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                        restrictions.iter().map(|bt| {
+                                            format!("'{}'", bt.mime_type)
+                                        }).collect::<Vec<_>>().join(", ")
+                                    }
+                                    )));
                             writer.unindent();
                             writer.write_line("} else {");
                             writer.indent();
@@ -377,23 +428,23 @@ impl TypeScriptBridgeGenerator {
                 for param in &params.elements {
                     let param_name = param.name.to_lower_camel_case();
                     match &param.schema {
-                        ElementSchema::ComponentModel(component_model) => {
-                            writer.write_line(format!(
-                                "{{ \"type\": \"componentModel\", value: {{ value: {} }} }},",
-                                Self::encode_wit_value(&param_name, &component_model.element_type)
-                            ));
+                            ElementSchema::ComponentModel(component_model) => {
+                                writer.write_line(format!(
+                                    "{{ \"type\": \"componentModel\", value: {{ value: {} }} }},",
+                                    Self::encode_wit_value(&param_name, &component_model.element_type)
+                                ));
+                            }
+                            ElementSchema::UnstructuredText(_) => {
+                                writer.write_line(format!(
+                                    "{{ \"type\": \"unstructuredText\", value: base.TextReference.fromUnstructuredText({param_name}) }},",
+                                ))
+                            }
+                            ElementSchema::UnstructuredBinary(_) => {
+                                writer.write_line(format!(
+                                    "{{ \"type\": \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary({param_name}) }},",
+                                ))
+                            }
                         }
-                        ElementSchema::UnstructuredText(_) => {
-                            writer.write_line(format!(
-                                "{{ \"type\": \"unstructuredText\", value: base.TextReference.fromUnstructuredText({param_name}) }},",
-                            ))
-                        }
-                        ElementSchema::UnstructuredBinary(_) => {
-                            writer.write_line(format!(
-                                "{{ \"type\": \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary({param_name}) }},",
-                            ))
-                        }
-                    }
                 }
 
                 writer.unindent();
@@ -518,6 +569,30 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
+    fn schema_as_type_list(schema: &DataSchema) -> String {
+        match schema {
+            DataSchema::Tuple(params) => params
+                .elements
+                .iter()
+                .map(|param| match &param.schema {
+                    ElementSchema::ComponentModel(component_model) => {
+                        Self::type_reference(&component_model.element_type).unwrap_or("any".to_string())
+                    }
+                    ElementSchema::UnstructuredText(descriptor) => {
+                        Self::unstructured_text_type(descriptor)
+                    }
+                    ElementSchema::UnstructuredBinary(descriptor) => {
+                        Self::unstructured_binary_type(&descriptor)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            DataSchema::Multimodal(_) => {
+                todo!()
+            }
+        }
+    }
+
     fn write_parameter_list(
         writer: &mut TsFunctionWriter<'_>,
         schema: &DataSchema,
@@ -540,6 +615,49 @@ impl TypeScriptBridgeGenerator {
                     }
                 }
                 Ok(())
+            }
+            DataSchema::Multimodal(_) => {
+                todo!()
+            }
+        }
+    }
+
+    fn schemas_as_result_type(schema: &DataSchema) -> String {
+        match schema {
+            DataSchema::Tuple(params) => {
+                if params.elements.is_empty() {
+                    "void".to_string()
+                } else if params.elements.len() == 1 {
+                    match &params.elements[0].schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            Self::type_reference(&component_model.element_type).unwrap_or("any".to_string())
+                        }
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            Self::unstructured_text_type(descriptor)
+                        }
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            Self::unstructured_binary_type(&descriptor)
+                        }
+                    }
+                } else {
+                    let types = params
+                        .elements
+                        .iter()
+                        .map(|param| match &param.schema {
+                            ElementSchema::ComponentModel(component_model) => {
+                                Self::type_reference(&component_model.element_type).unwrap_or("any".to_string())
+                            }
+                            ElementSchema::UnstructuredText(descriptor) => {
+                                Self::unstructured_text_type(descriptor)
+                            }
+                            ElementSchema::UnstructuredBinary(descriptor) => {
+                                Self::unstructured_binary_type(&descriptor)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("[{}]", types)
+                }
             }
             DataSchema::Multimodal(_) => {
                 todo!()
@@ -639,7 +757,7 @@ impl TypeScriptBridgeGenerator {
                     .map(|t| Self::type_reference(&t))
                     .transpose()?
                     .unwrap_or("Error".to_string());
-                Ok(format!("Result<{ok_type}, {err_type}>")) // TODO: we need a Result type in the common lib
+                Ok(format!("base.JsonResult<{ok_type}, {err_type}>")) // TODO: convert to a more convenient result type
             }
             AnalysedType::Option(option) => {
                 let inner_ts_type = Self::type_reference(&*option.inner)?;
@@ -748,7 +866,7 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         self.generate_ts(&ts_path)?;
         self.generate_package_json(&package_json_path)?;
         self.generate_tsconfig_json(&tsconfig_json_path)?;
-        self.generate_base_ts(&base_ts_path)?; // TODO: remove once this is published as a library
+        self.generate_base_ts(&base_ts_path)?;
 
         Ok(())
     }
