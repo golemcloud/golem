@@ -26,15 +26,26 @@ trait BridgeGenerator {
 }
 
 fn collect_all_wit_types(agent_type: &AgentType) -> Vec<AnalysedType> {
+    let mut seen = HashSet::new();
     let mut result = Vec::new();
-    result.extend(wit_types_in_data_schema(
-        &agent_type.constructor.input_schema,
-    ));
-    for method in &agent_type.methods {
-        result.extend(wit_types_in_data_schema(&method.input_schema));
-        result.extend(wit_types_in_data_schema(&method.output_schema));
+    
+    let mut add_type = |typ: AnalysedType| {
+        if seen.insert(typ.clone()) {
+            result.push(typ);
+        }
+    };
+    
+    for typ in wit_types_in_data_schema(&agent_type.constructor.input_schema) {
+        add_type(typ);
     }
-    result.dedup();
+    for method in &agent_type.methods {
+        for typ in wit_types_in_data_schema(&method.input_schema) {
+            add_type(typ);
+        }
+        for typ in wit_types_in_data_schema(&method.output_schema) {
+            add_type(typ);
+        }
+    }
     result
 }
 
@@ -47,7 +58,9 @@ fn wit_types_in_data_schema(schema: &DataSchema) -> Vec<AnalysedType> {
             }
         }
         DataSchema::Multimodal(variants) => {
-            todo!()
+            for named_variant in &variants.elements {
+                result.extend(wit_types_in_element_schema(&named_variant.schema));
+            }
         }
     }
     result

@@ -693,8 +693,62 @@ impl TypeScriptBridgeGenerator {
                     Err(anyhow!("Multiple result values are not supported"))
                 }
             }
-            DataSchema::Multimodal(_) => {
-                todo!()
+            DataSchema::Multimodal(multimodal) => {
+                writer.write_line("if (result.result && result.result.type === \"multimodal\") {");
+                writer.indent();
+                writer.write_line("return result.result.elements.map((item: any) => {");
+                writer.indent();
+                
+                // Generate union type handling code
+                for (idx, element) in multimodal.elements.iter().enumerate() {
+                    let if_or_else = if idx == 0 { "if" } else { "else if" };
+                    writer.write_line(format!("{}(item.name === \"{}\") {{", if_or_else, element.name));
+                    writer.indent();
+                    match &element.schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            let decoded = Self::decode_wit_value("item.value.value", &component_model.element_type);
+                            writer.write_line(format!("return {{ type: '{}', value: {} }};", element.name, decoded));
+                        }
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            writer.write_line(format!(
+                                "return {{ type: '{}', value: base.UnstructuredText.fromUntypedElementValue('{}', item.value, [{}]) }};",
+                                element.name,
+                                element.name,
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|tt| {
+                                        format!("'{}'", tt.language_code)
+                                    }).collect::<Vec<_>>().join(", ")
+                                })
+                            ));
+                        }
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            writer.write_line(format!(
+                                "return {{ type: '{}', value: base.UnstructuredBinary.fromUntypedElementValue('{}', item.value, [{}]) }};",
+                                element.name,
+                                element.name,
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|bt| {
+                                        format!("'{}'", bt.mime_type)
+                                    }).collect::<Vec<_>>().join(", ")
+                                })
+                            ));
+                        }
+                    }
+                    writer.unindent();
+                    writer.write_line("}");
+                }
+                
+                writer.write_line("throw new Error(`Unknown multimodal variant: ${item.name}`);");
+                writer.unindent();
+                writer.write_line("});");
+                
+                writer.unindent();
+                writer.write_line("} else {");
+                writer.indent();
+                writer.write_line("throw new Error(`Invalid result value. Expected multimodal DataValue, got ${JSON.stringify(result)}`);");
+                writer.unindent();
+                writer.write_line("}");
+                Ok(())
             }
         }
     }
@@ -715,7 +769,9 @@ impl TypeScriptBridgeGenerator {
                 Ok(())
             }
             DataSchema::Multimodal(_) => {
-                todo!()
+                // For multimodal input, the array is passed directly
+                writer.write_line(format!("const multimodalInput = {};", tuple));
+                Ok(())
             }
         }
     }
@@ -756,8 +812,46 @@ impl TypeScriptBridgeGenerator {
                 writer.unindent();
                 Ok(())
             }
-            DataSchema::Multimodal(_) => {
-                todo!()
+            DataSchema::Multimodal(multimodal) => {
+                writer.indent();
+                writer.write_line("{ type: \"multimodal\", elements: multimodalInput.map((item: any) => {");
+                writer.indent();
+                
+                // Generate encoding for each multimodal variant
+                for (idx, element) in multimodal.elements.iter().enumerate() {
+                    let if_or_else = if idx == 0 { "if" } else { "else if" };
+                    writer.write_line(format!("{}(item.type === '{}') {{", if_or_else, element.name));
+                    writer.indent();
+                    writer.write_line("return {");
+                    writer.indent();
+                    writer.write_line(format!("name: '{}',", element.name));
+                    writer.write_line("value: ");
+                    
+                    match &element.schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            writer.write_line(format!(
+                                "{{ type: 'componentModel', value: {{ value: {} }} }}",
+                                Self::encode_wit_value("item.value", &component_model.element_type)
+                            ));
+                        }
+                        ElementSchema::UnstructuredText(_) => {
+                            writer.write_line("{ type: 'unstructuredText', value: base.TextReference.fromUnstructuredText(item.value) }");
+                        }
+                        ElementSchema::UnstructuredBinary(_) => {
+                            writer.write_line("{ type: 'unstructuredBinary', value: base.BinaryReference.fromUnstructuredBinary(item.value) }");
+                        }
+                    }
+                    
+                    writer.write_line("};");
+                    writer.unindent();
+                    writer.write_line("}");
+                }
+                
+                writer.write_line("throw new Error(`Unknown multimodal type: ${item.type}`);");
+                writer.unindent();
+                writer.write_line("}) };");
+                writer.unindent();
+                Ok(())
             }
         }
     }
@@ -1096,8 +1190,28 @@ impl TypeScriptBridgeGenerator {
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
-            DataSchema::Multimodal(_) => {
-                todo!()
+            DataSchema::Multimodal(multimodal) => {
+                let union_types = multimodal
+                    .elements
+                    .iter()
+                    .map(|element| {
+                        let type_str = match &element.schema {
+                            ElementSchema::ComponentModel(component_model) => {
+                                Self::type_reference(&component_model.element_type)
+                                    .unwrap_or("any".to_string())
+                            }
+                            ElementSchema::UnstructuredText(descriptor) => {
+                                Self::unstructured_text_type(descriptor)
+                            }
+                            ElementSchema::UnstructuredBinary(descriptor) => {
+                                Self::unstructured_binary_type(&descriptor)
+                            }
+                        };
+                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                format!("({})[]", union_types)
             }
         }
     }
@@ -1125,8 +1239,29 @@ impl TypeScriptBridgeGenerator {
                 }
                 Ok(())
             }
-            DataSchema::Multimodal(_) => {
-                todo!()
+            DataSchema::Multimodal(multimodal) => {
+                let union_types = multimodal
+                    .elements
+                    .iter()
+                    .map(|element| {
+                        let type_str = match &element.schema {
+                            ElementSchema::ComponentModel(component_model) => {
+                                Self::type_reference(&component_model.element_type)
+                                    .unwrap_or("any".to_string())
+                            }
+                            ElementSchema::UnstructuredText(descriptor) => {
+                                Self::unstructured_text_type(descriptor)
+                            }
+                            ElementSchema::UnstructuredBinary(descriptor) => {
+                                Self::unstructured_binary_type(&descriptor)
+                            }
+                        };
+                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                writer.param("multimodalInput", &format!("({})[]", union_types));
+                Ok(())
             }
         }
     }
@@ -1170,8 +1305,28 @@ impl TypeScriptBridgeGenerator {
                     format!("[{}]", types)
                 }
             }
-            DataSchema::Multimodal(_) => {
-                todo!()
+            DataSchema::Multimodal(multimodal) => {
+                let union_types = multimodal
+                    .elements
+                    .iter()
+                    .map(|element| {
+                        let type_str = match &element.schema {
+                            ElementSchema::ComponentModel(component_model) => {
+                                Self::type_reference(&component_model.element_type)
+                                    .unwrap_or("any".to_string())
+                            }
+                            ElementSchema::UnstructuredText(descriptor) => {
+                                Self::unstructured_text_type(descriptor)
+                            }
+                            ElementSchema::UnstructuredBinary(descriptor) => {
+                                Self::unstructured_binary_type(&descriptor)
+                            }
+                        };
+                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                format!("({})[]", union_types)
             }
         }
     }
@@ -1194,8 +1349,29 @@ impl TypeScriptBridgeGenerator {
                 }
                 Ok(())
             }
-            DataSchema::Multimodal(_) => {
-                todo!()
+            DataSchema::Multimodal(multimodal) => {
+                let union_types = multimodal
+                    .elements
+                    .iter()
+                    .map(|element| {
+                        let type_str = match &element.schema {
+                            ElementSchema::ComponentModel(component_model) => {
+                                Self::type_reference(&component_model.element_type)
+                                    .unwrap_or("any".to_string())
+                            }
+                            ElementSchema::UnstructuredText(descriptor) => {
+                                Self::unstructured_text_type(descriptor)
+                            }
+                            ElementSchema::UnstructuredBinary(descriptor) => {
+                                Self::unstructured_binary_type(&descriptor)
+                            }
+                        };
+                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                writer.result(&format!("({})[]", union_types));
+                Ok(())
             }
         }
     }

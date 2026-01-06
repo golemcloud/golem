@@ -39,6 +39,16 @@ fn playground2() {
     generate_and_compile(agent_type, &target_dir);
 }
 
+#[test]
+fn playground3() {
+    let agent_type =
+        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[1].clone();
+    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen3");
+
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, &target_dir);
+}
+
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
     let gen = TypeScriptBridgeGenerator::new(agent_type, target_dir);
     gen.generate().unwrap();
