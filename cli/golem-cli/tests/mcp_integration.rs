@@ -1,13 +1,27 @@
 // Integration tests for MCP Server
 // These tests verify the MCP server functionality end-to-end
 //
-// NOTE: Session Management Limitation
-// The rmcp library's LocalSessionManager tracks sessions per HTTP connection, not by session ID.
-// This means that even though the server sends mcp-session-id headers and we include them in requests,
-// sessions are still tied to the underlying TCP connection. Since we can't guarantee connection reuse
-// with separate HTTP POST requests, some tests may fail with "Session not found" errors.
-// This is a known limitation of testing MCP servers that use LocalSessionManager with separate HTTP requests.
-// In production, clients would typically use long-lived connections (SSE streaming) or a proper MCP client library.
+// IMPORTANT: Session Management Limitation
+// =========================================
+// The rmcp library's LocalSessionManager tracks sessions per HTTP connection, NOT by session ID.
+// This means that even though:
+//   - The server sends mcp-session-id headers in responses
+//   - We extract and include these session IDs in subsequent requests
+//   - The MCP spec says sessions should be tracked by session ID
+// 
+// The sessions are still tied to the underlying TCP connection. Since we can't guarantee
+// connection reuse with separate HTTP POST requests, sessions may be lost when connections change.
+//
+// Current Workaround:
+// - We automatically re-initialize before each request to ensure a session exists
+// - We retry requests with re-initialization when session errors occur
+// - This is inefficient but necessary due to the connection-based session tracking
+//
+// This is a known limitation of testing MCP servers that use LocalSessionManager with
+// separate HTTP requests. In production, clients would typically use:
+//   - Long-lived connections (SSE streaming)
+//   - A proper MCP client library that handles session management
+//   - Or a session manager that actually uses session IDs for lookup
 
 use std::time::Duration;
 use tokio::time::sleep;
