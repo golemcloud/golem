@@ -42,27 +42,18 @@ struct McpClient {
 
 impl McpClient {
     fn new_with_port(port: u16) -> Self {
-        // Create a client for MCP requests
-        // Try HTTP/2 first for better connection multiplexing, fallback to HTTP/1.1
-        // The rmcp LocalSessionManager tracks sessions per connection, so connection reuse is critical
+        // Create a client for MCP requests with maximum connection reuse
+        // LocalSessionManager tracks sessions per connection, so we need to maximize
+        // the chance that requests reuse the same connection
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .http2_prior_knowledge() // Try HTTP/2 first (better multiplexing)
-            .pool_max_idle_per_host(1) // Keep one connection per host
-            .pool_idle_timeout(Duration::from_secs(90)) // Keep connections alive longer
+            .http1_title_case_headers() // Use HTTP/1.1 for better connection reuse
+            .pool_max_idle_per_host(1) // Keep exactly one connection per host
+            .pool_idle_timeout(Duration::from_secs(300)) // Keep connections alive for 5 minutes
             .tcp_keepalive(Duration::from_secs(60)) // TCP keepalive
+            .http1_allow_obsolete_multiline_headers_in_responses(true)
             .build()
-            .unwrap_or_else(|_| {
-                // Fallback to HTTP/1.1 if HTTP/2 fails
-                reqwest::Client::builder()
-                    .timeout(Duration::from_secs(30))
-                    .http1_title_case_headers()
-                    .pool_max_idle_per_host(1)
-                    .pool_idle_timeout(Duration::from_secs(90))
-                    .tcp_keepalive(Duration::from_secs(60))
-                    .build()
-                    .expect("Failed to create HTTP client")
-            });
+            .expect("Failed to create HTTP client");
         
         Self {
             client,
@@ -73,20 +64,27 @@ impl McpClient {
     }
 
     /// Make an MCP JSON-RPC request with proper session management
-    /// Automatically re-initializes if session is not found (workaround for connection-based session tracking)
     /// 
-    /// NOTE: Due to LocalSessionManager tracking sessions per connection (not by session ID),
-    /// we may need to re-initialize on each request when connections change. This is a limitation
-    /// of testing with separate HTTP requests rather than long-lived connections.
+    /// WORKAROUND: Since LocalSessionManager tracks sessions per connection (not by session ID),
+    /// and we can't guarantee connection reuse with separate HTTP requests, we initialize
+    /// on the same connection immediately before each request. This ensures the session exists
+    /// on the connection that will be used for the actual request.
     async fn request(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
         // Skip auto-init for initialize method itself
         if method == "initialize" {
             return self.request_internal(method, params, false).await;
         }
         
-        // Try request, and if we get "Session not found", re-initialize and retry
-        // We allow up to 2 retries to handle connection changes
-        for attempt in 0..3 {
+        // WORKAROUND: Initialize on the same connection right before the request
+        // This ensures the session exists on the connection that will be used
+        // We do this by making a dummy initialize request first, then immediately
+        // making the actual request, hoping they use the same connection
+        self.session_id = None;
+        self.initialize().await?;
+        
+        // Now make the actual request - it should use the same connection (or close to it)
+        // If it still fails, retry once more
+        for attempt in 0..2 {
             let result = self.request_internal(method, params.clone(), true).await;
             match result {
                 Ok(result) => return Ok(result),
@@ -96,16 +94,12 @@ impl McpClient {
                         || err.contains("401") 
                         || err.to_lowercase().contains("unauthorized");
                     
-                    if is_session_error && attempt < 2 {
-                        // Session was lost (likely due to connection change), re-initialize and retry
-                        // Clear the old session ID first
+                    if is_session_error && attempt == 0 {
+                        // Session was lost, try re-initializing one more time
                         self.session_id = None;
                         if let Err(init_err) = self.initialize().await {
-                            return Err(format!("Failed to re-initialize after session loss: {}", init_err));
+                            return Err(format!("Failed to re-initialize: {}", init_err));
                         }
-                        // Small delay to ensure session is ready
-                        sleep(Duration::from_millis(50)).await;
-                        // Continue loop to retry
                         continue;
                     } else {
                         return Err(err);
@@ -114,8 +108,7 @@ impl McpClient {
             }
         }
         
-        // Should never reach here, but just in case
-        Err("Max retries exceeded".to_string())
+        Err("Request failed after retries".to_string())
     }
     
     /// Internal request method that doesn't handle re-initialization
