@@ -14,10 +14,9 @@
 
 use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateHttpApiDefinitionError,
-    RegistryServiceGetHttpApiDefinitionError,
-    RegistryServiceGetHttpApiDefinitionInEnvironmentError,
-    RegistryServiceUpdateHttpApiDefinitionError,
+    RegistryServiceClient, RegistryServiceCreateHttpApiDefinitionOldError,
+    RegistryServiceGetHttpApiDefinitionInEnvironmentOldError,
+    RegistryServiceGetHttpApiDefinitionOldError, RegistryServiceUpdateHttpApiDefinitionOldError,
 };
 use golem_common::model::component::ComponentName;
 use golem_common::model::http_api_definition::{
@@ -31,6 +30,7 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn create_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -67,7 +67,7 @@ async fn create_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_definition = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await?;
 
     assert!(http_api_definition.name == http_api_definition_creation.name);
@@ -76,21 +76,21 @@ async fn create_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition(&http_api_definition.id.0)
+            .get_http_api_definition_old(&http_api_definition.id.0)
             .await?;
         assert!(fetched_http_api_definition == http_api_definition);
     }
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_in_environment(&env.id.0, &http_api_definition.name.0)
+            .get_http_api_definition_in_environment_old(&env.id.0, &http_api_definition.name.0)
             .await?;
         assert!(fetched_http_api_definition == http_api_definition);
     }
 
     {
         let result = client
-            .list_environment_http_api_definitions(&env.id.0)
+            .list_environment_http_api_definitions_old(&env.id.0)
             .await?;
         assert!(result.values == vec![http_api_definition]);
     }
@@ -99,6 +99,7 @@ async fn create_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -135,7 +136,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_definition = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_definition_update = HttpApiDefinitionUpdate {
@@ -145,7 +146,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let updated_http_api_definition = client
-        .update_http_api_definition(&http_api_definition.id.0, &http_api_definition_update)
+        .update_http_api_definition_old(&http_api_definition.id.0, &http_api_definition_update)
         .await?;
 
     assert!(updated_http_api_definition.id == http_api_definition.id);
@@ -155,7 +156,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_revision(
+            .get_http_api_definition_revision_old(
                 &http_api_definition.id.0,
                 http_api_definition.revision.into(),
             )
@@ -165,7 +166,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_revision(
+            .get_http_api_definition_revision_old(
                 &http_api_definition.id.0,
                 updated_http_api_definition.revision.into(),
             )
@@ -175,21 +176,21 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition(&http_api_definition.id.0)
+            .get_http_api_definition_old(&http_api_definition.id.0)
             .await?;
         assert!(fetched_http_api_definition == updated_http_api_definition);
     }
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_in_environment(&env.id.0, &http_api_definition.name.0)
+            .get_http_api_definition_in_environment_old(&env.id.0, &http_api_definition.name.0)
             .await?;
         assert!(fetched_http_api_definition == updated_http_api_definition);
     }
 
     {
         let result = client
-            .list_environment_http_api_definitions(&env.id.0)
+            .list_environment_http_api_definitions_old(&env.id.0)
             .await?;
         assert!(result.values == vec![updated_http_api_definition]);
     }
@@ -198,6 +199,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn delete_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -234,11 +236,11 @@ async fn delete_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_definition = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await?;
 
     client
-        .delete_http_api_definition(
+        .delete_http_api_definition_old(
             &http_api_definition.id.0,
             http_api_definition.revision.into(),
         )
@@ -246,29 +248,29 @@ async fn delete_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let result = client
-            .get_http_api_definition(&http_api_definition.id.0)
+            .get_http_api_definition_old(&http_api_definition.id.0)
             .await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceGetHttpApiDefinitionError::Error404(_)
+                RegistryServiceGetHttpApiDefinitionOldError::Error404(_)
             )) = result
         );
     }
 
     {
         let result = client
-            .get_http_api_definition_in_environment(&env.id.0, &http_api_definition.name.0)
+            .get_http_api_definition_in_environment_old(&env.id.0, &http_api_definition.name.0)
             .await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceGetHttpApiDefinitionInEnvironmentError::Error404(_)
+                RegistryServiceGetHttpApiDefinitionInEnvironmentOldError::Error404(_)
             )) = result
         );
     }
 
     {
         let result = client
-            .list_environment_http_api_definitions(&env.id.0)
+            .list_environment_http_api_definitions_old(&env.id.0)
             .await?;
         assert!(result.values == vec![]);
     }
@@ -277,6 +279,7 @@ async fn delete_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn cannot_create_two_http_api_definitions_with_same_name(
     deps: &EnvBasedTestDependencies,
@@ -315,16 +318,16 @@ async fn cannot_create_two_http_api_definitions_with_same_name(
     };
 
     client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let result = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await;
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceCreateHttpApiDefinitionError::Error409(_)
+            RegistryServiceCreateHttpApiDefinitionOldError::Error409(_)
         )) = result
     );
 
@@ -332,6 +335,7 @@ async fn cannot_create_two_http_api_definitions_with_same_name(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn cannot_create_two_revisions_with_same_version(
     deps: &EnvBasedTestDependencies,
@@ -348,7 +352,7 @@ async fn cannot_create_two_revisions_with_same_version(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_revision = client
-        .create_http_api_definition(
+        .create_http_api_definition_old(
             &env.id.0,
             &HttpApiDefinitionCreation {
                 name: HttpApiDefinitionName("test-definition".to_string()),
@@ -361,7 +365,7 @@ async fn cannot_create_two_revisions_with_same_version(
     user.deploy_environment(&env.id).await?;
 
     let result = client
-        .update_http_api_definition(
+        .update_http_api_definition_old(
             &http_api_revision.id.0,
             &HttpApiDefinitionUpdate {
                 current_revision: http_api_revision.revision,
@@ -373,7 +377,7 @@ async fn cannot_create_two_revisions_with_same_version(
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceUpdateHttpApiDefinitionError::Error409(_)
+            RegistryServiceUpdateHttpApiDefinitionOldError::Error409(_)
         )) = result
     );
 
@@ -381,6 +385,7 @@ async fn cannot_create_two_revisions_with_same_version(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn updates_with_wrong_revision_number_are_rejected(
     deps: &EnvBasedTestDependencies,
@@ -391,7 +396,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_revision = client
-        .create_http_api_definition(
+        .create_http_api_definition_old(
             &env.id.0,
             &HttpApiDefinitionCreation {
                 name: HttpApiDefinitionName("test-definition".to_string()),
@@ -402,7 +407,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
         .await?;
 
     let result = client
-        .update_http_api_definition(
+        .update_http_api_definition_old(
             &http_api_revision.id.0,
             &HttpApiDefinitionUpdate {
                 current_revision: http_api_revision.revision.next()?,
@@ -414,7 +419,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceUpdateHttpApiDefinitionError::Error409(_)
+            RegistryServiceUpdateHttpApiDefinitionOldError::Error409(_)
         )) = result
     );
 
@@ -422,6 +427,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn cannot_create_http_api_definition_with_empty_version(
     deps: &EnvBasedTestDependencies,
@@ -438,12 +444,12 @@ async fn cannot_create_http_api_definition_with_empty_version(
     };
 
     let result = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await;
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceCreateHttpApiDefinitionError::Error400(_)
+            RegistryServiceCreateHttpApiDefinitionOldError::Error400(_)
         )) = result
     );
 
@@ -451,6 +457,7 @@ async fn cannot_create_http_api_definition_with_empty_version(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -471,11 +478,11 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
     };
 
     let http_api_definition_1 = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation_1)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation_1)
         .await?;
 
     client
-        .delete_http_api_definition(
+        .delete_http_api_definition_old(
             &http_api_definition_1.id.0,
             http_api_definition_1.revision.into(),
         )
@@ -488,14 +495,14 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
     };
 
     let http_api_definition_2 = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation_2)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation_2)
         .await?;
 
     assert!(http_api_definition_2.id == http_api_definition_1.id);
     assert!(http_api_definition_2.revision == http_api_definition_1.revision.next()?.next()?);
 
     client
-        .delete_http_api_definition(
+        .delete_http_api_definition_old(
             &http_api_definition_2.id.0,
             http_api_definition_2.revision.into(),
         )
@@ -505,6 +512,7 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -545,14 +553,14 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     let http_api_definition = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let deployment = user.deploy_environment(&env.id).await?;
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_in_deployment(
+            .get_http_api_definition_in_deployment_old(
                 &env.id.0,
                 deployment.revision.into(),
                 "echo-api",
@@ -563,7 +571,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 
     {
         let fetched_http_api_definitions = client
-            .list_deployment_http_api_definitions(&env.id.0, deployment.revision.into())
+            .list_deployment_http_api_definitions_old(&env.id.0, deployment.revision.into())
             .await?;
         assert!(fetched_http_api_definitions.values == vec![http_api_definition]);
     }

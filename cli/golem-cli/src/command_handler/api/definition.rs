@@ -110,7 +110,7 @@ impl ApiDefinitionCommandHandler {
                         .golem_clients()
                         .await?
                         .environment
-                        .list_deployment_http_api_definitions(
+                        .list_deployment_http_api_definitions_old(
                             &environment.environment_id.0,
                             current_deployment_revision.into(),
                         )
@@ -200,7 +200,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_deployment
-            .list_http_api_deployments_in_deployment(
+            .list_http_api_deployments_in_deployment_old(
                 &environment.environment_id.0,
                 current_deployment.deployment_revision.get(),
             )
@@ -362,7 +362,7 @@ impl ApiDefinitionCommandHandler {
                     let clients = self.ctx.golem_clients().await?;
                     let Some(definition) = clients
                         .api_definition
-                        .get_http_api_definition_in_deployment(
+                        .get_http_api_definition_in_deployment_old(
                             &environment.environment_id.0,
                             current_deployment_revision.into(),
                             &name.0,
@@ -379,7 +379,7 @@ impl ApiDefinitionCommandHandler {
 
                     clients
                         .api_definition
-                        .get_http_api_definition_revision(&definition.id.0, (*revision).into())
+                        .get_http_api_definition_revision_old(&definition.id.0, (*revision).into())
                         .await
                         .map_service_error_not_found_as_opt()
                 },
@@ -401,7 +401,7 @@ impl ApiDefinitionCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .api_definition
-                        .get_http_api_definition_revision(
+                        .get_http_api_definition_revision_old(
                             &http_api_definition_id.0,
                             revision.into(),
                         )
@@ -439,7 +439,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .get_openapi_of_http_api_definition_in_deployment(
+            .get_openapi_of_http_api_definition_in_deployment_old(
                 &environment.environment_id.0,
                 deployment_revision.into(),
                 &name.0,
@@ -482,7 +482,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .create_http_api_definition(
+            .create_http_api_definition_old(
                 &environment.environment_id.0,
                 &HttpApiDefinitionCreation {
                     name: http_api_definition_name.clone(),
@@ -524,7 +524,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .delete_http_api_definition(
+            .delete_http_api_definition_old(
                 &http_api_definition.id.0,
                 http_api_definition.revision.into(),
             )
@@ -566,7 +566,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .update_http_api_definition(
+            .update_http_api_definition_old(
                 &http_api_definition.id.0,
                 &HttpApiDefinitionUpdate {
                     current_revision: http_api_definition.revision,

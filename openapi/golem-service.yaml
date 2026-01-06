@@ -5709,14 +5709,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-definitions:
+  /stubs/envs/{environment_id}/http-api-definitions:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       - Environment
       summary: List http api definitions in the environment
-      operationId: list_environment_http_api_definitions
+      operationId: list_environment_http_api_definitions_old
       parameters:
       - in: path
         name: environment_id
@@ -5785,7 +5785,7 @@ paths:
       - HttpApiDefinition
       - Environment
       summary: Create a new api-definition in the environment
-      operationId: create_http_api_definition
+      operationId: create_http_api_definition_old
       parameters:
       - in: path
         name: environment_id
@@ -5854,13 +5854,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-definitions/{http_api_definition_id}:
+  /stubs/http-api-definitions/{http_api_definition_id}:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       summary: Get http api definition
-      operationId: get_http_api_definition
+      operationId: get_http_api_definition_old
       parameters:
       - in: path
         name: http_api_definition_id
@@ -5928,7 +5928,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Delete http api definition
-      operationId: delete_http_api_definition
+      operationId: delete_http_api_definition_old
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6001,7 +6001,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Update http api definition
-      operationId: update_http_api_definition
+      operationId: update_http_api_definition_old
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6070,13 +6070,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-definitions/{http_api_definition_id}/revisions/{revision}:
+  /stubs/http-api-definitions/{http_api_definition_id}/revisions/{revision}:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       summary: Get a specific http api definition revision
-      operationId: get_http_api_definition_revision
+      operationId: get_http_api_definition_revision_old
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6148,14 +6148,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-definitions/{http_api_definition_name}:
+  /stubs/envs/{environment_id}/http-api-definitions/{http_api_definition_name}:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       - Environment
       summary: Get http api definition by name in the environment
-      operationId: get_http_api_definition_in_environment
+      operationId: get_http_api_definition_in_environment_old
       parameters:
       - in: path
         name: environment_id
@@ -6226,7 +6226,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}:
     get:
       tags:
       - RegistryService
@@ -6234,7 +6234,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api definition by name in the deployment
-      operationId: get_http_api_definition_in_deployment
+      operationId: get_http_api_definition_in_deployment_old
       parameters:
       - in: path
         name: environment_id
@@ -6314,7 +6314,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi:
     get:
       tags:
       - RegistryService
@@ -6322,7 +6322,7 @@ paths:
       - Environment
       - Deployment
       summary: Get openapi spec of http api definition in the deployment
-      operationId: get_openapi_of_http_api_definition_in_deployment
+      operationId: get_openapi_of_http_api_definition_in_deployment_old
       parameters:
       - in: path
         name: environment_id
@@ -6402,14 +6402,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       - Environment
       summary: List http api definitions in the deployment
-      operationId: list_deployment_http_api_definitions
+      operationId: list_deployment_http_api_definitions_old
       parameters:
       - in: path
         name: environment_id
@@ -6481,14 +6481,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-deployments:
+  /stubs/envs/{environment_id}/http-api-deployments:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       - Environment
       summary: List http api deployment by domain in the environment
-      operationId: list_http_api_deployments_in_environment
+      operationId: list_http_api_deployments_in_environment_old
       parameters:
       - in: path
         name: environment_id
@@ -6557,7 +6557,7 @@ paths:
       - ApiDeployment
       - Environment
       summary: Create a new api-deployment in the environment
-      operationId: create_http_api_deployment
+      operationId: create_http_api_deployment_old
       parameters:
       - in: path
         name: environment_id
@@ -6626,13 +6626,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-deployments/{http_api_deployment_id}:
+  /stubs/http-api-deployments/{http_api_deployment_id}:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       summary: Get an api-deployment by id
-      operationId: get_http_api_deployment
+      operationId: get_http_api_deployment_old
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6700,7 +6700,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Delete an api-deployment
-      operationId: delete_http_api_deployment
+      operationId: delete_http_api_deployment_old
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6773,7 +6773,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Update an api-deployment
-      operationId: update_http_api_deployment
+      operationId: update_http_api_deployment_old
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6842,13 +6842,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-deployment/{http_api_deployment_id}/revisions/{revision}:
+  /stubs/http-api-deployment/{http_api_deployment_id}/revisions/{revision}:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       summary: Get a specific http api deployment revision
-      operationId: get_http_api_deployment_revision
+      operationId: get_http_api_deployment_revision_old
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6920,14 +6920,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-deployments/{domain}:
+  /stubs/envs/{environment_id}/http-api-deployments/{domain}:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       - Environment
       summary: Get http api deployment by domain in the environment
-      operationId: get_http_api_deployment_in_environment
+      operationId: get_http_api_deployment_in_environment_old
       parameters:
       - in: path
         name: environment_id
@@ -6998,7 +6998,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}:
     get:
       tags:
       - RegistryService
@@ -7006,7 +7006,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api deployment by domain in the deployment
-      operationId: get_http_api_deployment_in_deployment
+      operationId: get_http_api_deployment_in_deployment_old
       parameters:
       - in: path
         name: environment_id
@@ -7086,7 +7086,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
       - RegistryService
@@ -7094,7 +7094,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api deployment by domain in the deployment
-      operationId: list_http_api_deployments_in_deployment
+      operationId: list_http_api_deployments_in_deployment_old
       parameters:
       - in: path
         name: environment_id

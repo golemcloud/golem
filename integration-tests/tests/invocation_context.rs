@@ -148,7 +148,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     };
 
     client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let domain = user.register_domain(&env.id).await?;
@@ -159,7 +159,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     };
 
     client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_old(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     user.deploy_environment(&env.id).await?;

@@ -21,8 +21,8 @@ pub mod environment_plugin_grants;
 pub mod environment_shares;
 pub mod environments;
 pub mod error;
-pub mod http_api_definitions;
-pub mod http_api_deployments;
+pub mod http_api_definitions_old;
+pub mod http_api_deployments_old;
 pub mod login;
 pub mod plugin_registrations;
 pub mod reports;
@@ -38,8 +38,8 @@ use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
 use self::environment_shares::EnvironmentSharesApi;
 use self::environments::EnvironmentsApi;
 use self::error::ApiError;
-use self::http_api_definitions::HttpApiDefinitionsApi;
-use self::http_api_deployments::HttpApiDeploymentsApi;
+use self::http_api_definitions_old::OldHttpApiDefinitionsApi;
+use self::http_api_deployments_old::OldHttpApiDeploymentsApi;
 use self::login::LoginApi;
 use self::plugin_registrations::PluginRegistrationsApi;
 use self::reports::ReportsApi;
@@ -60,8 +60,8 @@ pub type Apis = (
         EnvironmentsApi,
         EnvironmentSharesApi,
     ),
-    HttpApiDefinitionsApi,
-    HttpApiDeploymentsApi,
+    OldHttpApiDefinitionsApi,
+    OldHttpApiDeploymentsApi,
     LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
@@ -114,15 +114,8 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.auth_service.clone(),
                 ),
             ),
-            HttpApiDefinitionsApi::new(
-                services.http_api_definition_service.clone(),
-                services.auth_service.clone(),
-                services.deployed_routes_service.clone(),
-            ),
-            HttpApiDeploymentsApi::new(
-                services.http_api_deployment_service.clone(),
-                services.auth_service.clone(),
-            ),
+            OldHttpApiDefinitionsApi,
+            OldHttpApiDeploymentsApi,
             LoginApi::new(
                 services.login_system.clone(),
                 services.token_service.clone(),

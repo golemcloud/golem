@@ -134,7 +134,7 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     };
 
     client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
@@ -143,7 +143,7 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     };
 
     client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_old(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
@@ -260,7 +260,7 @@ async fn swagger_ui(cart: &ShoppingCart) -> anyhow::Result<()> {
 async fn open_api_spec(cart: &ShoppingCart) -> anyhow::Result<()> {
     let client = cart.user.registry_service_client().await;
     let spec = client
-        .get_openapi_of_http_api_definition_in_deployment(
+        .get_openapi_of_http_api_definition_in_deployment_old(
             &cart.env_id.0,
             cart.deployment_revision.into(),
             "test-api",
