@@ -56,13 +56,15 @@ impl TypeScriptBridgeGenerator {
                 "main": "self.library_name().js",
                 "types": "self.library_name().d.ts",
                 "scripts": {
-                    "build": "tsc"
+                    "build": "tsc",
+                    "test": "npx tsx test.ts"
                 },
                 "dependencies": {
                     "uuid": "^13"
                 },
                 "devDependencies": {
-                    "typescript": "^5.9"
+                    "typescript": "^5.9",
+                    "tsx": "^4.7"
                 }
             }
         };
@@ -99,6 +101,123 @@ impl TypeScriptBridgeGenerator {
         let base_ts_content = include_str!("../../../ts_bridge/base.ts");
         std::fs::write(path, base_ts_content)
             .map_err(|e| anyhow!("Failed to write base.ts file: {e}"))?;
+        Ok(())
+    }
+
+    fn generate_test(&self, path: &Utf8Path) -> anyhow::Result<()> {
+        let mut content = String::new();
+
+        content.push_str("import * as base from './base';\n\n");
+
+        // Helper function to read JSON from stdin
+        content.push_str("async function readStdin(): Promise<any> {\n");
+        content.push_str("  let input = '';\n");
+        content.push_str("  for await (const chunk of process.stdin) {\n");
+        content.push_str("    input += chunk;\n");
+        content.push_str("  }\n");
+        content.push_str("  return JSON.parse(input);\n");
+        content.push_str("}\n\n");
+
+        // Generate test functions for each method
+        for method_def in &self.agent_type.methods {
+            let method_name_pascal = method_def.name.to_upper_camel_case();
+
+            // encodeInput function
+            content.push_str(&format!(
+                "async function encode{}Input(): Promise<void> {{\n",
+                method_name_pascal
+            ));
+            content.push_str("  const json = await readStdin();\n");
+            content.push_str("  const result: base.DataValue = ");
+            Self::build_encode_data_value_code(&method_def.input_schema, &mut content)?;
+            content.push_str("  console.log(JSON.stringify(result));\n");
+            content.push_str("}\n\n");
+
+            // decodeInput function
+            content.push_str(&format!(
+                "async function decode{}Input(): Promise<void> {{\n",
+                method_name_pascal
+            ));
+            content.push_str("  const jsonResult = await readStdin();\n");
+            content.push_str("  const result = { result: jsonResult };\n");
+            content.push_str("  const decoded = (() => {\n");
+            Self::build_decode_data_value_code(&method_def.input_schema, &mut content)?;
+            content.push_str("  })();\n");
+            content.push_str("  console.log(JSON.stringify(decoded));\n");
+            content.push_str("}\n\n");
+
+            // encodeOutput function
+            content.push_str(&format!(
+                "async function encode{}Output(): Promise<void> {{\n",
+                method_name_pascal
+            ));
+            content.push_str("  const json = await readStdin();\n");
+            content.push_str("  const result: base.DataValue = ");
+            Self::build_encode_data_value_code(&method_def.output_schema, &mut content)?;
+            content.push_str("  console.log(JSON.stringify(result));\n");
+            content.push_str("}\n\n");
+
+            // decodeOutput function
+            content.push_str(&format!(
+                "async function decode{}Output(): Promise<void> {{\n",
+                method_name_pascal
+            ));
+            content.push_str("  const jsonResult = await readStdin();\n");
+            content.push_str("  const result = { result: jsonResult };\n");
+            content.push_str("  const decoded = (() => {\n");
+            Self::build_decode_data_value_code(&method_def.output_schema, &mut content)?;
+            content.push_str("  })();\n");
+            content.push_str("  console.log(JSON.stringify(decoded));\n");
+            content.push_str("}\n\n");
+        }
+
+        // Create a map of available functions
+        content.push_str("const testFunctions: { [key: string]: () => Promise<void> | void } = {\n");
+        for method_def in &self.agent_type.methods {
+            let method_name_pascal = method_def.name.to_upper_camel_case();
+            content.push_str(&format!("  encode{}Input,\n", method_name_pascal));
+            content.push_str(&format!("  decode{}Input,\n", method_name_pascal));
+            content.push_str(&format!("  encode{}Output,\n", method_name_pascal));
+            content.push_str(&format!("  decode{}Output,\n", method_name_pascal));
+        }
+        content.push_str("};\n\n");
+
+        // CLI handler
+        content.push_str("async function main() {\n");
+        content.push_str("  const args = process.argv.slice(2);\n");
+        content.push_str("  if (args.length === 0) {\n");
+        content.push_str("    console.error('Usage: npx tsx test.ts <function-name>');\n");
+        content.push_str("    console.error('Available functions:');\n");
+
+        for method_def in &self.agent_type.methods {
+            let method_name_pascal = method_def.name.to_upper_camel_case();
+            content.push_str(&format!(
+                "    console.error('  encode{}Input, decode{}Input, encode{}Output, decode{}Output');\n",
+                method_name_pascal, method_name_pascal, method_name_pascal, method_name_pascal
+            ));
+        }
+
+        content.push_str("    process.exit(1);\n");
+        content.push_str("  }\n");
+        content.push_str("  const functionName = args[0];\n");
+        content.push_str("  const fn = testFunctions[functionName];\n");
+        content.push_str("  if (!fn) {\n");
+        content.push_str("    console.error(`Unknown function: ${functionName}`);\n");
+        content.push_str("    console.error('Available functions:', Object.keys(testFunctions).join(', '));\n");
+        content.push_str("    process.exit(1);\n");
+        content.push_str("  }\n");
+        content.push_str("  try {\n");
+        content.push_str("    await fn();\n");
+        content.push_str("  } catch (error) {\n");
+        content.push_str("    console.error('Error:', error);\n");
+        content.push_str("    process.exit(1);\n");
+        content.push_str("  }\n");
+        content.push_str("}\n\n");
+        content.push_str("main();\n");
+
+        std::fs::write(path, content)
+            .map_err(|e| anyhow!("Failed to write test file: {e}"))?;
+
         Ok(())
     }
 
@@ -654,13 +773,13 @@ impl TypeScriptBridgeGenerator {
                             writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
                             writer.indent();
                             writer.write_line(format!(
-                                    "return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
-                                    descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
-                                        restrictions.iter().map(|tt| {
-                                            format!("'{}'", tt.language_code)
-                                        }).collect::<Vec<_>>().join(", ")
-                                    }
-                                    )));
+                                "return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|tt| {
+                                        format!("'{}'", tt.language_code)
+                                    }).collect::<Vec<_>>().join(", ")
+                                }
+                                )));
                             writer.unindent();
                             writer.write_line("} else {");
                             writer.indent();
@@ -673,13 +792,13 @@ impl TypeScriptBridgeGenerator {
                             writer.write_line("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {");
                             writer.indent();
                             writer.write_line(format!(
-                                    "return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
-                                    descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
-                                        restrictions.iter().map(|bt| {
-                                            format!("'{}'", bt.mime_type)
-                                        }).collect::<Vec<_>>().join(", ")
-                                    }
-                                    )));
+                                "return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);",
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|bt| {
+                                        format!("'{}'", bt.mime_type)
+                                    }).collect::<Vec<_>>().join(", ")
+                                }
+                                )));
                             writer.unindent();
                             writer.write_line("} else {");
                             writer.indent();
@@ -698,7 +817,7 @@ impl TypeScriptBridgeGenerator {
                 writer.indent();
                 writer.write_line("return result.result.elements.map((item: any) => {");
                 writer.indent();
-                
+
                 // Generate union type handling code
                 for (idx, element) in multimodal.elements.iter().enumerate() {
                     let if_or_else = if idx == 0 { "if" } else { "else if" };
@@ -737,11 +856,11 @@ impl TypeScriptBridgeGenerator {
                     writer.unindent();
                     writer.write_line("}");
                 }
-                
+
                 writer.write_line("throw new Error(`Unknown multimodal variant: ${item.name}`);");
                 writer.unindent();
                 writer.write_line("});");
-                
+
                 writer.unindent();
                 writer.write_line("} else {");
                 writer.indent();
@@ -788,23 +907,23 @@ impl TypeScriptBridgeGenerator {
                 for param in &params.elements {
                     let param_name = param.name.to_lower_camel_case();
                     match &param.schema {
-                            ElementSchema::ComponentModel(component_model) => {
-                                writer.write_line(format!(
-                                    "{{ \"type\": \"componentModel\", value: {{ value: {} }} }},",
-                                    Self::encode_wit_value(&param_name, &component_model.element_type)
-                                ));
-                            }
-                            ElementSchema::UnstructuredText(_) => {
-                                writer.write_line(format!(
-                                    "{{ \"type\": \"unstructuredText\", value: base.TextReference.fromUnstructuredText({param_name}) }},",
-                                ))
-                            }
-                            ElementSchema::UnstructuredBinary(_) => {
-                                writer.write_line(format!(
-                                    "{{ \"type\": \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary({param_name}) }},",
-                                ))
-                            }
+                        ElementSchema::ComponentModel(component_model) => {
+                            writer.write_line(format!(
+                                "{{ \"type\": \"componentModel\", value: {{ value: {} }} }},",
+                                Self::encode_wit_value(&param_name, &component_model.element_type)
+                            ));
                         }
+                        ElementSchema::UnstructuredText(_) => {
+                            writer.write_line(format!(
+                                "{{ \"type\": \"unstructuredText\", value: base.TextReference.fromUnstructuredText({param_name}) }},",
+                            ))
+                        }
+                        ElementSchema::UnstructuredBinary(_) => {
+                            writer.write_line(format!(
+                                "{{ \"type\": \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary({param_name}) }},",
+                            ))
+                        }
+                    }
                 }
 
                 writer.unindent();
@@ -816,7 +935,7 @@ impl TypeScriptBridgeGenerator {
                 writer.indent();
                 writer.write_line("{ type: \"multimodal\", elements: multimodalInput.map((item: any) => {");
                 writer.indent();
-                
+
                 // Generate encoding for each multimodal variant
                 for (idx, element) in multimodal.elements.iter().enumerate() {
                     let if_or_else = if idx == 0 { "if" } else { "else if" };
@@ -826,7 +945,7 @@ impl TypeScriptBridgeGenerator {
                     writer.indent();
                     writer.write_line(format!("name: '{}',", element.name));
                     writer.write_line("value: ");
-                    
+
                     match &element.schema {
                         ElementSchema::ComponentModel(component_model) => {
                             writer.write_line(format!(
@@ -841,12 +960,12 @@ impl TypeScriptBridgeGenerator {
                             writer.write_line("{ type: 'unstructuredBinary', value: base.BinaryReference.fromUnstructuredBinary(item.value) }");
                         }
                     }
-                    
+
                     writer.write_line("};");
                     writer.unindent();
                     writer.write_line("}");
                 }
-                
+
                 writer.write_line("throw new Error(`Unknown multimodal type: ${item.type}`);");
                 writer.unindent();
                 writer.write_line("}) };");
@@ -1102,7 +1221,7 @@ impl TypeScriptBridgeGenerator {
                             (condition, value_expr)
                         })
                         .collect();
-                    
+
                     // Nest the ternary operators properly from right to left
                     if cases.is_empty() {
                         "null".to_string()
@@ -1519,6 +1638,201 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
+    fn build_encode_data_value_code(
+        schema: &DataSchema,
+        content: &mut String,
+    ) -> anyhow::Result<()> {
+        match schema {
+            DataSchema::Tuple(params) => {
+                content.push_str("{ type: \"tuple\", elements: [\n");
+                content.push_str("  ...(() => {\n");
+                content.push_str("    const elements: any[] = [];\n");
+                for param in &params.elements {
+                    let param_name = param.name.to_lower_camel_case();
+                    match &param.schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            content.push_str(&format!(
+                                "    if (json.{} !== undefined) elements.push({{ type: \"componentModel\", value: {{ value: {} }} }});\n",
+                                param_name,
+                                Self::encode_wit_value(&format!("json.{}", param_name), &component_model.element_type)
+                            ));
+                        }
+                        ElementSchema::UnstructuredText(_) => {
+                            content.push_str(&format!(
+                                "    if (json.{} !== undefined) elements.push({{ type: \"unstructuredText\", value: base.TextReference.fromUnstructuredText(json.{}) }});\n",
+                                param_name, param_name
+                            ));
+                        }
+                        ElementSchema::UnstructuredBinary(_) => {
+                            content.push_str(&format!(
+                                "    if (json.{} !== undefined) elements.push({{ type: \"unstructuredBinary\", value: base.BinaryReference.fromUnstructuredBinary(json.{}) }});\n",
+                                param_name, param_name
+                            ));
+                        }
+                    }
+                }
+                content.push_str("    return elements;\n");
+                content.push_str("  })()\n");
+                content.push_str("] };\n");
+                Ok(())
+            }
+            DataSchema::Multimodal(multimodal) => {
+                content.push_str("{ type: \"multimodal\", elements: json.map((item: any) => {\n");
+                for (idx, element) in multimodal.elements.iter().enumerate() {
+                    let if_or_else = if idx == 0 { "if" } else { "else if" };
+                    content.push_str(&format!("  {}(item.type === '{}') {{\n", if_or_else, element.name));
+                    match &element.schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            content.push_str(&format!(
+                                "    return {{ name: '{}', value: {{ type: 'componentModel', value: {{ value: {} }} }} }};\n",
+                                element.name,
+                                Self::encode_wit_value("item.value", &component_model.element_type)
+                            ));
+                        }
+                        ElementSchema::UnstructuredText(_) => {
+                            content.push_str(&format!(
+                                "    return {{ name: '{}', value: {{ type: 'unstructuredText', value: base.TextReference.fromUnstructuredText(item.value) }} }};\n",
+                                element.name
+                            ));
+                        }
+                        ElementSchema::UnstructuredBinary(_) => {
+                            content.push_str(&format!(
+                                "    return {{ name: '{}', value: {{ type: 'unstructuredBinary', value: base.BinaryReference.fromUnstructuredBinary(item.value) }} }};\n",
+                                element.name
+                            ));
+                        }
+                    }
+                    content.push_str("  }\n");
+                }
+                content.push_str("  throw new Error(`Unknown multimodal type: ${item.type}`);\n");
+                content.push_str("}) };\n");
+                Ok(())
+            }
+        }
+    }
+
+    fn build_decode_data_value_code(
+        schema: &DataSchema,
+        content: &mut String,
+    ) -> anyhow::Result<()> {
+        match schema {
+            DataSchema::Tuple(params) => {
+                if params.elements.is_empty() {
+                    content.push_str("return;\n");
+                    Ok(())
+                } else if params.elements.len() == 1 {
+                    let element_schema = &params.elements[0].schema;
+                    match element_schema {
+                        ElementSchema::ComponentModel(component_model) => {
+                            content.push_str("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {\n");
+                            content.push_str(&format!(
+                                "  return {};\n",
+                                Self::decode_wit_value(
+                                    "result.result.elements[0].value",
+                                    &component_model.element_type
+                                )
+                            ));
+                            content.push_str("} else {\n");
+                            content.push_str("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);\n");
+                            content.push_str("}\n");
+                            Ok(())
+                        }
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            content.push_str("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {\n");
+                            content.push_str(&format!(
+                                "  return base.UnstructuredText.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);\n",
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|tt| {
+                                        format!("'{}'", tt.language_code)
+                                    }).collect::<Vec<_>>().join(", ")
+                                }
+                                )));
+                            content.push_str("} else {\n");
+                            content.push_str("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);\n");
+                            content.push_str("}\n");
+                            Ok(())
+                        }
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            content.push_str("if (result.result && result.result.type === \"tuple\" && result.result.elements.length === 1) {\n");
+                            content.push_str(&format!(
+                                "  return base.UnstructuredBinary.fromUntypedElementValue(\"result\", result.result.elements[0].value, [{}]);\n",
+                                descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                    restrictions.iter().map(|bt| {
+                                        format!("'{}'", bt.mime_type)
+                                    }).collect::<Vec<_>>().join(", ")
+                                }
+                                )));
+                            content.push_str("} else {\n");
+                            content.push_str("  throw new Error(`Invalid result value. Expected tuple DataValue of length 1, got ${JSON.stringify(result)}`);\n");
+                            content.push_str("}\n");
+                            Ok(())
+                        }
+                    }
+                } else {
+                    // Multiple result values - return as array
+                    content.push_str("if (result.result && result.result.type === \"tuple\") {\n");
+                    content.push_str(&format!("  if (result.result.elements.length !== {}) {{\n", params.elements.len()));
+                    content.push_str(&format!("    throw new Error(`Expected {} result elements, got ${{result.result.elements.length}}`);\n", params.elements.len()));
+                    content.push_str("  }\n");
+                    content.push_str("  return [\n");
+                    for (idx, param) in params.elements.iter().enumerate() {
+                        let element_schema = &param.schema;
+                        let decode_expr = match element_schema {
+                            ElementSchema::ComponentModel(component_model) => {
+                                Self::decode_wit_value(
+                                    &format!("result.result.elements[{}].value", idx),
+                                    &component_model.element_type
+                                )
+                            }
+                            ElementSchema::UnstructuredText(descriptor) => {
+                                format!(
+                                    "base.UnstructuredText.fromUntypedElementValue(\"{}\", result.result.elements[{}].value, [{}])",
+                                    param.name,
+                                    idx,
+                                    descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                        restrictions.iter().map(|tt| {
+                                            format!("'{}'", tt.language_code)
+                                        }).collect::<Vec<_>>().join(", ")
+                                    })
+                                )
+                            }
+                            ElementSchema::UnstructuredBinary(descriptor) => {
+                                format!(
+                                    "base.UnstructuredBinary.fromUntypedElementValue(\"{}\", result.result.elements[{}].value, [{}])",
+                                    param.name,
+                                    idx,
+                                    descriptor.restrictions.as_ref().map_or("".to_string(), |restrictions| {
+                                        restrictions.iter().map(|bt| {
+                                            format!("'{}'", bt.mime_type)
+                                        }).collect::<Vec<_>>().join(", ")
+                                    })
+                                )
+                            }
+                        };
+                        let comma = if idx < params.elements.len() - 1 { "," } else { "" };
+                        content.push_str(&format!("    {}{}\n", decode_expr, comma));
+                    }
+                    content.push_str("  ];\n");
+                    content.push_str("} else {\n");
+                    content.push_str(&format!(
+                        "  throw new Error(`Invalid result value. Expected tuple DataValue with {} elements, got ${{JSON.stringify(result)}}`);\n",
+                        params.elements.len()
+                    ));
+                    content.push_str("}\n");
+                    Ok(())
+                }
+            }
+            DataSchema::Multimodal(_) => {
+                content.push_str("if (result.result && result.result.type === \"multimodal\") {\n");
+                content.push_str("  return result.result.elements;\n");
+                content.push_str("} else {\n");
+                content.push_str("  throw new Error(`Invalid result value. Expected multimodal DataValue, got ${JSON.stringify(result)}`);\n");
+                content.push_str("}\n");
+                Ok(())
+            }
+        }
+    }
+
     fn library_name(&self) -> String {
         self.agent_type.type_name.0.to_snake_case()
     }
@@ -1546,6 +1860,7 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         let package_json_path = self.target_path.join("package.json".to_string());
         let tsconfig_json_path = self.target_path.join("tsconfig.json".to_string());
         let base_ts_path = self.target_path.join("base.ts");
+        let test_path = self.target_path.join("test.ts");
 
         if !self.target_path.exists() {
             std::fs::create_dir_all(&self.target_path)?;
@@ -1554,6 +1869,7 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         self.generate_package_json(&package_json_path)?;
         self.generate_tsconfig_json(&tsconfig_json_path)?;
         self.generate_base_ts(&base_ts_path)?;
+        self.generate_test(&test_path)?;
 
         Ok(())
     }
