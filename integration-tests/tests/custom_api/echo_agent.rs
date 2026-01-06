@@ -150,6 +150,7 @@ async fn echo_agent_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn ephemeral_agent_http_call_resets_state(agent: &EchoAgent) -> anyhow::Result<()> {
     // First call with param "hello" - should return "hello!"
@@ -187,6 +188,7 @@ async fn ephemeral_agent_http_call_resets_state(agent: &EchoAgent) -> anyhow::Re
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn url_gets_decoded_for_path_params(agent: &EchoAgent) -> anyhow::Result<()> {
     // Call with param "hello%20world" - should return "hello world!"

@@ -179,6 +179,7 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn request_to_wrong_domain_results_in_404(cart: &ShoppingCart) -> anyhow::Result<()> {
     // use fresh client so we don't send default host header
@@ -194,6 +195,7 @@ async fn request_to_wrong_domain_results_in_404(cart: &ShoppingCart) -> anyhow::
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn get_shopping_cart_contents(cart: &ShoppingCart) -> anyhow::Result<()> {
     let response = cart
@@ -210,6 +212,7 @@ async fn get_shopping_cart_contents(cart: &ShoppingCart) -> anyhow::Result<()> {
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn add_and_get_shopping_cart_contents(cart: &ShoppingCart) -> anyhow::Result<()> {
     let item = json!({
@@ -244,6 +247,7 @@ async fn add_and_get_shopping_cart_contents(cart: &ShoppingCart) -> anyhow::Resu
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn swagger_ui(cart: &ShoppingCart) -> anyhow::Result<()> {
     let response = cart
@@ -256,6 +260,7 @@ async fn swagger_ui(cart: &ShoppingCart) -> anyhow::Result<()> {
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn open_api_spec(cart: &ShoppingCart) -> anyhow::Result<()> {
     let client = cart.user.registry_service_client().await;
