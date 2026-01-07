@@ -149,6 +149,7 @@ impl From<AgentMethod> for super::bindings::golem::agent::common::AgentMethod {
             prompt_hint: value.prompt_hint,
             input_schema: value.input_schema.into(),
             output_schema: value.output_schema.into(),
+            http_endpoint: None,
         }
     }
 }
@@ -183,6 +184,7 @@ impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
                 .map(AgentDependency::into)
                 .collect(),
             mode: value.mode.into(),
+            http_mount: None,
         }
     }
 }
