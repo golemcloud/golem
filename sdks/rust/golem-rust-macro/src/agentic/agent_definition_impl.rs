@@ -305,7 +305,7 @@ fn get_agent_type_with_remote_client(
                     },
                     input_schema: #input_schema,
                     output_schema: #output_schema,
-                    http_endpoint: None,
+                    http_endpoint: Vec::new(),
                 }
             })
         } else {
