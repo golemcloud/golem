@@ -518,9 +518,9 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 '''
 
 [tasks.cli-integration-tests-group3]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
+dependencies = ["build-bins-all-non-ci"]
 description = "Run CLI integration tests (3/3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TS_PACKAGES_PATH" = "${CARGO_MAKE_WORKING_DIRECTORY}/sdks/ts/packages" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}

@@ -38,8 +38,8 @@ macro_rules! app_manifest_version {
         "1.4.2"
     };
 }
-static GOLEM_RUST_VERSION: &str = "1.10.4";
-static GOLEM_TS_VERSION: &str = "0.0.74";
+static GOLEM_RUST_VERSION: &str = "1.11.0";
+static GOLEM_TS_VERSION: &str = "0.1.0";
 static GOLEM_AI_VERSION: &str = "v0.4.0";
 static GOLEM_AI_SUFFIX: &str = ".wasm";
 
