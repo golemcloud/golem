@@ -30,7 +30,7 @@ interface common {
   record agent-method {
     name:          string,
     description:   string,
-    http-endpoint: option<http-endpoint-details>,
+    http-endpoint: list<http-endpoint-details>,
     prompt-hint:   option<string>,
     input-schema:  data-schema,
     output-schema: data-schema,
@@ -51,6 +51,7 @@ interface common {
   }
 
   record http-endpoint-details {
+    http-method: http-method,
     path-suffix:  list<path-segment>,
     header-vars:  list<header-variable>,
     query-vars:   list<query-variable>,
@@ -90,13 +91,13 @@ interface common {
     variable-name: string,
   }
 
-  record auth-details {
-    required: bool,
-  }
-
   record query-variable {
     query-param-name: string,
     variable-name: string,
+  }
+
+  record auth-details {
+    required: bool,
   }
 
   record auth-context {
@@ -109,7 +110,7 @@ interface common {
     given-name:     option<string>,
     family-name:    option<string>,
     picture:        option<string>,
-    username:       option<string>,
+    preferred-username: option<string>,
 
     claims: string,
   }

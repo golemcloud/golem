@@ -38,7 +38,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentHttpAuthContext, AgentId, AgentMode};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -307,6 +307,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         function_input: vec![
                             agent_id.agent_type.clone().into_value(),
                             agent_id.parameters.clone().into_value(),
+                            // Fixme: this needs to come from the invocation that caused this agent to be created
+                            None::<AgentHttpAuthContext>.into_value()
                         ],
                         invocation_context: invocation_context_stack.clone(),
                     })
