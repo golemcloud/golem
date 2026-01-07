@@ -28,7 +28,7 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 
-pub struct OldHttpApiDefinitionsApi;
+pub struct LegacyHttpApiDefinitionsApi;
 
 #[OpenApi(
     prefix_path = "/stubs",
@@ -36,12 +36,12 @@ pub struct OldHttpApiDefinitionsApi;
     tag = ApiTags::HttpApiDefinition
 )]
 #[allow(unused_variables)]
-impl OldHttpApiDefinitionsApi {
+impl LegacyHttpApiDefinitionsApi {
     /// Create a new api-definition in the environment
     #[oai(
         path = "/envs/:environment_id/http-api-definitions",
         method = "post",
-        operation_id = "create_http_api_definition_old",
+        operation_id = "create_http_api_definition_legacy",
         tag = ApiTags::Environment,
     )]
     async fn create_http_api_definition(
@@ -84,7 +84,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/http-api-definitions/:http_api_definition_id",
         method = "get",
-        operation_id = "get_http_api_definition_old"
+        operation_id = "get_http_api_definition_legacy"
     )]
     async fn get_http_api_definition(
         &self,
@@ -124,7 +124,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/http-api-definitions/:http_api_definition_id",
         method = "patch",
-        operation_id = "update_http_api_definition_old"
+        operation_id = "update_http_api_definition_legacy"
     )]
     async fn update_http_api_definition(
         &self,
@@ -166,7 +166,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/http-api-definitions/:http_api_definition_id",
         method = "delete",
-        operation_id = "delete_http_api_definition_old"
+        operation_id = "delete_http_api_definition_legacy"
     )]
     async fn delete_http_api_definition(
         &self,
@@ -207,7 +207,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/http-api-definitions/:http_api_definition_id/revisions/:revision",
         method = "get",
-        operation_id = "get_http_api_definition_revision_old"
+        operation_id = "get_http_api_definition_revision_legacy"
     )]
     async fn get_http_api_definition_revision(
         &self,
@@ -249,7 +249,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/envs/:environment_id/http-api-definitions/:http_api_definition_name",
         method = "get",
-        operation_id = "get_http_api_definition_in_environment_old",
+        operation_id = "get_http_api_definition_in_environment_legacy",
         tag = ApiTags::Environment
     )]
     async fn get_http_api_definition_in_environment(
@@ -297,7 +297,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/http-api-definitions/:http_api_definition_name",
         method = "get",
-        operation_id = "get_http_api_definition_in_deployment_old",
+        operation_id = "get_http_api_definition_in_deployment_legacy",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment,
     )]
@@ -355,7 +355,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/http-api-definitions/:http_api_definition_name/openapi",
         method = "get",
-        operation_id = "get_openapi_of_http_api_definition_in_deployment_old",
+        operation_id = "get_openapi_of_http_api_definition_in_deployment_legacy",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment,
     )]
@@ -415,7 +415,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/envs/:environment_id/http-api-definitions",
         method = "get",
-        operation_id = "list_environment_http_api_definitions_old",
+        operation_id = "list_environment_http_api_definitions_legacy",
         tag = ApiTags::Environment,
     )]
     async fn list_environment_http_api_definitions(
@@ -456,7 +456,7 @@ impl OldHttpApiDefinitionsApi {
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/http-api-definitions",
         method = "get",
-        operation_id = "list_deployment_http_api_definitions_old",
+        operation_id = "list_deployment_http_api_definitions_legacy",
         tag = ApiTags::Environment,
     )]
     async fn list_deployment_http_api_definitions(

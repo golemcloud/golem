@@ -14,9 +14,10 @@
 
 use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateHttpApiDefinitionOldError,
-    RegistryServiceGetHttpApiDefinitionInEnvironmentOldError,
-    RegistryServiceGetHttpApiDefinitionOldError, RegistryServiceUpdateHttpApiDefinitionOldError,
+    RegistryServiceClient, RegistryServiceCreateHttpApiDefinitionLegacyError,
+    RegistryServiceGetHttpApiDefinitionInEnvironmentLegacyError,
+    RegistryServiceGetHttpApiDefinitionLegacyError,
+    RegistryServiceUpdateHttpApiDefinitionLegacyError,
 };
 use golem_common::model::component::ComponentName;
 use golem_common::model::http_api_definition::{
@@ -67,7 +68,7 @@ async fn create_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_definition = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     assert!(http_api_definition.name == http_api_definition_creation.name);
@@ -76,21 +77,21 @@ async fn create_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_old(&http_api_definition.id.0)
+            .get_http_api_definition_legacy(&http_api_definition.id.0)
             .await?;
         assert!(fetched_http_api_definition == http_api_definition);
     }
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_in_environment_old(&env.id.0, &http_api_definition.name.0)
+            .get_http_api_definition_in_environment_legacy(&env.id.0, &http_api_definition.name.0)
             .await?;
         assert!(fetched_http_api_definition == http_api_definition);
     }
 
     {
         let result = client
-            .list_environment_http_api_definitions_old(&env.id.0)
+            .list_environment_http_api_definitions_legacy(&env.id.0)
             .await?;
         assert!(result.values == vec![http_api_definition]);
     }
@@ -136,7 +137,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_definition = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_definition_update = HttpApiDefinitionUpdate {
@@ -146,7 +147,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let updated_http_api_definition = client
-        .update_http_api_definition_old(&http_api_definition.id.0, &http_api_definition_update)
+        .update_http_api_definition_legacy(&http_api_definition.id.0, &http_api_definition_update)
         .await?;
 
     assert!(updated_http_api_definition.id == http_api_definition.id);
@@ -156,7 +157,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_revision_old(
+            .get_http_api_definition_revision_legacy(
                 &http_api_definition.id.0,
                 http_api_definition.revision.into(),
             )
@@ -166,7 +167,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_revision_old(
+            .get_http_api_definition_revision_legacy(
                 &http_api_definition.id.0,
                 updated_http_api_definition.revision.into(),
             )
@@ -176,21 +177,21 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_old(&http_api_definition.id.0)
+            .get_http_api_definition_legacy(&http_api_definition.id.0)
             .await?;
         assert!(fetched_http_api_definition == updated_http_api_definition);
     }
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_in_environment_old(&env.id.0, &http_api_definition.name.0)
+            .get_http_api_definition_in_environment_legacy(&env.id.0, &http_api_definition.name.0)
             .await?;
         assert!(fetched_http_api_definition == updated_http_api_definition);
     }
 
     {
         let result = client
-            .list_environment_http_api_definitions_old(&env.id.0)
+            .list_environment_http_api_definitions_legacy(&env.id.0)
             .await?;
         assert!(result.values == vec![updated_http_api_definition]);
     }
@@ -236,11 +237,11 @@ async fn delete_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_definition = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     client
-        .delete_http_api_definition_old(
+        .delete_http_api_definition_legacy(
             &http_api_definition.id.0,
             http_api_definition.revision.into(),
         )
@@ -248,29 +249,29 @@ async fn delete_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let result = client
-            .get_http_api_definition_old(&http_api_definition.id.0)
+            .get_http_api_definition_legacy(&http_api_definition.id.0)
             .await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceGetHttpApiDefinitionOldError::Error404(_)
+                RegistryServiceGetHttpApiDefinitionLegacyError::Error404(_)
             )) = result
         );
     }
 
     {
         let result = client
-            .get_http_api_definition_in_environment_old(&env.id.0, &http_api_definition.name.0)
+            .get_http_api_definition_in_environment_legacy(&env.id.0, &http_api_definition.name.0)
             .await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceGetHttpApiDefinitionInEnvironmentOldError::Error404(_)
+                RegistryServiceGetHttpApiDefinitionInEnvironmentLegacyError::Error404(_)
             )) = result
         );
     }
 
     {
         let result = client
-            .list_environment_http_api_definitions_old(&env.id.0)
+            .list_environment_http_api_definitions_legacy(&env.id.0)
             .await?;
         assert!(result.values == vec![]);
     }
@@ -318,16 +319,16 @@ async fn cannot_create_two_http_api_definitions_with_same_name(
     };
 
     client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let result = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await;
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceCreateHttpApiDefinitionOldError::Error409(_)
+            RegistryServiceCreateHttpApiDefinitionLegacyError::Error409(_)
         )) = result
     );
 
@@ -352,7 +353,7 @@ async fn cannot_create_two_revisions_with_same_version(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_revision = client
-        .create_http_api_definition_old(
+        .create_http_api_definition_legacy(
             &env.id.0,
             &HttpApiDefinitionCreation {
                 name: HttpApiDefinitionName("test-definition".to_string()),
@@ -365,7 +366,7 @@ async fn cannot_create_two_revisions_with_same_version(
     user.deploy_environment(&env.id).await?;
 
     let result = client
-        .update_http_api_definition_old(
+        .update_http_api_definition_legacy(
             &http_api_revision.id.0,
             &HttpApiDefinitionUpdate {
                 current_revision: http_api_revision.revision,
@@ -377,7 +378,7 @@ async fn cannot_create_two_revisions_with_same_version(
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceUpdateHttpApiDefinitionOldError::Error409(_)
+            RegistryServiceUpdateHttpApiDefinitionLegacyError::Error409(_)
         )) = result
     );
 
@@ -396,7 +397,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_revision = client
-        .create_http_api_definition_old(
+        .create_http_api_definition_legacy(
             &env.id.0,
             &HttpApiDefinitionCreation {
                 name: HttpApiDefinitionName("test-definition".to_string()),
@@ -407,7 +408,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
         .await?;
 
     let result = client
-        .update_http_api_definition_old(
+        .update_http_api_definition_legacy(
             &http_api_revision.id.0,
             &HttpApiDefinitionUpdate {
                 current_revision: http_api_revision.revision.next()?,
@@ -419,7 +420,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceUpdateHttpApiDefinitionOldError::Error409(_)
+            RegistryServiceUpdateHttpApiDefinitionLegacyError::Error409(_)
         )) = result
     );
 
@@ -444,12 +445,12 @@ async fn cannot_create_http_api_definition_with_empty_version(
     };
 
     let result = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await;
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceCreateHttpApiDefinitionOldError::Error400(_)
+            RegistryServiceCreateHttpApiDefinitionLegacyError::Error400(_)
         )) = result
     );
 
@@ -478,11 +479,11 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
     };
 
     let http_api_definition_1 = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation_1)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation_1)
         .await?;
 
     client
-        .delete_http_api_definition_old(
+        .delete_http_api_definition_legacy(
             &http_api_definition_1.id.0,
             http_api_definition_1.revision.into(),
         )
@@ -495,14 +496,14 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
     };
 
     let http_api_definition_2 = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation_2)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation_2)
         .await?;
 
     assert!(http_api_definition_2.id == http_api_definition_1.id);
     assert!(http_api_definition_2.revision == http_api_definition_1.revision.next()?.next()?);
 
     client
-        .delete_http_api_definition_old(
+        .delete_http_api_definition_legacy(
             &http_api_definition_2.id.0,
             http_api_definition_2.revision.into(),
         )
@@ -553,14 +554,14 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     let http_api_definition = client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let deployment = user.deploy_environment(&env.id).await?;
 
     {
         let fetched_http_api_definition = client
-            .get_http_api_definition_in_deployment_old(
+            .get_http_api_definition_in_deployment_legacy(
                 &env.id.0,
                 deployment.revision.into(),
                 "echo-api",
@@ -571,7 +572,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 
     {
         let fetched_http_api_definitions = client
-            .list_deployment_http_api_definitions_old(&env.id.0, deployment.revision.into())
+            .list_deployment_http_api_definitions_legacy(&env.id.0, deployment.revision.into())
             .await?;
         assert!(fetched_http_api_definitions.values == vec![http_api_definition]);
     }

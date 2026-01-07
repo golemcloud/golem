@@ -28,7 +28,7 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 
-pub struct OldHttpApiDeploymentsApi;
+pub struct LegacyHttpApiDeploymentsApi;
 
 #[OpenApi(
     prefix_path = "/stubs",
@@ -36,12 +36,12 @@ pub struct OldHttpApiDeploymentsApi;
     tag = ApiTags::ApiDeployment
 )]
 #[allow(unused_variables)]
-impl OldHttpApiDeploymentsApi {
+impl LegacyHttpApiDeploymentsApi {
     /// Create a new api-deployment in the environment
     #[oai(
         path = "/envs/:environment_id/http-api-deployments",
         method = "post",
-        operation_id = "create_http_api_deployment_old",
+        operation_id = "create_http_api_deployment_legacy",
         tag = ApiTags::Environment,
     )]
     async fn create_http_api_deployment(
@@ -84,7 +84,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/http-api-deployments/:http_api_deployment_id",
         method = "get",
-        operation_id = "get_http_api_deployment_old"
+        operation_id = "get_http_api_deployment_legacy"
     )]
     async fn get_http_api_deployment(
         &self,
@@ -124,7 +124,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/http-api-deployments/:http_api_deployment_id",
         method = "patch",
-        operation_id = "update_http_api_deployment_old"
+        operation_id = "update_http_api_deployment_legacy"
     )]
     async fn update_http_api_deployment(
         &self,
@@ -166,7 +166,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/http-api-deployments/:http_api_deployment_id",
         method = "delete",
-        operation_id = "delete_http_api_deployment_old"
+        operation_id = "delete_http_api_deployment_legacy"
     )]
     async fn delete_http_api_deployment(
         &self,
@@ -207,7 +207,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/http-api-deployment/:http_api_deployment_id/revisions/:revision",
         method = "get",
-        operation_id = "get_http_api_deployment_revision_old"
+        operation_id = "get_http_api_deployment_revision_legacy"
     )]
     async fn get_http_api_deployment_revision(
         &self,
@@ -249,7 +249,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/http-api-deployments/:domain",
         method = "get",
-        operation_id = "get_http_api_deployment_in_environment_old",
+        operation_id = "get_http_api_deployment_in_environment_legacy",
         tag = ApiTags::Environment
     )]
     async fn get_http_api_deployment_in_environment(
@@ -293,7 +293,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/http-api-deployments/:domain",
         method = "get",
-        operation_id = "get_http_api_deployment_in_deployment_old",
+        operation_id = "get_http_api_deployment_in_deployment_legacy",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment,
     )]
@@ -346,7 +346,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/http-api-deployments",
         method = "get",
-        operation_id = "list_http_api_deployments_in_environment_old",
+        operation_id = "list_http_api_deployments_in_environment_legacy",
         tag = ApiTags::Environment
     )]
     async fn list_http_api_deployments_in_environment(
@@ -387,7 +387,7 @@ impl OldHttpApiDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/http-api-deployments",
         method = "get",
-        operation_id = "list_http_api_deployments_in_deployment_old",
+        operation_id = "list_http_api_deployments_in_deployment_legacy",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment,
     )]

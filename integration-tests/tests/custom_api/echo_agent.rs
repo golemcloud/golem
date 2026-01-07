@@ -105,7 +105,7 @@ async fn echo_agent_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     client
-        .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
@@ -114,7 +114,7 @@ async fn echo_agent_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     client
-        .create_http_api_deployment_old(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;

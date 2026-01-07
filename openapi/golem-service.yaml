@@ -5716,7 +5716,7 @@ paths:
       - HttpApiDefinition
       - Environment
       summary: List http api definitions in the environment
-      operationId: list_environment_http_api_definitions_old
+      operationId: list_environment_http_api_definitions_legacy
       parameters:
       - in: path
         name: environment_id
@@ -5785,7 +5785,7 @@ paths:
       - HttpApiDefinition
       - Environment
       summary: Create a new api-definition in the environment
-      operationId: create_http_api_definition_old
+      operationId: create_http_api_definition_legacy
       parameters:
       - in: path
         name: environment_id
@@ -5860,7 +5860,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Get http api definition
-      operationId: get_http_api_definition_old
+      operationId: get_http_api_definition_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -5928,7 +5928,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Delete http api definition
-      operationId: delete_http_api_definition_old
+      operationId: delete_http_api_definition_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6001,7 +6001,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Update http api definition
-      operationId: update_http_api_definition_old
+      operationId: update_http_api_definition_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6076,7 +6076,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Get a specific http api definition revision
-      operationId: get_http_api_definition_revision_old
+      operationId: get_http_api_definition_revision_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6155,7 +6155,7 @@ paths:
       - HttpApiDefinition
       - Environment
       summary: Get http api definition by name in the environment
-      operationId: get_http_api_definition_in_environment_old
+      operationId: get_http_api_definition_in_environment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6234,7 +6234,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api definition by name in the deployment
-      operationId: get_http_api_definition_in_deployment_old
+      operationId: get_http_api_definition_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6322,7 +6322,7 @@ paths:
       - Environment
       - Deployment
       summary: Get openapi spec of http api definition in the deployment
-      operationId: get_openapi_of_http_api_definition_in_deployment_old
+      operationId: get_openapi_of_http_api_definition_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6409,7 +6409,7 @@ paths:
       - HttpApiDefinition
       - Environment
       summary: List http api definitions in the deployment
-      operationId: list_deployment_http_api_definitions_old
+      operationId: list_deployment_http_api_definitions_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6488,7 +6488,7 @@ paths:
       - ApiDeployment
       - Environment
       summary: List http api deployment by domain in the environment
-      operationId: list_http_api_deployments_in_environment_old
+      operationId: list_http_api_deployments_in_environment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6557,7 +6557,7 @@ paths:
       - ApiDeployment
       - Environment
       summary: Create a new api-deployment in the environment
-      operationId: create_http_api_deployment_old
+      operationId: create_http_api_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6632,7 +6632,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Get an api-deployment by id
-      operationId: get_http_api_deployment_old
+      operationId: get_http_api_deployment_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6700,7 +6700,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Delete an api-deployment
-      operationId: delete_http_api_deployment_old
+      operationId: delete_http_api_deployment_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6773,7 +6773,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Update an api-deployment
-      operationId: update_http_api_deployment_old
+      operationId: update_http_api_deployment_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6848,7 +6848,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Get a specific http api deployment revision
-      operationId: get_http_api_deployment_revision_old
+      operationId: get_http_api_deployment_revision_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6927,7 +6927,7 @@ paths:
       - ApiDeployment
       - Environment
       summary: Get http api deployment by domain in the environment
-      operationId: get_http_api_deployment_in_environment_old
+      operationId: get_http_api_deployment_in_environment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -7006,7 +7006,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api deployment by domain in the deployment
-      operationId: get_http_api_deployment_in_deployment_old
+      operationId: get_http_api_deployment_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -7094,7 +7094,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api deployment by domain in the deployment
-      operationId: list_http_api_deployments_in_deployment_old
+      operationId: list_http_api_deployments_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id

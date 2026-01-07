@@ -661,7 +661,7 @@ impl ThroughputBenchmark {
         };
 
         client
-            .create_http_api_definition_old(&env.id.0, &http_api_definition_creation)
+            .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
             .await
             .expect("Failed to create http api definition");
 
@@ -673,7 +673,7 @@ impl ThroughputBenchmark {
         };
 
         client
-            .create_http_api_deployment_old(&env.id.0, &http_api_deployment_creation)
+            .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
             .await
             .expect("Failed to create http api deployment");
 

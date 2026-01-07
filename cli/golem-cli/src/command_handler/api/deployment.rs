@@ -86,7 +86,7 @@ impl ApiDeploymentCommandHandler {
                         .golem_clients()
                         .await?
                         .api_deployment
-                        .list_http_api_deployments_in_deployment_old(
+                        .list_http_api_deployments_in_deployment_legacy(
                             &environment.environment_id.0,
                             current_deployment_revision.into(),
                         )
@@ -115,7 +115,7 @@ impl ApiDeploymentCommandHandler {
 
                     let Some(deployment) = clients
                         .api_deployment
-                        .get_http_api_deployment_in_deployment_old(
+                        .get_http_api_deployment_in_deployment_legacy(
                             &environment.environment_id.0,
                             current_deployment_revision.get(),
                             &domain.0,
@@ -132,7 +132,10 @@ impl ApiDeploymentCommandHandler {
 
                     clients
                         .api_deployment
-                        .get_http_api_deployment_revision_old(&deployment.id.0, (*revision).into())
+                        .get_http_api_deployment_revision_legacy(
+                            &deployment.id.0,
+                            (*revision).into(),
+                        )
                         .await
                         .map_service_error_not_found_as_opt()
                 },
@@ -181,7 +184,7 @@ impl ApiDeploymentCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .api_deployment
-                        .get_http_api_deployment_revision_old(
+                        .get_http_api_deployment_revision_legacy(
                             &http_api_deployment_id.0,
                             revision.into(),
                         )
@@ -211,7 +214,7 @@ impl ApiDeploymentCommandHandler {
         let create = async || {
             clients
                 .api_deployment
-                .create_http_api_deployment_old(
+                .create_http_api_deployment_legacy(
                     &environment.environment_id.0,
                     &HttpApiDeploymentCreation {
                         domain: domain.clone(),
@@ -263,7 +266,7 @@ impl ApiDeploymentCommandHandler {
             .golem_clients()
             .await?
             .api_deployment
-            .delete_http_api_deployment_old(
+            .delete_http_api_deployment_legacy(
                 &http_api_deployment.id.0,
                 http_api_deployment.revision.into(),
             )
@@ -305,7 +308,7 @@ impl ApiDeploymentCommandHandler {
             .golem_clients()
             .await?
             .api_deployment
-            .update_http_api_deployment_old(
+            .update_http_api_deployment_legacy(
                 &http_api_deployment.id.0,
                 &HttpApiDeploymentUpdate {
                     current_revision: http_api_deployment.revision,
