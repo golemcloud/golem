@@ -6,7 +6,7 @@ on:
       enable_ssh:
         description: "Enable SSH debugging session"
         required: false
-        default: "false"
+        default: false
         type: boolean
       rust_target:
         description: "Rust target to build"
