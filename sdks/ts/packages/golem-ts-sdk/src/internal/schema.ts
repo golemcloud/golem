@@ -246,7 +246,7 @@ export function getAgentMethodSchema(
         inputSchema: inputSchema,
         outputSchema: outputSchema,
         // TODO
-        httpEndpoint: []
+        httpEndpoint: [],
       });
     }),
   );
