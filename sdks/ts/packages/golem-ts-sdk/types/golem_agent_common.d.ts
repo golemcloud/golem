@@ -49,12 +49,12 @@ declare module 'golem:agent/common' {
     headerName: string;
     variableName: string;
   };
-  export type AuthDetails = {
-    required: boolean;
-  };
   export type QueryVariable = {
     queryParamName: string;
     variableName: string;
+  };
+  export type AuthDetails = {
+    required: boolean;
   };
   export type HttpMountDetails = {
     pathPrefix: PathSegment[];
@@ -66,6 +66,7 @@ declare module 'golem:agent/common' {
     webhookSuffix: PathSegment[];
   };
   export type HttpEndpointDetails = {
+    httpMethod: HttpMethod;
     pathSuffix: PathSegment[];
     headerVars: HeaderVariable[];
     queryVars: QueryVariable[];
@@ -81,7 +82,7 @@ declare module 'golem:agent/common' {
     givenName?: string;
     familyName?: string;
     picture?: string;
-    username?: string;
+    preferredUsername?: string;
     claims: string;
   };
   export type TextType = {
@@ -136,7 +137,7 @@ declare module 'golem:agent/common' {
   export type AgentMethod = {
     name: string;
     description: string;
-    httpEndpoint?: HttpEndpointDetails;
+    httpEndpoint: HttpEndpointDetails[];
     promptHint?: string;
     inputSchema: DataSchema;
     outputSchema: DataSchema;
