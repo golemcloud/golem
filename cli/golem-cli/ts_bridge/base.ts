@@ -14,37 +14,33 @@ export type AgentTypeName = string;
 export type IdempotencyKey = string;
 
 export type UntypedDataValue =
-    | { type: "tuple"; elements: UntypedElementValue[] }
-    | { type: "multimodal"; elements: UntypedNamedElementValue[] };
+    | { type: "Tuple"; elements: UntypedElementValue[] }
+    | { type: "Multimodal"; elements: UntypedNamedElementValue[] };
 
 export type UntypedElementValue =
-    | { type: "componentModel"; value: JsonComponentModelValue }
-    | { type: "unstructuredText"; value: TextReference }
-    | { type: "unstructuredBinary"; value: BinaryReference };
+    | { type: "ComponentModel"; value: unknown }
+    | { type: "UnstructuredText"; value: TextReference }
+    | { type: "UnstructuredBinary"; value: BinaryReference };
 
 export interface UntypedNamedElementValue {
     name: string;
     value: UntypedElementValue;
 }
 
-export interface JsonComponentModelValue {
-    value: unknown;
-}
-
 export type TextReference =
-    | { type: "url"; value: string }
-    | { type: "inline"; data: string; textType?: TextType };
+    | { type: "Url"; value: string }
+    | { type: "Inline"; data: string; textType?: TextType };
 
 export const TextReference = {
     fromUnstructuredText<LC extends LanguageCode[]>(input: UnstructuredText<LC>): TextReference {
         if (input.tag === 'url') {
             return {
-                type: 'url',
+                type: 'Url',
                 value: input.val,
             };
         } else {
             return {
-                type: 'inline',
+                type: 'Inline',
                 data: input.val,
                 textType: input.languageCode
                     ? {languageCode: input.languageCode as string}
@@ -59,19 +55,19 @@ export interface TextType {
 }
 
 export type BinaryReference =
-    | { type: "url"; value: string }
-    | { type: "inline"; data: Uint8Array; binaryType: BinaryType };
+    | { type: "Url"; value: string }
+    | { type: "Inline"; data: Uint8Array; binaryType: BinaryType };
 
 export const BinaryReference = {
     fromUnstructuredBinary<MT extends MimeType[] | MimeType>(input: UnstructuredBinary<MT>): BinaryReference {
         if (input.tag === 'url') {
             return {
-                type: 'url',
+                type: 'Url',
                 value: input.val,
             };
         } else {
             return {
-                type: 'inline',
+                type: 'Inline',
                 data: input.val,
                 binaryType: {mimeType: input.mimeType as string},
             };
@@ -222,7 +218,7 @@ export const UnstructuredText = {
         elementValue: UntypedElementValue,
         allowedCodes: string[],
     ): UnstructuredText<LC> {
-        if (elementValue.type === 'unstructuredText') {
+        if (elementValue.type === 'UnstructuredText') {
             return UnstructuredText.fromDataValue<LC>(
                 parameterName,
                 elementValue.value,
@@ -238,7 +234,7 @@ export const UnstructuredText = {
         dataValue: TextReference,
         allowedCodes: string[],
     ): UnstructuredText<LC> {
-        if (dataValue.type === 'url') {
+        if (dataValue.type === 'Url') {
             return {
                 tag: 'url',
                 val: dataValue.value,
@@ -378,7 +374,7 @@ export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> =
 
 export const UnstructuredBinary = {
     fromUntypedElementValue<MT extends string[] | MimeType = MimeType>(parameterName: string, elementValue: UntypedElementValue, allowedMimeTypes: string[]): UnstructuredBinary<MT> {
-        if (elementValue.type === 'unstructuredBinary') {
+        if (elementValue.type === 'UnstructuredBinary') {
             return UnstructuredBinary.fromDataValue<MT>(
                 parameterName,
                 elementValue.value,
@@ -394,7 +390,7 @@ export const UnstructuredBinary = {
         dataValue: BinaryReference,
         allowedMimeTypes: string[],
     ): UnstructuredBinary<MT> {
-        if (dataValue.type === 'url') {
+        if (dataValue.type === 'Url') {
             return {
                 tag: 'url',
                 val: dataValue.value,

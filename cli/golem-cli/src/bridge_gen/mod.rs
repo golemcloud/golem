@@ -21,7 +21,7 @@ use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashSet, VecDeque};
 
 trait BridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path) -> Self;
+    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self;
     fn generate(&self) -> anyhow::Result<()>;
 }
 
@@ -90,7 +90,6 @@ fn named_types_in_analysed_type(typ: &AnalysedType) -> Vec<AnalysedType> {
         }
         visited.insert(current);
 
-        println!("Visiting type: {:?}", current);
         if current.name().is_some() {
             result.push(current.clone());
         }

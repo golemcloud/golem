@@ -18,7 +18,7 @@ use golem_common::model::agent::{
     NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case,
+    bool, case, chr, field, list, option, r#enum, record, result, s32, str, tuple, u8, unit_case,
     unit_result, variant,
 };
 
@@ -35,7 +35,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                     NamedElementSchema {
                         name: "a".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: u32(),
+                            element_type: s32(),
                         }),
                     },
                     NamedElementSchema {
@@ -71,13 +71,13 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                         NamedElementSchema {
                             name: "x".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
+                                element_type: s32(),
                             }),
                         },
                         NamedElementSchema {
                             name: "y".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
+                                element_type: s32(),
                             }),
                         },
                     ],
@@ -86,7 +86,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                     elements: vec![NamedElementSchema {
                         name: "return".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: u32(),
+                            element_type: s32(),
                         }),
                     }],
                 }),
@@ -103,7 +103,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
     let person = record(vec![
         field("first-name", str()),
         field("last-name", str()),
-        field("age", option(u32())),
+        field("age", option(s32())),
         field("eye-color", color.clone()),
     ])
     .named("person");
@@ -238,7 +238,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                     NamedElementSchema {
                         name: "export".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: u32(),
+                            element_type: s32(),
                         }),
                     },
                     NamedElementSchema {
@@ -275,7 +275,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                         .map(|keyword| NamedElementSchema {
                             name: keyword.to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
+                                element_type: s32(),
                             }),
                         })
                         .collect(),
@@ -547,7 +547,7 @@ pub fn char_type() -> Vec<AgentType> {
 }
 
 pub fn unit_result_type() -> Vec<AgentType> {
-     vec![AgentType {
+    vec![AgentType {
         type_name: golem_common::model::agent::AgentTypeName("agent-unit-result".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
@@ -586,37 +586,57 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
     // Define reusable types with names
     let object_type = record(vec![
         field("a", str()),
-        field("b", u32()),
+        field("b", s32()),
         field("c", bool()),
     ])
     .named("ObjectType");
 
-    let union_type = str().named("UnionType");
+    let union_type = variant(vec![
+        case("case1", s32()),
+        case("case2", str()),
+        case("case3", bool()),
+        case("case4", object_type.clone()),
+    ])
+    .named("UnionType");
 
-    let union_complex_type = str().named("UnionComplexType");
+    let map_type = list(tuple(vec![str(), s32()])).named("MapType");
+
+    let tuple_complex_type =
+        tuple(vec![str(), s32(), object_type.clone()]).named("TupleComplexType");
+
+    let tuple_type = tuple(vec![str(), s32(), bool()]).named("TupleType");
+
+    let simple_interface_type = record(vec![field("n", s32())]).named("SimpleInterfaceType");
 
     let object_complex_type = record(vec![
         field("a", str()),
-        field("b", u32()),
+        field("b", s32()),
         field("c", bool()),
         field("d", object_type.clone()),
         field("e", union_type.clone()),
         field("f", list(str())),
         field("g", list(object_type.clone())),
-        field("h", str()), // TupleType
-        field("i", str()), // TupleComplexType
-        field("j", str()), // MapType
-        field("k", record(vec![field("n", u32())]).named("SimpleInterfaceType")),
+        field("h", tuple_type.clone()),
+        field("i", tuple_complex_type.clone()),
+        field("j", map_type.clone()),
+        field("k", simple_interface_type.clone()),
     ])
     .named("ObjectComplexType");
 
-    let map_type = str().named("MapType");
-
-    let tuple_complex_type = str().named("TupleComplexType");
-
-    let tuple_type = str().named("TupleType");
-
     let list_complex_type = list(object_type.clone()).named("ListComplexType");
+
+    let union_complex_type = variant(vec![
+        case("case1", s32()),
+        case("case2", str()),
+        case("case3", bool()),
+        case("case4", object_complex_type.clone()),
+        case("case5", union_type.clone()),
+        case("case6", tuple_type.clone()),
+        case("case7", tuple_complex_type.clone()),
+        case("case8", simple_interface_type.clone()),
+        case("case9", list(str())),
+    ])
+    .named("UnionComplexType");
 
     let result_like_with_no_tag = record(vec![
         field("ok", option(str())),
@@ -624,11 +644,13 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
     ])
     .named("ResultLikeWithNoTag");
 
-    let result_like = str().named("ResultLike");
+    let result_like =
+        variant(vec![case("okay", str()), case("error", option(str()))]).named("ResultLike");
 
-    let result_exact = str().named("ResultExact");
+    let result_exact = variant(vec![case("ok", str()), case("err", str())]).named("ResultExact");
 
-    let result_like_with_void = str().named("ResultLikeWithVoid");
+    let result_like_with_void =
+        variant(vec![unit_case("ok"), unit_case("err")]).named("ResultLikeWithVoid");
 
     let object_with_union_undefined_1 =
         record(vec![field("a", option(str()))]).named("ObjectWithUnionWithUndefined1");
@@ -675,129 +697,171 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "complexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "unionType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: union_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: union_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "unionComplexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: union_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: union_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "numberType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: u32(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: s32(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "stringType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "booleanType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: bool(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: bool(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "mapType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: map_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: map_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tupleComplexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: tuple_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: tuple_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tupleType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: tuple_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: tuple_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "listComplexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: list_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: list_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "resultLike".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: result_like.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: result_like.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "resultLikeWithNoTag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: result_like_with_no_tag.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: result_like_with_no_tag.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "unionWithNull".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined1".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_1.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_1.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined2".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_2.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_2.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined3".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_3.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_3.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined4".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_4.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_4.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "optionalStringType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "optionalUnionType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(union_type.clone()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(union_type.clone()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "taggedUnionType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: tagged_union.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: tagged_union.clone(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -818,45 +882,59 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "param1".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param2".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_1.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_1.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param3".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_2.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_2.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param4".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_3.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_3.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param5".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_4.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_4.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param6".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param7".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(union_type.clone()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(union_type.clone()),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -870,21 +948,27 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "param1".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param2".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(u32()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(s32()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param3".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -961,7 +1045,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "numberType".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
+                                element_type: s32(),
                             }),
                         }],
                     }),
@@ -969,7 +1053,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
+                                element_type: s32(),
                             }),
                         }],
                     }),
@@ -1278,15 +1362,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -1294,15 +1382,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -1315,15 +1407,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -1331,15 +1427,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -1564,129 +1664,171 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "complexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "unionType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: union_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: union_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "unionComplexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: union_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: union_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "numberType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: u32(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: s32(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "stringType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "booleanType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: bool(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: bool(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "mapType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: map_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: map_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tupleComplexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: tuple_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: tuple_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tupleType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: tuple_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: tuple_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "listComplexType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: list_complex_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: list_complex_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_type.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_type.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "resultLike".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: result_like.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: result_like.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "resultLikeWithNoTag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: result_like_with_no_tag.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: result_like_with_no_tag.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "unionWithNull".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined1".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_1.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_1.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined2".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_2.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_2.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined3".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_3.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_3.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "objectWithUnionWithUndefined4".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_4.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_4.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "optionalStringType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "optionalUnionType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(union_type.clone()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(union_type.clone()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "taggedUnionType".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: tagged_union.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: tagged_union.clone(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -1707,45 +1849,59 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "param1".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param2".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_1.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_1.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param3".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_2.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_2.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param4".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_3.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_3.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param5".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: object_with_union_undefined_4.clone(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: object_with_union_undefined_4.clone(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param6".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param7".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(union_type.clone()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(union_type.clone()),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -1759,21 +1915,27 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "param1".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param2".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(u32()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(s32()),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "param3".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: option(str()),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: option(str()),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -1850,7 +2012,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "numberType".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
+                                element_type: s32(),
                             }),
                         }],
                     }),
@@ -1858,7 +2020,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
+                                element_type: s32(),
                             }),
                         }],
                     }),
@@ -2125,15 +2287,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -2141,15 +2307,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -2162,15 +2332,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),
@@ -2178,15 +2352,19 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![
                             NamedElementSchema {
                                 name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    element_type: str(),
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: str(),
+                                    },
+                                ),
                             },
                         ],
                     }),

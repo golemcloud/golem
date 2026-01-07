@@ -15,11 +15,21 @@
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::AgentType;
+use golem_client::model::ValueAndType;
+use golem_common::model::agent::{
+    AgentType, JsonComponentModelValue, UntypedDataValue, UntypedElementValue, UntypedElementValues,
+};
+use golem_wasm::analysis::analysed_type::{bool, field, record, s32, str};
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::{IntoValueAndType, Value};
 use heck::ToUpperCamelCase;
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::io::Write;
+use std::process::Stdio;
 use test_r::test;
-
 // TODO: replace the paths with temp dirs before merging
+// TODO: generate doc comments based on descriptions
 
 // Playground tests for manual inspection
 #[test]
@@ -54,17 +64,72 @@ fn playground3() {
 
 #[test]
 fn playground4() {
-    let agent_type =
-        super::super::super::model::agent::test::ts_code_first_snippets()[0]
-            .clone();
+    let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen4");
 
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, &target_dir);
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunOptionalQMark",
+        json! {
+            [
+                "value1",
+                10,
+                null
+            ]
+        },
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: "value1".into_value_and_type().to_json_value().unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
+                }),
+            ],
+        }),
+    );
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunTupleComplexType",
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel( // single return value containing a tuple
+                JsonComponentModelValue {
+                    value: json! {
+                        [
+                            "hello".into_value_and_type().to_json_value().unwrap(),
+                            100i32.into_value_and_type().to_json_value().unwrap(),
+                            ValueAndType::new(
+                                Value::Record(vec![
+                                    Value::String("x".to_string()),
+                                    Value::S32(200),
+                                    Value::Bool(true),
+                                ]),
+                                record(vec![
+                                    field("a", str()),
+                                    field("b", s32()),
+                                    field("c", bool()),
+                                ]),
+                            )
+                            .to_json_value()
+                            .unwrap()
+                        ]
+                    },
+                },
+            )],
+        }),
+        json!(["hello", 100, { "a": "x", "b": 200, "c": true }]),
+    );
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
-    let gen = TypeScriptBridgeGenerator::new(agent_type, target_dir);
+    let gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true);
     gen.generate().unwrap();
 
     let status = std::process::Command::new("npm")
@@ -113,297 +178,112 @@ fn collect_js_and_d_ts(dir: &std::path::Path) -> Vec<Utf8PathBuf> {
     result
 }
 
-#[test]
-fn test_encode_decode_functions_exist() {
-    let agent_type =
-        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_test_funcs");
+fn assert_function_input_encoding(
+    target_dir: &Utf8Path,
+    function_name: &str,
+    input_json: serde_json::Value,
+    expected: UntypedDataValue,
+) {
+    // In this test we pass a JSON representing an array of function parameters as it is passed to our client method,
+    // and we expect the encoding to be a UntypedDataValue matching the DataSchema of the function's input.
 
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    let test_ts = std::fs::read_to_string(target_dir.join("test.ts"))
-        .expect("Failed to read test.ts");
-
-    // Verify that all encode/decode functions are exported
-    for method in &agent_type.methods {
-        let method_pascal = method.name.to_upper_camel_case();
-        assert!(
-            test_ts.contains(&format!("export async function encode{}Input", method_pascal)),
-            "Missing encode{}Input function",
-            method_pascal
-        );
-        assert!(
-            test_ts.contains(&format!("export async function decode{}Input", method_pascal)),
-            "Missing decode{}Input function",
-            method_pascal
-        );
-        assert!(
-            test_ts.contains(&format!("export async function encode{}Output", method_pascal)),
-            "Missing encode{}Output function",
-            method_pascal
-        );
-        assert!(
-            test_ts.contains(&format!("export async function decode{}Output", method_pascal)),
-            "Missing decode{}Output function",
-            method_pascal
-        );
-    }
-
-    // Verify that testFunctions map includes all functions
-    assert!(test_ts.contains("const testFunctions"), "Missing testFunctions map");
-}
-
-#[test]
-fn test_encode_input_callable() {
-    let agent_type =
-        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_test_encode_input");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    // Get the first method's name
-    let first_method = agent_type.methods.first().expect("No methods in agent type");
-    let method_pascal = first_method.name.to_upper_camel_case();
-
-    // Call the encode function via npx tsx with a simple input
-    let input = "{}";
-    let status = std::process::Command::new("bash")
-        .arg("-c")
+    let mut child = std::process::Command::new("npm")
+        .arg("run")
+        .arg("test")
         .arg(format!(
-            "cd {} && echo '{}' | npx tsx test.ts encode{}Input",
-            target_dir.as_std_path().display(),
-            input,
-            method_pascal
+            "encode{}Input",
+            function_name.to_upper_camel_case()
         ))
-        .status()
-        .expect("Failed to run encode function");
-
-    assert!(status.success(), "encode function failed");
-}
-
-#[test]
-fn test_main_function_shows_available_functions() {
-    let agent_type =
-        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_test_main");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    // Call the test script with no arguments to see the usage message
-    let output = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!(
-            "cd {} && npx tsx test.ts 2>&1",
-            target_dir.as_std_path().display()
-        ))
-        .output()
-        .expect("Failed to run test.ts");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
-    assert!(
-        combined.contains("Usage: npx tsx test.ts <function-name>"),
-        "Usage message not found in output: {}",
-        combined
-    );
-}
-
-// Tests using different agent types - call functions and verify outputs
-#[test]
-fn test_single_agent_encode_decode_with_input_output() {
-    let agent_type =
-        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_encode_decode_test");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    let first_method = agent_type.methods.first().expect("No methods in agent type");
-    let method_pascal = first_method.name.to_upper_camel_case();
-
-    // Test encodeF1Input: call with empty object input
-    let input = "{}";
-    let output = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!(
-            "cd {} && echo '{}' | npx tsx test.ts encode{}Input",
-            target_dir.as_std_path().display(),
-            input,
-            method_pascal
-        ))
-        .output()
-        .expect("Failed to run encode function");
-
-    assert!(output.status.success(), "encode function failed");
-    
-    let result_str = String::from_utf8_lossy(&output.stdout);
-    let result: serde_json::Value = serde_json::from_str(&result_str)
-        .expect("Failed to parse JSON output from encode function");
-    
-    // Verify the output is a valid DataValue structure
-    assert!(result.get("type").is_some(), "Missing 'type' field in DataValue");
-    assert_eq!(
-        result.get("type").and_then(|v| v.as_str()),
-        Some("tuple"),
-        "Expected 'tuple' type in output"
-    );
-    assert!(result.get("elements").is_some(), "Missing 'elements' field in DataValue");
-}
-
-#[test]
-fn test_multi_agent_wrapper_2_encode_input() {
-    let agent_type =
-        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_multi_2_encode");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    let first_method = agent_type.methods.first().expect("No methods in agent type");
-    let method_pascal = first_method.name.to_upper_camel_case();
-
-    // Test encoding input with empty object
-    let input = "{}";
-    let output = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!(
-            "cd {} && echo '{}' | npx tsx test.ts encode{}Input",
-            target_dir.as_std_path().display(),
-            input,
-            method_pascal
-        ))
-        .output()
+        .current_dir(target_dir.as_std_path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
         .expect("Failed to run encode input function");
 
-    assert!(output.status.success(), "encode input function failed: {:?}", String::from_utf8_lossy(&output.stderr));
-    
-    let result_str = String::from_utf8_lossy(&output.stdout);
-    let result: serde_json::Value = serde_json::from_str(&result_str)
-        .expect("Failed to parse JSON output from encode function");
-    
+    if let Some(ref mut stdin) = child.stdin {
+        let input_str = serde_json::to_string(&input_json).expect("Failed to serialize input JSON");
+        stdin
+            .write_all(input_str.as_bytes())
+            .expect("Failed to write to stdin");
+    }
+
+    let output = child.wait_with_output().expect("Failed to wait on npx");
+
+    assert!(
+        output.status.success(),
+        "encode input function failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let result_str = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|s| !s.is_empty() && !s.starts_with("> "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let result: serde_json::Value = serde_json::from_str(&result_str).expect(&format!(
+        "Failed to parse JSON output from encode function:\n{result_str}"
+    ));
+
+    let result_data_value: UntypedDataValue = serde_json::from_value(result).expect(&format!(
+        "Failed to deserialize output to UntypedDataValue:\n{result_str}"
+    ));
+
     // Verify the output structure
     assert_eq!(
-        result.get("type").and_then(|v| v.as_str()),
-        Some("tuple"),
-        "Expected 'tuple' type in output"
+        result_data_value, expected,
+        "Encoded data value does not match expected:\nInput:\n{input_json}\nOutput:\n{result_str}"
     );
-    assert!(result.get("elements").is_some(), "Missing 'elements' field");
 }
 
-#[test]
-fn test_multiple_element_types_encode() {
-    let agent_type =
-        super::super::super::model::agent::test::reproducer_for_multiple_types_called_element()[0]
-            .clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_multi_element_encode");
+fn assert_function_output_decoding(
+    target_dir: &Utf8Path,
+    function_name: &str,
+    output: UntypedDataValue,
+    expected: serde_json::Value,
+) {
+    // In this test we pass a JSON representing an UntypedDataValue as it is returned from our REST API,
+    // and we expect the output to be a JSON value representing the method's return value
 
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    let first_method = agent_type.methods.first().expect("No methods in agent type");
-    let method_pascal = first_method.name.to_upper_camel_case();
-
-    // Call encode with simple numeric input
-    let input = "{}";
-    let output = std::process::Command::new("bash")
-        .arg("-c")
+    let mut child = std::process::Command::new("npm")
+        .arg("run")
+        .arg("test")
         .arg(format!(
-            "cd {} && echo '{}' | npx tsx test.ts encode{}Input",
-            target_dir.as_std_path().display(),
-            input,
-            method_pascal
+            "decode{}Output",
+            function_name.to_upper_camel_case()
         ))
-        .output()
-        .expect("Failed to run encode function");
+        .current_dir(target_dir.as_std_path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to run decode output function");
 
-    assert!(
-        output.status.success(),
-        "encode function failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let result_str = String::from_utf8_lossy(&output.stdout);
-    let _result: serde_json::Value = serde_json::from_str(&result_str)
-        .expect("Failed to parse JSON output");
-}
-
-#[test]
-fn test_enum_types_compile() {
-    let agent_type =
-        super::super::super::model::agent::test::reproducer_for_issue_with_enums()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_enum_encode");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    let first_method = agent_type.methods.first().expect("No methods in agent type");
-    let method_pascal = first_method.name.to_upper_camel_case();
-
-    // Test that encode input function is callable
-    let input = "{}";
-    let output = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!(
-            "cd {} && echo '{}' | npx tsx test.ts encode{}Input 2>&1",
-            target_dir.as_std_path().display(),
-            input,
-            method_pascal
-        ))
-        .output()
-        .expect("Failed to run encode function");
-
-    // The test.ts should be compilable and the functions should be callable
-    // We verify successful compilation by checking that the function can be invoked
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let error_str = String::from_utf8_lossy(&output.stderr);
-    
-    // If we got here without panicking, the compilation succeeded
-    // Now check that output is valid JSON (success or expected error)
-    if output.status.success() {
-        let result: serde_json::Value = serde_json::from_str(&output_str)
-            .expect("Failed to parse JSON output from encode function");
-        assert!(result.is_object(), "Output should be a JSON object");
+    if let Some(ref mut stdin) = child.stdin {
+        let input_str = serde_json::to_string(&output).expect("Failed to serialize input JSON");
+        stdin
+            .write_all(input_str.as_bytes())
+            .expect("Failed to write to stdin");
     }
-}
 
-#[test]
-fn test_char_type_encode_input() {
-    let agent_type = super::super::super::model::agent::test::char_type()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen_char_encode");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type.clone(), &target_dir);
-
-    let first_method = agent_type.methods.first().expect("No methods in agent type");
-    let method_pascal = first_method.name.to_upper_camel_case();
-
-    // Test encoding char type with a single character
-    let input = r#"{"c": "a"}"#;
-    let output = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(format!(
-            "cd {} && echo '{}' | npx tsx test.ts encode{}Input",
-            target_dir.as_std_path().display(),
-            input,
-            method_pascal
-        ))
-        .output()
-        .expect("Failed to run encode function");
+    let output = child.wait_with_output().expect("Failed to wait on npx");
 
     assert!(
         output.status.success(),
-        "encode char function failed: {}",
+        "decode output function failed: {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let result_str = String::from_utf8_lossy(&output.stdout);
-    let result: serde_json::Value = serde_json::from_str(&result_str)
-        .expect("Failed to parse JSON output from encode function");
+    let result_str = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|s| !s.is_empty() && !s.starts_with("> "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let result: serde_json::Value = serde_json::from_str(&result_str).expect(&format!(
+        "Failed to parse JSON output from decode function:\n{result_str}"
+    ));
 
-    // Verify the encoded char is in the elements
-    assert!(result.get("elements").is_some(), "Missing elements in output");
+    // Verify the output structure
+    assert_eq!(
+        result, expected,
+        "Encoded decoded JSON value does not match expected:\nData:\n{output:?}\nDecoded:\n{result_str}"
+    );
 }
