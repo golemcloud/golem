@@ -1605,4 +1605,14 @@ mod tests {
         let target = NamedTempFile::new().unwrap();
         generate_moonbit_wrapper(ctx, target.path()).unwrap();
     }
+
+    #[test]
+    pub fn ts_code_first_snippets() {
+        let component_name = "example:code-first-snippets".try_into().unwrap();
+        let agent_types = test::ts_code_first_snippets();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
 }

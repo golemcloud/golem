@@ -19,6 +19,8 @@ use golem_common::model::agent::AgentType;
 use heck::ToUpperCamelCase;
 use test_r::test;
 
+// TODO: replace the paths with temp dirs before merging
+
 // Playground tests for manual inspection
 #[test]
 fn playground1() {
@@ -45,6 +47,17 @@ fn playground3() {
     let agent_type =
         super::super::super::model::agent::test::multi_agent_wrapper_2_types()[1].clone();
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen3");
+
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, &target_dir);
+}
+
+#[test]
+fn playground4() {
+    let agent_type =
+        super::super::super::model::agent::test::ts_code_first_snippets()[0]
+            .clone();
+    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen4");
 
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, &target_dir);

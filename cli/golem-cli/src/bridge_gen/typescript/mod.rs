@@ -129,12 +129,16 @@ impl TypeScriptBridgeGenerator {
 
             // encodeInput function
             {
-                let mut encode_input = writer.begin_export_async_function(&format!("encode{}Input", method_name_pascal));
+                let mut encode_input = writer
+                    .begin_export_async_function(&format!("encode{}Input", method_name_pascal));
                 encode_input.result("void");
                 encode_input.write_line("const json = await readStdin();");
                 encode_input.write_line("const result: base.DataValue = (() => {");
                 encode_input.indent();
-                Self::write_encode_data_value_from_json(&mut encode_input, &method_def.input_schema)?;
+                Self::write_encode_data_value_from_json(
+                    &mut encode_input,
+                    &method_def.input_schema,
+                )?;
                 encode_input.unindent();
                 encode_input.write_line("})();");
                 encode_input.write_line("console.log(JSON.stringify(result));");
@@ -144,7 +148,8 @@ impl TypeScriptBridgeGenerator {
 
             // decodeInput function
             {
-                let mut decode_input = writer.begin_export_async_function(&format!("decode{}Input", method_name_pascal));
+                let mut decode_input = writer
+                    .begin_export_async_function(&format!("decode{}Input", method_name_pascal));
                 decode_input.result("void");
                 decode_input.write_line("const jsonResult = await readStdin();");
                 decode_input.write_line("const result = { result: jsonResult };");
@@ -160,12 +165,16 @@ impl TypeScriptBridgeGenerator {
 
             // encodeOutput function
             {
-                let mut encode_output = writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
+                let mut encode_output = writer
+                    .begin_export_async_function(&format!("encode{}Output", method_name_pascal));
                 encode_output.result("void");
                 encode_output.write_line("const json = await readStdin();");
                 encode_output.write_line("const result: base.DataValue = (() => {");
                 encode_output.indent();
-                Self::write_encode_data_value_from_json(&mut encode_output, &method_def.output_schema)?;
+                Self::write_encode_data_value_from_json(
+                    &mut encode_output,
+                    &method_def.output_schema,
+                )?;
                 encode_output.unindent();
                 encode_output.write_line("})();");
                 encode_output.write_line("console.log(JSON.stringify(result));");
@@ -175,7 +184,8 @@ impl TypeScriptBridgeGenerator {
 
             // decodeOutput function
             {
-                let mut decode_output = writer.begin_export_async_function(&format!("decode{}Output", method_name_pascal));
+                let mut decode_output = writer
+                    .begin_export_async_function(&format!("decode{}Output", method_name_pascal));
                 decode_output.result("void");
                 decode_output.write_line("const jsonResult = await readStdin();");
                 decode_output.write_line("const result = { result: jsonResult };");
@@ -229,7 +239,9 @@ impl TypeScriptBridgeGenerator {
         main.write_line("if (!fn) {");
         main.indent();
         main.write_line("console.error(`Unknown function: ${functionName}`);");
-        main.write_line("console.error('Available functions:', Object.keys(testFunctions).join(', '));");
+        main.write_line(
+            "console.error('Available functions:', Object.keys(testFunctions).join(', '));",
+        );
         main.write_line("process.exit(1);");
         main.unindent();
         main.write_line("}");
@@ -452,7 +464,10 @@ impl TypeScriptBridgeGenerator {
         typ: &AnalysedType,
     ) -> anyhow::Result<()> {
         match typ {
-            AnalysedType::Record(_) | AnalysedType::Variant(_) | AnalysedType::Result(_) | AnalysedType::Flags(_) => {
+            AnalysedType::Record(_)
+            | AnalysedType::Variant(_)
+            | AnalysedType::Result(_)
+            | AnalysedType::Flags(_) => {
                 // For complex types, write multi-line encode logic
                 Self::write_encode_logic(writer, value, typ)?;
             }
@@ -465,7 +480,8 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("return [".to_string());
                 writer.indent();
                 for (idx, item_type) in tuple.items.iter().enumerate() {
-                    let item_encode = Self::encode_wit_value(&format!("{}[{}]", value, idx), item_type);
+                    let item_encode =
+                        Self::encode_wit_value(&format!("{}[{}]", value, idx), item_type);
                     let comma = if idx < tuple.items.len() - 1 { "," } else { "" };
                     writer.write_line(format!("{}{}", item_encode, comma));
                 }
@@ -493,8 +509,13 @@ impl TypeScriptBridgeGenerator {
                 for (idx, field) in record.fields.iter().enumerate() {
                     let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
                     let wit_field_name = &field.name;
-                    let field_encode = Self::encode_wit_value(&format!("{}.{}", value, js_field_name), &field.typ);
-                    let comma = if idx < record.fields.len() - 1 { "," } else { "" };
+                    let field_encode =
+                        Self::encode_wit_value(&format!("{}.{}", value, js_field_name), &field.typ);
+                    let comma = if idx < record.fields.len() - 1 {
+                        ","
+                    } else {
+                        ""
+                    };
                     writer.write_line(format!("\"{}\": {}{}", wit_field_name, field_encode, comma));
                 }
                 writer.unindent();
@@ -508,7 +529,8 @@ impl TypeScriptBridgeGenerator {
                     let condition = format!("{}.tag === '{}'", value, case.name);
                     let value_expr = match &case.typ {
                         Some(case_type) => {
-                            let encoded = Self::encode_wit_value(&format!("{}.val", value), case_type);
+                            let encoded =
+                                Self::encode_wit_value(&format!("{}.val", value), case_type);
                             format!("{{ \"{}\": {} }}", case.name, encoded)
                         }
                         None => {
@@ -517,7 +539,10 @@ impl TypeScriptBridgeGenerator {
                     };
                     let connector = if idx == 0 { "" } else { ":" };
                     if idx == variant.cases.len() - 1 {
-                        writer.write_line(format!("{} {} ? {} : null", connector, condition, value_expr));
+                        writer.write_line(format!(
+                            "{} {} ? {} : null",
+                            connector, condition, value_expr
+                        ));
                     } else {
                         writer.write_line(format!("{} {} ? {} ", connector, condition, value_expr));
                     }
@@ -555,7 +580,10 @@ impl TypeScriptBridgeGenerator {
                 writer.indent();
                 for flag in &flags.names {
                     let flag_name = escape_js_ident(flag.to_lower_camel_case());
-                    writer.write_line(format!("({}[\"{}\"] ? \"{}\" : undefined),", value, flag_name, flag));
+                    writer.write_line(format!(
+                        "({}[\"{}\"] ? \"{}\" : undefined),",
+                        value, flag_name, flag
+                    ));
                 }
                 writer.unindent();
                 writer.write_line("].filter((f) => f !== undefined);".to_string());
@@ -595,7 +623,10 @@ impl TypeScriptBridgeGenerator {
         typ: &AnalysedType,
     ) -> anyhow::Result<()> {
         match typ {
-            AnalysedType::Record(_) | AnalysedType::Variant(_) | AnalysedType::Result(_) | AnalysedType::Flags(_) => {
+            AnalysedType::Record(_)
+            | AnalysedType::Variant(_)
+            | AnalysedType::Result(_)
+            | AnalysedType::Flags(_) => {
                 // For complex types, write multi-line decode logic
                 writer.write_line(format!("const obj = {} as any;", value));
                 Self::write_decode_logic(writer, typ)?;
@@ -604,10 +635,14 @@ impl TypeScriptBridgeGenerator {
                 // For enums, write a readable multi-line check
                 writer.write_line(format!("if (typeof {} !== 'string') {{", value));
                 writer.indent();
-                writer.write_line(format!("throw new Error(`Expected string for enum, got ${{{}}})`);", value));
+                writer.write_line(format!(
+                    "throw new Error(`Expected string for enum, got ${{{}}})`);",
+                    value
+                ));
                 writer.unindent();
                 writer.write_line("}".to_string());
-                let cases = enum_type.cases
+                let cases = enum_type
+                    .cases
                     .iter()
                     .map(|case| format!("\"{}\"", case))
                     .collect::<Vec<_>>();
@@ -623,18 +658,30 @@ impl TypeScriptBridgeGenerator {
                 // For tuples, write readable validation
                 writer.write_line(format!("if (!Array.isArray({})) {{", value));
                 writer.indent();
-                writer.write_line(format!("throw new Error(`Expected array for tuple, got ${{{}}}`);", value));
+                writer.write_line(format!(
+                    "throw new Error(`Expected array for tuple, got ${{{}}}`);",
+                    value
+                ));
                 writer.unindent();
                 writer.write_line("}".to_string());
-                writer.write_line(format!("if ({}.length !== {}) {{", value, tuple.items.len()));
+                writer.write_line(format!(
+                    "if ({}.length !== {}) {{",
+                    value,
+                    tuple.items.len()
+                ));
                 writer.indent();
-                writer.write_line(format!("throw new Error(`Expected tuple of length {}, got length ${{{}}}.length`);", tuple.items.len(), value));
+                writer.write_line(format!(
+                    "throw new Error(`Expected tuple of length {}, got length ${{{}}}.length`);",
+                    tuple.items.len(),
+                    value
+                ));
                 writer.unindent();
                 writer.write_line("}".to_string());
                 writer.write_line("return [".to_string());
                 writer.indent();
                 for (idx, item_type) in tuple.items.iter().enumerate() {
-                    let item_decode = Self::decode_wit_value(&format!("{}[{}]", value, idx), item_type);
+                    let item_decode =
+                        Self::decode_wit_value(&format!("{}[{}]", value, idx), item_type);
                     let comma = if idx < tuple.items.len() - 1 { "," } else { "" };
                     writer.write_line(format!("{}{}", item_decode, comma));
                 }
@@ -650,7 +697,10 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
-    fn write_decode_logic(writer: &mut TsFunctionWriter<'_>, typ: &AnalysedType) -> anyhow::Result<()> {
+    fn write_decode_logic(
+        writer: &mut TsFunctionWriter<'_>,
+        typ: &AnalysedType,
+    ) -> anyhow::Result<()> {
         match typ {
             AnalysedType::Record(record) => {
                 writer.write_line("return {".to_string());
@@ -658,8 +708,13 @@ impl TypeScriptBridgeGenerator {
                 for (idx, field) in record.fields.iter().enumerate() {
                     let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
                     let wit_field_name = &field.name;
-                    let field_decode = Self::decode_wit_value(&format!("obj[\"{}\"]", wit_field_name), &field.typ);
-                    let comma = if idx < record.fields.len() - 1 { "," } else { "" };
+                    let field_decode =
+                        Self::decode_wit_value(&format!("obj[\"{}\"]", wit_field_name), &field.typ);
+                    let comma = if idx < record.fields.len() - 1 {
+                        ","
+                    } else {
+                        ""
+                    };
                     writer.write_line(format!("{}: {}{}", js_field_name, field_decode, comma));
                 }
                 writer.unindent();
@@ -672,8 +727,14 @@ impl TypeScriptBridgeGenerator {
                     writer.indent();
                     match &case.typ {
                         Some(case_type) => {
-                            let value_decode = Self::decode_wit_value(&format!("obj[\"{}\"]", case.name), case_type);
-                            writer.write_line(format!("return {{ tag: '{}', val: {} }};", case.name, value_decode));
+                            let value_decode = Self::decode_wit_value(
+                                &format!("obj[\"{}\"]", case.name),
+                                case_type,
+                            );
+                            writer.write_line(format!(
+                                "return {{ tag: '{}', val: {} }};",
+                                case.name, value_decode
+                            ));
                         }
                         None => {
                             writer.write_line(format!("return {{ tag: '{}' }};", case.name));
@@ -703,14 +764,19 @@ impl TypeScriptBridgeGenerator {
                 writer.unindent();
                 writer.write_line("} else {".to_string());
                 writer.indent();
-                writer.write_line("throw new Error(`Expected result object with 'ok' or 'err' key, got ${obj}`);".to_string());
+                writer.write_line(
+                    "throw new Error(`Expected result object with 'ok' or 'err' key, got ${obj}`);"
+                        .to_string(),
+                );
                 writer.unindent();
                 writer.write_line("}".to_string());
             }
             AnalysedType::Flags(flags) => {
                 writer.write_line("if (!Array.isArray(obj)) {".to_string());
                 writer.indent();
-                writer.write_line("throw new Error(`Expected array of flag names, got ${obj}`);".to_string());
+                writer.write_line(
+                    "throw new Error(`Expected array of flag names, got ${obj}`);".to_string(),
+                );
                 writer.unindent();
                 writer.write_line("}".to_string());
                 writer.write_line("const result = {".to_string());
@@ -725,10 +791,13 @@ impl TypeScriptBridgeGenerator {
                 writer.indent();
                 writer.write_line("if (typeof flag !== 'string') {".to_string());
                 writer.indent();
-                writer.write_line("throw new Error(`Expected string flag name, got ${flag}`);".to_string());
+                writer.write_line(
+                    "throw new Error(`Expected string flag name, got ${flag}`);".to_string(),
+                );
                 writer.unindent();
                 writer.write_line("}".to_string());
-                let flag_names_str = flags.names
+                let flag_names_str = flags
+                    .names
                     .iter()
                     .map(|name| format!("'{}'", escape_js_ident(name.to_lower_camel_case())))
                     .collect::<Vec<_>>()
@@ -842,7 +911,10 @@ impl TypeScriptBridgeGenerator {
                     // Multiple result values - return as array
                     writer.write_line("if (result.result && result.result.type === \"tuple\") {");
                     writer.indent();
-                    writer.write_line(format!("if (result.result.elements.length !== {}) {{", params.elements.len()));
+                    writer.write_line(format!(
+                        "if (result.result.elements.length !== {}) {{",
+                        params.elements.len()
+                    ));
                     writer.indent();
                     writer.write_line(format!("throw new Error(`Expected {} result elements, got ${{result.result.elements.length}}`);", params.elements.len()));
                     writer.unindent();
@@ -855,7 +927,7 @@ impl TypeScriptBridgeGenerator {
                             ElementSchema::ComponentModel(component_model) => {
                                 Self::decode_wit_value(
                                     &format!("result.result.elements[{}].value", idx),
-                                    &component_model.element_type
+                                    &component_model.element_type,
                                 )
                             }
                             ElementSchema::UnstructuredText(descriptor) => {
@@ -883,7 +955,11 @@ impl TypeScriptBridgeGenerator {
                                 )
                             }
                         };
-                        let comma = if idx < params.elements.len() - 1 { "," } else { "" };
+                        let comma = if idx < params.elements.len() - 1 {
+                            ","
+                        } else {
+                            ""
+                        };
                         writer.write_line(format!("{}{}", decode_expr, comma));
                     }
                     writer.unindent();
@@ -909,12 +985,21 @@ impl TypeScriptBridgeGenerator {
                 // Generate union type handling code
                 for (idx, element) in multimodal.elements.iter().enumerate() {
                     let if_or_else = if idx == 0 { "if" } else { "else if" };
-                    writer.write_line(format!("{}(item.name === \"{}\") {{", if_or_else, element.name));
+                    writer.write_line(format!(
+                        "{}(item.name === \"{}\") {{",
+                        if_or_else, element.name
+                    ));
                     writer.indent();
                     match &element.schema {
                         ElementSchema::ComponentModel(component_model) => {
-                            let decoded = Self::decode_wit_value("item.value.value", &component_model.element_type);
-                            writer.write_line(format!("return {{ type: '{}', value: {} }};", element.name, decoded));
+                            let decoded = Self::decode_wit_value(
+                                "item.value.value",
+                                &component_model.element_type,
+                            );
+                            writer.write_line(format!(
+                                "return {{ type: '{}', value: {} }};",
+                                element.name, decoded
+                            ));
                         }
                         ElementSchema::UnstructuredText(descriptor) => {
                             writer.write_line(format!(
@@ -1021,13 +1106,18 @@ impl TypeScriptBridgeGenerator {
             }
             DataSchema::Multimodal(multimodal) => {
                 writer.indent();
-                writer.write_line("{ type: \"multimodal\", elements: multimodalInput.map((item: any) => {");
+                writer.write_line(
+                    "{ type: \"multimodal\", elements: multimodalInput.map((item: any) => {",
+                );
                 writer.indent();
 
                 // Generate encoding for each multimodal variant
                 for (idx, element) in multimodal.elements.iter().enumerate() {
                     let if_or_else = if idx == 0 { "if" } else { "else if" };
-                    writer.write_line(format!("{}(item.type === '{}') {{", if_or_else, element.name));
+                    writer.write_line(format!(
+                        "{}(item.type === '{}') {{",
+                        if_or_else, element.name
+                    ));
                     writer.indent();
                     writer.write_line("return {");
                     writer.indent();
@@ -1100,12 +1190,17 @@ impl TypeScriptBridgeGenerator {
                 Ok(())
             }
             DataSchema::Multimodal(multimodal) => {
-                writer.write_line("return { type: \"multimodal\", elements: json.map((item: any) => {");
+                writer.write_line(
+                    "return { type: \"multimodal\", elements: json.map((item: any) => {",
+                );
                 writer.indent();
 
                 for (idx, element) in multimodal.elements.iter().enumerate() {
                     let if_or_else = if idx == 0 { "if" } else { "else if" };
-                    writer.write_line(format!("{}(item.type === '{}') {{", if_or_else, element.name));
+                    writer.write_line(format!(
+                        "{}(item.type === '{}') {{",
+                        if_or_else, element.name
+                    ));
                     writer.indent();
                     writer.write_line("return {");
                     writer.indent();
@@ -1179,12 +1274,14 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::Enum(enum_type) => {
                     // Enum: decoded as a string, validate it's a known case
-                    let cases_array = enum_type.cases
+                    let cases_array = enum_type
+                        .cases
                         .iter()
                         .map(|case| format!("\"{}\"", case))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    let cases_union = enum_type.cases
+                    let cases_union = enum_type
+                        .cases
                         .iter()
                         .map(|case| format!("\"{}\"", case))
                         .collect::<Vec<_>>()
@@ -1193,7 +1290,8 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::Flags(flags) => {
                     // Flags: decoded as an array of flag names, convert to boolean object
-                    let flag_names = flags.names
+                    let flag_names = flags
+                        .names
                         .iter()
                         .map(|name| {
                             let flag_name = escape_js_ident(name.to_lower_camel_case());
@@ -1201,7 +1299,8 @@ impl TypeScriptBridgeGenerator {
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
-                    let flag_initializers = flags.names
+                    let flag_initializers = flags
+                        .names
                         .iter()
                         .map(|name| {
                             let flag_name = escape_js_ident(name.to_lower_camel_case());
@@ -1215,11 +1314,13 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::Tuple(tuple) => {
                     // Tuple: decoded from an array
-                    let items: Vec<String> = tuple.items
+                    let items: Vec<String> = tuple
+                        .items
                         .iter()
                         .enumerate()
                         .map(|(idx, item_type)| {
-                            let item_decode = Self::decode_wit_value(&format!("v[{}]", idx), item_type);
+                            let item_decode =
+                                Self::decode_wit_value(&format!("v[{}]", idx), item_type);
                             item_decode
                         })
                         .collect();
@@ -1232,12 +1333,16 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::Record(record) => {
                     // Record: decoded from an object
-                    let field_decoders: Vec<String> = record.fields
+                    let field_decoders: Vec<String> = record
+                        .fields
                         .iter()
                         .map(|field| {
                             let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
                             let wit_field_name = &field.name;
-                            let field_decode = Self::decode_wit_value(&format!("(v as any)[\"{}\"]", wit_field_name), &field.typ);
+                            let field_decode = Self::decode_wit_value(
+                                &format!("(v as any)[\"{}\"]", wit_field_name),
+                                &field.typ,
+                            );
                             format!("{js_field_name}: {field_decode}")
                         })
                         .collect();
@@ -1249,17 +1354,25 @@ impl TypeScriptBridgeGenerator {
                 AnalysedType::Variant(variant) => {
                     // Variant: decoded from an object with a single key (case name)
                     // Create a series of checks: if 'case1' in v { ... } else if 'case2' in v { ... }
-                    let cases = variant.cases
+                    let cases = variant
+                        .cases
                         .iter()
-                        .map(|case| {
-                            match &case.typ {
-                                Some(case_type) => {
-                                    let value_decode = Self::decode_wit_value(&format!("(obj as any)[\"{}\"]", case.name), case_type);
-                                    format!("if (\"{}\" in obj) {{ return {{ tag: '{}', val: {} }}; }}", case.name, case.name, value_decode)
-                                }
-                                None => {
-                                    format!("if (\"{}\" in obj) {{ return {{ tag: '{}' }}; }}", case.name, case.name)
-                                }
+                        .map(|case| match &case.typ {
+                            Some(case_type) => {
+                                let value_decode = Self::decode_wit_value(
+                                    &format!("(obj as any)[\"{}\"]", case.name),
+                                    case_type,
+                                );
+                                format!(
+                                    "if (\"{}\" in obj) {{ return {{ tag: '{}', val: {} }}; }}",
+                                    case.name, case.name, value_decode
+                                )
+                            }
+                            None => {
+                                format!(
+                                    "if (\"{}\" in obj) {{ return {{ tag: '{}' }}; }}",
+                                    case.name, case.name
+                                )
                             }
                         })
                         .collect::<Vec<_>>()
@@ -1331,7 +1444,8 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::Flags(flags) => {
                     // Flags: encoded as an array of flag names that are true
-                    let flag_names: Vec<String> = flags.names
+                    let flag_names: Vec<String> = flags
+                        .names
                         .iter()
                         .map(|name| {
                             let flag_name = escape_js_ident(name.to_lower_camel_case());
@@ -1342,11 +1456,13 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::Tuple(tuple) => {
                     // Tuple: encoded as an array
-                    let items: Vec<String> = tuple.items
+                    let items: Vec<String> = tuple
+                        .items
                         .iter()
                         .enumerate()
                         .map(|(idx, item_type)| {
-                            let item_encode = Self::encode_wit_value(&format!("{}[{}]", value, idx), item_type);
+                            let item_encode =
+                                Self::encode_wit_value(&format!("{}[{}]", value, idx), item_type);
                             item_encode
                         })
                         .collect();
@@ -1354,7 +1470,8 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::Record(record) => {
                     // Record: encoded as an object
-                    let fields: Vec<String> = record.fields
+                    let fields: Vec<String> = record
+                        .fields
                         .iter()
                         .map(|field| {
                             let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
@@ -1370,13 +1487,17 @@ impl TypeScriptBridgeGenerator {
                 AnalysedType::Variant(variant) => {
                     // Variant: encoded as an object with a single key (case name)
                     // Generate nested ternary: case1 ? obj1 : (case2 ? obj2 : (case3 ? obj3 : null))
-                    let cases: Vec<(String, String)> = variant.cases
+                    let cases: Vec<(String, String)> = variant
+                        .cases
                         .iter()
                         .map(|case| {
                             let condition = format!("{}.tag === '{}'", value, case.name);
                             let value_expr = match &case.typ {
                                 Some(case_type) => {
-                                    let encoded = Self::encode_wit_value(&format!("{}.val", value), case_type);
+                                    let encoded = Self::encode_wit_value(
+                                        &format!("{}.val", value),
+                                        case_type,
+                                    );
                                     format!("{{ \"{}\": {} }}", case.name, encoded)
                                 }
                                 None => {
@@ -1410,7 +1531,8 @@ impl TypeScriptBridgeGenerator {
                     };
                     let err_expr = match &result.err {
                         Some(err_type) => {
-                            let encoded = Self::encode_wit_value(&format!("{}.err", value), err_type);
+                            let encoded =
+                                Self::encode_wit_value(&format!("{}.err", value), err_type);
                             format!("{{ err: {} }}", encoded)
                         }
                         None => "{ err: null }".to_string(),
@@ -1685,7 +1807,21 @@ impl TypeScriptBridgeGenerator {
                 let inner_ts_type = Self::type_reference(&*inner.inner)?;
                 Ok(format!("{}[]", inner_ts_type))
             }
-            // TODO: result
+            AnalysedType::Result(result) => {
+                let ok_type = result
+                    .ok
+                    .as_ref()
+                    .map(|t| Self::type_reference(&t))
+                    .transpose()?
+                    .unwrap_or("void".to_string());
+                let err_type = result
+                    .err
+                    .as_ref()
+                    .map(|t| Self::type_reference(&t))
+                    .transpose()?
+                    .unwrap_or("Error".to_string());
+                Ok(format!("base.JsonResult<{ok_type}, {err_type}>"))
+            }
             AnalysedType::Handle(_) => Err(anyhow!("Handle types are not supported")),
             _ => match typ.name() {
                 Some(name) => Ok(name.to_upper_camel_case()), // TODO: use owner too?

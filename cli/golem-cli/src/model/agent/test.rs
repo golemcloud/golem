@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+    AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor, BinaryType,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::analysed_type::{
-    case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case,
+    bool, case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case,
     unit_result, variant,
 };
 
@@ -547,7 +547,7 @@ pub fn char_type() -> Vec<AgentType> {
 }
 
 pub fn unit_result_type() -> Vec<AgentType> {
-    vec![AgentType {
+     vec![AgentType {
         type_name: golem_common::model::agent::AgentTypeName("agent-unit-result".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
@@ -580,4 +580,1946 @@ pub fn unit_result_type() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
     }]
+}
+
+pub fn ts_code_first_snippets() -> Vec<AgentType> {
+    // Define reusable types with names
+    let object_type = record(vec![
+        field("a", str()),
+        field("b", u32()),
+        field("c", bool()),
+    ])
+    .named("ObjectType");
+
+    let union_type = str().named("UnionType");
+
+    let union_complex_type = str().named("UnionComplexType");
+
+    let object_complex_type = record(vec![
+        field("a", str()),
+        field("b", u32()),
+        field("c", bool()),
+        field("d", object_type.clone()),
+        field("e", union_type.clone()),
+        field("f", list(str())),
+        field("g", list(object_type.clone())),
+        field("h", str()), // TupleType
+        field("i", str()), // TupleComplexType
+        field("j", str()), // MapType
+        field("k", record(vec![field("n", u32())]).named("SimpleInterfaceType")),
+    ])
+    .named("ObjectComplexType");
+
+    let map_type = str().named("MapType");
+
+    let tuple_complex_type = str().named("TupleComplexType");
+
+    let tuple_type = str().named("TupleType");
+
+    let list_complex_type = list(object_type.clone()).named("ListComplexType");
+
+    let result_like_with_no_tag = record(vec![
+        field("ok", option(str())),
+        field("err", option(str())),
+    ])
+    .named("ResultLikeWithNoTag");
+
+    let result_like = str().named("ResultLike");
+
+    let result_exact = str().named("ResultExact");
+
+    let result_like_with_void = str().named("ResultLikeWithVoid");
+
+    let object_with_union_undefined_1 =
+        record(vec![field("a", option(str()))]).named("ObjectWithUnionWithUndefined1");
+
+    let object_with_union_undefined_2 =
+        record(vec![field("a", option(str()))]).named("ObjectWithUnionWithUndefined2");
+
+    let object_with_union_undefined_3 =
+        record(vec![field("a", option(str()))]).named("ObjectWithUnionWithUndefined3");
+
+    let object_with_union_undefined_4 =
+        record(vec![field("a", option(str()))]).named("ObjectWithUnionWithUndefined4");
+
+    let tagged_union = str().named("TaggedUnion");
+
+    let union_with_literals = str().named("UnionWithLiterals");
+
+    let union_with_only_literals = str().named("UnionWithOnlyLiterals");
+
+    vec![
+        // FooAgent
+        AgentType {
+            type_name: golem_common::model::agent::AgentTypeName("FooAgent".to_string()),
+            description: "FooAgent class".to_string(),
+            constructor: AgentConstructor {
+                name: Some("FooAgent".to_string()),
+                description: "Constructor for FooAgent".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "input".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            },
+            methods: vec![
+                AgentMethod {
+                    name: "funAll".to_string(),
+                    description: "Takes all complex types".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "complexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "unionType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: union_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "unionComplexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: union_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "numberType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: u32(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "stringType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "booleanType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: bool(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "mapType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: map_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tupleComplexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: tuple_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tupleType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: tuple_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "listComplexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: list_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "resultLike".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: result_like.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "resultLikeWithNoTag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: result_like_with_no_tag.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "unionWithNull".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined1".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_1.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined2".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_2.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined3".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_3.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined4".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_4.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "optionalStringType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "optionalUnionType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(union_type.clone()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "taggedUnionType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: tagged_union.clone(),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funOptional".to_string(),
+                    description: "Takes optional parameters".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "param1".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param2".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_1.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param3".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_2.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param4".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_3.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param5".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_4.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param6".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param7".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(union_type.clone()),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funOptionalQMark".to_string(),
+                    description: "Takes optional parameters with question mark".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "param1".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param2".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(u32()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param3".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funObjectComplexType".to_string(),
+                    description: "Takes ObjectComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionType".to_string(),
+                    description: "Takes UnionType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionComplexType".to_string(),
+                    description: "Takes UnionComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionComplexType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funNumber".to_string(),
+                    description: "Takes NumberType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "numberType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funString".to_string(),
+                    description: "Takes StringType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "stringType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBoolean".to_string(),
+                    description: "Takes BooleanType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "booleanType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: bool(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: bool(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funMap".to_string(),
+                    description: "Takes MapType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "mapType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: map_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: map_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funTaggedUnion".to_string(),
+                    description: "Takes TaggedUnion".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "taggedUnionType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tagged_union.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tagged_union.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funTupleComplexType".to_string(),
+                    description: "Takes TupleComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "complexType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funTupleType".to_string(),
+                    description: "Takes TupleType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "tupleType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funListComplexType".to_string(),
+                    description: "Takes ListComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "listComplexType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: list_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: list_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funObjectType".to_string(),
+                    description: "Takes ObjectType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "objectType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionWithLiterals".to_string(),
+                    description: "Takes UnionWithLiterals".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionWithLiterals".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_literals.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_literals.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionWithOnlyLiterals".to_string(),
+                    description: "Takes UnionWithOnlyLiterals".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionWithLiterals".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_only_literals.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_only_literals.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funVoidReturn".to_string(),
+                    description: "Returns void".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funNullReturn".to_string(),
+                    description: "Returns null".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funUndefinedReturn".to_string(),
+                    description: "Returns undefined".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funUnstructuredText".to_string(),
+                    description: "Takes UnstructuredText".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unstructuredText".to_string(),
+                            schema: ElementSchema::UnstructuredText(TextDescriptor {
+                                restrictions: None,
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnstructuredBinary".to_string(),
+                    description: "Takes UnstructuredBinary".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unstructuredText".to_string(),
+                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                                restrictions: Some(vec![BinaryType {
+                                    mime_type: "application/json".to_string(),
+                                }]),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funMultimodal".to_string(),
+                    description: "Takes Multimodal".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                },
+                AgentMethod {
+                    name: "funMultimodalAdvanced".to_string(),
+                    description: "Takes MultimodalAdvanced".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                },
+                AgentMethod {
+                    name: "funEitherOptional".to_string(),
+                    description: "Takes ResultLikeWithNoTag".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "eitherBothOptional".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_no_tag.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_no_tag.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funResultExact".to_string(),
+                    description: "Takes ResultExact".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "either".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_exact.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_exact.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funResultLike".to_string(),
+                    description: "Takes ResultLike".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "eitherOneOptional".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funResultLikeWithVoid".to_string(),
+                    description: "Takes ResultLikeWithVoid".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "resultLikeWithVoid".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_void.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_void.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBuiltinResultVS".to_string(),
+                    description: "Takes Result<void, string>".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "result".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultVoidString"),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultVoidString"),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBuiltinResultSV".to_string(),
+                    description: "Takes Result<string, void>".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "result".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringVoid"),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringVoid"),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBuiltinResultSN".to_string(),
+                    description: "Takes Result<string, number>".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "result".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringNumber"),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringNumber"),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funNoReturn".to_string(),
+                    description: "Returns nothing".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funArrowSync".to_string(),
+                    description: "Arrow function returning text".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+            ],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+        },
+        // BarAgent
+        AgentType {
+            type_name: golem_common::model::agent::AgentTypeName("BarAgent".to_string()),
+            description: "BarAgent class".to_string(),
+            constructor: AgentConstructor {
+                name: Some("BarAgent".to_string()),
+                description: "Constructor for BarAgent".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![
+                        NamedElementSchema {
+                            name: "optionalStringType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: option(str()),
+                            }),
+                        },
+                        NamedElementSchema {
+                            name: "optionalUnionType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: option(union_type.clone()),
+                            }),
+                        },
+                    ],
+                }),
+            },
+            methods: vec![
+                AgentMethod {
+                    name: "funAll".to_string(),
+                    description: "Takes all complex types".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "complexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "unionType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: union_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "unionComplexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: union_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "numberType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: u32(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "stringType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "booleanType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: bool(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "mapType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: map_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tupleComplexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: tuple_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tupleType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: tuple_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "listComplexType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: list_complex_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_type.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "resultLike".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: result_like.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "resultLikeWithNoTag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: result_like_with_no_tag.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "unionWithNull".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined1".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_1.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined2".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_2.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined3".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_3.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "objectWithUnionWithUndefined4".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_4.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "optionalStringType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "optionalUnionType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(union_type.clone()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "taggedUnionType".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: tagged_union.clone(),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funOptional".to_string(),
+                    description: "Takes optional parameters".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "param1".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param2".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_1.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param3".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_2.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param4".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_3.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param5".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: object_with_union_undefined_4.clone(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param6".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param7".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(union_type.clone()),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funOptionalQMark".to_string(),
+                    description: "Takes optional parameters with question mark".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "param1".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param2".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(u32()),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "param3".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: option(str()),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funObjectComplexType".to_string(),
+                    description: "Takes ObjectComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionType".to_string(),
+                    description: "Takes UnionType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionComplexType".to_string(),
+                    description: "Takes UnionComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionComplexType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funNumber".to_string(),
+                    description: "Takes NumberType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "numberType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funString".to_string(),
+                    description: "Takes StringType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "stringType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBoolean".to_string(),
+                    description: "Takes BooleanType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "booleanType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: bool(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: bool(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funText".to_string(),
+                    description: "Takes MapType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "mapType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: map_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: map_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funTupleComplexType".to_string(),
+                    description: "Takes TupleComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "complexType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funTupleType".to_string(),
+                    description: "Takes TupleType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "tupleType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tuple_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funListComplexType".to_string(),
+                    description: "Takes ListComplexType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "listComplexType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: list_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: list_complex_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funObjectType".to_string(),
+                    description: "Takes ObjectType".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "objectType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_type.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: object_type.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionWithLiterals".to_string(),
+                    description: "Takes UnionWithLiterals".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionWithLiterals".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_literals.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_literals.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funVoidReturn".to_string(),
+                    description: "Returns void".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funNullReturn".to_string(),
+                    description: "Returns null".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funUndefinedReturn".to_string(),
+                    description: "Returns undefined".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funUnstructuredText".to_string(),
+                    description: "Takes UnstructuredText".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unstructuredText".to_string(),
+                            schema: ElementSchema::UnstructuredText(TextDescriptor {
+                                restrictions: None,
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnstructuredBinary".to_string(),
+                    description: "Takes UnstructuredBinary".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unstructuredText".to_string(),
+                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                                restrictions: Some(vec![BinaryType {
+                                    mime_type: "application/json".to_string(),
+                                }]),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funMultimodal".to_string(),
+                    description: "Takes Multimodal".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                },
+                AgentMethod {
+                    name: "funMultimodalAdvanced".to_string(),
+                    description: "Takes MultimodalAdvanced".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Multimodal(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "val".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                            NamedElementSchema {
+                                name: "tag".to_string(),
+                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                    element_type: str(),
+                                }),
+                            },
+                        ],
+                    }),
+                },
+                AgentMethod {
+                    name: "funUnionWithOnlyLiterals".to_string(),
+                    description: "Takes UnionWithOnlyLiterals".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "unionWithLiterals".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_only_literals.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: union_with_only_literals.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funTaggedUnion".to_string(),
+                    description: "Takes TaggedUnion".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "taggedUnionType".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tagged_union.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: tagged_union.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funResultNoTag".to_string(),
+                    description: "Takes ResultLikeWithNoTag".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "eitherBothOptional".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_no_tag.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_no_tag.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funResultExact".to_string(),
+                    description: "Takes ResultExact".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "either".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_exact.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_exact.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funResultLike".to_string(),
+                    description: "Takes ResultLike".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "eitherOneOptional".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funResultLikeWithVoid".to_string(),
+                    description: "Takes ResultLikeWithVoid".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "resultLikeWithVoid".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_void.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: result_like_with_void.clone(),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBuiltinResultVS".to_string(),
+                    description: "Takes Result<void, string>".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "result".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultVoidString"),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultVoidString"),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBuiltinResultSV".to_string(),
+                    description: "Takes Result<string, void>".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "result".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringVoid"),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringVoid"),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funBuiltinResultSN".to_string(),
+                    description: "Takes Result<string, number>".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "result".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringNumber"),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str().named("ResultStringNumber"),
+                            }),
+                        }],
+                    }),
+                },
+                AgentMethod {
+                    name: "funNoReturn".to_string(),
+                    description: "Returns nothing".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "funArrowSync".to_string(),
+                    description: "Arrow function returning text".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "text".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+            ],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+        },
+        // TestAgent from naming_extremes
+        AgentType {
+            type_name: golem_common::model::agent::AgentTypeName("TestAgent".to_string()),
+            description: "TestAgent class".to_string(),
+            constructor: AgentConstructor {
+                name: Some("TestAgent".to_string()),
+                description: "Constructor for TestAgent".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "name".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            },
+            methods: vec![
+                AgentMethod {
+                    name: "testAll".to_string(),
+                    description: "Test all functionality".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "testString".to_string(),
+                    description: "Test string functionality".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+                AgentMethod {
+                    name: "testStruct".to_string(),
+                    description: "Test struct functionality".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                },
+            ],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+        },
+        // StringAgent from naming_extremes
+        AgentType {
+            type_name: golem_common::model::agent::AgentTypeName("StringAgent".to_string()),
+            description: "StringAgent class".to_string(),
+            constructor: AgentConstructor {
+                name: Some("StringAgent".to_string()),
+                description: "Constructor for StringAgent".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "name".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            },
+            methods: vec![AgentMethod {
+                name: "test".to_string(),
+                description: "Test method".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            }],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+        },
+        // StructAgent from naming_extremes
+        AgentType {
+            type_name: golem_common::model::agent::AgentTypeName("StructAgent".to_string()),
+            description: "StructAgent class".to_string(),
+            constructor: AgentConstructor {
+                name: Some("StructAgent".to_string()),
+                description: "Constructor for StructAgent".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "args".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: record(vec![
+                                field("x", str()),
+                                field("y", str()),
+                                field("z", str()),
+                            ])
+                            .named("StructArgs"),
+                        }),
+                    }],
+                }),
+            },
+            methods: vec![AgentMethod {
+                name: "test".to_string(),
+                description: "Test method".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            }],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+        },
+    ]
 }
