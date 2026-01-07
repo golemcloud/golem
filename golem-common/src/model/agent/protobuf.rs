@@ -1,14 +1,21 @@
-use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType, RegisteredAgentTypeImplementer, TextDescriptor, TextReference, TextSource, TextType, Url
+use super::{
+    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PathSegmentNode, PathVariable,
+    QueryVariable, SystemVariable, SystemVariableSegment,
 };
+use crate::model::agent::{
+    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, LiteralSegment, NamedElementSchema,
+    NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
+    RegisteredAgentTypeImplementer, TextDescriptor, TextReference, TextSource, TextType, Url,
+};
+use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
 use golem_api_grpc::proto::golem::component::{
     binary_reference, data_value, element_value, text_reference,
 };
-use super::{AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment};
-use rib::LiteralValue;
-use crate::model::Empty;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
     fn from(value: golem_api_grpc::proto::golem::component::AgentMode) -> Self {
@@ -52,10 +59,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
                 .into_iter()
                 .map(AgentDependency::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
-            http_mount: proto
-                .http_mount
-                .map(TryInto::try_into)
-                .transpose()?
+            http_mount: proto.http_mount.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -77,7 +81,7 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
                 .into_iter()
                 .map(golem_api_grpc::proto::golem::component::AgentDependency::from)
                 .collect(),
-            http_mount: value.http_mount.map(Into::into)
+            http_mount: value.http_mount.map(Into::into),
         }
     }
 }
@@ -133,7 +137,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentMethod> for AgentMeth
                 .http_endpoint
                 .into_iter()
                 .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?
+                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -146,7 +150,7 @@ impl From<AgentMethod> for golem_api_grpc::proto::golem::component::AgentMethod 
             prompt_hint: value.prompt_hint,
             input_schema: Some(value.input_schema.into()),
             output_schema: Some(value.output_schema.into()),
-            http_endpoint: value.http_endpoint.into_iter().map(Into::into).collect()
+            http_endpoint: value.http_endpoint.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -734,16 +738,32 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
         value: golem_api_grpc::proto::golem::component::HttpMountDetails,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            path_prefix: value.path_prefix.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
-            header_vars: value.header_vars.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
-            query_vars: value.query_vars.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
+            path_prefix: value
+                .path_prefix
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            header_vars: value
+                .header_vars
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            query_vars: value
+                .query_vars
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             phantom_agent: value.phantom_agent,
             cors_options: value
                 .cors_options
                 .ok_or_else(|| "Missing field: cors_options".to_string())?
                 .try_into()?,
-            webhook_suffix: value.webhook_suffix.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
+            webhook_suffix: value
+                .webhook_suffix
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -773,9 +793,21 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpEndpointDetails> for H
                 .http_method
                 .ok_or_else(|| "Missing field: http_method".to_string())?
                 .try_into()?,
-            path_suffix: value.path_suffix.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
-            header_vars: value.header_vars.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
-            query_vars: value.query_vars.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
+            path_suffix: value
+                .path_suffix
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            header_vars: value
+                .header_vars
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            query_vars: value
+                .query_vars
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             cors_options: value
                 .cors_options
@@ -801,10 +833,15 @@ impl From<HttpEndpointDetails> for golem_api_grpc::proto::golem::component::Http
 impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::component::HttpMethod) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::HttpMethod,
+    ) -> Result<Self, Self::Error> {
         use golem_api_grpc::proto::golem::component::http_method::Value;
 
-        match value.value.ok_or_else(|| "Missing oneof: value".to_string())? {
+        match value
+            .value
+            .ok_or_else(|| "Missing oneof: value".to_string())?
+        {
             Value::Get(_) => Ok(HttpMethod::Get(Empty {})),
             Value::Put(_) => Ok(HttpMethod::Put(Empty {})),
             Value::Post(_) => Ok(HttpMethod::Post(Empty {})),
@@ -816,8 +853,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
 
 impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
     fn from(value: HttpMethod) -> Self {
-        use golem_api_grpc::proto::golem::component::http_method::Value;
         use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
+        use golem_api_grpc::proto::golem::component::http_method::Value;
 
         Self {
             value: Some(match value {
@@ -834,7 +871,9 @@ impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
 impl TryFrom<golem_api_grpc::proto::golem::component::CustomHttpMethod> for CustomHttpMethod {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::component::CustomHttpMethod) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::CustomHttpMethod,
+    ) -> Result<Self, Self::Error> {
         Ok(Self { value: value.value })
     }
 }
@@ -844,7 +883,6 @@ impl From<CustomHttpMethod> for golem_api_grpc::proto::golem::component::CustomH
         Self { value: value.value }
     }
 }
-
 
 impl TryFrom<golem_api_grpc::proto::golem::component::CorsOptions> for CorsOptions {
     type Error = String;
@@ -898,7 +936,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PathSegmentNode> for PathS
     ) -> Result<Self, Self::Error> {
         use golem_api_grpc::proto::golem::component::path_segment_node::Value;
 
-        match value.value.ok_or_else(|| "Missing field: value".to_string())? {
+        match value
+            .value
+            .ok_or_else(|| "Missing field: value".to_string())?
+        {
             Value::Literal(v) => Ok(Self::Literal(v.try_into()?)),
             Value::SystemVariable(v) => Ok(Self::SystemVariable(v.try_into()?)),
             Value::PathVariable(v) => Ok(Self::PathVariable(v.try_into()?)),
@@ -936,7 +977,9 @@ impl From<LiteralSegment> for golem_api_grpc::proto::golem::component::LiteralSe
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::SystemVariableSegment> for SystemVariableSegment {
+impl TryFrom<golem_api_grpc::proto::golem::component::SystemVariableSegment>
+    for SystemVariableSegment
+{
     type Error = String;
 
     fn try_from(
@@ -948,10 +991,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::SystemVariableSegment> for
     }
 }
 
-impl From<SystemVariableSegment> for golem_api_grpc::proto::golem::component::SystemVariableSegment {
+impl From<SystemVariableSegment>
+    for golem_api_grpc::proto::golem::component::SystemVariableSegment
+{
     fn from(value: SystemVariableSegment) -> Self {
         Self {
-            value: golem_api_grpc::proto::golem::component::SystemVariable::from(value.value).into(),
+            value: golem_api_grpc::proto::golem::component::SystemVariable::from(value.value)
+                .into(),
         }
     }
 }
@@ -963,9 +1009,15 @@ impl TryFrom<golem_api_grpc::proto::golem::component::SystemVariable> for System
         value: golem_api_grpc::proto::golem::component::SystemVariable,
     ) -> Result<Self, Self::Error> {
         match value {
-            golem_api_grpc::proto::golem::component::SystemVariable::AgentType => Ok(Self::AgentType),
-            golem_api_grpc::proto::golem::component::SystemVariable::AgentVersion => Ok(Self::AgentVersion),
-            golem_api_grpc::proto::golem::component::SystemVariable::Unspecified => Err("Unknown SystemVariable variant".to_string()),
+            golem_api_grpc::proto::golem::component::SystemVariable::AgentType => {
+                Ok(Self::AgentType)
+            }
+            golem_api_grpc::proto::golem::component::SystemVariable::AgentVersion => {
+                Ok(Self::AgentVersion)
+            }
+            golem_api_grpc::proto::golem::component::SystemVariable::Unspecified => {
+                Err("Unknown SystemVariable variant".to_string())
+            }
         }
     }
 }
@@ -1043,23 +1095,31 @@ impl From<QueryVariable> for golem_api_grpc::proto::golem::component::QueryVaria
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthDetails> for AgentHttpAuthDetails {
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthDetails>
+    for AgentHttpAuthDetails
+{
     type Error = String;
 
     fn try_from(
         value: golem_api_grpc::proto::golem::component::AgentHttpAuthDetails,
     ) -> Result<Self, Self::Error> {
-        Ok(Self { required: value.required })
+        Ok(Self {
+            required: value.required,
+        })
     }
 }
 
 impl From<AgentHttpAuthDetails> for golem_api_grpc::proto::golem::component::AgentHttpAuthDetails {
     fn from(value: AgentHttpAuthDetails) -> Self {
-        Self { required: value.required }
+        Self {
+            required: value.required,
+        }
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthContext> for AgentHttpAuthContext {
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthContext>
+    for AgentHttpAuthContext
+{
     type Error = String;
 
     fn try_from(

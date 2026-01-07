@@ -36,6 +36,7 @@ pub mod bindings {
     });
 }
 
+use super::Empty;
 use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -56,7 +57,6 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::LazyLock;
 use uuid::Uuid;
-use super::Empty;
 
 #[derive(
     Debug,
@@ -203,9 +203,7 @@ impl Display for AgentError {
     FromValue,
     poem_openapi::Object,
 )]
-#[desert(evolution(
-    FieldAdded("http_endpoint", Vec::new())
-))]
+#[desert(evolution(FieldAdded("http_endpoint", Vec::new())))]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethod {
@@ -214,7 +212,7 @@ pub struct AgentMethod {
     pub prompt_hint: Option<String>,
     pub input_schema: DataSchema,
     pub output_schema: DataSchema,
-    pub http_endpoint: Vec<HttpEndpointDetails>
+    pub http_endpoint: Vec<HttpEndpointDetails>,
 }
 
 #[derive(
@@ -237,9 +235,7 @@ pub struct AgentTypeName(pub String);
     FromValue,
     poem_openapi::Object,
 )]
-#[desert(evolution(
-    FieldAdded("http_mount", None)
-))]
+#[desert(evolution(FieldAdded("http_mount", None)))]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
@@ -1129,7 +1125,7 @@ pub struct HttpMountDetails {
     pub auth_details: Option<AgentHttpAuthDetails>,
     pub phantom_agent: bool,
     pub cors_options: CorsOptions,
-    pub webhook_suffix: Vec<PathSegment>
+    pub webhook_suffix: Vec<PathSegment>,
 }
 
 #[derive(
@@ -1238,7 +1234,7 @@ pub struct CorsOptions {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PathSegment {
-    pub concat: Vec<PathSegmentNode>
+    pub concat: Vec<PathSegmentNode>,
 }
 
 #[derive(
@@ -1259,7 +1255,7 @@ pub struct PathSegment {
 pub enum PathSegmentNode {
     Literal(LiteralSegment),
     SystemVariable(SystemVariableSegment),
-    PathVariable(PathVariable)
+    PathVariable(PathVariable),
 }
 
 #[derive(
@@ -1318,7 +1314,7 @@ pub struct SystemVariableSegment {
 )]
 pub enum SystemVariable {
     AgentType,
-    AgentVersion
+    AgentVersion,
 }
 
 impl Display for SystemVariable {
@@ -1347,7 +1343,7 @@ impl Display for SystemVariable {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PathVariable {
-    pub variable_name: String
+    pub variable_name: String,
 }
 
 #[derive(
@@ -1367,7 +1363,7 @@ pub struct PathVariable {
 #[serde(rename_all = "camelCase")]
 pub struct HeaderVariable {
     pub header_name: String,
-    pub variable_name: String
+    pub variable_name: String,
 }
 
 #[derive(
@@ -1387,7 +1383,7 @@ pub struct HeaderVariable {
 #[serde(rename_all = "camelCase")]
 pub struct QueryVariable {
     pub query_param_name: String,
-    pub variable_name: String
+    pub variable_name: String,
 }
 
 #[derive(
@@ -1406,7 +1402,7 @@ pub struct QueryVariable {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentHttpAuthDetails {
-    pub required: bool
+    pub required: bool,
 }
 
 #[derive(
@@ -1436,5 +1432,5 @@ pub struct AgentHttpAuthContext {
     // Url of the user's picture or avatar
     pub picture: Option<String>,
     pub preferred_username: Option<String>,
-    pub claims: String
+    pub claims: String,
 }

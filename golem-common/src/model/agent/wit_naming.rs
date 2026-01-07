@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{
+    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
+    PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
+};
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentMethod, AgentType, ComponentModelElementSchema,
     DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
@@ -22,7 +27,6 @@ use golem_wasm::analysis::{
     TypeOption, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };
 use golem_wasm::ValueAndType;
-use super::{AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment};
 
 /// ToWitNaming allows converting discovered AgentTypes to WIT and WAVE compatible naming for named
 /// elements
@@ -74,7 +78,7 @@ impl ToWitNaming for AgentType {
             methods: self.methods.to_wit_naming(),
             dependencies: self.dependencies.to_wit_naming(),
             mode: self.mode,
-            http_mount: self.http_mount.as_ref().map(ToWitNaming::to_wit_naming)
+            http_mount: self.http_mount.as_ref().map(ToWitNaming::to_wit_naming),
         }
     }
 }
@@ -98,7 +102,11 @@ impl ToWitNaming for AgentMethod {
             prompt_hint: self.prompt_hint.clone(),
             input_schema: self.input_schema.to_wit_naming(),
             output_schema: self.output_schema.to_wit_naming(),
-            http_endpoint: self.http_endpoint.iter().map(ToWitNaming::to_wit_naming).collect()
+            http_endpoint: self
+                .http_endpoint
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
         }
     }
 }
@@ -307,13 +315,29 @@ impl ToWitNaming for ElementValue {
 impl ToWitNaming for HttpMountDetails {
     fn to_wit_naming(&self) -> Self {
         Self {
-            path_prefix: self.path_prefix.iter().map(ToWitNaming::to_wit_naming).collect(),
-            header_vars: self.header_vars.iter().map(ToWitNaming::to_wit_naming).collect(),
-            query_vars: self.query_vars.iter().map(ToWitNaming::to_wit_naming).collect(),
+            path_prefix: self
+                .path_prefix
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
+            header_vars: self
+                .header_vars
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
+            query_vars: self
+                .query_vars
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
             auth_details: self.auth_details.as_ref().map(ToWitNaming::to_wit_naming),
             phantom_agent: self.phantom_agent,
             cors_options: self.cors_options.to_wit_naming(),
-            webhook_suffix: self.webhook_suffix.iter().map(ToWitNaming::to_wit_naming).collect(),
+            webhook_suffix: self
+                .webhook_suffix
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
         }
     }
 }
@@ -322,9 +346,21 @@ impl ToWitNaming for HttpEndpointDetails {
     fn to_wit_naming(&self) -> Self {
         Self {
             http_method: self.http_method.to_wit_naming(),
-            path_suffix: self.path_suffix.iter().map(ToWitNaming::to_wit_naming).collect(),
-            header_vars: self.header_vars.iter().map(ToWitNaming::to_wit_naming).collect(),
-            query_vars: self.query_vars.iter().map(ToWitNaming::to_wit_naming).collect(),
+            path_suffix: self
+                .path_suffix
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
+            header_vars: self
+                .header_vars
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
+            query_vars: self
+                .query_vars
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
             auth_details: self.auth_details.as_ref().map(ToWitNaming::to_wit_naming),
             cors_options: self.cors_options.to_wit_naming(),
         }
@@ -354,7 +390,11 @@ impl ToWitNaming for CustomHttpMethod {
 impl ToWitNaming for CorsOptions {
     fn to_wit_naming(&self) -> Self {
         Self {
-            allowed_patterns: self.allowed_patterns.iter().map(ToWitNaming::to_wit_naming).collect(),
+            allowed_patterns: self
+                .allowed_patterns
+                .iter()
+                .map(ToWitNaming::to_wit_naming)
+                .collect(),
         }
     }
 }
@@ -387,9 +427,7 @@ impl ToWitNaming for LiteralSegment {
 
 impl ToWitNaming for SystemVariableSegment {
     fn to_wit_naming(&self) -> Self {
-        Self {
-            value: self.value,
-        }
+        Self { value: self.value }
     }
 }
 
@@ -444,7 +482,10 @@ impl ToWitNaming for AgentHttpAuthContext {
             given_name: self.given_name.as_ref().map(ToWitNaming::to_wit_naming),
             family_name: self.family_name.as_ref().map(ToWitNaming::to_wit_naming),
             picture: self.picture.as_ref().map(ToWitNaming::to_wit_naming),
-            preferred_username: self.preferred_username.as_ref().map(ToWitNaming::to_wit_naming),
+            preferred_username: self
+                .preferred_username
+                .as_ref()
+                .map(ToWitNaming::to_wit_naming),
             claims: self.claims.to_wit_naming(),
         }
     }

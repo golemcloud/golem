@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{
+    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
+    PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
+};
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
@@ -20,10 +25,9 @@ use crate::model::agent::{
     NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
     TextDescriptor, TextReference, TextSource, TextType, Url,
 };
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{IntoValue, Value, ValueAndType};
-use super::{AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment};
 use crate::model::Empty;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{Value, ValueAndType};
 
 impl From<super::bindings::golem::agent::common::AgentMode> for AgentMode {
     fn from(value: super::bindings::golem::agent::common::AgentMode) -> Self {
@@ -642,7 +646,9 @@ impl From<super::bindings::golem::agent::common::HttpMethod> for HttpMethod {
             super::bindings::golem::agent::common::HttpMethod::Put => Self::Put(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Post => Self::Post(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Delete => Self::Delete(Empty {}),
-            super::bindings::golem::agent::common::HttpMethod::Custom(value) => Self::Custom(CustomHttpMethod { value }),
+            super::bindings::golem::agent::common::HttpMethod::Custom(value) => {
+                Self::Custom(CustomHttpMethod { value })
+            }
         }
     }
 }
@@ -692,9 +698,17 @@ impl From<PathSegmentNode> for super::bindings::golem::agent::common::PathSegmen
 impl From<super::bindings::golem::agent::common::PathSegmentNode> for PathSegmentNode {
     fn from(value: super::bindings::golem::agent::common::PathSegmentNode) -> Self {
         match value {
-            super::bindings::golem::agent::common::PathSegmentNode::Literal(value) => Self::Literal(LiteralSegment { value }),
-            super::bindings::golem::agent::common::PathSegmentNode::SystemVariable(value) => Self::SystemVariable(SystemVariableSegment { value: value.into() }),
-            super::bindings::golem::agent::common::PathSegmentNode::PathVariable(v) => Self::PathVariable(v.into()),
+            super::bindings::golem::agent::common::PathSegmentNode::Literal(value) => {
+                Self::Literal(LiteralSegment { value })
+            }
+            super::bindings::golem::agent::common::PathSegmentNode::SystemVariable(value) => {
+                Self::SystemVariable(SystemVariableSegment {
+                    value: value.into(),
+                })
+            }
+            super::bindings::golem::agent::common::PathSegmentNode::PathVariable(v) => {
+                Self::PathVariable(v.into())
+            }
         }
     }
 }
@@ -712,7 +726,9 @@ impl From<super::bindings::golem::agent::common::SystemVariable> for SystemVaria
     fn from(value: super::bindings::golem::agent::common::SystemVariable) -> Self {
         match value {
             super::bindings::golem::agent::common::SystemVariable::AgentType => Self::AgentType,
-            super::bindings::golem::agent::common::SystemVariable::AgentVersion => Self::AgentVersion,
+            super::bindings::golem::agent::common::SystemVariable::AgentVersion => {
+                Self::AgentVersion
+            }
         }
     }
 }
@@ -771,13 +787,17 @@ impl From<super::bindings::golem::agent::common::QueryVariable> for QueryVariabl
 
 impl From<AgentHttpAuthDetails> for super::bindings::golem::agent::common::AuthDetails {
     fn from(value: AgentHttpAuthDetails) -> Self {
-        Self { required: value.required }
+        Self {
+            required: value.required,
+        }
     }
 }
 
 impl From<super::bindings::golem::agent::common::AuthDetails> for AgentHttpAuthDetails {
     fn from(value: super::bindings::golem::agent::common::AuthDetails) -> Self {
-        Self { required: value.required }
+        Self {
+            required: value.required,
+        }
     }
 }
 
@@ -793,13 +813,13 @@ impl From<AgentHttpAuthContext> for super::bindings::golem::agent::common::AuthC
             family_name: value.family_name,
             picture: value.picture,
             preferred_username: value.preferred_username,
-            claims: value.claims
+            claims: value.claims,
         }
     }
 }
 
 impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthContext {
-    fn from(value: super::bindings::golem::agent::common::AuthContext ) -> Self {
+    fn from(value: super::bindings::golem::agent::common::AuthContext) -> Self {
         Self {
             sub: value.sub,
             provider: value.provider,
@@ -810,7 +830,7 @@ impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthC
             family_name: value.family_name,
             picture: value.picture,
             preferred_username: value.preferred_username,
-            claims: value.claims
+            claims: value.claims,
         }
     }
 }
