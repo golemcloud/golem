@@ -21,6 +21,7 @@ use golem_wasm::analysis::analysed_type::{
     bool, case, chr, field, list, option, r#enum, record, result, s32, str, tuple, u8, unit_case,
     unit_result, variant,
 };
+use std::env::var;
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {
@@ -664,11 +665,29 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
     let object_with_union_undefined_4 =
         record(vec![field("a", option(str()))]).named("ObjectWithUnionWithUndefined4");
 
-    let tagged_union = str().named("TaggedUnion");
+    let tagged_union = variant(vec![
+        case("a", str()),
+        case("b", s32()),
+        case("c", bool()),
+        case("d", union_type.clone()),
+        case("e", object_type.clone()),
+        case("f", list(str())),
+        case("g", tuple(vec![str(), s32(), bool()])),
+        case("h", simple_interface_type.clone()),
+        unit_case("i"),
+        unit_case("j"),
+    ])
+    .named("TaggedUnion");
 
-    let union_with_literals = str().named("UnionWithLiterals");
+    let union_with_literals = variant(vec![
+        unit_case("lit1"),
+        unit_case("lit2"),
+        unit_case("lit3"),
+        case("union-with-literals1", bool()),
+    ])
+    .named("UnionWithLiterals");
 
-    let union_with_only_literals = str().named("UnionWithOnlyLiterals");
+    let union_with_only_literals = r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
 
     vec![
         // FooAgent

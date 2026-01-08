@@ -20,7 +20,7 @@ use golem_common::model::agent::{
     AgentType, JsonComponentModelValue, UntypedDataValue, UntypedElementValue, UntypedElementValues,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, case, field, list, record, s32, str, tuple, variant,
+    bool, case, field, list, r#enum, record, s32, str, tuple, unit_case, variant,
 };
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValue, IntoValueAndType, Value};
@@ -271,6 +271,8 @@ fn playground4() {
         case("case4", object_type.clone()),
     ]);
 
+    let list_complex_type = list(object_type.clone());
+
     let tuple_type = tuple(vec![str(), s32(), bool()]);
 
     let tuple_complex_type = tuple(vec![str(), s32(), object_type.clone()]);
@@ -292,6 +294,41 @@ fn playground4() {
         field("j", map_type.clone()),
         field("k", simple_interface_type.clone()),
     ]);
+
+    let union_complex_type = variant(vec![
+        case("case1", s32()),
+        case("case2", str()),
+        case("case3", bool()),
+        case("case4", object_complex_type.clone()),
+        case("case5", union_type.clone()),
+        case("case6", tuple_type.clone()),
+        case("case7", tuple_complex_type.clone()),
+        case("case8", simple_interface_type.clone()),
+        case("case9", list(str())),
+    ]);
+
+    let tagged_union = variant(vec![
+        case("a", str()),
+        case("b", s32()),
+        case("c", bool()),
+        case("d", union_type.clone()),
+        case("e", object_type.clone()),
+        case("f", list(str())),
+        case("g", tuple(vec![str(), s32(), bool()])),
+        case("h", simple_interface_type.clone()),
+        unit_case("i"),
+        unit_case("j"),
+    ]);
+
+    let union_with_literals = variant(vec![
+        unit_case("lit1"),
+        unit_case("lit2"),
+        unit_case("lit3"),
+        case("union-with-literals1", bool()),
+    ])
+    .named("UnionWithLiterals");
+
+    let union_with_only_literals = r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
 
     assert_function_input_encoding(
         target_dir,
@@ -382,19 +419,26 @@ fn playground4() {
         }),
     );
 
-    // TODO: FunUnionComplexType - union encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunUnionComplexType",
-    //     json!([1]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(1),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunUnionComplexType",
+        json!([{ "tag": "case8", "val": { "n": 1 } }]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 7,
+                            case_value: Some(Box::new(Value::Record(vec![Value::S32(1)]))),
+                        },
+                        union_complex_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
 
     assert_function_input_encoding(
         target_dir,
@@ -453,89 +497,165 @@ fn playground4() {
         }),
     );
 
-    // TODO: FunTaggedUnion - tagged union encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunTaggedUnion",
-    //     json!([{"variant1": "value"}]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"variant1": "value"}),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunTaggedUnion",
+        json!([{"tag": "e", "val": {"a": "x", "b": 200, "c": true }}]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 4,
+                            case_value: Some(Box::new(Value::Record(vec![
+                                Value::String("x".to_string()),
+                                Value::S32(200),
+                                Value::Bool(true),
+                            ]))),
+                        },
+                        tagged_union.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
 
-    // TODO: FunTupleComplexType - tuple encoding is incorrect
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunTupleComplexType",
-    //     json!(["hello", 100, {"a": "x", "b": 200, "c": true}]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(["hello", 100, {"a": "x", "b": 200, "c": true}]),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunTupleComplexType",
+        json!([["hello", 100, {"a": "x", "b": 200, "c": true}]]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Tuple(vec![
+                            Value::String("hello".to_string()),
+                            Value::S32(100),
+                            Value::Record(vec![
+                                Value::String("x".to_string()),
+                                Value::S32(200),
+                                Value::Bool(true),
+                            ]),
+                        ]),
+                        tuple_complex_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
 
-    // TODO: FunTupleType - tuple encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunTupleType",
-    //     json!(["item", 42, false]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(["item", 42, false]),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunTupleType",
+        json!([["item", 42, false]]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ("item".to_string(), 42, false)
+                        .into_value_and_type()
+                        .to_json_value()
+                        .unwrap(),
+                },
+            )],
+        }),
+    );
 
-    // TODO: FunListComplexType - list encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunListComplexType",
-    //     json!([[{"a": "item1", "b": 1, "c": true}, {"a": "item2", "b": 2, "c": false}]]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!([{"a": "item1", "b": 1, "c": true}, {"a": "item2", "b": 2, "c": false}]),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunListComplexType",
+        json!([[{"a": "item1", "b": 1, "c": true}, {"a": "item2", "b": 2, "c": false}]]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::List(vec![
+                            Value::Record(vec![
+                                Value::String("item1".to_string()),
+                                Value::S32(1),
+                                Value::Bool(true),
+                            ]),
+                            Value::Record(vec![
+                                Value::String("item2".to_string()),
+                                Value::S32(2),
+                                Value::Bool(false),
+                            ]),
+                        ]),
+                        list_complex_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
 
-    // TODO: FunObjectType - object type encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunObjectType",
-    //     json!([{"a": "test", "b": 123, "c": true}]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"a": "test", "b": 123, "c": true}),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunObjectType",
+        json!([{"a": "test", "b": 123, "c": true}]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![
+                            Value::String("test".to_string()),
+                            Value::S32(123),
+                            Value::Bool(true),
+                        ]),
+                        object_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
 
-    // TODO: FunUnionWithLiterals - literal union encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunUnionWithLiterals",
-    //     json!(["red"]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!("red"),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunUnionWithLiterals",
+        json!([{"tag": "lit1"}]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 0,
+                            case_value: None,
+                        },
+                        union_with_literals.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunUnionWithLiterals",
+        json!([{"tag": "union-with-literals1", "val": true}]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 3,
+                            case_value: Some(Box::new(Value::Bool(true))),
+                        },
+                        union_with_literals.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
 
     // TODO: FunUnionWithOnlyLiterals - literal union encoding format needs investigation
     // assert_function_input_encoding(
