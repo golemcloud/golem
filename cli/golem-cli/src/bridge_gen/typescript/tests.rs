@@ -17,13 +17,15 @@ use crate::bridge_gen::BridgeGenerator;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_client::model::ValueAndType;
 use golem_common::model::agent::{
-    AgentType, JsonComponentModelValue, UntypedDataValue, UntypedElementValue, UntypedElementValues,
+    AgentType, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
+    JsonComponentModelValue, TextReference, TextReferenceValue, TextSource, UntypedDataValue,
+    UntypedElementValue, UntypedElementValues,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, case, field, list, r#enum, record, s32, str, tuple, unit_case, variant,
+    bool, case, field, list, option, r#enum, record, s32, str, tuple, unit_case, variant,
 };
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{IntoValue, IntoValueAndType, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use heck::ToUpperCamelCase;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -71,192 +73,6 @@ fn playground4() {
 
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, &target_dir);
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunOptionalQMark",
-        json! {
-            [
-                "value1",
-                10,
-                null
-            ]
-        },
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
-                    value: "value1".into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
-                    value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
-                    value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
-                }),
-            ],
-        }),
-    );
-
-    // TODO: FunAll needs proper nested object initialization
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunAll",
-    //     json!([{"a": "x", "b": 1, "c": true, "d": {"a": "y", "b": 2, "c": false}, "e": 3, "f": [], "g": [], "h": [], "i": [], "j": [], "k": {"n": 0}}, true, 1, 42, "hello", true, [[["key", 10]]], ["hello", 100, {"a": "x", "b": 200, "c": true}], ["a", 1, false], [{"a": "x", "b": 1, "c": true}], {"a": "x", "b": 1, "c": true}, {"ok": "value"}, {"ok": "value"}, "value", {}, {}, {}, {}, "opt", null]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"a": "x", "b": 1, "c": true, "d": {"a": "y", "b": 2, "c": false}, "e": 3, "f": [], "g": [], "h": [], "i": [], "j": [], "k": {"n": 0}}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(true),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(1),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(42),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!("hello"),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(true),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!([[["key", 10]]]),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(["hello", 100, {"a": "x", "b": 200, "c": true}]),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(["a", 1, false]),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!([{"a": "x", "b": 1, "c": true}]),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"a": "x", "b": 1, "c": true}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"ok": "value"}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"ok": "value"}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!("value"),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!("opt"),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(null),
-    //             }),
-    //         ],
-    //     }),
-    // );
-
-    // TODO: FunOptional needs proper union type handling
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunOptional",
-    //     json!(["value", {"a": "nested"}, {"a": "nested"}, {"a": "nested"}, {"a": "nested"}, "optional", null]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!("value"),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"a": "nested"}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"a": "nested"}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"a": "nested"}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"a": "nested"}),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!("optional"),
-    //             }),
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!(null),
-    //             }),
-    //         ],
-    //     }),
-    // );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunOptionalQMark",
-        json!(["value1", 10, null]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
-                    value: "value1".into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
-                    value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
-                    value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
-                }),
-            ],
-        }),
-    );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunNumber",
-        json!([42]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: (42i32).into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunString",
-        json!(["hello"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: "hello".into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunBoolean",
-        json!([true]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: true.into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
 
     let object_type = record(vec![
         field("a", str()),
@@ -329,6 +145,159 @@ fn playground4() {
     .named("UnionWithLiterals");
 
     let union_with_only_literals = r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
+
+    let object_with_union_undefined = record(vec![field("a", option(str()))]);
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunOptionalQMark",
+        json! {
+            [
+                "value1",
+                10,
+                null
+            ]
+        },
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: "value1".into_value_and_type().to_json_value().unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
+                }),
+            ],
+        }),
+    );
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunOptional",
+        // [string | undefined, ObjectWithUnionWithUndefined1, ObjectWithUnionWithUndefined2, ObjectWithUnionWithUndefined3, ObjectWithUnionWithUndefined4, string | undefined, UnionType | undefined]
+        json!(["value", {"a": "nested"}, {"a": "nested"}, {"a": "nested"}, {"a": "nested"}, "optional", null]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: Some("value".to_string())
+                        .into_value_and_type()
+                        .to_json_value()
+                        .unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![Value::Option(Some(Box::new(Value::String(
+                            "nested".to_string(),
+                        ))))]),
+                        object_with_union_undefined.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![Value::Option(Some(Box::new(Value::String(
+                            "nested".to_string(),
+                        ))))]),
+                        object_with_union_undefined.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![Value::Option(Some(Box::new(Value::String(
+                            "nested".to_string(),
+                        ))))]),
+                        object_with_union_undefined.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![Value::Option(Some(Box::new(Value::String(
+                            "nested".to_string(),
+                        ))))]),
+                        object_with_union_undefined.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: Some("optional".to_string())
+                        .into_value_and_type()
+                        .to_json_value()
+                        .unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: ValueAndType::new(Value::Option(None), option(union_type.clone()))
+                        .to_json_value()
+                        .unwrap(),
+                }),
+            ],
+        }),
+    );
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunOptionalQMark",
+        json!(["value1", 10, null]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: "value1".into_value_and_type().to_json_value().unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
+                }),
+                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
+                }),
+            ],
+        }),
+    );
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunNumber",
+        json!([42]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: (42i32).into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+    );
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunString",
+        json!(["hello"]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: "hello".into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+    );
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunBoolean",
+        json!([true]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: true.into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+    );
 
     assert_function_input_encoding(
         target_dir,
@@ -657,19 +626,20 @@ fn playground4() {
         }),
     );
 
-    // TODO: FunUnionWithOnlyLiterals - literal union encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunUnionWithOnlyLiterals",
-    //     json!(["literal1"]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!("literal1"),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunUnionWithOnlyLiterals",
+        json!(["bar"]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(Value::Enum(1), union_with_only_literals.clone())
+                        .to_json_value()
+                        .unwrap(),
+                },
+            )],
+        }),
+    );
 
     assert_function_input_encoding(
         target_dir,
@@ -710,33 +680,37 @@ fn playground4() {
         }),
     );
 
-    // TODO: FunUnstructuredText - unstructured text encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunUnstructuredText",
-    //     json!(["plain text"]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"type": "Inline", "text": "plain text"}),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunUnstructuredText",
+        json!([{ "tag": "inline", "val": "plain text"}]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Inline(TextSource {
+                    data: "plain text".to_string(),
+                    text_type: None,
+                }),
+            })],
+        }),
+    );
 
-    // TODO: FunUnstructuredBinary - unstructured binary encoding format needs investigation
-    // assert_function_input_encoding(
-    //     target_dir,
-    //     "FunUnstructuredBinary",
-    //     json!(["application/json", "eyJkYXRhIjoid2l0aG91dHBhZGRpbmcifQ"]),
-    //     UntypedDataValue::Tuple(UntypedElementValues {
-    //         elements: vec![
-    //             UntypedElementValue::ComponentModel(JsonComponentModelValue {
-    //                 value: json!({"contentType": "application/json", "data": "eyJkYXRhIjoid2l0aG91dHBhZGRpbmcifQ"}),
-    //             }),
-    //         ],
-    //     }),
-    // );
+    assert_function_input_encoding(
+        target_dir,
+        "FunUnstructuredBinary",
+        json!([{ "tag": "inline", "mimeType": "application/json", "val": [0,1,2,3]}]),
+        UntypedDataValue::Tuple(UntypedElementValues {
+            elements: vec![UntypedElementValue::UnstructuredBinary(
+                BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        binary_type: BinaryType {
+                            mime_type: "application/json".to_string(),
+                        },
+                        data: vec![0, 1, 2, 3],
+                    }),
+                },
+            )],
+        }),
+    );
 
     // TODO: FunMultimodal - multimodal encoding format needs investigation
     // assert_function_input_encoding(

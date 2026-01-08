@@ -732,13 +732,29 @@ impl IntoValue for NamedElementValue {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct TextReferenceValue {
+    pub value: TextReference,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryReferenceValue {
+    pub value: BinaryReference,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum UntypedElementValue {
     ComponentModel(JsonComponentModelValue),
-    UnstructuredText(TextReference),
-    UnstructuredBinary(BinaryReference),
+    UnstructuredText(TextReferenceValue),
+    UnstructuredBinary(BinaryReferenceValue),
 }
 
 impl From<ElementValue> for UntypedElementValue {
@@ -752,10 +768,14 @@ impl From<ElementValue> for UntypedElementValue {
                 })
             }
             ElementValue::UnstructuredText(text_reference) => {
-                UntypedElementValue::UnstructuredText(text_reference)
+                UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: text_reference,
+                })
             }
             ElementValue::UnstructuredBinary(binary_reference) => {
-                UntypedElementValue::UnstructuredBinary(binary_reference)
+                UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: binary_reference,
+                })
             }
         }
     }

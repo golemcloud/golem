@@ -27,6 +27,14 @@ export interface UntypedNamedElementValue {
     value: UntypedElementValue;
 }
 
+export type Url = {
+    value: string
+}
+
+export type TextSource = {
+    data: string; textType?: TextType
+}
+
 export type TextReference =
     | { type: "Url"; value: string }
     | { type: "Inline"; data: string; textType?: TextType };
@@ -41,10 +49,10 @@ export const TextReference = {
         } else {
             return {
                 type: 'Inline',
-                data: input.val,
-                textType: input.languageCode
-                    ? {languageCode: input.languageCode as string}
-                    : undefined,
+                    data: input.val,
+                    textType: input.languageCode
+                        ? {languageCode: input.languageCode as string}
+                        : undefined,
             };
         }
     }
@@ -52,6 +60,10 @@ export const TextReference = {
 
 export interface TextType {
     languageCode: string;
+}
+
+export type BinarySource = {
+    data: Uint8Array; binaryType: BinaryType
 }
 
 export type BinaryReference =
@@ -68,7 +80,7 @@ export const BinaryReference = {
         } else {
             return {
                 type: 'Inline',
-                data: input.val,
+                    data: input.val,
                 binaryType: {mimeType: input.mimeType as string},
             };
         }
@@ -464,7 +476,7 @@ export const UnstructuredBinary = {
 
 
 export function encodeOption<T>(value: T | undefined, encode: (v: T) => unknown): unknown {
-    if (value === undefined) {
+    if (value === undefined || value === null) {
         return null;
     } else {
         return encode(value);

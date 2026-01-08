@@ -13,15 +13,18 @@
 // limitations under the License.
 
 use crate::model::agent::{
-    AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeResolver, AgentTypeName, BinaryDescriptor,
-    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
-    NamedElementValue, NamedElementValues, TextDescriptor, TextReference, TextSource, TextType,
-    Url,
+    AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
+    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
+    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, JsonComponentModelValue,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
+    TextReference, TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
+    UntypedElementValues, Url,
 };
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType};
+use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use proptest::prelude::Strategy;
 use proptest::strategy::Just;
@@ -407,6 +410,27 @@ fn roundtrip_with_non_kebab_metadata() {
     );
 }
 
+#[test]
+fn untyped_data_value_serde_poem_roundtrip() {
+    let original = UntypedDataValue::Tuple(UntypedElementValues {
+        elements: vec![
+            UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                value: 42u32.into_value_and_type().to_json_value().unwrap(),
+            }),
+            UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Url(Url {
+                    value: "https://example.com/".to_string(),
+                }),
+            }),
+        ],
+    });
+
+    let poem_serialized = original.to_json_string();
+    println!("{}", poem_serialized);
+    let serde_deserialized: UntypedDataValue = serde_json::from_str(&poem_serialized).unwrap();
+    assert_eq!(original, serde_deserialized);
+}
+
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
     let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
     let s = id.to_string();
@@ -416,7 +440,11 @@ fn roundtrip_test(agent_type: &str, parameters: DataValue) {
 }
 
 fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: Option<Uuid>) {
-    let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, phantom_id);
+    let id = AgentId::new(
+        AgentTypeName(agent_type.to_string()),
+        parameters,
+        phantom_id,
+    );
     let s = id.to_string();
     println!("{s}");
     let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -452,7 +480,10 @@ impl TestAgentTypes {
 
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
-    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentType, String> {
         self.types
             .get(agent_type)
             .cloned()
