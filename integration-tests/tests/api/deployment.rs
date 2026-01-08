@@ -56,7 +56,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
+                    "d3f96bb6c277ccbbe3560c9eb028d6d7ff65b79e6060cdd03b40bdb05b62286f".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -133,7 +133,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
+                    "d3f96bb6c277ccbbe3560c9eb028d6d7ff65b79e6060cdd03b40bdb05b62286f".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -165,7 +165,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: Some(deployment_1.current_revision),
                 expected_deployment_hash:
-                    "358099fef347618289be7f61eb52e4f230fd9f282f525fa89e1ba197bee93a40".parse()?,
+                    "317c5cf421d42d0e79c51df4812daef590229d56e3b0e64aa816d1345c898389".parse()?,
                 version: DeploymentVersion("0.0.2".to_string()),
             },
         )
