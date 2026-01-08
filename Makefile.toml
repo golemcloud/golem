@@ -502,7 +502,7 @@ dependencies = [
 ]
 
 [tasks.cli-integration-tests-group1]
-dependencies = ["build-bins-all-non-ci"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (1/3)"
 env = { GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
 script_runner = "@duckscript"
@@ -512,7 +512,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 '''
 
 [tasks.cli-integration-tests-group2]
-dependencies = ["build-bins-all-non-ci"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (2/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
 script_runner = "@duckscript"
@@ -521,7 +521,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 '''
 
 [tasks.cli-integration-tests-group3]
-dependencies = ["build-bins-all-non-ci"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (3/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
 script_runner = "@duckscript"
