@@ -8,9 +8,9 @@ use golem_rust::bindings::golem::durability::durability::{
 use golem_rust::durability::Durability;
 use golem_rust::value_and_type::type_builder::TypeNodeBuilder;
 use golem_rust::value_and_type::{FromValueAndType, IntoValue};
-use golem_rust::wasm_rpc::{NodeBuilder, Pollable, WitValueExtractor};
+use golem_rust::golem_wasm::{NodeBuilder, Pollable, WitValueExtractor};
 use golem_rust::{with_persistence_level, PersistenceLevel};
-use reqwest::{Client, IncomingBody, InputStream, Method};
+use golem_wasi_http::{Client, IncomingBody, InputStream, Method};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 
@@ -168,7 +168,7 @@ fn perform_callback(payload: String) -> String {
 struct LazyPollableTest {
     pub lazy_pollable: LazyInitializedPollable,
     pub pollable: Pollable,
-    pub response: RefCell<Option<reqwest::Response>>,
+    pub response: RefCell<Option<golem_wasi_http::Response>>,
     pub input_stream: RefCell<Option<InputStream>>,
     pub body: RefCell<Option<IncomingBody>>,
 }

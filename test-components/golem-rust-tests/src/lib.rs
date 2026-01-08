@@ -8,7 +8,7 @@ use golem_rust::golem_wasm::wasi::io::streams::StreamError;
 use golem_rust::golem_wasm::wasi::io::poll;
 use golem_rust::*;
 use golem_rust_macro::golem_operation;
-use reqwest::{Client, Response};
+use golem_wasi_http::{Client, Response};
 use std::time::Duration;
 
 struct Component;

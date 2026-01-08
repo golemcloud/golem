@@ -5,10 +5,10 @@ use crate::bindings::exports::golem::it::api::Guest;
 
 use async_iterator::Iterator;
 use futures_concurrency::future::Join;
-use reqwest::*;
+use golem_wasi_http::*;
 use serde::{Deserialize, Serialize};
 use wasi::clocks::monotonic_clock::subscribe_duration;
-use wasi_async_runtime::{block_on, Reactor};
+use wstd::runtime::{block_on, AsyncPollable};
 
 struct Component;
 
@@ -36,12 +36,12 @@ struct ExampleResponse {
     message: Option<String>,
 }
 
-async fn async_run(reactor: Reactor) -> String {
+async fn async_run() -> String {
     println!("Hello reqwest-wasi!");
 
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
-    let client = Client::builder(reactor).build().unwrap();
+    let client = Client::builder().build().unwrap();
     println!("{:?}", client);
 
     let request_body = ExampleRequest {
@@ -72,10 +72,10 @@ async fn async_run(reactor: Reactor) -> String {
     format!("{:?} {:?}", status, body).to_string()
 }
 
-async fn async_run_parallel(reactor: Reactor, n: u16) -> Vec<String> {
+async fn async_run_parallel(n: u16) -> Vec<String> {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
-    let client = Client::builder(reactor).build().unwrap();
+    let client = Client::builder().build().unwrap();
 
     let mut send_futures = Vec::new();
     for i in 0..n {
@@ -113,10 +113,10 @@ async fn async_run_parallel(reactor: Reactor, n: u16) -> Vec<String> {
     send_futures.join().await
 }
 
-async fn async_slow_body_stream(reactor: Reactor) -> u64 {
+async fn async_slow_body_stream() -> u64 {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
-    let client = Client::builder(reactor).build().unwrap();
+    let client = Client::builder().build().unwrap();
 
     let response: Response = client
         .get(&format!("http://localhost:{port}/big-byte-array"))
@@ -139,14 +139,14 @@ async fn async_slow_body_stream(reactor: Reactor) -> u64 {
     total
 }
 
-async fn async_start_polling(reactor: Reactor, until: String) {
+async fn async_start_polling(until: String) {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
     let component_id = std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
     let worker_name = std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
 
     println!("Polling until receiving {until}");
 
-    let client = Client::builder(reactor.clone()).build().unwrap();
+    let client = Client::builder().build().unwrap();
     loop {
         println!("Calling the poll endpoint");
         match client.get(format!("http://localhost:{port}/poll?component_id={component_id}&worker_name={worker_name}")).send().await {
@@ -158,7 +158,7 @@ async fn async_start_polling(reactor: Reactor, until: String) {
                     return;
                 } else {
                     let pollable = subscribe_duration(std::time::Duration::from_millis(100).as_nanos() as u64);
-                    reactor.wait_for(pollable).await;
+                    AsyncPollable::new(pollable).wait_for().await;
                 }
             }
             Err(err) => {
@@ -170,7 +170,7 @@ async fn async_start_polling(reactor: Reactor, until: String) {
 
 impl Guest for Component {
     fn start_polling(until: String) {
-        block_on(|reactor| async { async_start_polling(reactor, until).await })
+        block_on(async_start_polling(until))
     }
 
     fn increment() {
@@ -182,15 +182,15 @@ impl Guest for Component {
     }
 
     fn slow_body_stream() -> u64 {
-        block_on(|reactor| async { async_slow_body_stream(reactor).await })
+        block_on(async_slow_body_stream())
     }
 
     fn run() -> String {
-        block_on(|reactor| async { async_run(reactor).await })
+        block_on(async_run())
     }
 
     fn run_parallel(n: u16) -> Vec<String> {
-        block_on(|reactor| async { async_run_parallel(reactor, n).await })
+        block_on(async_run_parallel(n))
     }
 }
 
