@@ -3,6 +3,18 @@
 version = 4
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10,6 +22,12 @@ checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "async-iterator"
@@ -265,35 +283,22 @@ version = "0.0.1"
 dependencies = [
  "async-iterator",
  "futures-concurrency",
- "golem-wasi-http",
+ "reqwest",
  "serde",
  "serde_json",
  "wasi",
- "wit-bindgen-rt 0.40.0",
- "wstd",
+ "wasi-async-runtime",
+ "wit-bindgen-rt",
 ]
 
 [[package]]
-name = "golem-wasi-http"
-version = "0.1.0"
+name = "hashbrown"
+version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4432afa382b4bb6bb4a90cef6064e72b2a93696e65461b37271a37fb0b15e977"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
- "async-iterator",
- "base64",
- "bytes",
- "encoding_rs",
- "futures",
- "futures-concurrency",
- "http",
- "mime",
- "percent-encoding",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "url",
- "wasi",
- "wstd",
+ "ahash",
+ "allocator-api2",
 ]
 
 [[package]]
@@ -576,6 +581,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "reqwest"
+version = "0.12.15"
+source = "git+https://github.com/golemcloud/reqwest?branch=update-sep-2025#2970f017ebad0a1af4d341c1ac35bfcda7bbd28f"
+dependencies = [
+ "async-iterator",
+ "base64",
+ "bytes",
+ "encoding_rs",
+ "futures",
+ "futures-concurrency",
+ "http",
+ "mime",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "url",
+ "wasi",
+ "wasi-async-runtime",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -820,12 +847,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
-name = "wasi"
-version = "0.14.1+wasi-0.2.3"
+name = "version_check"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad7df608df60a1c33e247881838b0f809512086e3e3bb1c18323b77eeb1f844e"
+checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "wasi"
+version = "0.12.1+wasi-0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af274f03e73b7d85551b3f9e97b8a04d5c9aec703cfc227a3fe0595a7561c67a"
 dependencies = [
- "wit-bindgen-rt 0.39.0",
+ "wit-bindgen",
+]
+
+[[package]]
+name = "wasi-async-runtime"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9df0b7f89869b578aa56d8e4749776be8949ba9abda52fc8d5c15f02e901e022"
+dependencies = [
+ "hashbrown",
+ "slab",
+ "wasi",
 ]
 
 [[package]]
@@ -853,10 +897,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "wit-bindgen-rt"
-version = "0.39.0"
+name = "wit-bindgen"
+version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
+checksum = "b37d270da94012e0ac490ac633ad5bdd76a10a3fb15069edb033c1b771ce931f"
 dependencies = [
  "bitflags",
 ]
@@ -875,33 +919,6 @@ name = "writeable"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
-
-[[package]]
-name = "wstd"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5f51495e1ae93476d1629b5810bd6068fdf22545a8ada7ea5929e2faed7b793"
-dependencies = [
- "futures-core",
- "http",
- "itoa",
- "pin-project-lite",
- "serde",
- "serde_json",
- "slab",
- "wasi",
- "wstd-macro",
-]
-
-[[package]]
-name = "wstd-macro"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "225ac858e4405bdf164d92d070422c0b3b9b81f9b0b68836841f4d1bafc446b3"
-dependencies = [
- "quote",
- "syn",
-]
 
 [[package]]
 name = "yoke"
@@ -924,6 +941,26 @@ dependencies = [
  "quote",
  "syn",
  "synstructure",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "668f5168d10b9ee831de31933dc111a459c97ec93225beb307aed970d1372dfd"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c7962b26b0a8685668b671ee4b54d007a67d4eaf05fda79ac0ecf41e32270f1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
