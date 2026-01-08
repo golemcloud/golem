@@ -258,7 +258,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let expected_hash =
-        Hash::from_str("8ea5f5a111eb829d2f2d61583ae3fc0fc7723c22605726b3a14ac4c2ef4f2a35")?;
+        Hash::from_str("087c869b4c364100347971e1e0042bab9b1e3d4d196ecfbf103ec61c922fb4cf")?;
 
     let expected_plan = DeploymentPlan {
         current_revision: None,
@@ -268,7 +268,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             revision: component.revision,
             name: ComponentName("shopping-cart".to_string()),
             hash: Hash::from_str(
-                "fcab9dc7f8e5be5db26315871aadc09ece50cade095b6b9a503b967e37f72e6a",
+                "14fce3c6af8fb02ea56e1c948d1232c5cef4b8c836b66b6dbc00d3ee6e72b333",
             )?,
         }],
         http_api_definitions: vec![DeploymentPlanHttpApiDefintionEntry {
