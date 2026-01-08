@@ -1533,8 +1533,8 @@ impl TypeScriptBridgeGenerator {
                     .map(|element| {
                         let type_str = match &element.schema {
                             ElementSchema::ComponentModel(component_model) => {
-                                Self::type_reference(&component_model.element_type)
-                                    .unwrap_or("any".to_string())
+                                    Self::type_reference(&component_model.element_type)
+                                        .unwrap_or("any".to_string())
                             }
                             ElementSchema::UnstructuredText(descriptor) => {
                                 Self::unstructured_text_type(descriptor)
