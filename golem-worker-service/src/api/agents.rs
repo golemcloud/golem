@@ -1,9 +1,8 @@
 use crate::api::common::ApiEndpointError;
 use crate::service::auth::AuthService;
-use crate::service::component::ComponentService;
-use crate::service::worker::{AgentsService, WorkerService};
+use crate::service::worker::AgentsService;
 use chrono::{DateTime, Utc};
-use golem_common::model::agent::{AgentTypeName, DataValue, UntypedDataValue};
+use golem_common::model::agent::{AgentTypeName, UntypedDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::IdempotencyKey;
@@ -28,10 +27,7 @@ pub struct AgentsApi {
 
 #[OpenApi(prefix_path = "/v1/agents", tag = ApiTags::Agent)]
 impl AgentsApi {
-    pub fn new(
-        agents_service: Arc<AgentsService>,
-        auth_service: Arc<dyn AuthService>,
-    ) -> Self {
+    pub fn new(agents_service: Arc<AgentsService>, auth_service: Arc<dyn AuthService>) -> Self {
         Self {
             agents_service,
             auth_service,
@@ -95,7 +91,7 @@ pub struct AgentInvocationRequest {
     pub parameters: UntypedDataValue,
     pub phantom_id: Option<Uuid>,
     pub method_name: String,
-    pub method_parameters: DataValue,
+    pub method_parameters: UntypedDataValue,
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,

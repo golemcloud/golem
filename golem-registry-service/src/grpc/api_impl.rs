@@ -39,14 +39,16 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetDeployedComponentMetadataSuccessResponse, GetResourceLimitsRequest,
     GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, RegistryServiceError,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
-    UpdateWorkerConnectionLimitRequest, UpdateWorkerConnectionLimitResponse,
-    UpdateWorkerLimitRequest, UpdateWorkerLimitResponse, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response,
+    ResolveLatestAgentTypeByNamesRequest, ResolveLatestAgentTypeByNamesResponse,
+    ResolveLatestAgentTypeByNamesSuccessResponse, UpdateWorkerConnectionLimitRequest,
+    UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_deployed_component_metadata_response,
     get_resource_limits_response, registry_service_error, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
+    update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
@@ -62,7 +64,7 @@ use golem_service_base::grpc::{
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tonic::{Request, Response};
+use tonic::{Request, Response, Status};
 use tracing_futures::Instrument;
 
 pub struct RegistryServiceGrpcApi {
@@ -388,15 +390,19 @@ impl RegistryServiceGrpcApi {
             compiled_routes: Some(compiled_routes.try_into()?),
         })
     }
+
+    async fn resolve_latest_agent_type_by_names_internal(
+        &self,
+        _request: ResolveLatestAgentTypeByNamesRequest,
+    ) -> Result<ResolveLatestAgentTypeByNamesSuccessResponse, GrpcApiError> {
+        todo!()
+    }
 }
 
 #[async_trait]
 impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::RegistryService
     for RegistryServiceGrpcApi
 {
-    type DownloadComponentStream =
-        BoxStream<'static, Result<DownloadComponentResponse, tonic::Status>>;
-
     async fn authenticate_token(
         &self,
         request: Request<AuthenticateTokenRequest>,
@@ -535,6 +541,9 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
             result: Some(response),
         }))
     }
+
+    type DownloadComponentStream =
+        BoxStream<'static, Result<DownloadComponentResponse, tonic::Status>>;
 
     async fn download_component(
         &self,
@@ -733,6 +742,33 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetAgentTypeResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn resolve_latest_agent_type_by_names(
+        &self,
+        request: Request<ResolveLatestAgentTypeByNamesRequest>,
+    ) -> Result<Response<ResolveLatestAgentTypeByNamesResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "resolve_latest_agent_type_by_names",
+            app_name = &request.app_name,
+            environment_name = &request.environment_name,
+            agent_type_name = &request.agent_type_name,
+        );
+
+        let response = match self
+            .resolve_latest_agent_type_by_names_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => resolve_latest_agent_type_by_names_response::Result::Success(result),
+            Err(error) => resolve_latest_agent_type_by_names_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(ResolveLatestAgentTypeByNamesResponse {
             result: Some(response),
         }))
     }

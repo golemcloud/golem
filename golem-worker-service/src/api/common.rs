@@ -20,6 +20,7 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::payload::Json;
@@ -170,6 +171,7 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::InternalCallError(inner) => inner.into(),
             WorkerServiceError::LimitError(inner) => inner.into(),
             WorkerServiceError::AuthError(inner) => inner.into(),
+            WorkerServiceError::RegistryServiceError(inner) => inner.into(),
         }
     }
 }
@@ -243,6 +245,21 @@ impl From<AuthServiceError> for ApiEndpointError {
             AuthServiceError::Unauthorized(inner) => inner.into(),
             AuthServiceError::CouldNotAuthenticate => Self::unauthorized(error),
             AuthServiceError::InternalError(_) => Self::internal(error),
+        }
+    }
+}
+
+impl From<RegistryServiceError> for ApiEndpointError {
+    fn from(value: RegistryServiceError) -> Self {
+        match value {
+            RegistryServiceError::BadRequest(_) => Self::bad_request(value),
+            RegistryServiceError::Unauthorized(_) => Self::unauthorized(value),
+            RegistryServiceError::LimitExceeded(_) => Self::limit_exceeded(value),
+            RegistryServiceError::NotFound(_) => Self::not_found(value),
+            RegistryServiceError::AlreadyExists(_) => Self::already_exists(value),
+            RegistryServiceError::InternalServerError(_) => Self::internal(value),
+            RegistryServiceError::CouldNotAuthenticate(_) => Self::unauthorized(value),
+            RegistryServiceError::InternalClientError(_) => Self::internal(value),
         }
     }
 }

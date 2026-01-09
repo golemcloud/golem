@@ -15,10 +15,12 @@
 use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult};
 use crate::service::component::ComponentService;
 use crate::service::worker::{WorkerResult, WorkerService, WorkerServiceError};
+use golem_common::model::agent::{AgentId, DataValue};
+use golem_common::model::WorkerId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::AuthCtx;
+use golem_wasm::IntoValueAndType;
 use std::sync::Arc;
-use golem_common::model::agent::{AgentId, DataValue};
 
 pub struct AgentsService {
     registry_service: Arc<dyn RegistryService>,
@@ -75,24 +77,88 @@ impl AgentsService {
                     "Agent type {} not found in component metadata",
                     request.agent_type_name
                 ))
-            })?
+            })?;
 
-        let constructor_parameters: DataValue = request.parameters
+        let constructor_parameters: DataValue =
+            DataValue::try_from_untyped(request.parameters, agent_type.constructor.input_schema)
+                .map_err(|err| {
+                    WorkerServiceError::TypeChecker(format!(
+                        "Agent constructor parameters type error: {err}"
+                    ))
+                })?;
 
         let agent_id = AgentId::new(
-            request.agent_type_name,
+            request.agent_type_name.clone(),
             constructor_parameters,
-            request.phantom_id
+            request.phantom_id,
         );
+
+        let worker_id = WorkerId {
+            component_id: component_metadata.id,
+            worker_name: agent_id.to_string(),
+        };
+
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == request.method_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method {} not found in agent type {}",
+                    request.method_name, request.agent_type_name
+                ))
+            })?;
+
+        let method_parameters: DataValue =
+            DataValue::try_from_untyped(request.method_parameters, method.input_schema.clone())
+                .map_err(|err| {
+                    WorkerServiceError::TypeChecker(format!(
+                        "Agent method parameters type error: {err}"
+                    ))
+                })?;
+
+        // invoke: func(method-name: string, input: data-value) -> result<data-value, agent-error>;
 
         match request.mode {
             AgentInvocationMode::Await => {
-                // self.worker_service.invoke_and_await_typed(
-                // )
+                let _invoke_result = self
+                    .worker_service
+                    .invoke_and_await_typed(
+                        &worker_id,
+                        request.idempotency_key,
+                        "golem:agent/guest.{invoke}".to_string(),
+                        vec![
+                            request.method_name.into_value_and_type(),
+                            method_parameters.into_value_and_type(),
+                        ],
+                        None,
+                        auth,
+                    )
+                    .await?;
                 todo!()
             }
             AgentInvocationMode::Schedule => {
-                todo!()
+                if let Some(_schedule_at) = request.schedule_at {
+                    // schedule at time
+                    // TODO
+                    Err(WorkerServiceError::Internal("Not implemented".to_string()))?
+                } else {
+                    // trigger
+                    self.worker_service
+                        .invoke_typed(
+                            &worker_id,
+                            request.idempotency_key,
+                            "golem:agent/guest.{invoke}".to_string(),
+                            vec![
+                                request.method_name.into_value_and_type(),
+                                method_parameters.into_value_and_type(),
+                            ],
+                            None,
+                            auth,
+                        )
+                        .await?;
+                    Ok(AgentInvocationResult { result: None })
+                }
             }
         }
     }

@@ -59,7 +59,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
     pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
-    pub agents_service: Arc<AgentsService>
+    pub agents_service: Arc<AgentsService>,
 }
 
 impl Services {
@@ -206,7 +206,11 @@ impl Services {
                 identity_provider.clone(),
             ));
 
-        let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new());
+        let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new(
+            registry_service_client.clone(),
+            component_service.clone(),
+            worker_service.clone(),
+        ));
 
         Ok(Self {
             auth_service,
@@ -214,7 +218,7 @@ impl Services {
             component_service,
             worker_service,
             gateway_http_input_executor,
-            agents_service
+            agents_service,
         })
     }
 }

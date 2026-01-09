@@ -18,9 +18,11 @@ use crate::model::agent::{
     AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
     ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, Url,
+    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
+    UntypedElementValue, Url,
 };
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{Value, ValueAndType};
 
 impl From<super::bindings::golem::agent::common::AgentMode> for AgentMode {
@@ -278,6 +280,42 @@ impl DataValue {
             _ => Err("Data value does not match schema".to_string()),
         }
     }
+
+    pub fn try_from_untyped(value: UntypedDataValue, schema: DataSchema) -> Result<Self, String> {
+        match (value, schema) {
+            (UntypedDataValue::Tuple(tuple), DataSchema::Tuple(schema)) => {
+                if tuple.elements.len() != schema.elements.len() {
+                    return Err("Tuple length mismatch".to_string());
+                }
+                Ok(DataValue::Tuple(ElementValues {
+                    elements: tuple
+                        .elements
+                        .into_iter()
+                        .zip(schema.elements)
+                        .map(|(value, schema)| ElementValue::try_from_untyped(value, schema.schema))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
+            }
+            (UntypedDataValue::Multimodal(multimodal), DataSchema::Multimodal(schema)) => {
+                Ok(DataValue::Multimodal(NamedElementValues {
+                    elements: multimodal
+                        .elements
+                        .into_iter()
+                        .zip(schema.elements)
+                        .map(|(value, schema)| {
+                            ElementValue::try_from_untyped(value.value, schema.schema).map(|v| {
+                                NamedElementValue {
+                                    name: value.name,
+                                    value: v,
+                                }
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
+            }
+            _ => Err("Data value does not match schema".to_string()),
+        }
+    }
 }
 
 impl From<DataValue> for super::bindings::golem::agent::common::DataValue {
@@ -363,6 +401,36 @@ impl ElementValue {
             ) => {
                 Ok(ElementValue::UnstructuredBinary(binary.into()))
             }
+            _ => Err("Element value does not match schema".to_string()),
+        }
+    }
+
+    pub fn try_from_untyped(
+        value: UntypedElementValue,
+        schema: ElementSchema,
+    ) -> Result<Self, String> {
+        match (value, schema) {
+            (
+                UntypedElementValue::ComponentModel(json_value),
+                ElementSchema::ComponentModel(component_model_schema),
+            ) => {
+                let typ: AnalysedType = component_model_schema.element_type;
+                let value_and_type = ValueAndType::parse_with_type(&json_value.value, &typ)
+                    .map_err(|errors: Vec<String>| {
+                        format!(
+                            "Failed to parse JSON as ComponentModel value: {}",
+                            errors.join(", ")
+                        )
+                    })?;
+                Ok(ElementValue::ComponentModel(value_and_type))
+            }
+            (UntypedElementValue::UnstructuredText(text), ElementSchema::UnstructuredText(_)) => {
+                Ok(ElementValue::UnstructuredText(text.value))
+            }
+            (
+                UntypedElementValue::UnstructuredBinary(binary),
+                ElementSchema::UnstructuredBinary(_),
+            ) => Ok(ElementValue::UnstructuredBinary(binary.value)),
             _ => Err("Element value does not match schema".to_string()),
         }
     }
