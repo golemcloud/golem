@@ -24,6 +24,7 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -377,6 +378,7 @@ impl DeploymentService {
 
     pub async fn get_latest_deployed_agent_type_by_names(
         &self,
+        account_id: AccountId,
         app_name: &ApplicationName,
         environment_name: &EnvironmentName,
         agent_type_name: &AgentTypeName,
@@ -384,7 +386,7 @@ impl DeploymentService {
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let application = self
             .application_service
-            .get_in_account(auth.account_id(), app_name, auth)
+            .get_in_account(account_id, app_name, auth)
             .await?;
 
         let environment = self

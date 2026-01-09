@@ -21,7 +21,6 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
-mod from_value;
 pub mod wit_naming;
 
 pub mod bindings {
@@ -48,7 +47,8 @@ use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{
-    parse_value_and_type, print_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType,
+    parse_value_and_type, print_value_and_type, FromValue, IntoValue, IntoValueAndType, Value,
+    ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
 use poem_openapi::NewType;
@@ -445,8 +445,8 @@ impl DataSchema {
 
 #[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
 pub enum UntypedDataValue {
-    Tuple(UntypedElementValues),
-    Multimodal(UntypedNamedElementValues),
+    Tuple(Vec<UntypedElementValue>),
+    Multimodal(Vec<UntypedNamedElementValue>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
@@ -611,11 +611,6 @@ impl IntoValue for DataValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub struct UntypedElementValues {
-    pub elements: Vec<UntypedElementValue>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -657,11 +652,6 @@ impl Display for ElementValues {
                 .join(",")
         )
     }
-}
-
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub struct UntypedNamedElementValues {
-    pub elements: Vec<UntypedNamedElementValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
@@ -763,12 +753,44 @@ pub struct TextReferenceValue {
     pub value: TextReference,
 }
 
+impl IntoValue for TextReferenceValue {
+    fn into_value(self) -> Value {
+        self.value.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        TextReference::get_type()
+    }
+}
+
+impl FromValue for TextReferenceValue {
+    fn from_value(value: Value) -> Result<Self, String> {
+        TextReference::from_value(value).map(|value| Self { value })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryReferenceValue {
     pub value: BinaryReference,
+}
+
+impl IntoValue for BinaryReferenceValue {
+    fn into_value(self) -> Value {
+        self.value.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        BinaryReference::get_type()
+    }
+}
+
+impl FromValue for BinaryReferenceValue {
+    fn from_value(value: Value) -> Result<Self, String> {
+        BinaryReference::from_value(value).map(|value| Self { value })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]

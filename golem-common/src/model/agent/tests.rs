@@ -17,8 +17,8 @@ use crate::model::agent::{
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, JsonComponentModelValue,
     NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
-    TextReference, TextReferenceValue, TextSource, TextType, UntypedJsonDataValue, UntypedJsonElementValue,
-    UntypedJsonElementValues, Url,
+    TextReference, TextReferenceValue, TextSource, TextType, UntypedJsonDataValue,
+    UntypedJsonElementValue, UntypedJsonElementValues, Url,
 };
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};

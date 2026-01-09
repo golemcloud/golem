@@ -20,8 +20,8 @@ use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,
     ElementSchema, JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, TextReference,
-    TextReferenceValue, TextSource, UntypedJsonDataValue, UntypedJsonElementValue, UntypedJsonElementValues,
-    UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
+    TextReferenceValue, TextSource, UntypedJsonDataValue, UntypedJsonElementValue,
+    UntypedJsonElementValues, UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
 };
 use golem_wasm::analysis::analysed_type::{
     bool, case, f64, field, list, option, r#enum, record, s32, str, tuple, unit_case, variant,
@@ -686,12 +686,14 @@ fn playground4() {
         "FunUnstructuredText",
         json!([{ "tag": "inline", "val": "plain text"}]),
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Inline(TextSource {
-                    data: "plain text".to_string(),
-                    text_type: None,
-                }),
-            })],
+            elements: vec![UntypedJsonElementValue::UnstructuredText(
+                TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "plain text".to_string(),
+                        text_type: None,
+                    }),
+                },
+            )],
         }),
     );
 
@@ -1032,9 +1034,10 @@ fn assert_function_input_encoding(
         panic!("Failed to parse JSON output from encode function:\n{result_str}")
     });
 
-    let result_data_value: UntypedJsonDataValue = serde_json::from_value(result).unwrap_or_else(|_| {
-        panic!("Failed to deserialize output to UntypedDataValue:\n{result_str}")
-    });
+    let result_data_value: UntypedJsonDataValue =
+        serde_json::from_value(result).unwrap_or_else(|_| {
+            panic!("Failed to deserialize output to UntypedDataValue:\n{result_str}")
+        });
 
     // Verify the output structure
     assert_eq!(

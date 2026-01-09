@@ -19,8 +19,7 @@ use golem_common::model::agent::{AgentError, AgentId, DataValue, UntypedDataValu
 use golem_common::model::WorkerId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::{FromValue, FromValueAndType, IntoValueAndType, Value};
-use rib::to_string;
+use golem_wasm::{FromValue, IntoValueAndType, Value};
 use std::sync::Arc;
 
 pub struct AgentsService {
@@ -148,7 +147,11 @@ impl AgentsService {
                                 let untyped_data_value = UntypedDataValue::from_value(
                                     *data_value_value,
                                 )
-                                .map_err(|err| format!("Unexpected DataValue value: {err}"))?;
+                                .map_err(|err| {
+                                    WorkerServiceError::Internal(format!(
+                                        "Unexpected DataValue value: {err}"
+                                    ))
+                                })?;
                                 Ok(DataValue::try_from_untyped(
                                     untyped_data_value,
                                     method.output_schema.clone(),

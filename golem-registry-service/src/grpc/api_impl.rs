@@ -398,6 +398,10 @@ impl RegistryServiceGrpcApi {
         &self,
         request: ResolveLatestAgentTypeByNamesRequest,
     ) -> Result<ResolveLatestAgentTypeByNamesSuccessResponse, GrpcApiError> {
+        let account_id = request
+            .account_id
+            .ok_or("missing account_id field")?
+            .try_into()?;
         let app_name = ApplicationName(request.app_name);
         let environment_name = EnvironmentName(request.environment_name);
         let agent_type_name = AgentTypeName(request.agent_type_name);
@@ -405,6 +409,7 @@ impl RegistryServiceGrpcApi {
         let agent_type = self
             .deployment_service
             .get_latest_deployed_agent_type_by_names(
+                account_id,
                 &app_name,
                 &environment_name,
                 &agent_type_name,
@@ -772,6 +777,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "resolve_latest_agent_type_by_names",
+            account_id = proto_account_id_string(&request.account_id),
             app_name = &request.app_name,
             environment_name = &request.environment_name,
             agent_type_name = &request.agent_type_name,
