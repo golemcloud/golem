@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::{AgentConstructor, AgentDependency, AgentMethod, AgentType, AgentTypeName, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues};
+use crate::model::agent::{
+    AgentConstructor, AgentDependency, AgentMethod, AgentType, AgentTypeName,
+    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+};
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
     TypeOption, TypeRecord, TypeResult, TypeTuple, TypeVariant,

@@ -208,7 +208,9 @@ mod local {
     use crate::services::agent_types::AgentTypesService;
     use crate::services::component::ComponentService;
     use async_trait::async_trait;
-    use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer};
+    use golem_common::model::agent::{
+        AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;

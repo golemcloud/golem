@@ -21,7 +21,6 @@ use golem_wasm::analysis::analysed_type::{
     bool, case, chr, field, list, option, r#enum, record, result, s32, str, tuple, u8, unit_case,
     unit_result, variant,
 };
-use std::env::var;
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {

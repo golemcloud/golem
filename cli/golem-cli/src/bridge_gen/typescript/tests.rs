@@ -42,7 +42,7 @@ fn playground1() {
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen");
 
     std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, &target_dir);
+    generate_and_compile(agent_type, target_dir);
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn playground2() {
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen2");
 
     std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, &target_dir);
+    generate_and_compile(agent_type, target_dir);
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn playground3() {
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen3");
 
     std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, &target_dir);
+    generate_and_compile(agent_type, target_dir);
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn playground4() {
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen4");
 
     std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, &target_dir);
+    generate_and_compile(agent_type, target_dir);
 
     let object_type = record(vec![
         field("a", str()),
@@ -716,17 +716,15 @@ fn playground4() {
         "FunMultimodal",
         json!([[{"type": "text", "value": {"tag": "inline", "val": "hello"}}]]),
         UntypedDataValue::Multimodal(UntypedNamedElementValues {
-            elements: vec![
-                UntypedNamedElementValue {
-                    name: "text".to_string(),
-                    value: UntypedElementValue::UnstructuredText(TextReferenceValue {
-                        value: TextReference::Inline(TextSource {
-                            data: "hello".to_string(),
-                            text_type: None,
-                        }),
+            elements: vec![UntypedNamedElementValue {
+                name: "text".to_string(),
+                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "hello".to_string(),
+                        text_type: None,
                     }),
-                },
-            ],
+                }),
+            }],
         }),
     );
 
@@ -735,14 +733,12 @@ fn playground4() {
         "FunMultimodalAdvanced",
         json!([[{"type": "text", "value": "input"}]]),
         UntypedDataValue::Multimodal(UntypedNamedElementValues {
-            elements: vec![
-                UntypedNamedElementValue {
-                    name: "text".to_string(),
-                    value: UntypedElementValue::ComponentModel(JsonComponentModelValue {
-                        value: "input".into_value_and_type().to_json_value().unwrap(),
-                    }),
-                },
-            ],
+            elements: vec![UntypedNamedElementValue {
+                name: "text".to_string(),
+                value: UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                    value: "input".into_value_and_type().to_json_value().unwrap(),
+                }),
+            }],
         }),
     );
 
@@ -751,11 +747,11 @@ fn playground4() {
         "FunEitherOptional",
         json!([{"ok": "value"}]),
         UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
                     value: json!({"ok": "value", "err": null}),
-                }),
-            ],
+                },
+            )],
         }),
     );
 
@@ -764,11 +760,11 @@ fn playground4() {
         "FunResultExact",
         json!([{"tag": "ok", "val": "value"}]),
         UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
                     value: json!({"ok": "value"}),
-                }),
-            ],
+                },
+            )],
         }),
     );
 
@@ -777,11 +773,11 @@ fn playground4() {
         "FunResultLike",
         json!([{"tag": "okay", "val": "value"}]),
         UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
                     value: json!({"okay": "value"}),
-                }),
-            ],
+                },
+            )],
         }),
     );
 
@@ -790,11 +786,11 @@ fn playground4() {
         "FunResultLikeWithVoid",
         json!([{"tag": "ok"}]),
         UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
                     value: json!({"ok": null}),
-                }),
-            ],
+                },
+            )],
         }),
     );
 
@@ -803,11 +799,11 @@ fn playground4() {
         "FunBuiltinResultVS",
         json!(["hello"]),
         UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
-                }),
-            ],
+                },
+            )],
         }),
     );
 
@@ -816,11 +812,11 @@ fn playground4() {
         "FunBuiltinResultSV",
         json!(["hello"]),
         UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
-                }),
-            ],
+                },
+            )],
         }),
     );
 
@@ -829,11 +825,11 @@ fn playground4() {
         "FunBuiltinResultSN",
         json!(["hello"]),
         UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            elements: vec![UntypedElementValue::ComponentModel(
+                JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
-                }),
-            ],
+                },
+            )],
         }),
     );
 
@@ -989,13 +985,13 @@ fn assert_function_input_encoding(
         .filter(|s| !s.is_empty() && !s.starts_with("> "))
         .collect::<Vec<_>>()
         .join("\n");
-    let result: serde_json::Value = serde_json::from_str(&result_str).expect(&format!(
-        "Failed to parse JSON output from encode function:\n{result_str}"
-    ));
+    let result: serde_json::Value = serde_json::from_str(&result_str).unwrap_or_else(|_| {
+        panic!("Failed to parse JSON output from encode function:\n{result_str}")
+    });
 
-    let result_data_value: UntypedDataValue = serde_json::from_value(result).expect(&format!(
-        "Failed to deserialize output to UntypedDataValue:\n{result_str}"
-    ));
+    let result_data_value: UntypedDataValue = serde_json::from_value(result).unwrap_or_else(|_| {
+        panic!("Failed to deserialize output to UntypedDataValue:\n{result_str}")
+    });
 
     // Verify the output structure
     assert_eq!(
@@ -1046,9 +1042,9 @@ fn assert_function_output_decoding(
         .filter(|s| !s.is_empty() && !s.starts_with("> "))
         .collect::<Vec<_>>()
         .join("\n");
-    let result: serde_json::Value = serde_json::from_str(&result_str).expect(&format!(
-        "Failed to parse JSON output from decode function:\n{result_str}"
-    ));
+    let result: serde_json::Value = serde_json::from_str(&result_str).unwrap_or_else(|_| {
+        panic!("Failed to parse JSON output from decode function:\n{result_str}")
+    });
 
     // Verify the output structure
     assert_eq!(

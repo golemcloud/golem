@@ -313,7 +313,10 @@ impl TypeScriptBridgeGenerator {
         }
 
         if self.agent_type.mode == AgentMode::Durable {
-            writer.write_doc(&format!("Gets or creates an instance of this agent\n{}", self.agent_type.constructor.description));
+            writer.write_doc(&format!(
+                "Gets or creates an instance of this agent\n{}",
+                self.agent_type.constructor.description
+            ));
             let mut get = writer.begin_static_method("get");
             Self::write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
             get.result(&class_name);
@@ -325,7 +328,10 @@ impl TypeScriptBridgeGenerator {
         }
 
         {
-            writer.write_doc(&format!("Gets or creates a phantom instance of this agent with a specific phantom ID\n{}", self.agent_type.constructor.description));
+            writer.write_doc(&format!(
+                "Gets or creates a phantom instance of this agent with a specific phantom ID\n{}",
+                self.agent_type.constructor.description
+            ));
             let mut get_phantom = writer.begin_static_method("getPhantom");
             get_phantom.param("phantomId", "base.PhantomId");
             Self::write_parameter_list(
@@ -343,7 +349,10 @@ impl TypeScriptBridgeGenerator {
         }
 
         {
-            writer.write_doc(&format!("Creates a new phantom instance of this agent\n{}", self.agent_type.constructor.description));
+            writer.write_doc(&format!(
+                "Creates a new phantom instance of this agent\n{}",
+                self.agent_type.constructor.description
+            ));
             let mut new_phantom = writer.begin_static_method("newPhantom");
             Self::write_parameter_list(
                 &mut new_phantom,
@@ -365,7 +374,7 @@ impl TypeScriptBridgeGenerator {
             get_config.result("base.Configuration");
             get_config.write_line(format!("if (!{config_var}) {{"));
             get_config.indent();
-            get_config.write_line(&format!(
+            get_config.write_line(format!(
                 "  throw new Error(\"{} configuration is not set\");",
                 self.agent_type.type_name.0
             ));
@@ -386,13 +395,13 @@ impl TypeScriptBridgeGenerator {
             get_method_request.indent();
             get_method_request.write_line("appName: this.__getConfig().application,");
             get_method_request.write_line("envName: this.__getConfig().environment,");
-            get_method_request.write_line(&format!(
+            get_method_request.write_line(format!(
                 "agentTypeName: \"{}\",",
                 self.agent_type.type_name.0
             ));
             get_method_request.write_line("parameters: this.parameters,");
             get_method_request.write_line("phantomId: this.phantomId,");
-            get_method_request.write_line(&format!("methodName: \"{}\",", method_def.name));
+            get_method_request.write_line(format!("methodName: \"{}\",", method_def.name));
             get_method_request.write_line("mode: \"await\",");
             get_method_request.write_line("methodParameters: { type: \"Tuple\", elements: [] }");
             get_method_request.unindent();
@@ -495,7 +504,7 @@ impl TypeScriptBridgeGenerator {
             }
             AnalysedType::Tuple(tuple) => {
                 // For tuples, write readable array construction
-                writer.write_line("return [".to_string());
+                writer.write_line("return [");
                 writer.indent();
                 for (idx, item_type) in tuple.items.iter().enumerate() {
                     let item_encode =
@@ -504,7 +513,7 @@ impl TypeScriptBridgeGenerator {
                     writer.write_line(format!("{}{}", item_encode, comma));
                 }
                 writer.unindent();
-                writer.write_line("];".to_string());
+                writer.write_line("];");
             }
             _ => {
                 // For simpler primitive types, just return the encoded value
@@ -522,7 +531,7 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         match typ {
             AnalysedType::Record(record) => {
-                writer.write_line("return {".to_string());
+                writer.write_line("return {");
                 writer.indent();
                 for (idx, field) in record.fields.iter().enumerate() {
                     let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
@@ -537,11 +546,11 @@ impl TypeScriptBridgeGenerator {
                     writer.write_line(format!("\"{}\": {}{}", wit_field_name, field_encode, comma));
                 }
                 writer.unindent();
-                writer.write_line("};".to_string());
+                writer.write_line("};");
             }
             AnalysedType::Variant(variant) => {
                 // Use nested ternary operators for conciseness, but split across lines
-                writer.write_line("return (".to_string());
+                writer.write_line("return (");
                 writer.indent();
                 for (idx, case) in variant.cases.iter().enumerate() {
                     let condition = format!("{}.tag === '{}'", value, case.name);
@@ -566,10 +575,10 @@ impl TypeScriptBridgeGenerator {
                     }
                 }
                 writer.unindent();
-                writer.write_line(");".to_string());
+                writer.write_line(");");
             }
             AnalysedType::Result(result) => {
-                writer.write_line("return (".to_string());
+                writer.write_line("return (");
                 writer.indent();
                 writer.write_line(format!("{}.ok !== undefined ?", value));
                 writer.indent();
@@ -591,10 +600,10 @@ impl TypeScriptBridgeGenerator {
                 };
                 writer.write_line(format!("{})", err_expr));
                 writer.unindent();
-                writer.write_line(");".to_string());
+                writer.write_line(");");
             }
             AnalysedType::Flags(flags) => {
-                writer.write_line("return [".to_string());
+                writer.write_line("return [");
                 writer.indent();
                 for flag in &flags.names {
                     let flag_name = escape_js_ident(flag.to_lower_camel_case());
@@ -604,11 +613,11 @@ impl TypeScriptBridgeGenerator {
                     ));
                 }
                 writer.unindent();
-                writer.write_line("].filter((f) => f !== undefined);".to_string());
+                writer.write_line("].filter((f) => f !== undefined);");
             }
             _ => {
                 // This shouldn't be reached for complex types
-                writer.write_line("throw new Error(\"Unsupported type in encode\");".to_string());
+                writer.write_line("throw new Error(\"Unsupported type in encode\");");
             }
         }
         Ok(())
@@ -658,7 +667,7 @@ impl TypeScriptBridgeGenerator {
                     value
                 ));
                 writer.unindent();
-                writer.write_line("}".to_string());
+                writer.write_line("}");
                 let cases = enum_type
                     .cases
                     .iter()
@@ -669,7 +678,7 @@ impl TypeScriptBridgeGenerator {
                 writer.indent();
                 writer.write_line(format!("throw new Error(`Invalid enum value ${{{}}}. Expected one of: ${{validCases.join(', ')}})`);", value));
                 writer.unindent();
-                writer.write_line("}".to_string());
+                writer.write_line("}");
                 writer.write_line(format!("return {} as any;", value));
             }
             AnalysedType::Tuple(tuple) => {
@@ -681,7 +690,7 @@ impl TypeScriptBridgeGenerator {
                     value
                 ));
                 writer.unindent();
-                writer.write_line("}".to_string());
+                writer.write_line("}");
                 writer.write_line(format!(
                     "if ({}.length !== {}) {{",
                     value,
@@ -694,8 +703,8 @@ impl TypeScriptBridgeGenerator {
                     value
                 ));
                 writer.unindent();
-                writer.write_line("}".to_string());
-                writer.write_line("return [".to_string());
+                writer.write_line("}");
+                writer.write_line("return [");
                 writer.indent();
                 for (idx, item_type) in tuple.items.iter().enumerate() {
                     let item_decode =
@@ -704,7 +713,7 @@ impl TypeScriptBridgeGenerator {
                     writer.write_line(format!("{}{}", item_decode, comma));
                 }
                 writer.unindent();
-                writer.write_line("] as any;".to_string());
+                writer.write_line("] as any;");
             }
             _ => {
                 // For simpler primitive types, just return the decoded value
@@ -721,7 +730,7 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         match typ {
             AnalysedType::Record(record) => {
-                writer.write_line("return {".to_string());
+                writer.write_line("return {");
                 writer.indent();
                 for (idx, field) in record.fields.iter().enumerate() {
                     let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
@@ -736,7 +745,7 @@ impl TypeScriptBridgeGenerator {
                     writer.write_line(format!("{}: {}{}", js_field_name, field_decode, comma));
                 }
                 writer.unindent();
-                writer.write_line("};".to_string());
+                writer.write_line("};");
             }
             AnalysedType::Variant(variant) => {
                 for (idx, case) in variant.cases.iter().enumerate() {
@@ -759,12 +768,12 @@ impl TypeScriptBridgeGenerator {
                         }
                     }
                     writer.unindent();
-                    writer.write_line("}".to_string());
+                    writer.write_line("}");
                 }
-                writer.write_line("throw new Error(`Unknown variant case in ${obj}`);".to_string());
+                writer.write_line("throw new Error(`Unknown variant case in ${obj}`);");
             }
             AnalysedType::Result(result) => {
-                writer.write_line("if ('ok' in obj) {".to_string());
+                writer.write_line("if ('ok' in obj) {");
                 writer.indent();
                 let ok_value = match &result.ok {
                     Some(ok_type) => Self::decode_wit_value("obj.ok", ok_type),
@@ -772,7 +781,7 @@ impl TypeScriptBridgeGenerator {
                 };
                 writer.write_line(format!("return {{ ok: {} }};", ok_value));
                 writer.unindent();
-                writer.write_line("} else if ('err' in obj) {".to_string());
+                writer.write_line("} else if ('err' in obj) {");
                 writer.indent();
                 let err_value = match &result.err {
                     Some(err_type) => Self::decode_wit_value("obj.err", err_type),
@@ -780,40 +789,35 @@ impl TypeScriptBridgeGenerator {
                 };
                 writer.write_line(format!("return {{ err: {} }};", err_value));
                 writer.unindent();
-                writer.write_line("} else {".to_string());
+                writer.write_line("} else {");
                 writer.indent();
                 writer.write_line(
-                    "throw new Error(`Expected result object with 'ok' or 'err' key, got ${obj}`);"
-                        .to_string(),
+                    "throw new Error(`Expected result object with 'ok' or 'err' key, got ${obj}`);",
                 );
                 writer.unindent();
-                writer.write_line("}".to_string());
+                writer.write_line("}");
             }
             AnalysedType::Flags(flags) => {
-                writer.write_line("if (!Array.isArray(obj)) {".to_string());
+                writer.write_line("if (!Array.isArray(obj)) {");
                 writer.indent();
-                writer.write_line(
-                    "throw new Error(`Expected array of flag names, got ${obj}`);".to_string(),
-                );
+                writer.write_line("throw new Error(`Expected array of flag names, got ${obj}`);");
                 writer.unindent();
-                writer.write_line("}".to_string());
-                writer.write_line("const result = {".to_string());
+                writer.write_line("}");
+                writer.write_line("const result = {");
                 writer.indent();
                 for flag in &flags.names {
                     let flag_name = escape_js_ident(flag.to_lower_camel_case());
                     writer.write_line(format!("{}: false,", flag_name));
                 }
                 writer.unindent();
-                writer.write_line("};".to_string());
-                writer.write_line("for (const flag of obj) {".to_string());
+                writer.write_line("};");
+                writer.write_line("for (const flag of obj) {");
                 writer.indent();
-                writer.write_line("if (typeof flag !== 'string') {".to_string());
+                writer.write_line("if (typeof flag !== 'string') {");
                 writer.indent();
-                writer.write_line(
-                    "throw new Error(`Expected string flag name, got ${flag}`);".to_string(),
-                );
+                writer.write_line("throw new Error(`Expected string flag name, got ${flag}`);");
                 writer.unindent();
-                writer.write_line("}".to_string());
+                writer.write_line("}");
                 let flag_names_str = flags
                     .names
                     .iter()
@@ -822,17 +826,17 @@ impl TypeScriptBridgeGenerator {
                     .join(", ");
                 writer.write_line(format!("if (![{}].includes(flag)) {{", flag_names_str));
                 writer.indent();
-                writer.write_line("throw new Error(`Unknown flag name ${flag}`);".to_string());
+                writer.write_line("throw new Error(`Unknown flag name ${flag}`);");
                 writer.unindent();
-                writer.write_line("}".to_string());
-                writer.write_line("result[flag as keyof typeof result] = true;".to_string());
+                writer.write_line("}");
+                writer.write_line("result[flag as keyof typeof result] = true;");
                 writer.unindent();
-                writer.write_line("}".to_string());
-                writer.write_line("return result;".to_string());
+                writer.write_line("}");
+                writer.write_line("return result;");
             }
             _ => {
                 // This shouldn't be reached for complex types
-                writer.write_line("throw new Error(\"Unsupported type in decode\");".to_string());
+                writer.write_line("throw new Error(\"Unsupported type in decode\");");
             }
         }
         Ok(())
@@ -1073,7 +1077,7 @@ impl TypeScriptBridgeGenerator {
                 let param_names: Vec<String> = params
                     .elements
                     .iter()
-                    .map(|param| escape_js_ident(&param.name.to_lower_camel_case()))
+                    .map(|param| escape_js_ident(param.name.to_lower_camel_case()))
                     .collect();
                 writer.write_line(format!("const [{}] = {};", param_names.join(", "), tuple));
                 Ok(())
@@ -1196,7 +1200,7 @@ impl TypeScriptBridgeGenerator {
                     format!("((v: unknown) => {{ if (typeof v === 'boolean') {{ return v; }} else {{ throw new Error(`Expected boolean, got ${{v}}`); }} }})({value})")
                 }
                 AnalysedType::Option(inner) => {
-                    let inner_decode = Self::decode_wit_value("item", &*inner.inner);
+                    let inner_decode = Self::decode_wit_value("item", &inner.inner);
                     format!("base.decodeOption({value}, (item) => {})", inner_decode)
                 }
                 AnalysedType::List(inner) => {
@@ -1204,7 +1208,7 @@ impl TypeScriptBridgeGenerator {
                     if matches!(*inner.inner, AnalysedType::U8(_)) {
                         format!("((v: unknown) => {{ if (v instanceof Uint8Array) {{ return v; }} else if (Array.isArray(v)) {{ return new Uint8Array(v); }} else {{ throw new Error(`Expected Uint8Array or array, got ${{v}}`); }} }})({value})")
                     } else {
-                        let inner_decode = Self::decode_wit_value("item", &*inner.inner);
+                        let inner_decode = Self::decode_wit_value("item", &inner.inner);
                         format!("((v: unknown) => {{ if (!Array.isArray(v)) {{ throw new Error(`Expected array, got ${{v}}`); }} return v.map((item) => {}); }})({value})", inner_decode)
                     }
                 }
@@ -1353,35 +1357,35 @@ impl TypeScriptBridgeGenerator {
             format!("encode{}({})", ts_name, value)
         } else {
             match typ {
-                AnalysedType::Str(_) => format!("{}", value),
-                AnalysedType::Chr(_) => format!("{}", value),
-                AnalysedType::F64(_) => format!("{}", value),
-                AnalysedType::F32(_) => format!("{}", value),
-                AnalysedType::U64(_) => format!("{}", value),
-                AnalysedType::S64(_) => format!("{}", value),
-                AnalysedType::U32(_) => format!("{}", value),
-                AnalysedType::S32(_) => format!("{}", value),
-                AnalysedType::U16(_) => format!("{}", value),
-                AnalysedType::S16(_) => format!("{}", value),
-                AnalysedType::U8(_) => format!("{}", value),
-                AnalysedType::S8(_) => format!("{}", value),
-                AnalysedType::Bool(_) => format!("{}", value),
+                AnalysedType::Str(_) => value.to_string(),
+                AnalysedType::Chr(_) => value.to_string(),
+                AnalysedType::F64(_) => value.to_string(),
+                AnalysedType::F32(_) => value.to_string(),
+                AnalysedType::U64(_) => value.to_string(),
+                AnalysedType::S64(_) => value.to_string(),
+                AnalysedType::U32(_) => value.to_string(),
+                AnalysedType::S32(_) => value.to_string(),
+                AnalysedType::U16(_) => value.to_string(),
+                AnalysedType::S16(_) => value.to_string(),
+                AnalysedType::U8(_) => value.to_string(),
+                AnalysedType::S8(_) => value.to_string(),
+                AnalysedType::Bool(_) => value.to_string(),
                 AnalysedType::Option(inner) => {
-                    let inner_encode = Self::encode_wit_value("item", &*inner.inner);
+                    let inner_encode = Self::encode_wit_value("item", &inner.inner);
                     format!("base.encodeOption({value}, (item) => {})", inner_encode)
                 }
                 AnalysedType::List(inner) => {
-                    let inner_encode = Self::encode_wit_value("item", &*inner.inner);
+                    let inner_encode = Self::encode_wit_value("item", &inner.inner);
                     // For primitives, just return the value as-is since no transformation is needed
                     if inner_encode == "item" {
-                        format!("{}", value)
+                        value.to_string()
                     } else {
                         format!("{}.map((item: any) => {})", value, inner_encode)
                     }
                 }
                 AnalysedType::Enum(_) => {
                     // Enum: encoded as a string
-                    format!("{}", value)
+                    value.to_string()
                 }
                 AnalysedType::Flags(flags) => {
                     // Flags: encoded as an array of flag names that are true
@@ -1532,7 +1536,7 @@ impl TypeScriptBridgeGenerator {
                         Self::unstructured_text_type(descriptor)
                     }
                     ElementSchema::UnstructuredBinary(descriptor) => {
-                        Self::unstructured_binary_type(&descriptor)
+                        Self::unstructured_binary_type(descriptor)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -1544,14 +1548,14 @@ impl TypeScriptBridgeGenerator {
                     .map(|element| {
                         let type_str = match &element.schema {
                             ElementSchema::ComponentModel(component_model) => {
-                                    Self::type_reference(&component_model.element_type)
-                                        .unwrap_or("any".to_string())
+                                Self::type_reference(&component_model.element_type)
+                                    .unwrap_or("any".to_string())
                             }
                             ElementSchema::UnstructuredText(descriptor) => {
                                 Self::unstructured_text_type(descriptor)
                             }
                             ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(&descriptor)
+                                Self::unstructured_binary_type(descriptor)
                             }
                         };
                         format!("{{ type: '{}', value: {} }}", element.name, type_str)
@@ -1569,7 +1573,7 @@ impl TypeScriptBridgeGenerator {
                 let param_names: Vec<String> = params
                     .elements
                     .iter()
-                    .map(|param| escape_js_ident(&param.name.to_lower_camel_case()))
+                    .map(|param| escape_js_ident(param.name.to_lower_camel_case()))
                     .collect();
                 writer.write(param_names.join(", "));
             }
@@ -1596,7 +1600,7 @@ impl TypeScriptBridgeGenerator {
                             writer.param(&param_name, &Self::unstructured_text_type(descriptor));
                         }
                         ElementSchema::UnstructuredBinary(descriptor) => {
-                            writer.param(&param_name, &Self::unstructured_binary_type(&descriptor));
+                            writer.param(&param_name, &Self::unstructured_binary_type(descriptor));
                         }
                     }
                 }
@@ -1616,7 +1620,7 @@ impl TypeScriptBridgeGenerator {
                                 Self::unstructured_text_type(descriptor)
                             }
                             ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(&descriptor)
+                                Self::unstructured_binary_type(descriptor)
                             }
                         };
                         format!("{{ type: '{}', value: {} }}", element.name, type_str)
@@ -1644,7 +1648,7 @@ impl TypeScriptBridgeGenerator {
                             Self::unstructured_text_type(descriptor)
                         }
                         ElementSchema::UnstructuredBinary(descriptor) => {
-                            Self::unstructured_binary_type(&descriptor)
+                            Self::unstructured_binary_type(descriptor)
                         }
                     }
                 } else {
@@ -1660,7 +1664,7 @@ impl TypeScriptBridgeGenerator {
                                 Self::unstructured_text_type(descriptor)
                             }
                             ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(&descriptor)
+                                Self::unstructured_binary_type(descriptor)
                             }
                         })
                         .collect::<Vec<_>>()
@@ -1682,7 +1686,7 @@ impl TypeScriptBridgeGenerator {
                                 Self::unstructured_text_type(descriptor)
                             }
                             ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(&descriptor)
+                                Self::unstructured_binary_type(descriptor)
                             }
                         };
                         format!("{{ type: '{}', value: {} }}", element.name, type_str)
@@ -1706,7 +1710,7 @@ impl TypeScriptBridgeGenerator {
                             writer.result(&Self::unstructured_text_type(descriptor));
                         }
                         ElementSchema::UnstructuredBinary(descriptor) => {
-                            writer.result(&Self::unstructured_binary_type(&descriptor));
+                            writer.result(&Self::unstructured_binary_type(descriptor));
                         }
                     }
                 }
@@ -1726,7 +1730,7 @@ impl TypeScriptBridgeGenerator {
                                 Self::unstructured_text_type(descriptor)
                             }
                             ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(&descriptor)
+                                Self::unstructured_binary_type(descriptor)
                             }
                         };
                         format!("{{ type: '{}', value: {} }}", element.name, type_str)
@@ -1757,14 +1761,14 @@ impl TypeScriptBridgeGenerator {
             AnalysedType::Chr(_) => Ok("string".to_string()),
             AnalysedType::Str(_) => Ok("string".to_string()),
             AnalysedType::Option(inner) => {
-                let inner_ts_type = Self::type_reference(&*inner.inner)?;
+                let inner_ts_type = Self::type_reference(&inner.inner)?;
                 Ok(format!("{} | undefined", inner_ts_type)) // TODO: use ? in parameter and field positions
             }
             AnalysedType::List(inner) => {
                 if matches!(&*inner.inner, AnalysedType::U8(_)) {
                     Ok("Uint8Array".to_string())
                 } else {
-                    let inner_ts_type = Self::type_reference(&*inner.inner)?;
+                    let inner_ts_type = Self::type_reference(&inner.inner)?;
                     Ok(format!("{}[]", inner_ts_type))
                 }
             }
@@ -1772,7 +1776,7 @@ impl TypeScriptBridgeGenerator {
                 let types: Vec<String> = inner
                     .items
                     .iter()
-                    .map(|t| Self::type_reference(t))
+                    .map(Self::type_reference)
                     .collect::<Result<_, _>>()?;
                 Ok(format!("[{}]", types.join(", ")))
             }
@@ -1780,13 +1784,13 @@ impl TypeScriptBridgeGenerator {
                 let ok_type = result
                     .ok
                     .as_ref()
-                    .map(|t| Self::type_reference(&t))
+                    .map(|t| Self::type_reference(t))
                     .transpose()?
                     .unwrap_or("void".to_string());
                 let err_type = result
                     .err
                     .as_ref()
-                    .map(|t| Self::type_reference(&t))
+                    .map(|t| Self::type_reference(t))
                     .transpose()?
                     .unwrap_or("Error".to_string());
                 Ok(format!("base.JsonResult<{ok_type}, {err_type}>"))
@@ -1824,19 +1828,19 @@ impl TypeScriptBridgeGenerator {
                 let ok_type = result
                     .ok
                     .as_ref()
-                    .map(|t| Self::type_reference(&t))
+                    .map(|t| Self::type_reference(t))
                     .transpose()?
                     .unwrap_or("void".to_string());
                 let err_type = result
                     .err
                     .as_ref()
-                    .map(|t| Self::type_reference(&t))
+                    .map(|t| Self::type_reference(t))
                     .transpose()?
                     .unwrap_or("Error".to_string());
                 Ok(format!("base.JsonResult<{ok_type}, {err_type}>")) // TODO: convert to a more convenient result type
             }
             AnalysedType::Option(option) => {
-                let inner_ts_type = Self::type_reference(&*option.inner)?;
+                let inner_ts_type = Self::type_reference(&option.inner)?;
                 Ok(format!("{} | undefined", inner_ts_type))
             }
             AnalysedType::Enum(r#enum) => {
@@ -1863,7 +1867,7 @@ impl TypeScriptBridgeGenerator {
                 for field in &record.fields {
                     let js_name = escape_js_ident(field.name.to_lower_camel_case());
                     let field_str = if let AnalysedType::Option(option) = &field.typ {
-                        let field_type = Self::type_reference(&*option.inner)?;
+                        let field_type = Self::type_reference(&option.inner)?;
                         format!("{js_name}?: {field_type};\n")
                     } else {
                         let field_type = Self::type_reference(&field.typ)?;
@@ -1879,7 +1883,7 @@ impl TypeScriptBridgeGenerator {
                 let types: Vec<String> = tuple
                     .items
                     .iter()
-                    .map(|t| Self::type_reference(t))
+                    .map(Self::type_reference)
                     .collect::<Result<_, _>>()?;
                 Ok(format!("[{}]", types.join(", ")))
             }
@@ -1887,7 +1891,7 @@ impl TypeScriptBridgeGenerator {
                 if matches!(*list.inner, AnalysedType::U8(_)) {
                     Ok("Uint8Array".to_string())
                 } else {
-                    let inner_type = Self::type_reference(&*list.inner)?;
+                    let inner_type = Self::type_reference(&list.inner)?;
                     Ok(format!("{}[]", inner_type))
                 }
             }
@@ -1933,8 +1937,8 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         let library_name = self.library_name();
 
         let ts_path = self.target_path.join(format!("{library_name}.ts"));
-        let package_json_path = self.target_path.join("package.json".to_string());
-        let tsconfig_json_path = self.target_path.join("tsconfig.json".to_string());
+        let package_json_path = self.target_path.join("package.json");
+        let tsconfig_json_path = self.target_path.join("tsconfig.json");
         let base_ts_path = self.target_path.join("base.ts");
         let test_path = self.target_path.join("test.ts");
 

@@ -23,7 +23,7 @@ use crate::model::agent::{
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use proptest::prelude::Strategy;

@@ -13,7 +13,13 @@
 // limitations under the License.
 
 use crate::model::agent::bindings::golem::agent::host;
-use crate::model::agent::{AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, Url};
+use crate::model::agent::{
+    AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
+    AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
+    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, Url,
+};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
 

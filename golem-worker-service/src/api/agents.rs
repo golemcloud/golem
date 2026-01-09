@@ -6,16 +6,16 @@ use chrono::{DateTime, Utc};
 use golem_common::model::agent::{AgentTypeName, DataValue, UntypedDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::{Empty, IdempotencyKey};
+use golem_common::model::IdempotencyKey;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme};
 use poem_openapi::param::Header;
 use poem_openapi::payload::Json;
-use poem_openapi_derive::{Enum, Object, OpenApi, Union};
+use poem_openapi::types::Type;
+use poem_openapi_derive::{Enum, Object, OpenApi};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use poem_openapi::types::Type;
 use tracing::Instrument;
 use uuid::Uuid;
 
@@ -73,8 +73,8 @@ impl AgentsApi {
 
     async fn invoke_agent_internal(
         &self,
-        request: AgentInvocationRequest,
-        auth: AuthCtx,
+        _request: AgentInvocationRequest,
+        _auth: AuthCtx,
     ) -> Result<AgentInvocationResult> {
         todo!()
     }

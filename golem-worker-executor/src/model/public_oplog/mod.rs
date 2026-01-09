@@ -761,12 +761,12 @@ async fn enrich_golem_rpc_invoke(
         .map(|agent_id| agent_id.agent_type.clone());
     payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
     payload
-    }
-    
-    async fn enrich_golem_rpc_scheduled_invocation(
+}
+
+async fn enrich_golem_rpc_scheduled_invocation(
     components: Arc<dyn ComponentService>,
     mut payload: HostRequestGolemRpcScheduledInvocation,
-    ) -> HostRequestGolemRpcScheduledInvocation {
+) -> HostRequestGolemRpcScheduledInvocation {
     let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
     payload.remote_agent_type = agent_id
         .as_ref()

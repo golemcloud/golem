@@ -1,4 +1,10 @@
-use crate::model::agent::{AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType, RegisteredAgentTypeImplementer, TextDescriptor, TextReference, TextSource, TextType, Url};
+use crate::model::agent::{
+    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, AgentTypeName,
+    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
+    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
+    NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
+    RegisteredAgentTypeImplementer, TextDescriptor, TextReference, TextSource, TextType, Url,
+};
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
 use golem_api_grpc::proto::golem::component::{

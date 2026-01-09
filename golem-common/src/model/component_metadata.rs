@@ -134,7 +134,10 @@ impl ComponentMetadata {
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
             .unwrap()
@@ -367,7 +370,10 @@ impl ComponentMetadataInnerData {
             ))
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
@@ -576,7 +582,8 @@ struct ComponentMetadataInnerCache {
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
     agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
     agent_types_by_wrapper_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
-    functions_by_agent_constructor: HashMap<AgentTypeName, Result<Option<InvokableFunction>, String>>,
+    functions_by_agent_constructor:
+        HashMap<AgentTypeName, Result<Option<InvokableFunction>, String>>,
 }
 
 impl ComponentMetadataInnerCache {

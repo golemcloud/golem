@@ -28,13 +28,13 @@ trait BridgeGenerator {
 fn collect_all_wit_types(agent_type: &AgentType) -> Vec<AnalysedType> {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
-    
+
     let mut add_type = |typ: AnalysedType| {
         if seen.insert(typ.clone()) {
             result.push(typ);
         }
     };
-    
+
     for typ in wit_types_in_data_schema(&agent_type.constructor.input_schema) {
         add_type(typ);
     }
@@ -98,16 +98,16 @@ fn named_types_in_analysed_type(typ: &AnalysedType) -> Vec<AnalysedType> {
             AnalysedType::Variant(variant) => {
                 for case in &variant.cases {
                     if let Some(typ) = &case.typ {
-                        stack.push_back(&typ);
+                        stack.push_back(typ);
                     }
                 }
             }
             AnalysedType::Result(result) => {
                 if let Some(ok) = &result.ok {
-                    stack.push_back(&*ok);
+                    stack.push_back(ok);
                 }
                 if let Some(err) = &result.err {
-                    stack.push_back(&*err);
+                    stack.push_back(err);
                 }
             }
             AnalysedType::Option(inner) => {
@@ -120,13 +120,13 @@ fn named_types_in_analysed_type(typ: &AnalysedType) -> Vec<AnalysedType> {
             }
             AnalysedType::Tuple(items) => {
                 for item in &items.items {
-                    stack.push_back(&item);
+                    stack.push_back(item);
                 }
             }
             AnalysedType::List(inner) => {
                 stack.push_back(&*inner.inner);
             }
-            _ => {},
+            _ => {}
         }
     }
     result
