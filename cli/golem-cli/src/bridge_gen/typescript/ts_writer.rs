@@ -36,6 +36,7 @@ pub struct TsWriter {
     module_stack: Vec<TsModuleState>,
 }
 
+#[allow(unused)]
 impl TsWriter {
     pub fn new() -> Self {
         TsWriter {
@@ -48,6 +49,22 @@ impl TsWriter {
     pub fn finish(self, target: &Utf8Path) -> anyhow::Result<()> {
         std::fs::write(target, self.content)
             .map_err(|e| anyhow!("Failed to write TypeScript file: {e}"))
+    }
+
+    pub fn write_doc(&mut self, doc: &str) {
+        let doc = doc.trim_end();
+        if doc.is_empty() {
+            return;
+        }
+        self.indented_write_line("/**");
+        for line in doc.lines() {
+            if line.trim().is_empty() {
+                self.indented_write_line(" *");
+            } else {
+                self.indented_write_line(format!(" * {}", line));
+            }
+        }
+        self.indented_write_line(" */");
     }
 
     pub fn begin_export_namespace(&mut self, name: &str) {
@@ -70,7 +87,7 @@ impl TsWriter {
         self.indented_write_line("}");
     }
 
-    pub fn begin_function<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_function(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("function {name}("));
         TsFunctionWriter {
             writer: self,
@@ -82,7 +99,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_export_function<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_export_function(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("export function {name}("));
         TsFunctionWriter {
             writer: self,
@@ -94,7 +111,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_export_async_function<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_export_async_function(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("export async function {name}("));
         TsFunctionWriter {
             writer: self,
@@ -106,7 +123,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_method(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("{name}("));
         TsFunctionWriter {
             writer: self,
@@ -118,7 +135,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_private_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_private_method(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("private {name}("));
         TsFunctionWriter {
             writer: self,
@@ -130,7 +147,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_async_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_async_method(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("async {name}("));
         TsFunctionWriter {
             writer: self,
@@ -142,7 +159,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_static_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_static_method(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("static {name}("));
         TsFunctionWriter {
             writer: self,
@@ -154,7 +171,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_static_async_method<'a>(&'a mut self, name: &str) -> TsFunctionWriter<'a> {
+    pub fn begin_static_async_method(&mut self, name: &str) -> TsFunctionWriter {
         self.indented_write(format!("static async {name}("));
         TsFunctionWriter {
             writer: self,
@@ -166,7 +183,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_constructor<'a>(&'a mut self) -> TsFunctionWriter<'a> {
+    pub fn begin_constructor(&mut self) -> TsFunctionWriter {
         self.indented_write("constructor(");
         TsFunctionWriter {
             writer: self,
@@ -178,7 +195,7 @@ impl TsWriter {
         }
     }
 
-    pub fn begin_private_constructor<'a>(&'a mut self) -> TsFunctionWriter<'a> {
+    pub fn begin_private_constructor(&mut self) -> TsFunctionWriter {
         self.indented_write("private constructor(");
         TsFunctionWriter {
             writer: self,
@@ -303,7 +320,7 @@ impl<'a> TsFunctionWriter<'a> {
             }
         } else {
             let last_line = self.body.last_mut().unwrap();
-            let (new_head, new_rest) = lines.split_first().unwrap();
+            let (_, new_rest) = lines.split_first().unwrap();
             last_line.push_str(content.as_ref());
             for line in new_rest {
                 self.body.push(indent(line, self.indent_level * 2));
@@ -479,31 +496,31 @@ impl TsAnonymousFunctionWriter {
         result.push_str("}\n");
 
         result
-        }
-        }
+    }
+}
 
-        impl FunctionWriter for TsAnonymousFunctionWriter {
-        fn param(&mut self, name: &str, typ: &str) {
+impl FunctionWriter for TsAnonymousFunctionWriter {
+    fn param(&mut self, name: &str, typ: &str) {
         TsAnonymousFunctionWriter::param(self, name, typ);
-        }
+    }
 
-        fn result(&mut self, typ: &str) {
+    fn result(&mut self, typ: &str) {
         TsAnonymousFunctionWriter::result(self, typ);
-        }
+    }
 
-        fn write(&mut self, content: impl AsRef<str>) {
+    fn write(&mut self, content: impl AsRef<str>) {
         TsAnonymousFunctionWriter::write(self, content);
-        }
+    }
 
-        fn write_line(&mut self, line: impl AsRef<str>) {
+    fn write_line(&mut self, line: impl AsRef<str>) {
         TsAnonymousFunctionWriter::write_line(self, line);
-        }
+    }
 
-        fn indent(&mut self) {
+    fn indent(&mut self) {
         TsAnonymousFunctionWriter::indent(self);
-        }
+    }
 
-        fn unindent(&mut self) {
+    fn unindent(&mut self) {
         TsAnonymousFunctionWriter::unindent(self);
-        }
-        }
+    }
+}

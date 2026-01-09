@@ -33,7 +33,6 @@ use std::io::Write;
 use std::process::Stdio;
 use test_r::test;
 // TODO: replace the paths with temp dirs before merging
-// TODO: generate doc comments based on descriptions
 
 // Playground tests for manual inspection
 #[test]

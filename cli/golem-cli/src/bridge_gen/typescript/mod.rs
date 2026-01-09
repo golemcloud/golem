@@ -297,6 +297,7 @@ impl TypeScriptBridgeGenerator {
             }
         }
 
+        writer.write_doc(&self.agent_type.description);
         let class_name = self.agent_type.type_name.0.to_upper_camel_case();
         writer.begin_export_class(&class_name);
 
@@ -312,6 +313,7 @@ impl TypeScriptBridgeGenerator {
         }
 
         if self.agent_type.mode == AgentMode::Durable {
+            writer.write_doc(&format!("Gets or creates an instance of this agent\n{}", self.agent_type.constructor.description));
             let mut get = writer.begin_static_method("get");
             Self::write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
             get.result(&class_name);
@@ -323,6 +325,7 @@ impl TypeScriptBridgeGenerator {
         }
 
         {
+            writer.write_doc(&format!("Gets or creates a phantom instance of this agent with a specific phantom ID\n{}", self.agent_type.constructor.description));
             let mut get_phantom = writer.begin_static_method("getPhantom");
             get_phantom.param("phantomId", "base.PhantomId");
             Self::write_parameter_list(
@@ -340,6 +343,7 @@ impl TypeScriptBridgeGenerator {
         }
 
         {
+            writer.write_doc(&format!("Creates a new phantom instance of this agent\n{}", self.agent_type.constructor.description));
             let mut new_phantom = writer.begin_static_method("newPhantom");
             Self::write_parameter_list(
                 &mut new_phantom,
@@ -413,6 +417,7 @@ impl TypeScriptBridgeGenerator {
             Self::write_decode_data_value(&mut decode_result, &method_def.output_schema)?;
             let decode_result_fn = decode_result.build();
 
+            writer.write_doc(&method_def.description);
             writer.declare_field(
                 &method_def.name,
                 &format!(
@@ -440,6 +445,7 @@ impl TypeScriptBridgeGenerator {
         writer.end_export_class();
 
         {
+            writer.write_doc("Sets the global configuration for this agent client");
             let mut configure = writer.begin_export_function("configure");
             configure.param("config", "base.Configuration");
 
