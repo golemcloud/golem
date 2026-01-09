@@ -2,7 +2,7 @@ use crate::api::common::ApiEndpointError;
 use crate::service::auth::AuthService;
 use crate::service::worker::AgentsService;
 use chrono::{DateTime, Utc};
-use golem_common::model::agent::{AgentTypeName, UntypedDataValue};
+use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::IdempotencyKey;
@@ -82,10 +82,10 @@ pub struct AgentInvocationRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: UntypedDataValue,
+    pub parameters: UntypedJsonDataValue,
     pub phantom_id: Option<Uuid>,
     pub method_name: String,
-    pub method_parameters: UntypedDataValue,
+    pub method_parameters: UntypedJsonDataValue,
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
@@ -95,5 +95,5 @@ pub struct AgentInvocationRequest {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
-    pub result: Option<UntypedDataValue>,
+    pub result: Option<UntypedJsonDataValue>,
 }

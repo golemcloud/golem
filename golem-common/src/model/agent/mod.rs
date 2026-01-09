@@ -21,6 +21,7 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
+mod from_value;
 pub mod wit_naming;
 
 pub mod bindings {
@@ -156,13 +157,13 @@ pub struct AgentDependency {
     pub methods: Vec<AgentMethod>,
 }
 
-#[derive(Debug, Clone, BinaryCodec, IntoValue)]
+#[derive(Debug, Clone, BinaryCodec, IntoValue, FromValue)]
 pub enum AgentError {
     InvalidInput(String),
     InvalidMethod(String),
     InvalidType(String),
     InvalidAgentId(String),
-    CustomError(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
+    CustomError(ValueAndType),
 }
 
 impl Display for AgentError {
@@ -442,19 +443,25 @@ impl DataSchema {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
 pub enum UntypedDataValue {
     Tuple(UntypedElementValues),
     Multimodal(UntypedNamedElementValues),
 }
 
-impl From<DataValue> for UntypedDataValue {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum UntypedJsonDataValue {
+    Tuple(UntypedJsonElementValues),
+    Multimodal(UntypedJsonNamedElementValues),
+}
+
+impl From<DataValue> for UntypedJsonDataValue {
     fn from(value: DataValue) -> Self {
         match value {
-            DataValue::Tuple(elements) => UntypedDataValue::Tuple(elements.into()),
-            DataValue::Multimodal(elements) => UntypedDataValue::Multimodal(elements.into()),
+            DataValue::Tuple(elements) => UntypedJsonDataValue::Tuple(elements.into()),
+            DataValue::Multimodal(elements) => UntypedJsonDataValue::Multimodal(elements.into()),
         }
     }
 }
@@ -604,20 +611,25 @@ impl IntoValue for DataValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
 pub struct UntypedElementValues {
     pub elements: Vec<UntypedElementValue>,
 }
 
-impl From<ElementValues> for UntypedElementValues {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonElementValues {
+    pub elements: Vec<UntypedJsonElementValue>,
+}
+
+impl From<ElementValues> for UntypedJsonElementValues {
     fn from(value: ElementValues) -> Self {
         Self {
             elements: value
                 .elements
                 .into_iter()
-                .map(UntypedElementValue::from)
+                .map(UntypedJsonElementValue::from)
                 .collect(),
         }
     }
@@ -647,20 +659,25 @@ impl Display for ElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
 pub struct UntypedNamedElementValues {
     pub elements: Vec<UntypedNamedElementValue>,
 }
 
-impl From<NamedElementValues> for UntypedNamedElementValues {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonNamedElementValues {
+    pub elements: Vec<UntypedJsonNamedElementValue>,
+}
+
+impl From<NamedElementValues> for UntypedJsonNamedElementValues {
     fn from(value: NamedElementValues) -> Self {
         Self {
             elements: value
                 .elements
                 .into_iter()
-                .map(UntypedNamedElementValue::from)
+                .map(UntypedJsonNamedElementValue::from)
                 .collect(),
         }
     }
@@ -690,15 +707,21 @@ impl Display for NamedElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
 pub struct UntypedNamedElementValue {
     pub name: String,
     pub value: UntypedElementValue,
 }
 
-impl From<NamedElementValue> for UntypedNamedElementValue {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonNamedElementValue {
+    pub name: String,
+    pub value: UntypedJsonElementValue,
+}
+
+impl From<NamedElementValue> for UntypedJsonNamedElementValue {
     fn from(value: NamedElementValue) -> Self {
         Self {
             name: value.name,
@@ -748,32 +771,39 @@ pub struct BinaryReferenceValue {
     pub value: BinaryReference,
 }
 
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+pub enum UntypedElementValue {
+    ComponentModel(Value),
+    UnstructuredText(TextReferenceValue),
+    UnstructuredBinary(BinaryReferenceValue),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
-pub enum UntypedElementValue {
+pub enum UntypedJsonElementValue {
     ComponentModel(JsonComponentModelValue),
     UnstructuredText(TextReferenceValue),
     UnstructuredBinary(BinaryReferenceValue),
 }
 
-impl From<ElementValue> for UntypedElementValue {
+impl From<ElementValue> for UntypedJsonElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
             ElementValue::ComponentModel(value) => {
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: value
                         .to_json_value()
                         .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
                 })
             }
             ElementValue::UnstructuredText(text_reference) => {
-                UntypedElementValue::UnstructuredText(TextReferenceValue {
+                UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
                     value: text_reference,
                 })
             }
             ElementValue::UnstructuredBinary(binary_reference) => {
-                UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue {
                     value: binary_reference,
                 })
             }

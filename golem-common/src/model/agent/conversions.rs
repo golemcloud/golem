@@ -18,8 +18,8 @@ use crate::model::agent::{
     AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
     ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
-    UntypedElementValue, Url,
+    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedJsonDataValue,
+    UntypedJsonElementValue, Url,
 };
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -281,9 +281,9 @@ impl DataValue {
         }
     }
 
-    pub fn try_from_untyped(value: UntypedDataValue, schema: DataSchema) -> Result<Self, String> {
+    pub fn try_from_untyped_json(value: UntypedJsonDataValue, schema: DataSchema) -> Result<Self, String> {
         match (value, schema) {
-            (UntypedDataValue::Tuple(tuple), DataSchema::Tuple(schema)) => {
+            (UntypedJsonDataValue::Tuple(tuple), DataSchema::Tuple(schema)) => {
                 if tuple.elements.len() != schema.elements.len() {
                     return Err("Tuple length mismatch".to_string());
                 }
@@ -292,18 +292,18 @@ impl DataValue {
                         .elements
                         .into_iter()
                         .zip(schema.elements)
-                        .map(|(value, schema)| ElementValue::try_from_untyped(value, schema.schema))
+                        .map(|(value, schema)| ElementValue::try_from_untyped_json(value, schema.schema))
                         .collect::<Result<Vec<_>, _>>()?,
                 }))
             }
-            (UntypedDataValue::Multimodal(multimodal), DataSchema::Multimodal(schema)) => {
+            (UntypedJsonDataValue::Multimodal(multimodal), DataSchema::Multimodal(schema)) => {
                 Ok(DataValue::Multimodal(NamedElementValues {
                     elements: multimodal
                         .elements
                         .into_iter()
                         .zip(schema.elements)
                         .map(|(value, schema)| {
-                            ElementValue::try_from_untyped(value.value, schema.schema).map(|v| {
+                            ElementValue::try_from_untyped_json(value.value, schema.schema).map(|v| {
                                 NamedElementValue {
                                     name: value.name,
                                     value: v,
@@ -405,13 +405,13 @@ impl ElementValue {
         }
     }
 
-    pub fn try_from_untyped(
-        value: UntypedElementValue,
+    pub fn try_from_untyped_json(
+        value: UntypedJsonElementValue,
         schema: ElementSchema,
     ) -> Result<Self, String> {
         match (value, schema) {
             (
-                UntypedElementValue::ComponentModel(json_value),
+                UntypedJsonElementValue::ComponentModel(json_value),
                 ElementSchema::ComponentModel(component_model_schema),
             ) => {
                 let typ: AnalysedType = component_model_schema.element_type;
@@ -424,11 +424,11 @@ impl ElementValue {
                     })?;
                 Ok(ElementValue::ComponentModel(value_and_type))
             }
-            (UntypedElementValue::UnstructuredText(text), ElementSchema::UnstructuredText(_)) => {
+            (UntypedJsonElementValue::UnstructuredText(text), ElementSchema::UnstructuredText(_)) => {
                 Ok(ElementValue::UnstructuredText(text.value))
             }
             (
-                UntypedElementValue::UnstructuredBinary(binary),
+                UntypedJsonElementValue::UnstructuredBinary(binary),
                 ElementSchema::UnstructuredBinary(_),
             ) => Ok(ElementValue::UnstructuredBinary(binary.value)),
             _ => Err("Element value does not match schema".to_string()),

@@ -17,12 +17,14 @@ use crate::bridge_gen::BridgeGenerator;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_client::model::ValueAndType;
 use golem_common::model::agent::{
-    AgentType, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
-    JsonComponentModelValue, TextReference, TextReferenceValue, TextSource, UntypedDataValue,
-    UntypedElementValue, UntypedElementValues, UntypedNamedElementValue, UntypedNamedElementValues,
+    AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
+    BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,
+    ElementSchema, JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, TextReference,
+    TextReferenceValue, TextSource, UntypedJsonDataValue, UntypedJsonElementValue, UntypedJsonElementValues,
+    UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, case, field, list, option, r#enum, record, s32, str, tuple, unit_case, variant,
+    bool, case, f64, field, list, option, r#enum, record, s32, str, tuple, unit_case, variant,
 };
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValueAndType, Value};
@@ -157,15 +159,15 @@ fn playground4() {
                 null
             ]
         },
-        UntypedDataValue::Tuple(UntypedElementValues {
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: "value1".into_value_and_type().to_json_value().unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
                 }),
             ],
@@ -177,15 +179,15 @@ fn playground4() {
         "FunOptional",
         // [string | undefined, ObjectWithUnionWithUndefined1, ObjectWithUnionWithUndefined2, ObjectWithUnionWithUndefined3, ObjectWithUnionWithUndefined4, string | undefined, UnionType | undefined]
         json!(["value", {"a": "nested"}, {"a": "nested"}, {"a": "nested"}, {"a": "nested"}, "optional", null]),
-        UntypedDataValue::Tuple(UntypedElementValues {
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: Some("value".to_string())
                         .into_value_and_type()
                         .to_json_value()
                         .unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
@@ -195,7 +197,7 @@ fn playground4() {
                     .to_json_value()
                     .unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
@@ -205,7 +207,7 @@ fn playground4() {
                     .to_json_value()
                     .unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
@@ -215,7 +217,7 @@ fn playground4() {
                     .to_json_value()
                     .unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
@@ -225,13 +227,13 @@ fn playground4() {
                     .to_json_value()
                     .unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: Some("optional".to_string())
                         .into_value_and_type()
                         .to_json_value()
                         .unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: ValueAndType::new(Value::Option(None), option(union_type.clone()))
                         .to_json_value()
                         .unwrap(),
@@ -244,15 +246,15 @@ fn playground4() {
         target_dir,
         "FunOptionalQMark",
         json!(["value1", 10, null]),
-        UntypedDataValue::Tuple(UntypedElementValues {
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: "value1".into_value_and_type().to_json_value().unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
                 }),
-                UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
                 }),
             ],
@@ -263,8 +265,8 @@ fn playground4() {
         target_dir,
         "FunNumber",
         json!([42]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: (42i32).into_value_and_type().to_json_value().unwrap(),
                 },
@@ -276,8 +278,8 @@ fn playground4() {
         target_dir,
         "FunString",
         json!(["hello"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -289,8 +291,8 @@ fn playground4() {
         target_dir,
         "FunBoolean",
         json!([true]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: true.into_value_and_type().to_json_value().unwrap(),
                 },
@@ -317,8 +319,8 @@ fn playground4() {
             "i": ["str", 2, {"a": "obj", "b": 1, "c": true}],
             "j": [],
             "k": {"n": 1}}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Record(vec![
@@ -370,8 +372,8 @@ fn playground4() {
         target_dir,
         "FunUnionType",
         json!([{ "tag": "case3", "val": true }]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
@@ -391,8 +393,8 @@ fn playground4() {
         target_dir,
         "FunUnionComplexType",
         json!([{ "tag": "case8", "val": { "n": 1 } }]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
@@ -412,8 +414,8 @@ fn playground4() {
         target_dir,
         "FunNumber",
         json!([42]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: (42i32).into_value_and_type().to_json_value().unwrap(),
                 },
@@ -425,8 +427,8 @@ fn playground4() {
         target_dir,
         "FunString",
         json!(["hello"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -438,8 +440,8 @@ fn playground4() {
         target_dir,
         "FunBoolean",
         json!([true]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: true.into_value_and_type().to_json_value().unwrap(),
                 },
@@ -451,8 +453,8 @@ fn playground4() {
         target_dir,
         "FunMap",
         json!([[["key1", 10]]]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: vec![("key1".to_string(), 10i32)]
                         .into_iter()
@@ -469,8 +471,8 @@ fn playground4() {
         target_dir,
         "FunTaggedUnion",
         json!([{"tag": "e", "val": {"a": "x", "b": 200, "c": true }}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
@@ -494,8 +496,8 @@ fn playground4() {
         target_dir,
         "FunTupleComplexType",
         json!([["hello", 100, {"a": "x", "b": 200, "c": true}]]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Tuple(vec![
@@ -520,8 +522,8 @@ fn playground4() {
         target_dir,
         "FunTupleType",
         json!([["item", 42, false]]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ("item".to_string(), 42, false)
                         .into_value_and_type()
@@ -536,8 +538,8 @@ fn playground4() {
         target_dir,
         "FunListComplexType",
         json!([[{"a": "item1", "b": 1, "c": true}, {"a": "item2", "b": 2, "c": false}]]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::List(vec![
@@ -565,8 +567,8 @@ fn playground4() {
         target_dir,
         "FunObjectType",
         json!([{"a": "test", "b": 123, "c": true}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Record(vec![
@@ -587,8 +589,8 @@ fn playground4() {
         target_dir,
         "FunUnionWithLiterals",
         json!([{"tag": "lit1"}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
@@ -608,8 +610,8 @@ fn playground4() {
         target_dir,
         "FunUnionWithLiterals",
         json!([{"tag": "union-with-literals1", "val": true}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
@@ -629,8 +631,8 @@ fn playground4() {
         target_dir,
         "FunUnionWithOnlyLiterals",
         json!(["bar"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(Value::Enum(1), union_with_only_literals.clone())
                         .to_json_value()
@@ -644,8 +646,8 @@ fn playground4() {
         target_dir,
         "FunVoidReturn",
         json!(["test"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "test".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -657,8 +659,8 @@ fn playground4() {
         target_dir,
         "FunNullReturn",
         json!(["test"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "test".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -670,8 +672,8 @@ fn playground4() {
         target_dir,
         "FunUndefinedReturn",
         json!(["test"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "test".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -683,8 +685,8 @@ fn playground4() {
         target_dir,
         "FunUnstructuredText",
         json!([{ "tag": "inline", "val": "plain text"}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::UnstructuredText(TextReferenceValue {
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
                 value: TextReference::Inline(TextSource {
                     data: "plain text".to_string(),
                     text_type: None,
@@ -697,8 +699,8 @@ fn playground4() {
         target_dir,
         "FunUnstructuredBinary",
         json!([{ "tag": "inline", "mimeType": "application/json", "val": [0,1,2,3]}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::UnstructuredBinary(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::UnstructuredBinary(
                 BinaryReferenceValue {
                     value: BinaryReference::Inline(BinarySource {
                         binary_type: BinaryType {
@@ -715,10 +717,10 @@ fn playground4() {
         target_dir,
         "FunMultimodal",
         json!([[{"type": "text", "value": {"tag": "inline", "val": "hello"}}]]),
-        UntypedDataValue::Multimodal(UntypedNamedElementValues {
-            elements: vec![UntypedNamedElementValue {
+        UntypedJsonDataValue::Multimodal(UntypedJsonNamedElementValues {
+            elements: vec![UntypedJsonNamedElementValue {
                 name: "text".to_string(),
-                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
                     value: TextReference::Inline(TextSource {
                         data: "hello".to_string(),
                         text_type: None,
@@ -732,10 +734,10 @@ fn playground4() {
         target_dir,
         "FunMultimodalAdvanced",
         json!([[{"type": "text", "value": "input"}]]),
-        UntypedDataValue::Multimodal(UntypedNamedElementValues {
-            elements: vec![UntypedNamedElementValue {
+        UntypedJsonDataValue::Multimodal(UntypedJsonNamedElementValues {
+            elements: vec![UntypedJsonNamedElementValue {
                 name: "text".to_string(),
-                value: UntypedElementValue::ComponentModel(JsonComponentModelValue {
+                value: UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: "input".into_value_and_type().to_json_value().unwrap(),
                 }),
             }],
@@ -746,8 +748,8 @@ fn playground4() {
         target_dir,
         "FunEitherOptional",
         json!([{"ok": "value"}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: json!({"ok": "value", "err": null}),
                 },
@@ -759,8 +761,8 @@ fn playground4() {
         target_dir,
         "FunResultExact",
         json!([{"tag": "ok", "val": "value"}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: json!({"ok": "value"}),
                 },
@@ -772,8 +774,8 @@ fn playground4() {
         target_dir,
         "FunResultLike",
         json!([{"tag": "okay", "val": "value"}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: json!({"okay": "value"}),
                 },
@@ -785,8 +787,8 @@ fn playground4() {
         target_dir,
         "FunResultLikeWithVoid",
         json!([{"tag": "ok"}]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: json!({"ok": null}),
                 },
@@ -798,8 +800,8 @@ fn playground4() {
         target_dir,
         "FunBuiltinResultVS",
         json!(["hello"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -811,8 +813,8 @@ fn playground4() {
         target_dir,
         "FunBuiltinResultSV",
         json!(["hello"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -824,8 +826,8 @@ fn playground4() {
         target_dir,
         "FunBuiltinResultSN",
         json!(["hello"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "hello".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -837,8 +839,8 @@ fn playground4() {
         target_dir,
         "FunNoReturn",
         json!(["test"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "test".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -850,8 +852,8 @@ fn playground4() {
         target_dir,
         "FunArrowSync",
         json!(["test"]),
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: "test".into_value_and_type().to_json_value().unwrap(),
                 },
@@ -862,8 +864,8 @@ fn playground4() {
     assert_function_output_decoding(
         target_dir,
         "FunTupleComplexType",
-        UntypedDataValue::Tuple(UntypedElementValues {
-            elements: vec![UntypedElementValue::ComponentModel(
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
                 // single return value containing a tuple
                 JsonComponentModelValue {
                     value: json! {
@@ -891,6 +893,47 @@ fn playground4() {
         }),
         json!(["hello", 100, { "a": "x", "b": 200, "c": true }]),
     );
+}
+
+#[test]
+fn playground5() {
+    let agent_type = AgentType {
+        type_name: AgentTypeName("CounterAgent".to_string()),
+        description: "Constructs the agent CounterAgent".to_string(),
+        constructor: AgentConstructor {
+            name: Some("CounterAgent".to_string()),
+            description: "Constructs the agent CounterAgent".to_string(),
+            prompt_hint: Some("Enter the following parameters: name".to_string()),
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "name".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "increment".to_string(),
+            description: "Increases the count by one and returns the new value".to_string(),
+            prompt_hint: Some("Increase the count by one".to_string()),
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return-value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: f64(),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+    };
+    let target_dir = Utf8Path::new("/Users/vigoo/tmp/counter-client");
+
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, target_dir);
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
@@ -947,7 +990,7 @@ fn assert_function_input_encoding(
     target_dir: &Utf8Path,
     function_name: &str,
     input_json: serde_json::Value,
-    expected: UntypedDataValue,
+    expected: UntypedJsonDataValue,
 ) {
     // In this test we pass a JSON representing an array of function parameters as it is passed to our client method,
     // and we expect the encoding to be a UntypedDataValue matching the DataSchema of the function's input.
@@ -989,7 +1032,7 @@ fn assert_function_input_encoding(
         panic!("Failed to parse JSON output from encode function:\n{result_str}")
     });
 
-    let result_data_value: UntypedDataValue = serde_json::from_value(result).unwrap_or_else(|_| {
+    let result_data_value: UntypedJsonDataValue = serde_json::from_value(result).unwrap_or_else(|_| {
         panic!("Failed to deserialize output to UntypedDataValue:\n{result_str}")
     });
 
@@ -1003,7 +1046,7 @@ fn assert_function_input_encoding(
 fn assert_function_output_decoding(
     target_dir: &Utf8Path,
     function_name: &str,
-    output: UntypedDataValue,
+    output: UntypedJsonDataValue,
     expected: serde_json::Value,
 ) {
     // In this test we pass a JSON representing an UntypedDataValue as it is returned from our REST API,

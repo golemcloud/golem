@@ -407,6 +407,7 @@ pub struct TsAnonymousFunctionWriter {
     indent_level: usize,
 }
 
+#[allow(unused)]
 impl TsAnonymousFunctionWriter {
     pub fn new() -> Self {
         TsAnonymousFunctionWriter {

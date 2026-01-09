@@ -1,6 +1,9 @@
 export type PhantomId = string;
 
-export type GolemServer = "local" | "cloud" | { url: string, token: string };
+export type GolemServer = 
+    | { type: 'local' }
+    | { type: 'cloud'; token: string }
+    | { type: 'custom'; url: string; token: string };
 
 export type Configuration = {
     server: GolemServer,
@@ -116,16 +119,30 @@ export async function invokeAgent(
     server: GolemServer,
     request: AgentInvocationRequest,
 ): Promise<AgentInvocationResult> {
-    const baseUrl = typeof server === "string"
-        ? (server === "local" ? "http://localhost:9080" : "https://api.golem.cloud")
-        : server.url;
+    let baseUrl: string;
+    let token: string;
+
+    switch (server.type) {
+        case 'local':
+            baseUrl = "http://localhost:9881";
+            token = "__REPLACE_WITH_LOCAL_TOKEN__";
+            break;
+        case 'cloud':
+            baseUrl = "https://api.golem.cloud";
+            token = server.token;
+            break;
+        case 'custom':
+            baseUrl = server.url;
+            token = server.token;
+            break;
+    }
 
     const headers: HeadersInit = {
         "Content-Type": "application/json",
     };
 
-    if (typeof server !== "string" && server.token) {
-        headers["Authorization"] = `Bearer ${server.token}`;
+    if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
     }
 
     if (request.idempotencyKey) {

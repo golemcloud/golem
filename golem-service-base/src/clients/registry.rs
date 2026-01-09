@@ -154,6 +154,7 @@ pub trait RegistryService: Send + Sync {
 
     async fn resolve_latest_agent_type_by_names(
         &self,
+        account_id: &AccountId,
         app_name: &ApplicationName,
         environment_name: &EnvironmentName,
         agent_type_name: &AgentTypeName,
@@ -667,6 +668,7 @@ impl RegistryService for GrpcRegistryService {
 
     async fn resolve_latest_agent_type_by_names(
         &self,
+        account_id: &AccountId,
         app_name: &ApplicationName,
         environment_name: &EnvironmentName,
         agent_type_name: &AgentTypeName,
@@ -675,6 +677,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("resolve_latest_agent_type_by_names", move |client| {
                 let request = golem_api_grpc::proto::golem::registry::v1::ResolveLatestAgentTypeByNamesRequest {
+                    account_id: Some(account_id.clone().into()),
                     app_name: app_name.0.clone(),
                     environment_name: environment_name.0.clone(),
                     agent_type_name: agent_type_name.0.clone(),

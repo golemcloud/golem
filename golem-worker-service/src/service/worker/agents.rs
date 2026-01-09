@@ -15,11 +15,12 @@
 use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult};
 use crate::service::component::ComponentService;
 use crate::service::worker::{WorkerResult, WorkerService, WorkerServiceError};
-use golem_common::model::agent::{AgentId, DataValue};
+use golem_common::model::agent::{AgentError, AgentId, DataValue, UntypedDataValue};
 use golem_common::model::WorkerId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::IntoValueAndType;
+use golem_wasm::{FromValue, FromValueAndType, IntoValueAndType, Value};
+use rib::to_string;
 use std::sync::Arc;
 
 pub struct AgentsService {
@@ -49,6 +50,7 @@ impl AgentsService {
         let registered_agent_type = self
             .registry_service
             .resolve_latest_agent_type_by_names(
+                &auth.account_id(),
                 &request.app_name,
                 &request.env_name,
                 &request.agent_type_name,
@@ -79,13 +81,15 @@ impl AgentsService {
                 ))
             })?;
 
-        let constructor_parameters: DataValue =
-            DataValue::try_from_untyped(request.parameters, agent_type.constructor.input_schema)
-                .map_err(|err| {
-                    WorkerServiceError::TypeChecker(format!(
-                        "Agent constructor parameters type error: {err}"
-                    ))
-                })?;
+        let constructor_parameters: DataValue = DataValue::try_from_untyped_json(
+            request.parameters,
+            agent_type.constructor.input_schema,
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!(
+                "Agent constructor parameters type error: {err}"
+            ))
+        })?;
 
         let agent_id = AgentId::new(
             request.agent_type_name.clone(),
@@ -109,19 +113,19 @@ impl AgentsService {
                 ))
             })?;
 
-        let method_parameters: DataValue =
-            DataValue::try_from_untyped(request.method_parameters, method.input_schema.clone())
-                .map_err(|err| {
-                    WorkerServiceError::TypeChecker(format!(
-                        "Agent method parameters type error: {err}"
-                    ))
-                })?;
+        let method_parameters: DataValue = DataValue::try_from_untyped_json(
+            request.method_parameters,
+            method.input_schema.clone(),
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!("Agent method parameters type error: {err}"))
+        })?;
 
         // invoke: func(method-name: string, input: data-value) -> result<data-value, agent-error>;
 
         match request.mode {
             AgentInvocationMode::Await => {
-                let _invoke_result = self
+                let invoke_result = self
                     .worker_service
                     .invoke_and_await_typed(
                         &worker_id,
@@ -135,7 +139,50 @@ impl AgentsService {
                         auth,
                     )
                     .await?;
-                todo!()
+
+                match invoke_result {
+                    Some(value_and_type) => {
+                        // return value has type 'result<data-value, agent-error>'
+                        let result = match value_and_type.value {
+                            Value::Result(Ok(Some(data_value_value))) => {
+                                let untyped_data_value = UntypedDataValue::from_value(
+                                    *data_value_value,
+                                )
+                                .map_err(|err| format!("Unexpected DataValue value: {err}"))?;
+                                Ok(DataValue::try_from_untyped(
+                                    untyped_data_value,
+                                    method.output_schema.clone(),
+                                )
+                                .map_err(|err| {
+                                    WorkerServiceError::TypeChecker(format!(
+                                        "DataValue conversion error: {err}"
+                                    ))
+                                })?)
+                            }
+                            Value::Result(Err(Some(agent_error_value))) => {
+                                Err(AgentError::from_value(*agent_error_value).map_err(|err| {
+                                    WorkerServiceError::Internal(format!(
+                                        "Unexpected AgentError value: {err}"
+                                    ))
+                                })?)
+                            }
+                            _ => Err(WorkerServiceError::Internal(
+                                "Unexpected return value from agent invocation".to_string(),
+                            ))?,
+                        };
+                        match result {
+                            Ok(data_value) => Ok(AgentInvocationResult {
+                                result: Some(data_value.into()),
+                            }),
+                            Err(err) => Err(WorkerServiceError::Internal(format!(
+                                "Agent invocation failed: {err}"
+                            ))),
+                        }
+                    }
+                    None => Err(WorkerServiceError::Internal(
+                        "Unexpected missing invoke result value".to_string(),
+                    )),
+                }
             }
             AgentInvocationMode::Schedule => {
                 if let Some(_schedule_at) = request.schedule_at {

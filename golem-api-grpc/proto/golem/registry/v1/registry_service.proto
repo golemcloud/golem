@@ -248,9 +248,10 @@ message GetAgentTypeSuccessResponse {
 }
 
 message ResolveLatestAgentTypeByNamesRequest {
-  string app_name = 1;
-  string environment_name = 2;
-  string agent_type_name = 3;
+  golem.common.AccountId accountId = 1;
+  string app_name = 2;
+  string environment_name = 3;
+  string agent_type_name = 4;
 }
 
 message ResolveLatestAgentTypeByNamesResponse {

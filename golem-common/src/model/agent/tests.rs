@@ -17,8 +17,8 @@ use crate::model::agent::{
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, JsonComponentModelValue,
     NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
-    TextReference, TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
-    UntypedElementValues, Url,
+    TextReference, TextReferenceValue, TextSource, TextType, UntypedJsonDataValue, UntypedJsonElementValue,
+    UntypedJsonElementValues, Url,
 };
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
@@ -412,12 +412,12 @@ fn roundtrip_with_non_kebab_metadata() {
 
 #[test]
 fn untyped_data_value_serde_poem_roundtrip() {
-    let original = UntypedDataValue::Tuple(UntypedElementValues {
+    let original = UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
         elements: vec![
-            UntypedElementValue::ComponentModel(JsonComponentModelValue {
+            UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                 value: 42u32.into_value_and_type().to_json_value().unwrap(),
             }),
-            UntypedElementValue::UnstructuredText(TextReferenceValue {
+            UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
                 value: TextReference::Url(Url {
                     value: "https://example.com/".to_string(),
                 }),
@@ -427,7 +427,7 @@ fn untyped_data_value_serde_poem_roundtrip() {
 
     let poem_serialized = original.to_json_string();
     println!("{}", poem_serialized);
-    let serde_deserialized: UntypedDataValue = serde_json::from_str(&poem_serialized).unwrap();
+    let serde_deserialized: UntypedJsonDataValue = serde_json::from_str(&poem_serialized).unwrap();
     assert_eq!(original, serde_deserialized);
 }
 
