@@ -4034,7 +4034,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_environment_share
-  /v1/envs/{environment_id}/http-api-definitions:
+  /stubs/envs/{environment_id}/http-api-definitions:
     post:
       tags:
       - RegistryService
@@ -4108,7 +4108,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: create_http_api_definition
+      operationId: create_http_api_definition_legacy
     get:
       tags:
       - RegistryService
@@ -4176,8 +4176,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_environment_http_api_definitions
-  /v1/http-api-definitions/{http_api_definition_id}:
+      operationId: list_environment_http_api_definitions_legacy
+  /stubs/http-api-definitions/{http_api_definition_id}:
     get:
       tags:
       - RegistryService
@@ -4244,7 +4244,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_definition
+      operationId: get_http_api_definition_legacy
     patch:
       tags:
       - RegistryService
@@ -4317,7 +4317,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: update_http_api_definition
+      operationId: update_http_api_definition_legacy
     delete:
       tags:
       - RegistryService
@@ -4388,8 +4388,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: delete_http_api_definition
-  /v1/http-api-definitions/{http_api_definition_id}/revisions/{revision}:
+      operationId: delete_http_api_definition_legacy
+  /stubs/http-api-definitions/{http_api_definition_id}/revisions/{revision}:
     get:
       tags:
       - RegistryService
@@ -4464,8 +4464,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_definition_revision
-  /v1/envs/{environment_id}/http-api-definitions/{http_api_definition_name}:
+      operationId: get_http_api_definition_revision_legacy
+  /stubs/envs/{environment_id}/http-api-definitions/{http_api_definition_name}:
     get:
       tags:
       - RegistryService
@@ -4540,8 +4540,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_definition_in_environment
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}:
+      operationId: get_http_api_definition_in_environment_legacy
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}:
     get:
       tags:
       - RegistryService
@@ -4625,8 +4625,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_definition_in_deployment
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi:
+      operationId: get_http_api_definition_in_deployment_legacy
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi:
     get:
       tags:
       - RegistryService
@@ -4710,8 +4710,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_openapi_of_http_api_definition_in_deployment
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
+      operationId: get_openapi_of_http_api_definition_in_deployment_legacy
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
     get:
       tags:
       - RegistryService
@@ -4787,8 +4787,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_deployment_http_api_definitions
-  /v1/envs/{environment_id}/http-api-deployments:
+      operationId: list_deployment_http_api_definitions_legacy
+  /stubs/envs/{environment_id}/http-api-deployments:
     post:
       tags:
       - RegistryService
@@ -4862,7 +4862,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: create_http_api_deployment
+      operationId: create_http_api_deployment_legacy
     get:
       tags:
       - RegistryService
@@ -4930,8 +4930,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_http_api_deployments_in_environment
-  /v1/http-api-deployments/{http_api_deployment_id}:
+      operationId: list_http_api_deployments_in_environment_legacy
+  /stubs/http-api-deployments/{http_api_deployment_id}:
     get:
       tags:
       - RegistryService
@@ -4998,7 +4998,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_deployment
+      operationId: get_http_api_deployment_legacy
     patch:
       tags:
       - RegistryService
@@ -5071,7 +5071,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: update_http_api_deployment
+      operationId: update_http_api_deployment_legacy
     delete:
       tags:
       - RegistryService
@@ -5142,8 +5142,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: delete_http_api_deployment
-  /v1/http-api-deployment/{http_api_deployment_id}/revisions/{revision}:
+      operationId: delete_http_api_deployment_legacy
+  /stubs/http-api-deployment/{http_api_deployment_id}/revisions/{revision}:
     get:
       tags:
       - RegistryService
@@ -5218,8 +5218,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_deployment_revision
-  /v1/envs/{environment_id}/http-api-deployments/{domain}:
+      operationId: get_http_api_deployment_revision_legacy
+  /stubs/envs/{environment_id}/http-api-deployments/{domain}:
     get:
       tags:
       - RegistryService
@@ -5294,8 +5294,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_deployment_in_environment
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}:
+      operationId: get_http_api_deployment_in_environment_legacy
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}:
     get:
       tags:
       - RegistryService
@@ -5379,8 +5379,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_deployment_in_deployment
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
+      operationId: get_http_api_deployment_in_deployment_legacy
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
       - RegistryService
@@ -5457,7 +5457,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_http_api_deployments_in_deployment
+      operationId: list_http_api_deployments_in_deployment_legacy
   /v1/login/oauth2:
     post:
       tags:

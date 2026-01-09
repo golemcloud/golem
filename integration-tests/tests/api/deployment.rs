@@ -197,6 +197,7 @@ async fn get_component_version_from_previous_deployment(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -245,7 +246,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     };
 
     let http_api_definition = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
@@ -254,7 +255,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let expected_hash =
