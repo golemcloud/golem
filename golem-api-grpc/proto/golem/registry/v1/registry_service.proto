@@ -42,6 +42,7 @@ service RegistryService {
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
+  rpc ResolveLatestAgentTypeByNames (ResolveLatestAgentTypeByNamesRequest) returns (ResolveLatestAgentTypeByNamesResponse);
 
   // active routes api
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
@@ -243,6 +244,23 @@ message GetAgentTypeResponse {
 }
 
 message GetAgentTypeSuccessResponse {
+  RegisteredAgentType agent_type = 1;
+}
+
+message ResolveLatestAgentTypeByNamesRequest {
+  string app_name = 1;
+  string environment_name = 2;
+  string agent_type_name = 3;
+}
+
+message ResolveLatestAgentTypeByNamesResponse {
+  oneof result {
+    ResolveLatestAgentTypeByNamesSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveLatestAgentTypeByNamesSuccessResponse {
   RegisteredAgentType agent_type = 1;
 }
 

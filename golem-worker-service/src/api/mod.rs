@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod agents;
+pub mod agents;
 pub mod common;
 mod custom_http_request;
 mod worker;
@@ -36,8 +36,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.auth_service.clone(),
             ),
             AgentsApi::new(
-                services.component_service.clone(),
-                services.worker_service.clone(),
+                services.agents_service.clone(),
                 services.auth_service.clone(),
             ),
         ),

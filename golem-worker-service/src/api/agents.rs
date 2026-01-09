@@ -1,7 +1,7 @@
 use crate::api::common::ApiEndpointError;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
-use crate::service::worker::WorkerService;
+use crate::service::worker::{AgentsService, WorkerService};
 use chrono::{DateTime, Utc};
 use golem_common::model::agent::{AgentTypeName, DataValue, UntypedDataValue};
 use golem_common::model::application::ApplicationName;
@@ -22,21 +22,18 @@ use uuid::Uuid;
 type Result<T> = std::result::Result<T, ApiEndpointError>;
 
 pub struct AgentsApi {
-    component_service: Arc<dyn ComponentService>,
-    worker_service: Arc<WorkerService>,
+    agents_service: Arc<AgentsService>,
     auth_service: Arc<dyn AuthService>,
 }
 
 #[OpenApi(prefix_path = "/v1/agents", tag = ApiTags::Agent)]
 impl AgentsApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService>,
-        worker_service: Arc<WorkerService>,
+        agents_service: Arc<AgentsService>,
         auth_service: Arc<dyn AuthService>,
     ) -> Self {
         Self {
-            component_service,
-            worker_service,
+            agents_service,
             auth_service,
         }
     }

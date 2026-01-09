@@ -39,7 +39,7 @@ use crate::gateway_execution::route_resolver::RouteResolver;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_security::DefaultIdentityProvider;
 use crate::service::component::ComponentService;
-use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient};
+use crate::service::worker::{AgentsService, WorkerClient, WorkerExecutorWorkerClient};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
@@ -59,6 +59,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
     pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
+    pub agents_service: Arc<AgentsService>
 }
 
 impl Services {
@@ -205,12 +206,15 @@ impl Services {
                 identity_provider.clone(),
             ));
 
+        let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new());
+
         Ok(Self {
             auth_service,
             limit_service,
             component_service,
             worker_service,
             gateway_http_input_executor,
+            agents_service
         })
     }
 }

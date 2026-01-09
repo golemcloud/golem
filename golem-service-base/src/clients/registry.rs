@@ -19,29 +19,17 @@ use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
-    GetAllDeployedComponentRevisionsRequest, GetAuthDetailsForEnvironmentRequest,
-    GetComponentMetadataRequest, GetDeployedComponentMetadataRequest, GetResourceLimitsRequest,
-    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
-    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_deployed_component_metadata_response,
-    get_resource_limits_response, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
-};
+use golem_api_grpc::proto::golem::registry::v1::{AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest, GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest, GetDeployedComponentMetadataRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response, batch_update_fuel_usage_response, download_component_response, get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response, get_all_deployed_component_revisions_response, get_auth_details_for_environment_response, get_component_metadata_response, get_deployed_component_metadata_response, get_resource_limits_response, resolve_component_response, update_worker_connection_limit_response, update_worker_limit_response, resolve_latest_agent_type_by_names_response};
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
-use golem_common::model::application::ApplicationId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -150,6 +138,13 @@ pub trait RegistryService: Send + Sync {
         &self,
         domain: &Domain,
     ) -> Result<CompiledRoutes, RegistryServiceError>;
+
+    async fn resolve_latest_agent_type_by_names(
+        &self,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<RegisteredAgentType, RegistryServiceError>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -654,6 +649,39 @@ impl RegistryService for GrpcRegistryService {
                 Ok(converted)
             }
             Some(get_active_routes_for_domain_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn resolve_latest_agent_type_by_names(
+        &self,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<RegisteredAgentType, RegistryServiceError> {
+        let response = self
+            .client
+            .call("resolve_latest_agent_type_by_names", move |client| {
+                let request = golem_api_grpc::proto::golem::registry::v1::ResolveLatestAgentTypeByNamesRequest {
+                    app_name: app_name.0.clone(),
+                    environment_name: environment_name.0.clone(),
+                    agent_type_name: agent_type_name.0.clone(),
+                };
+                Box::pin(client.resolve_latest_agent_type_by_names(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_latest_agent_type_by_names_response::Result::Success(payload)) => {
+                Ok(payload
+                    .agent_type
+                    .ok_or("missing agent_type field")?
+                    .try_into()?)
+            }
+            Some(resolve_latest_agent_type_by_names_response::Result::Error(error)) => {
+                Err(error.into())
+            }
         }
     }
 }
