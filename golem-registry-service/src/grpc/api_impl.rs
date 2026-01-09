@@ -51,11 +51,11 @@ use golem_api_grpc::proto::golem::registry::v1::{
     update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::{
     proto_account_id_string, proto_application_id_string, proto_component_id_string,
@@ -393,9 +393,25 @@ impl RegistryServiceGrpcApi {
 
     async fn resolve_latest_agent_type_by_names_internal(
         &self,
-        _request: ResolveLatestAgentTypeByNamesRequest,
+        request: ResolveLatestAgentTypeByNamesRequest,
     ) -> Result<ResolveLatestAgentTypeByNamesSuccessResponse, GrpcApiError> {
-        todo!()
+        let app_name = ApplicationName(request.app_name);
+        let environment_name = EnvironmentName(request.environment_name);
+        let agent_type_name = request.agent_type_name;
+
+        let agent_type = self
+            .deployment_service
+            .get_latest_deployed_agent_type_by_names(
+                &app_name,
+                &environment_name,
+                &agent_type_name,
+                &AuthCtx::System,
+            )
+            .await?;
+
+        Ok(ResolveLatestAgentTypeByNamesSuccessResponse {
+            agent_type: Some(agent_type.into()),
+        })
     }
 }
 
