@@ -144,6 +144,8 @@ script_runner = "@duckscript"
 script = """
 components = array
 array_push ${components} agent-counters/.wit
+array_push ${components} agent-updates-v1/.wit
+array_push ${components} agent-updates-v2/.wit
 array_push ${components} benchmarks
 array_push ${components} blob-store-service
 array_push ${components} component-resolve
@@ -500,8 +502,9 @@ dependencies = [
 ]
 
 [tasks.cli-integration-tests-group1]
-dependencies = ["build-bins-all-non-ci"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (1/3)"
+env = { GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
@@ -509,18 +512,18 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 '''
 
 [tasks.cli-integration-tests-group2]
-dependencies = ["build-bins-all-non-ci"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (2/3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-group3]
-dependencies = ["build-bins-all-non-ci"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (3/3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}

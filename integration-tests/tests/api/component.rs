@@ -583,9 +583,11 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     };
 
     let component = client

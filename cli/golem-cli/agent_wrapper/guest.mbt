@@ -4,16 +4,18 @@
 pub fn initialize(
   agent_type : String,
   input : @common.DataValue,
+  auth : Option[@common.AuthContext],
 ) -> Result[Unit, @common.AgentError] {
-  @guest.initialize(agent_type, input)
+  @guest.initialize(agent_type, input, auth)
 }
 
 ///|
 pub fn invoke(
   method_name : String,
   input : @common.DataValue,
+  auth : Option[@common.AuthContext],
 ) -> Result[@common.DataValue, @common.AgentError] {
-  @guest.invoke(method_name, input)
+  @guest.invoke(method_name, input, auth)
 }
 
 ///|

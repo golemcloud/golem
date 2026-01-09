@@ -5,7 +5,7 @@ use crate::bindings::exports::golem::it::api::Guest;
 use crate::bindings::golem::api::host::*;
 use crate::bindings::wasi;
 use crate::bindings::wasi::io::streams::StreamError;
-use reqwest::{Client, Response};
+use golem_wasi_http::{Client, Response};
 
 struct Component;
 

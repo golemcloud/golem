@@ -543,7 +543,7 @@ fn generate_agent_stub(
     writeln!(result, "    }}")?;
     writeln!(
         result,
-        "  match @guest.initialize(\"{original_agent_name}\", encoded_params) {{"
+        "  match @guest.initialize(\"{original_agent_name}\", encoded_params, None) {{"
     )?;
     writeln!(result, "    Ok(result) => result")?;
     writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", error.to_string()); panic(); }}")?;
@@ -580,7 +580,7 @@ fn generate_agent_stub(
 
         writeln!(
             result,
-            "  let result = match @guest.invoke(\"{original_method_name}\", input) {{"
+            "  let result = match @guest.invoke(\"{original_method_name}\", input, None) {{"
         )?;
         writeln!(result, "    Ok(result) => result")?;
         writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", error.to_string()); panic(); }}")?;

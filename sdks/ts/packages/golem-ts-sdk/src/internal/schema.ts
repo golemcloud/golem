@@ -245,6 +245,8 @@ export function getAgentMethodSchema(
         promptHint: baseMeta.prompt ?? '',
         inputSchema: inputSchema,
         outputSchema: outputSchema,
+        // TODO
+        httpEndpoint: [],
       });
     }),
   );

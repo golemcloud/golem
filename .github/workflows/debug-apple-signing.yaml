@@ -1,0 +1,227 @@
+name: Debug Apple Code Signing
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_ssh:
+        description: "Enable SSH debugging session"
+        required: false
+        default: false
+        type: boolean
+      rust_target:
+        description: "Rust target to build"
+        required: false
+        default: "aarch64-apple-darwin"
+        type: choice
+        options:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+
+jobs:
+  debug-signing:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: System Info
+        run: |
+          echo "=== macOS Version ==="
+          sw_vers
+          echo ""
+          echo "=== Xcode Version ==="
+          xcodebuild -version
+          echo ""
+          echo "=== Available codesign ==="
+          which codesign
+          codesign --version || true
+
+      - name: List existing keychains
+        run: |
+          echo "=== Current Keychains ==="
+          security list-keychains
+          echo ""
+          echo "=== Default Keychain ==="
+          security default-keychain
+          echo ""
+          echo "=== Existing Signing Identities (before import) ==="
+          security find-identity -v -p codesigning || echo "No identities found"
+
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ inputs.rust_target }}
+
+      - name: Build simple test binary
+        run: |
+          echo "Building golem-cli for ${{ inputs.rust_target }}..."
+          cargo build -p golem-cli --release --target ${{ inputs.rust_target }}
+          ls -la ./target/${{ inputs.rust_target }}/release/golem-cli
+
+      - name: Import Code Signing Certificate
+        if: ${{ env.HAS_CERTIFICATE == 'true' }}
+        env:
+          HAS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -x  # Enable verbose output
+
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo "=== Creating keychain at $KEYCHAIN_PATH ==="
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "=== Setting keychain settings ==="
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+
+          echo "=== Unlocking keychain ==="
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "=== Importing certificate ==="
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+
+          # Check certificate file
+          ls -la "$CERTIFICATE_PATH"
+          file "$CERTIFICATE_PATH"
+
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          echo "=== Adding keychain to search list ==="
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          echo "=== Setting key partition list ==="
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "=== Verifying import - List keychains ==="
+          security list-keychains
+
+          echo "=== Verifying import - Find identities ==="
+          security find-identity -v -p codesigning
+
+          echo "=== Verifying import - Find identities in our keychain ==="
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          # Save keychain password for later steps
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> $GITHUB_ENV
+
+      - name: Check for certificate secrets
+        run: |
+          if [ -z "${{ secrets.APPLE_CERTIFICATE_BASE64 }}" ]; then
+            echo "::warning::APPLE_CERTIFICATE_BASE64 secret is not set"
+            echo "Required secrets for Apple code signing:"
+            echo "  - APPLE_CERTIFICATE_BASE64: Base64-encoded .p12 certificate"
+            echo "  - APPLE_CERTIFICATE_PASSWORD: Password for the .p12 file"
+            echo "  - APPLE_TEAM_ID: Your Apple Developer Team ID"
+            echo "  - APPLE_ID: Your Apple ID (email)"
+            echo "  - APPLE_APP_PASSWORD: App-specific password for notarization"
+          else
+            echo "Certificate secret is present"
+          fi
+
+      - name: Code Sign Binary (Test)
+        if: ${{ env.KEYCHAIN_PATH != '' }}
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -x  # Enable verbose output
+
+          BINARY_PATH=./target/${{ inputs.rust_target }}/release/golem-cli
+
+          echo "=== Binary info before signing ==="
+          ls -la "$BINARY_PATH"
+          file "$BINARY_PATH"
+
+          echo "=== Attempting to sign ==="
+          # Try to find the identity name
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Found identity: $IDENTITY"
+
+          if [ -n "$IDENTITY" ]; then
+            codesign --force \
+              --verbose=4 \
+              --options runtime \
+              --timestamp \
+              --sign "$IDENTITY" \
+              "$BINARY_PATH"
+
+            echo "=== Verify signature ==="
+            codesign --verify --verbose=4 "$BINARY_PATH"
+
+            echo "=== Display signature details ==="
+            codesign --display --verbose=4 "$BINARY_PATH"
+          else
+            echo "::error::No Developer ID Application identity found"
+            echo "Available identities:"
+            security find-identity -v -p codesigning
+          fi
+
+      - name: Test Notarization (Dry Run Info)
+        if: ${{ env.KEYCHAIN_PATH != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          echo "=== Notarization would use these credentials ==="
+          echo "Apple ID: ${APPLE_ID:+[SET]}"
+          echo "Team ID: ${APPLE_TEAM_ID:+[SET]}"
+          echo "App Password: ${APPLE_APP_PASSWORD:+[SET]}"
+
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+            echo ""
+            echo "=== Notarization submission would be: ==="
+            echo "xcrun notarytool submit <binary.zip> \\"
+            echo "  --apple-id \"$APPLE_ID\" \\"
+            echo "  --team-id \"$APPLE_TEAM_ID\" \\"
+            echo "  --password \"***\" \\"
+            echo "  --wait"
+          else
+            echo "::warning::Not all notarization secrets are set"
+          fi
+
+      - name: Cleanup Keychain
+        if: always() && env.KEYCHAIN_PATH != ''
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
+
+      # Optional SSH debugging - only runs if enabled
+      - name: Setup SSH debugging session
+        if: ${{ inputs.enable_ssh == 'true' }}
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+        timeout-minutes: 30
+
+  # Summary job to document what secrets are needed
+  document-requirements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Document Required Secrets
+        run: |
+          echo "# Apple Code Signing Requirements"
+          echo ""
+          echo "## Required GitHub Secrets"
+          echo ""
+          echo "### For Code Signing:"
+          echo "- \`APPLE_CERTIFICATE_BASE64\`: Your Developer ID Application certificate exported as .p12, then base64 encoded"
+          echo "  - Export from Keychain Access: Developer ID Application certificate → Export → .p12"
+          echo "  - Encode: \`base64 -i certificate.p12 | pbcopy\`"
+          echo ""
+          echo "- \`APPLE_CERTIFICATE_PASSWORD\`: Password used when exporting the .p12 file"
+          echo ""
+          echo "- \`APPLE_TEAM_ID\`: Your Apple Developer Team ID (found in Apple Developer portal)"
+          echo ""
+          echo "### For Notarization:"
+          echo "- \`APPLE_ID\`: Your Apple ID email"
+          echo ""
+          echo "- \`APPLE_APP_PASSWORD\`: App-specific password for notarization"
+          echo "  - Create at: https://appleid.apple.com/account/manage → App-Specific Passwords"
+          echo ""
+          echo "## Testing Steps"
+          echo "1. First run without SSH to see what fails"
+          echo "2. Check if certificate import succeeded (look for identity in logs)"
+          echo "3. If needed, enable SSH and manually debug"
