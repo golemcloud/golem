@@ -51,6 +51,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
@@ -365,9 +366,11 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing environment_id field")?
             .try_into()?;
 
+        let agent_type_name = AgentTypeName(request.agent_type);
+
         let agent_type = self
             .deployment_service
-            .get_deployed_agent_type(environment_id, &request.agent_type)
+            .get_deployed_agent_type(environment_id, &agent_type_name)
             .await?;
 
         Ok(GetAgentTypeSuccessResponse {
@@ -397,7 +400,7 @@ impl RegistryServiceGrpcApi {
     ) -> Result<ResolveLatestAgentTypeByNamesSuccessResponse, GrpcApiError> {
         let app_name = ApplicationName(request.app_name);
         let environment_name = EnvironmentName(request.environment_name);
-        let agent_type_name = request.agent_type_name;
+        let agent_type_name = AgentTypeName(request.agent_type_name);
 
         let agent_type = self
             .deployment_service

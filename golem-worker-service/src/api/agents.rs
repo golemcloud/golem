@@ -8,7 +8,7 @@ use golem_common::model::environment::EnvironmentName;
 use golem_common::model::IdempotencyKey;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme};
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Header;
 use poem_openapi::payload::Json;
 use poem_openapi::types::Type;
@@ -57,19 +57,13 @@ impl AgentsApi {
         );
 
         let response = self
-            .invoke_agent_internal(request.0, auth)
+            .agents_service
+            .invoke_agent(request.0, auth)
             .instrument(record.span.clone())
-            .await;
+            .await
+            .map_err(Into::into);
 
         record.result(response).map(Json)
-    }
-
-    async fn invoke_agent_internal(
-        &self,
-        _request: AgentInvocationRequest,
-        _auth: AuthCtx,
-    ) -> Result<AgentInvocationResult> {
-        todo!()
     }
 }
 

@@ -22,9 +22,9 @@ pub use self::write::{DeploymentWriteError, DeploymentWriteService};
 use super::http_api_definition::HttpApiDefinitionError;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
+use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-use crate::services::application::{ApplicationService, ApplicationError};
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
@@ -241,14 +241,14 @@ impl DeploymentService {
     pub async fn get_deployed_agent_type(
         &self,
         environment_id: EnvironmentId,
-        agent_type_name: &str,
+        agent_type_name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let agent_type = self
             .deployment_repo
-            .get_deployed_agent_type(environment_id.0, agent_type_name)
+            .get_deployed_agent_type(environment_id.0, &agent_type_name.0)
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
-                agent_type_name.to_string(),
+                agent_type_name.0.clone(),
             ))?
             .try_into()?;
 
@@ -275,7 +275,7 @@ impl DeploymentService {
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
-        agent_type_name: &str,
+        agent_type_name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let agent_type = self
             .deployment_repo
@@ -283,11 +283,11 @@ impl DeploymentService {
                 &environment_id.0,
                 &component_id.0,
                 component_revision.into(),
-                agent_type_name,
+                &agent_type_name.0,
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
-                agent_type_name.to_string(),
+                agent_type_name.0.clone(),
             ))?
             .try_into()?;
 
@@ -319,7 +319,7 @@ impl DeploymentService {
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
-        agent_type_name: &str,
+        agent_type_name: &AgentTypeName,
         auth: &AuthCtx,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let (_, environment) = self
@@ -337,11 +337,11 @@ impl DeploymentService {
             .get_deployment_agent_type(
                 environment_id.0,
                 deployment_revision.into(),
-                agent_type_name,
+                &agent_type_name.0,
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
-                agent_type_name.to_string(),
+                agent_type_name.0.clone(),
             ))?
             .try_into()?;
 
@@ -379,7 +379,7 @@ impl DeploymentService {
         &self,
         app_name: &ApplicationName,
         environment_name: &EnvironmentName,
-        agent_type_name: &str,
+        agent_type_name: &AgentTypeName,
         auth: &AuthCtx,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let application = self
