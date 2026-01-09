@@ -715,7 +715,7 @@ fn playground4() {
     assert_function_input_encoding(
         target_dir,
         "FunMultimodal",
-        json!([[{"tag": "inline", "val": "hello"}]]),
+        json!([[{"type": "text", "value": {"tag": "inline", "val": "hello"}}]]),
         UntypedDataValue::Multimodal(UntypedNamedElementValues {
             elements: vec![
                 UntypedNamedElementValue {

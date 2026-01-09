@@ -1073,8 +1073,8 @@ impl TypeScriptBridgeGenerator {
                 Ok(())
             }
             DataSchema::Multimodal(_) => {
-                // For multimodal input, the array is passed directly
-                writer.write_line(format!("const multimodalInput = {};", tuple));
+                // For multimodal input, extract the array from the args tuple
+                writer.write_line(format!("const multimodalInput = {}[0];", tuple));
                 Ok(())
             }
         }
@@ -1366,7 +1366,12 @@ impl TypeScriptBridgeGenerator {
                 }
                 AnalysedType::List(inner) => {
                     let inner_encode = Self::encode_wit_value("item", &*inner.inner);
-                    format!("{}.map((item) => {})", value, inner_encode)
+                    // For primitives, just return the value as-is since no transformation is needed
+                    if inner_encode == "item" {
+                        format!("{}", value)
+                    } else {
+                        format!("{}.map((item: any) => {})", value, inner_encode)
+                    }
                 }
                 AnalysedType::Enum(_) => {
                     // Enum: encoded as a string
@@ -1750,8 +1755,12 @@ impl TypeScriptBridgeGenerator {
                 Ok(format!("{} | undefined", inner_ts_type)) // TODO: use ? in parameter and field positions
             }
             AnalysedType::List(inner) => {
-                let inner_ts_type = Self::type_reference(&*inner.inner)?;
-                Ok(format!("{}[]", inner_ts_type))
+                if matches!(&*inner.inner, AnalysedType::U8(_)) {
+                    Ok("Uint8Array".to_string())
+                } else {
+                    let inner_ts_type = Self::type_reference(&*inner.inner)?;
+                    Ok(format!("{}[]", inner_ts_type))
+                }
             }
             AnalysedType::Tuple(inner) => {
                 let types: Vec<String> = inner
