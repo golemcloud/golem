@@ -14,7 +14,12 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { AgentError, AgentType, DataValue } from 'golem:agent/common';
+import {
+  AgentError,
+  AgentType,
+  AuthContext,
+  DataValue,
+} from 'golem:agent/common';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
@@ -44,6 +49,7 @@ let resolvedAgent: Option.Option<ResolvedAgent> = Option.none();
 async function initialize(
   agentTypeName: string,
   input: DataValue,
+  authCtx?: AuthContext,
 ): Promise<void> {
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
@@ -72,6 +78,7 @@ async function initialize(
 async function invoke(
   methodName: string,
   input: DataValue,
+  authCtx?: AuthContext,
 ): Promise<DataValue> {
   if (Option.isNone(resolvedAgent)) {
     throw createCustomError(
