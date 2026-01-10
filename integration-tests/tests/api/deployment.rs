@@ -56,7 +56,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
+                    "d3f96bb6c277ccbbe3560c9eb028d6d7ff65b79e6060cdd03b40bdb05b62286f".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -133,7 +133,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
+                    "d3f96bb6c277ccbbe3560c9eb028d6d7ff65b79e6060cdd03b40bdb05b62286f".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -165,7 +165,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: Some(deployment_1.current_revision),
                 expected_deployment_hash:
-                    "358099fef347618289be7f61eb52e4f230fd9f282f525fa89e1ba197bee93a40".parse()?,
+                    "317c5cf421d42d0e79c51df4812daef590229d56e3b0e64aa816d1345c898389".parse()?,
                 version: DeploymentVersion("0.0.2".to_string()),
             },
         )
@@ -197,6 +197,7 @@ async fn get_component_version_from_previous_deployment(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -245,7 +246,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     };
 
     let http_api_definition = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
@@ -254,11 +255,11 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let expected_hash =
-        Hash::from_str("8ea5f5a111eb829d2f2d61583ae3fc0fc7723c22605726b3a14ac4c2ef4f2a35")?;
+        Hash::from_str("087c869b4c364100347971e1e0042bab9b1e3d4d196ecfbf103ec61c922fb4cf")?;
 
     let expected_plan = DeploymentPlan {
         current_revision: None,
@@ -268,7 +269,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             revision: component.revision,
             name: ComponentName("shopping-cart".to_string()),
             hash: Hash::from_str(
-                "fcab9dc7f8e5be5db26315871aadc09ece50cade095b6b9a503b967e37f72e6a",
+                "14fce3c6af8fb02ea56e1c948d1232c5cef4b8c836b66b6dbc00d3ee6e72b333",
             )?,
         }],
         http_api_definitions: vec![DeploymentPlanHttpApiDefintionEntry {

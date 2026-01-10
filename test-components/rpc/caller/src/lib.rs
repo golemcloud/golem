@@ -3,7 +3,7 @@ mod bindings;
 
 use crate::bindings::exports::rpc::caller_exports::caller_inline_functions::{Guest, TimelineNode};
 use crate::bindings::rpc::counters_client::counters_client::{Api, Counter};
-use golem_rust::wasm_rpc::{AgentId, ComponentId};
+use golem_rust::golem_wasm::{AgentId, ComponentId};
 use std::env;
 use uuid::Uuid;
 
@@ -195,7 +195,7 @@ fn create_use_and_drop_counters_non_blocking(component_id: &ComponentId) -> [u64
     let mut mapping = vec![0, 1, 2];
 
     while !remaining.is_empty() {
-        let poll_result = golem_rust::wasm_rpc::wasi::io::poll::poll(&remaining);
+        let poll_result = golem_rust::golem_wasm::wasi::io::poll::poll(&remaining);
         println!("Got poll result: {:?}", poll_result);
         for idx in &poll_result {
             let counter_idx = mapping[*idx as usize];

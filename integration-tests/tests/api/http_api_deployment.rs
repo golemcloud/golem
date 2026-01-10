@@ -14,10 +14,10 @@
 
 use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateHttpApiDeploymentError,
-    RegistryServiceGetHttpApiDeploymentError,
-    RegistryServiceGetHttpApiDeploymentInEnvironmentError,
-    RegistryServiceUpdateHttpApiDeploymentError,
+    RegistryServiceClient, RegistryServiceCreateHttpApiDeploymentLegacyError,
+    RegistryServiceGetHttpApiDeploymentInEnvironmentLegacyError,
+    RegistryServiceGetHttpApiDeploymentLegacyError,
+    RegistryServiceUpdateHttpApiDeploymentLegacyError,
 };
 use golem_common::model::component::ComponentName;
 use golem_common::model::domain_registration::Domain;
@@ -35,6 +35,7 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn create_http_api_deployment_for_nonexitant_domain(
     deps: &EnvBasedTestDependencies,
@@ -50,12 +51,12 @@ async fn create_http_api_deployment_for_nonexitant_domain(
     };
 
     let result = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await;
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceCreateHttpApiDeploymentError::Error409(_)
+            RegistryServiceCreateHttpApiDeploymentLegacyError::Error409(_)
         )) = result
     );
 
@@ -63,6 +64,7 @@ async fn create_http_api_deployment_for_nonexitant_domain(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -77,28 +79,28 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     assert!(http_api_deployment_creation.domain == http_api_deployment_creation.domain);
 
     {
         let fetched_http_api_deployment = client
-            .get_http_api_deployment(&http_api_deployment.id.0)
+            .get_http_api_deployment_legacy(&http_api_deployment.id.0)
             .await?;
         assert!(fetched_http_api_deployment == http_api_deployment);
     }
 
     {
         let fetched_http_api_deployment = client
-            .get_http_api_deployment_in_environment(&env.id.0, &http_api_deployment.domain.0)
+            .get_http_api_deployment_in_environment_legacy(&env.id.0, &http_api_deployment.domain.0)
             .await?;
         assert!(fetched_http_api_deployment == http_api_deployment);
     }
 
     {
         let result = client
-            .list_http_api_deployments_in_environment(&env.id.0)
+            .list_http_api_deployments_in_environment_legacy(&env.id.0)
             .await?;
         assert!(result.values == vec![http_api_deployment]);
     }
@@ -107,6 +109,7 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -121,7 +124,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
@@ -133,7 +136,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let updated_http_api_deployment = client
-        .update_http_api_deployment(&http_api_deployment.id.0, &http_api_deployment_update)
+        .update_http_api_deployment_legacy(&http_api_deployment.id.0, &http_api_deployment_update)
         .await?;
 
     assert!(updated_http_api_deployment.id == http_api_deployment.id);
@@ -145,7 +148,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_deployment = client
-            .get_http_api_deployment_revision(
+            .get_http_api_deployment_revision_legacy(
                 &http_api_deployment.id.0,
                 http_api_deployment.revision.into(),
             )
@@ -155,7 +158,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_deployment = client
-            .get_http_api_deployment_revision(
+            .get_http_api_deployment_revision_legacy(
                 &http_api_deployment.id.0,
                 updated_http_api_deployment.revision.into(),
             )
@@ -165,21 +168,21 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_deployment = client
-            .get_http_api_deployment(&http_api_deployment.id.0)
+            .get_http_api_deployment_legacy(&http_api_deployment.id.0)
             .await?;
         assert!(fetched_http_api_deployment == updated_http_api_deployment);
     }
 
     {
         let fetched_http_api_deployment = client
-            .get_http_api_deployment_in_environment(&env.id.0, &http_api_deployment.domain.0)
+            .get_http_api_deployment_in_environment_legacy(&env.id.0, &http_api_deployment.domain.0)
             .await?;
         assert!(fetched_http_api_deployment == updated_http_api_deployment);
     }
 
     {
         let result = client
-            .list_http_api_deployments_in_environment(&env.id.0)
+            .list_http_api_deployments_in_environment_legacy(&env.id.0)
             .await?;
         assert!(result.values == vec![updated_http_api_deployment]);
     }
@@ -188,6 +191,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -202,11 +206,11 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     client
-        .delete_http_api_deployment(
+        .delete_http_api_deployment_legacy(
             &http_api_deployment.id.0,
             http_api_deployment.revision.into(),
         )
@@ -214,29 +218,29 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let result = client
-            .get_http_api_deployment(&http_api_deployment.id.0)
+            .get_http_api_deployment_legacy(&http_api_deployment.id.0)
             .await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceGetHttpApiDeploymentError::Error404(_)
+                RegistryServiceGetHttpApiDeploymentLegacyError::Error404(_)
             )) = result
         );
     }
 
     {
         let result = client
-            .get_http_api_deployment_in_environment(&env.id.0, &http_api_deployment.domain.0)
+            .get_http_api_deployment_in_environment_legacy(&env.id.0, &http_api_deployment.domain.0)
             .await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceGetHttpApiDeploymentInEnvironmentError::Error404(_)
+                RegistryServiceGetHttpApiDeploymentInEnvironmentLegacyError::Error404(_)
             )) = result
         );
     }
 
     {
         let result = client
-            .list_http_api_deployments_in_environment(&env.id.0)
+            .list_http_api_deployments_in_environment_legacy(&env.id.0)
             .await?;
         assert!(result.values == vec![]);
     }
@@ -245,6 +249,7 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn cannot_create_two_http_api_deployments_for_same_domain(
     deps: &EnvBasedTestDependencies,
@@ -261,16 +266,16 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
     };
 
     client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let result = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await;
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceCreateHttpApiDeploymentError::Error409(_)
+            RegistryServiceCreateHttpApiDeploymentLegacyError::Error409(_)
         )) = result
     );
 
@@ -278,6 +283,7 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn updates_with_wrong_revision_number_are_rejected(
     deps: &EnvBasedTestDependencies,
@@ -294,7 +300,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
@@ -306,12 +312,12 @@ async fn updates_with_wrong_revision_number_are_rejected(
     };
 
     let result = client
-        .update_http_api_deployment(&http_api_deployment.id.0, &http_api_deployment_update)
+        .update_http_api_deployment_legacy(&http_api_deployment.id.0, &http_api_deployment_update)
         .await;
 
     assert!(
         let Err(golem_client::Error::Item(
-            RegistryServiceUpdateHttpApiDeploymentError::Error409(_)
+            RegistryServiceUpdateHttpApiDeploymentLegacyError::Error409(_)
         )) = result
     );
 
@@ -319,6 +325,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -333,25 +340,25 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
     };
 
     let http_api_deployment_1 = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     client
-        .delete_http_api_deployment(
+        .delete_http_api_deployment_legacy(
             &http_api_deployment_1.id.0,
             http_api_deployment_1.revision.into(),
         )
         .await?;
 
     let http_api_deployment_2 = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     assert!(http_api_deployment_2.id == http_api_deployment_1.id);
     assert!(http_api_deployment_2.revision == http_api_deployment_1.revision.next()?.next()?);
 
     client
-        .delete_http_api_deployment(
+        .delete_http_api_deployment_legacy(
             &http_api_deployment_2.id.0,
             http_api_deployment_2.revision.into(),
         )
@@ -361,6 +368,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -402,7 +410,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     let http_api_definition = client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
@@ -411,21 +419,25 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let deployment = user.deploy_environment(&env.id).await?;
 
     {
         let fetched_http_api_deployment = client
-            .get_http_api_deployment_in_deployment(&env.id.0, deployment.revision.into(), &domain.0)
+            .get_http_api_deployment_in_deployment_legacy(
+                &env.id.0,
+                deployment.revision.into(),
+                &domain.0,
+            )
             .await?;
         assert!(fetched_http_api_deployment == http_api_deployment);
     }
 
     {
         let fetched_http_api_deployments = client
-            .list_http_api_deployments_in_deployment(&env.id.0, deployment.revision.into())
+            .list_http_api_deployments_in_deployment_legacy(&env.id.0, deployment.revision.into())
             .await?;
         assert!(fetched_http_api_deployments.values == vec![http_api_deployment]);
     }

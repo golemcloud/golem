@@ -61,6 +61,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             },
             AgentMethod {
                 name: "f2".to_string(),
@@ -90,10 +91,12 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             },
         ],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
@@ -159,9 +162,11 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: "agent2".to_string(),
@@ -216,9 +221,11 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                         },
                     ],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
     ];
 
@@ -264,6 +271,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             },
             AgentMethod {
                 name: "package".to_string(),
@@ -281,10 +289,12 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                         .collect(),
                 }),
                 output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                http_endpoint: Vec::new(),
             },
         ],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
@@ -319,9 +329,11 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: "weather-agent".to_string(),
@@ -370,9 +382,11 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
     ]
 }
@@ -416,9 +430,11 @@ pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
@@ -452,9 +468,11 @@ pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
@@ -504,9 +522,11 @@ pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
                     },
                 ],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
@@ -540,9 +560,11 @@ pub fn char_type() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
@@ -576,8 +598,10 @@ pub fn unit_result_type() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
