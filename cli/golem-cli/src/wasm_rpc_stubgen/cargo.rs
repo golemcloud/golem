@@ -448,18 +448,18 @@ pub fn regenerate_cargo_package_component(
                     if interface_path == format!("golem:rpc/types@{GOLEM_RPC_WIT_VERSION}") {
                         bind_to_golem_rust.push((
                             interface_path,
-                            "golem_rust::wasm_rpc::golem_rpc_0_2_x::types".to_string(),
+                            "golem_rust::golem_wasm::golem_rpc_0_2_x::types".to_string(),
                         ));
                     } else if interface_path == format!("wasi:io/poll@{WASI_WIT_VERSION}") {
                         bind_to_golem_rust.push((
                             interface_path,
-                            "golem_rust::wasm_rpc::wasi::io::poll".to_string(),
+                            "golem_rust::golem_wasm::wasi::io::poll".to_string(),
                         ));
                     } else if interface_path == format!("wasi:clocks/wall-clock@{WASI_WIT_VERSION}")
                     {
                         bind_to_golem_rust.push((
                             interface_path,
-                            "golem_rust::wasm_rpc::wasi::clocks::wall_clock".to_string(),
+                            "golem_rust::golem_wasm::wasi::clocks::wall_clock".to_string(),
                         ));
                     } else if interface_path
                         == format!("golem:api/load-snapshot@{GOLEM_API_VERSION}")

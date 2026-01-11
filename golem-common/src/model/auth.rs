@@ -250,3 +250,17 @@ mod protobuf {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::TokenSecret;
+    use test_r::test;
+
+    #[test]
+    #[ignore]
+    // utility to generate a token secret for tests, configs, etc.
+    fn generate_token_secret() {
+        let secret = TokenSecret::new();
+        println!("Token secret: {}", secret.0)
+    }
+}

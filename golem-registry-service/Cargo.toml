@@ -46,6 +46,7 @@ goldenfile.workspace = true
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
+itertools = { workspace = true }
 hyper = { workspace = true }
 indoc = { workspace = true }
 jsonwebtoken = { workspace = true }
@@ -75,6 +76,7 @@ rusoto_credential = { workspace = true }
 rusoto_elbv2 = { workspace = true }
 rusoto_route53 = { workspace = true }
 rusoto_sts = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 sanitize-filename = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

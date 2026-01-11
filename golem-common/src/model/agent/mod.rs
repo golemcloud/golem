@@ -36,6 +36,7 @@ pub mod bindings {
     });
 }
 
+use super::Empty;
 use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -202,7 +203,7 @@ impl Display for AgentError {
     FromValue,
     poem_openapi::Object,
 )]
-#[desert(evolution())]
+#[desert(evolution(FieldAdded("http_endpoint", Vec::new())))]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethod {
@@ -211,6 +212,7 @@ pub struct AgentMethod {
     pub prompt_hint: Option<String>,
     pub input_schema: DataSchema,
     pub output_schema: DataSchema,
+    pub http_endpoint: Vec<HttpEndpointDetails>,
 }
 
 #[derive(
@@ -233,7 +235,7 @@ pub struct AgentTypeName(pub String);
     FromValue,
     poem_openapi::Object,
 )]
-#[desert(evolution())]
+#[desert(evolution(FieldAdded("http_mount", None)))]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
@@ -243,6 +245,7 @@ pub struct AgentType {
     pub methods: Vec<AgentMethod>,
     pub dependencies: Vec<AgentDependency>,
     pub mode: AgentMode,
+    pub http_mount: Option<HttpMountDetails>,
 }
 
 impl AgentType {
@@ -657,8 +660,9 @@ impl ElementValue {
     pub fn parse(s: &str, schema: &ElementSchema) -> Result<Self, String> {
         match schema {
             ElementSchema::ComponentModel(typ) => {
-                let value_and_type = parse_value_and_type(&typ.element_type, s)
+                let mut value_and_type = parse_value_and_type(&typ.element_type.to_wit_naming(), s)
                     .map_err(|e| format!("Failed to parse parameter value {s}: {e}"))?;
+                value_and_type.typ = typ.element_type.clone(); // Store the original type, not the wit-naming one
                 Ok(ElementValue::ComponentModel(value_and_type))
             }
             ElementSchema::UnstructuredText(_) => {
@@ -855,9 +859,10 @@ impl Display for TextReference {
     FromValue,
     poem_openapi::Object,
 )]
-#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(transparent)]
+#[wit_transparent]
 pub struct Url {
     pub value: String,
 }
@@ -983,17 +988,21 @@ pub struct AgentId {
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,
     wrapper_agent_type: String,
+    as_string: String,
 }
 
 impl AgentId {
     pub fn new(agent_type: String, parameters: DataValue, phantom_id: Option<Uuid>) -> Self {
         let wrapper_agent_type = agent_type.to_wit_naming();
-        Self {
+        let mut result = Self {
             agent_type,
             parameters,
             phantom_id,
             wrapper_agent_type,
-        }
+            as_string: "".to_string(),
+        };
+        result.as_string = result.to_string();
+        result
     }
 
     pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
@@ -1037,15 +1046,15 @@ impl AgentId {
         let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type_name)?;
         let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
 
-        Ok((
-            AgentId {
-                agent_type: agent_type.type_name.clone(),
-                wrapper_agent_type: agent_type.type_name.to_wit_naming(),
-                parameters: value,
-                phantom_id,
-            },
-            agent_type,
-        ))
+        let mut agent_id = AgentId {
+            agent_type: agent_type.type_name.clone(),
+            wrapper_agent_type: agent_type.type_name.to_wit_naming(),
+            parameters: value,
+            phantom_id,
+            as_string: "".to_string(),
+        };
+        agent_id.as_string = agent_id.to_string();
+        Ok((agent_id, agent_type))
     }
 
     pub fn wrapper_agent_type(&self) -> &str {
@@ -1062,16 +1071,20 @@ impl AgentId {
 
 impl Display for AgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}({})",
-            self.wrapper_agent_type,
-            self.parameters.to_compact_string()
-        )?;
-        if let Some(phantom_id) = &self.phantom_id {
-            write!(f, "[{phantom_id}]")?;
+        if self.as_string.is_empty() {
+            write!(
+                f,
+                "{}({})",
+                self.wrapper_agent_type,
+                self.parameters.to_wit_naming().to_compact_string()
+            )?;
+            if let Some(phantom_id) = &self.phantom_id {
+                write!(f, "[{phantom_id}]")?;
+            }
+            Ok(())
+        } else {
+            write!(f, "{}", self.as_string)
         }
-        Ok(())
     }
 }
 
@@ -1088,4 +1101,336 @@ impl AgentTypeResolver for &ComponentMetadata {
             .to_wit_naming();
         result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct HttpMountDetails {
+    pub path_prefix: Vec<PathSegment>,
+    pub header_vars: Vec<HeaderVariable>,
+    pub query_vars: Vec<QueryVariable>,
+    pub auth_details: Option<AgentHttpAuthDetails>,
+    pub phantom_agent: bool,
+    pub cors_options: CorsOptions,
+    pub webhook_suffix: Vec<PathSegment>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct HttpEndpointDetails {
+    pub http_method: HttpMethod,
+    pub path_suffix: Vec<PathSegment>,
+    pub header_vars: Vec<HeaderVariable>,
+    pub query_vars: Vec<QueryVariable>,
+    pub auth_details: Option<AgentHttpAuthDetails>,
+    pub cors_options: CorsOptions,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
+)]
+#[desert(evolution())]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum HttpMethod {
+    #[unit_case]
+    Get(Empty),
+    #[unit_case]
+    Put(Empty),
+    #[unit_case]
+    Post(Empty),
+    #[unit_case]
+    Delete(Empty),
+    Custom(CustomHttpMethod),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+#[desert(transparent)]
+#[wit_transparent]
+pub struct CustomHttpMethod {
+    pub value: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct CorsOptions {
+    pub allowed_patterns: Vec<String>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct PathSegment {
+    pub concat: Vec<PathSegmentNode>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+#[desert(evolution())]
+pub enum PathSegmentNode {
+    Literal(LiteralSegment),
+    SystemVariable(SystemVariableSegment),
+    PathVariable(PathVariable),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+#[desert(transparent)]
+#[wit_transparent]
+pub struct LiteralSegment {
+    pub value: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+#[desert(transparent)]
+#[wit_transparent]
+pub struct SystemVariableSegment {
+    pub value: SystemVariable,
+}
+
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    poem_openapi::Enum,
+)]
+pub enum SystemVariable {
+    AgentType,
+    AgentVersion,
+}
+
+impl Display for SystemVariable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            SystemVariable::AgentType => "AgentType",
+            SystemVariable::AgentVersion => "AgentVersion",
+        };
+        write!(f, "{s}")
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct PathVariable {
+    pub variable_name: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct HeaderVariable {
+    pub header_name: String,
+    pub variable_name: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct QueryVariable {
+    pub query_param_name: String,
+    pub variable_name: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHttpAuthDetails {
+    pub required: bool,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+// Meaning of the various claims: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
+pub struct AgentHttpAuthContext {
+    pub sub: String,
+    pub provider: String,
+    pub email: String,
+    pub name: String,
+    pub email_verified: Option<bool>,
+    pub given_name: Option<String>,
+    pub family_name: Option<String>,
+    // Url of the user's picture or avatar
+    pub picture: Option<String>,
+    pub preferred_username: Option<String>,
+    pub claims: String,
 }

@@ -55,6 +55,7 @@ fred = { workspace = true }
 fs-set-times = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
+half = { workspace = true }
 heck = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
@@ -70,11 +71,13 @@ mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
 metrohash = { workspace = true }
 nonempty-collections = { workspace = true }
+pgvector = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 ringbuf = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

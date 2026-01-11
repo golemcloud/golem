@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::account::AccountId;
+use super::account::{AccountId, AccountSummary};
 use super::application::ApplicationId;
-use super::application::ApplicationName;
+use super::application::ApplicationSummary;
 use super::auth::EnvironmentRole;
-use super::deployment::{CurrentDeploymentRevision, DeploymentRevision};
+use super::deployment::{CurrentDeploymentRevision, DeploymentRevision, DeploymentVersion};
 use super::diff::Hash;
-use crate::model::validate_lower_kebab_case_identifier;
+use crate::model::{diff, validate_lower_kebab_case_identifier};
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
@@ -31,7 +32,7 @@ newtype_uuid!(
 declare_revision!(EnvironmentRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Eq, Hash, PartialOrd, Ord)]
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
     pub struct EnvironmentName(pub String);
 }
 
@@ -70,12 +71,16 @@ declare_structs! {
 
     pub struct EnvironmentUpdate {
         pub current_revision: EnvironmentRevision,
-        pub new_name: Option<EnvironmentName>
+        pub name: Option<EnvironmentName>,
+        pub compatibility_check: Option<bool>,
+        pub version_check: Option<bool>,
+        pub security_overrides: Option<bool>,
     }
 
     pub struct EnvironmentCurrentDeploymentView {
         pub revision: CurrentDeploymentRevision,
         pub deployment_revision: DeploymentRevision,
+        pub deployment_version: DeploymentVersion,
         pub deployment_hash: Hash
     }
 
@@ -107,17 +112,6 @@ declare_structs! {
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }
 
-    pub struct ApplicationSummary {
-        pub id: ApplicationId,
-        pub name: ApplicationName,
-    }
-
-    pub struct AccountSummary {
-        pub id: AccountId,
-        pub name: String,
-        pub email: String,
-    }
-
     /// A cross-tenant, enriched view of an environment used specifically by the
     /// `GET /environments` endpoint.
     ///
@@ -145,5 +139,15 @@ declare_structs! {
         pub environment: EnvironmentSummary,
         pub application: ApplicationSummary,
         pub account: AccountSummary
+    }
+}
+
+impl Environment {
+    pub fn to_diffable(&self) -> diff::Environment {
+        diff::Environment {
+            compatibility_check: self.compatibility_check,
+            version_check: self.version_check,
+            security_overrides: self.security_overrides,
+        }
     }
 }

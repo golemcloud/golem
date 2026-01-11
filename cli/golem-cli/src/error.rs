@@ -23,7 +23,6 @@ impl Error for NonSuccessfulExit {}
 pub enum ShowClapHelpTarget {
     AppNew,
     ComponentNew,
-    ComponentAddDependency,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages
@@ -31,6 +30,7 @@ pub enum ShowClapHelpTarget {
 pub enum HintError {
     NoApplicationManifestFound,
     ExpectedCloudProfile,
+    EnvironmentHasNoDeployment,
     ShowClapHelp(ShowClapHelpTarget),
 }
 
@@ -38,6 +38,7 @@ impl Error for HintError {}
 
 #[derive(Debug, Display)]
 pub enum ContextInitHintError {
+    CannotUseShortEnvRefWithLocalOrCloudFlags,
     CannotSelectEnvironmentWithoutManifest {
         requested_environment_name: EnvironmentName,
     },

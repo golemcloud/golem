@@ -28,7 +28,7 @@ sequential_suite!(plugins);
 
 sequential_suite!(build_and_deploy_all);
 
-tag_suite!(agents, group4);
+tag_suite!(agents, group3);
 sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
@@ -58,9 +58,8 @@ use tracing::info;
 use url::Url;
 
 mod cmd {
-    pub static ADD_DEPENDENCY: &str = "add-dependency";
+    pub static NO_ARGS: &[&str] = &[];
     pub static AGENT: &str = "agent";
-    pub static APP: &str = "app";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
@@ -86,10 +85,8 @@ mod flag {
 }
 
 mod pattern {
-    pub static ERROR: &str = "error";
     pub static HELP_APPLICATION_COMPONENTS: &str = "Application components:";
     pub static HELP_APPLICATION_CUSTOM_COMMANDS: &str = "Application custom commands:";
-    pub static HELP_COMMANDS: &str = "Commands:";
     pub static HELP_USAGE: &str = "Usage:";
 }
 
@@ -225,6 +222,7 @@ impl Output {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     fn stderr_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
         self.stderr
             .iter()
@@ -349,6 +347,7 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
+    #[allow(dead_code)]
     fn use_generic_template_group(&mut self) {
         self.use_template_group("generic")
     }
@@ -557,4 +556,8 @@ pub fn replace_strings_in_file(
         content = content.replace(from, to);
     }
     write_str(path, content)
+}
+
+pub fn replace_string_in_file(path: impl AsRef<Path>, from: &str, to: &str) -> anyhow::Result<()> {
+    replace_strings_in_file(path, &[(from, to)])
 }

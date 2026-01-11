@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: atomic: pub mod grant;
-
 use crate::command::cloud::account::AccountSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -25,7 +23,7 @@ use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use golem_client::api::AccountClient;
 use golem_client::model::{Account, AccountCreation, AccountUpdate};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use std::sync::Arc;
 
 pub struct CloudAccountCommandHandler {
@@ -55,14 +53,6 @@ impl CloudAccountCommandHandler {
             AccountSubcommand::Delete { account_id } => {
                 self.cmd_delete(account_id.account_id).await
             }
-            AccountSubcommand::Grant { subcommand: _ } => {
-                // TODO: atomic:
-                // self.ctx
-                //     .cloud_account_grant_handler()
-                //     .handle_command(subcommand)
-                //     .await
-                todo!()
-            }
         }
     }
 
@@ -84,7 +74,6 @@ impl CloudAccountCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        // TODO: this should have a proper update endpoint instead of getting then updating...
         let account = self.get(account_id).await?;
         let account = self
             .ctx
@@ -95,8 +84,8 @@ impl CloudAccountCommandHandler {
                 &account.id.0,
                 &AccountUpdate {
                     current_revision: account.revision,
-                    name: account_name.unwrap_or(account.name),
-                    email: account_email.unwrap_or(account.email),
+                    name: account_name,
+                    email: account_email.map(AccountEmail),
                 },
             )
             .await
@@ -115,7 +104,7 @@ impl CloudAccountCommandHandler {
             .account
             .create_account(&AccountCreation {
                 name: account_name,
-                email: account_email,
+                email: AccountEmail(account_email),
             })
             .await
             .map_service_error()?;

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use axum::http::{HeaderMap, HeaderValue};
 use golem_client::api::RegistryServiceClient;
 use golem_client::model::DeploymentCreation;
@@ -28,6 +27,7 @@ use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_eq;
 use reqwest::Url;
 use serde_json::json;
 use std::fmt::{Debug, Formatter};
@@ -105,7 +105,7 @@ async fn echo_agent_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     client
-        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
@@ -114,7 +114,7 @@ async fn echo_agent_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     };
 
     client
-        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
@@ -160,7 +160,7 @@ async fn ephemeral_agent_http_call_resets_state(agent: &EchoAgent) -> anyhow::Re
         .await?;
     assert_eq!(response1.status(), reqwest::StatusCode::OK);
     let body1: serde_json::Value = response1.json().await?;
-    assert!(body1 == json!({ "result": "hello!" }));
+    assert_eq!(body1, json!({ "result": "hello!" }));
 
     // Second call with same param "hello" - should also return "hello!" (not "hello!!")
     // This verifies that the ephemeral agent is recreated fresh each time
@@ -171,7 +171,7 @@ async fn ephemeral_agent_http_call_resets_state(agent: &EchoAgent) -> anyhow::Re
         .await?;
     assert_eq!(response2.status(), reqwest::StatusCode::OK);
     let body2: serde_json::Value = response2.json().await?;
-    assert!(body2 == json!({ "result": "hello!" }));
+    assert_eq!(body2, json!({ "result": "hello!" }));
 
     // Call with different param "world" - should return "world!"
     let response3 = agent
@@ -181,7 +181,23 @@ async fn ephemeral_agent_http_call_resets_state(agent: &EchoAgent) -> anyhow::Re
         .await?;
     assert_eq!(response3.status(), reqwest::StatusCode::OK);
     let body3: serde_json::Value = response3.json().await?;
-    assert!(body3 == json!({ "result": "world!" }));
+    assert_eq!(body3, json!({ "result": "world!" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn url_gets_decoded_for_path_params(agent: &EchoAgent) -> anyhow::Result<()> {
+    // Call with param "hello%20world" - should return "hello world!"
+    let response1 = agent
+        .client
+        .post(agent.base_url.join("/echo/hello%20world")?)
+        .send()
+        .await?;
+    assert_eq!(response1.status(), reqwest::StatusCode::OK);
+    let body1: serde_json::Value = response1.json().await?;
+    assert_eq!(body1, json!({ "result": "hello world!" }));
 
     Ok(())
 }

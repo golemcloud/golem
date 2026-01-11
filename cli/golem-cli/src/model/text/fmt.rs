@@ -21,7 +21,7 @@ use anyhow::anyhow;
 use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
-use golem_common::model::component::InitialComponentFile;
+use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
 use golem_common::model::WorkerStatus;
 use itertools::Itertools;
 use regex::Regex;
@@ -312,7 +312,7 @@ pub fn format_dynamic_links(links: &BTreeMap<String, BTreeMap<String, String>>) 
         .join("\n")
 }
 
-pub fn format_ifs_entry(files: &[InitialComponentFile]) -> String {
+pub fn format_files(files: &[InitialComponentFile]) -> String {
     files
         .iter()
         .map(|file| {
@@ -322,6 +322,34 @@ pub fn format_ifs_entry(files: &[InitialComponentFile]) -> String {
                 file.path.as_path().as_str().log_color_highlight(),
                 file.content_hash.0.to_string().black()
             )
+        })
+        .join("\n")
+}
+
+pub fn format_plugins(plugins: &[InstalledPlugin]) -> String {
+    plugins
+        .iter()
+        .map(|plugin| {
+            let plugin_id = format!(
+                "{}: {}/{}",
+                plugin.priority,
+                plugin.plugin_name.log_color_highlight(),
+                plugin.plugin_version.log_color_highlight(),
+            );
+
+            if plugin.parameters.is_empty() {
+                plugin_id
+            } else {
+                format!(
+                    "{}:\n{}",
+                    plugin_id,
+                    plugin
+                        .parameters
+                        .iter()
+                        .map(|(k, v)| format!("  {}={}", k, v))
+                        .join("\n")
+                )
+            }
         })
         .join("\n")
 }

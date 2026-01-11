@@ -30,7 +30,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest,
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
-use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -45,6 +44,7 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
@@ -63,7 +63,6 @@ pub trait WorkerClient: Send + Sync {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        component_version: ComponentRevision,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
@@ -185,7 +184,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn find_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -324,11 +323,10 @@ impl WorkerExecutorWorkerClient {
 
     async fn find_running_metadata_internal(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadataDto>> {
-        let component_id = *component_id;
         let result = self.call_worker_executor(
             AllExecutors,
             "get_running_workers_metadata",
@@ -376,7 +374,7 @@ impl WorkerExecutorWorkerClient {
 
     async fn find_metadata_internal(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -384,7 +382,6 @@ impl WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
-        let component_id = *component_id;
         let result = self
             .call_worker_executor(
                 RandomExecutor,
@@ -464,7 +461,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        component_version: ComponentRevision,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
@@ -481,7 +477,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 let worker_id = worker_id_clone.clone();
                 Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    component_version: component_version.into(),
                     env: environment_variables.clone(),
                     component_owner_account_id: Some(account_id_clone.into()),
                     environment_id: Some(environment_id.into()),
@@ -1002,7 +997,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn find_metadata(
         &self,
-        component_id: &ComponentId,
+        component_id: ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,

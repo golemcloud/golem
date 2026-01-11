@@ -12,22 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{
-    agentic::{
-        with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
-    },
-    golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
-};
-
 use crate::agentic::{agent_registry, get_resolved_agent};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
+use crate::{
+    agentic::{
+        with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
+    },
+    golem_agentic::exports::golem::agent::guest::{
+        AgentError, AgentType, AuthContext, DataValue, Guest,
+    },
+};
 
 pub struct Component;
 
 impl Guest for Component {
-    fn initialize(agent_type: String, input: DataValue) -> Result<(), AgentError> {
+    fn initialize(
+        agent_type: String,
+        input: DataValue,
+        _auth_ctx: Option<AuthContext>,
+    ) -> Result<(), AgentError> {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
@@ -58,7 +63,11 @@ impl Guest for Component {
 
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
+    fn invoke(
+        method_name: String,
+        input: DataValue,
+        _auth_ctx: Option<AuthContext>,
+    ) -> Result<DataValue, AgentError> {
         with_agent_instance_async(|resolved_agent| async move {
             resolved_agent
                 .agent
@@ -112,22 +121,18 @@ impl LoadSnapshotGuest for Component {
             parse_agent_id(&id).map_err(|e| e.to_string())?;
 
         with_agent_initiator(
-            |initiator| async move {
-                initiator
-                    .initiate(agent_parameters)
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                get_resolved_agent()
-                    .unwrap()
-                    .agent
-                    .borrow()
-                    .load_snapshot_base(agent_snapshot)
-                    .await
-            },
+            |initiator| async move { initiator.initiate(agent_parameters).await },
             &AgentTypeName(agent_type_name),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+        with_agent_instance_async(|resolved_agent| async move {
+            resolved_agent
+                .agent
+                .borrow_mut()
+                .load_snapshot_base(agent_snapshot)
+                .await
+        })
     }
 }
 

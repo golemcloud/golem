@@ -76,7 +76,13 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
             "Initial file system",
             view.files.as_slice(),
             !view.files.is_empty(),
-            format_ifs_entry,
+            format_files,
+        )
+        .fmt_field_optional(
+            "Plugins",
+            view.plugins.as_slice(),
+            !view.plugins.is_empty(),
+            format_plugins,
         );
 
     fields.build()

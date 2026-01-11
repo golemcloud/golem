@@ -39,7 +39,7 @@ pub trait OAuth2TokenRepo: Send + Sync {
         external_id: &str,
     ) -> RepoResult<Option<OAuth2TokenRecord>>;
 
-    async fn get_by_token_id(&self, token_id: &Uuid) -> RepoResult<Option<OAuth2TokenRecord>>;
+    async fn get_by_token_id(&self, token_id: Uuid) -> RepoResult<Option<OAuth2TokenRecord>>;
 }
 
 pub struct LoggedOAuth2TokenRepo<Repo: OAuth2TokenRepo> {
@@ -61,7 +61,7 @@ impl<Repo: OAuth2TokenRepo> LoggedOAuth2TokenRepo<Repo> {
         info_span!(SPAN_NAME, provider, external_id)
     }
 
-    fn span_token_id(token_id: &Uuid) -> Span {
+    fn span_token_id(token_id: Uuid) -> Span {
         info_span!(SPAN_NAME, token_id=%token_id)
     }
 }
@@ -95,8 +95,9 @@ impl<Repo: OAuth2TokenRepo> OAuth2TokenRepo for LoggedOAuth2TokenRepo<Repo> {
             .await
     }
 
-    async fn get_by_token_id(&self, token_id: &Uuid) -> RepoResult<Option<OAuth2TokenRecord>> {
-        self.get_by_token_id(token_id)
+    async fn get_by_token_id(&self, token_id: Uuid) -> RepoResult<Option<OAuth2TokenRecord>> {
+        self.repo
+            .get_by_token_id(token_id)
             .instrument(Self::span_token_id(token_id))
             .await
     }
@@ -186,7 +187,7 @@ impl OAuth2TokenRepo for DbOAuth2TokenRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_token_id(&self, token_id: &Uuid) -> RepoResult<Option<OAuth2TokenRecord>> {
+    async fn get_by_token_id(&self, token_id: Uuid) -> RepoResult<Option<OAuth2TokenRecord>> {
         self.with_ro("get_by_token_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"

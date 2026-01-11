@@ -80,7 +80,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
@@ -134,7 +134,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
@@ -195,7 +195,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
@@ -263,7 +263,7 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
         component_id: ComponentId::new(),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
@@ -310,7 +310,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
@@ -460,7 +460,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
@@ -683,7 +683,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
@@ -813,7 +813,7 @@ async fn read_from_archive_impl(use_blob: bool) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
@@ -933,7 +933,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
 
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
@@ -1076,7 +1076,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
 
     info!("FIRST OPEN");
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
@@ -1358,7 +1358,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
@@ -1472,7 +1472,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
 
     let timestamp = Timestamp::now_utc();
     let entries: Vec<OplogEntry> = (0..100)
@@ -1632,7 +1632,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             None,
         );
 
-        let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
         let oplog = oplog_service
             .create(
                 &owned_worker_id,

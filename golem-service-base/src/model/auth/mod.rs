@@ -17,7 +17,7 @@ mod tests;
 
 use axum::http::header;
 use golem_common::SafeDisplay;
-use golem_common::model::account::{AccountId, SYSTEM_ACCOUNT_ID};
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
@@ -310,11 +310,11 @@ impl AuthCtx {
         matches!(self, AuthCtx::System)
     }
 
-    pub fn account_id(&self) -> &AccountId {
+    pub fn account_id(&self) -> AccountId {
         match self {
-            Self::System => &SYSTEM_ACCOUNT_ID,
-            Self::User(user) => &user.account_id,
-            Self::ImpersonatedUser(user) => &user.account_id,
+            Self::System => AccountId::SYSTEM,
+            Self::User(user) => user.account_id,
+            Self::ImpersonatedUser(user) => user.account_id,
         }
     }
 
@@ -395,7 +395,7 @@ impl AuthCtx {
 
     pub fn authorize_account_action(
         &self,
-        target_account_id: &AccountId,
+        target_account_id: AccountId,
         action: AccountAction,
     ) -> Result<(), AuthorizationError> {
         let is_allowed = match action {
@@ -417,7 +417,7 @@ impl AuthCtx {
 
     pub fn authorize_environment_action(
         &self,
-        account_owning_enviroment: &AccountId,
+        account_owning_enviroment: AccountId,
         roles_from_shares: &BTreeSet<EnvironmentRole>,
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {

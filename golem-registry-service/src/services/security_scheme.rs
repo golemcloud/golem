@@ -94,7 +94,7 @@ impl SecuritySchemeService {
     ) -> Result<SecurityScheme, SecuritySchemeError> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -104,7 +104,7 @@ impl SecuritySchemeService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateSecurityScheme,
         )?;
@@ -122,7 +122,7 @@ impl SecuritySchemeService {
             data.client_secret,
             &redirect_url,
             &scopes,
-            *auth.account_id(),
+            auth.account_id(),
         );
 
         let result = self
@@ -141,7 +141,7 @@ impl SecuritySchemeService {
 
     pub async fn update(
         &self,
-        security_scheme_id: &SecuritySchemeId,
+        security_scheme_id: SecuritySchemeId,
         update: SecuritySchemeUpdate,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
@@ -149,7 +149,7 @@ impl SecuritySchemeService {
             self.get_with_environment(security_scheme_id, auth).await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::UpdateSecurityScheme,
         )?;
@@ -199,7 +199,7 @@ impl SecuritySchemeService {
 
     pub async fn delete(
         &self,
-        security_scheme_id: &SecuritySchemeId,
+        security_scheme_id: SecuritySchemeId,
         current_revision: SecuritySchemeRevision,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
@@ -207,7 +207,7 @@ impl SecuritySchemeService {
             self.get_with_environment(security_scheme_id, auth).await?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteSecurityScheme,
         )?;
@@ -239,7 +239,7 @@ impl SecuritySchemeService {
 
     pub async fn get(
         &self,
-        security_scheme_id: &SecuritySchemeId,
+        security_scheme_id: SecuritySchemeId,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
         let (security_scheme, _) = self.get_with_environment(security_scheme_id, auth).await?;
@@ -253,7 +253,7 @@ impl SecuritySchemeService {
     ) -> Result<Vec<SecurityScheme>, SecuritySchemeError> {
         let environment = self
             .environment_service
-            .get(&environment_id, false, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -263,14 +263,14 @@ impl SecuritySchemeService {
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewSecurityScheme,
         )?;
 
         let result = self
             .security_scheme_repo
-            .get_for_environment(&environment_id.0)
+            .get_for_environment(environment_id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -286,14 +286,14 @@ impl SecuritySchemeService {
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewSecurityScheme,
         )?;
 
         let result = self
             .security_scheme_repo
-            .get_for_environment_and_name(&environment.id.0, &name.0)
+            .get_for_environment_and_name(environment.id.0, &name.0)
             .await?
             .ok_or(SecuritySchemeError::SecuritySchemeForNameNotFound(
                 name.clone(),
@@ -305,35 +305,35 @@ impl SecuritySchemeService {
 
     async fn get_with_environment(
         &self,
-        security_scheme_id: &SecuritySchemeId,
+        security_scheme_id: SecuritySchemeId,
         auth: &AuthCtx,
     ) -> Result<(SecurityScheme, Environment), SecuritySchemeError> {
         let security_scheme: SecurityScheme = self
             .security_scheme_repo
-            .get_by_id(&security_scheme_id.0)
+            .get_by_id(security_scheme_id.0)
             .await?
             .ok_or(SecuritySchemeError::SecuritySchemeNotFound(
-                *security_scheme_id,
+                security_scheme_id,
             ))?
             .try_into()?;
 
         let environment = self
             .environment_service
-            .get(&security_scheme.environment_id, false, auth)
+            .get(security_scheme.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    SecuritySchemeError::SecuritySchemeNotFound(*security_scheme_id)
+                    SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id)
                 }
                 other => other.into(),
             })?;
 
         auth.authorize_environment_action(
-            &environment.owner_account_id,
+            environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewSecurityScheme,
         )
-        .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(*security_scheme_id))?;
+        .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id))?;
 
         Ok((security_scheme, environment))
     }

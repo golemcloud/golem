@@ -65,6 +65,7 @@ reqwest = { workspace = true }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2.workspace = true
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",
@@ -81,8 +82,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
-tonic = { workspace = true }
+tonic = { workspace = true, features = [ "_tls-any" ] }
 tonic-tracing-opentelemetry = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

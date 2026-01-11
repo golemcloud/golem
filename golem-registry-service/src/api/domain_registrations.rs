@@ -54,7 +54,7 @@ impl DomainRegistrationsApi {
 
     /// Create a new domain registration in the environment
     #[oai(
-        path = "/:environment_id/domain-registrations",
+        path = "/envs/:environment_id/domain-registrations",
         method = "post",
         operation_id = "create_domain_registration",
         tag = ApiTags::Environment,
@@ -96,7 +96,7 @@ impl DomainRegistrationsApi {
 
     /// List all domain registrations in the environment
     #[oai(
-        path = "/:environment_id/domain-registrations",
+        path = "/envs/:environment_id/domain-registrations",
         method = "get",
         operation_id = "list_environment_domain_registrations",
         tag = ApiTags::Environment,
@@ -128,7 +128,7 @@ impl DomainRegistrationsApi {
     ) -> ApiResult<Json<Page<DomainRegistration>>> {
         let domain_registrations = self
             .domain_registration_service
-            .list_in_environment(&environment_id, &auth)
+            .list_in_environment(environment_id, &auth)
             .await?;
         Ok(Json(Page {
             values: domain_registrations,
@@ -168,7 +168,7 @@ impl DomainRegistrationsApi {
     ) -> ApiResult<Json<DomainRegistration>> {
         let domain_registration = self
             .domain_registration_service
-            .get_by_id(&domain_registration_id, &auth)
+            .get_by_id(domain_registration_id, &auth)
             .await?;
 
         Ok(Json(domain_registration))
@@ -206,7 +206,7 @@ impl DomainRegistrationsApi {
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.domain_registration_service
-            .delete(&domain_registration_id, &auth)
+            .delete(domain_registration_id, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)

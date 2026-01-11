@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::SafeDisplay;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::api::make_open_api_service;
 use golem_registry_service::bootstrap::Services;
@@ -23,6 +24,7 @@ use opentelemetry_sdk::trace::SdkTracer;
 use prometheus::Registry;
 use std::panic;
 use tokio::task::JoinSet;
+use tracing::info;
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
@@ -31,7 +33,12 @@ fn main() -> anyhow::Result<()> {
             .build()?
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_config_loader().load_or_dump_config() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install crypto provider");
+
         let tracer = init_tracing_with_default_env_filter(&config.tracing);
+        info!("Using configuration:\n{}", config.to_safe_string_indented());
 
         let prometheus = metrics::register_all();
 

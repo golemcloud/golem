@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::{
-    builtin_app_subcommands, help_target_to_command, GolemCliCommandPartialMatch,
+    builtin_exec_subcommands, help_target_to_command, GolemCliCommandPartialMatch,
     GolemCliGlobalFlags,
 };
 use crate::command_handler::Handlers;
@@ -25,7 +25,7 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
-use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
+use crate::model::text::help::{AvailableFunctionNamesHelp, EnvironmentNameHelp, WorkerNameHelp};
 use colored::Colorize;
 use indoc::indoc;
 use std::sync::Arc;
@@ -48,14 +48,14 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        builtin_app_subcommands(),
+                        builtin_exec_subcommands(),
                     ))?
                 }
 
@@ -65,14 +65,14 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        builtin_app_subcommands(),
+                        builtin_exec_subcommands(),
                     ))?
                 }
 
@@ -82,7 +82,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -97,7 +97,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -109,7 +109,7 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::AgentHelp => {
-                // TODO: atomic: show agents
+                // TODO: show agents
                 Ok(())
             }
             GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName { worker_name } => {
@@ -189,7 +189,7 @@ impl ErrorHandler {
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
                     .await?;
 
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -233,6 +233,15 @@ impl ErrorHandler {
                 logln("");
                 Ok(())
             }
+            HintError::EnvironmentHasNoDeployment => {
+                log_error(
+                    "The requested operation requires an existing deployment for the environment!",
+                );
+                logln("");
+                logln("Use 'golem deploy' for deploying, or select a different environment.");
+                logln("");
+                Ok(())
+            }
             HintError::ShowClapHelp(help_target) => {
                 // TODO: we should print to STDERR to match normal help behaviour,
                 //       but 'print_long_help' is hardcoded to use STDOUT.
@@ -250,7 +259,6 @@ impl ErrorHandler {
                             .app_handler()
                             .log_templates_help(None, None, self.ctx.dev_mode());
                     }
-                    ShowClapHelpTarget::ComponentAddDependency => {}
                 }
                 Ok(())
             }
@@ -262,6 +270,12 @@ impl ErrorHandler {
         hint_error: &ContextInitHintError,
     ) -> anyhow::Result<()> {
         match hint_error {
+            ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags => {
+                log_error("Cannot use short (name only) environment reference with --local or --cloud flags!");
+                logln("");
+                log_text_view(&EnvironmentNameHelp);
+                Ok(())
+            }
             ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
                 requested_environment_name,
             } => {

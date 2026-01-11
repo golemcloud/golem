@@ -17,7 +17,6 @@ use golem_common::model::account::AccountId;
 use golem_common::model::WorkerId;
 use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
-use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -43,14 +42,14 @@ error_forwarding!(LimitServiceError, RegistryServiceError);
 pub trait LimitService: Send + Sync {
     async fn update_worker_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
     ) -> Result<(), LimitServiceError>;
 
     async fn update_worker_connection_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
     ) -> Result<(), LimitServiceError>;
@@ -70,12 +69,12 @@ impl RemoteLimitService {
 impl LimitService for RemoteLimitService {
     async fn update_worker_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
     ) -> Result<(), LimitServiceError> {
         self.client
-            .update_worker_limit(account_id, worker_id, added, &AuthCtx::System)
+            .update_worker_limit(account_id, worker_id, added)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),
@@ -86,12 +85,12 @@ impl LimitService for RemoteLimitService {
 
     async fn update_worker_connection_limit(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         worker_id: &WorkerId,
         added: bool,
     ) -> Result<(), LimitServiceError> {
         self.client
-            .update_worker_connection_limit(account_id, worker_id, added, &AuthCtx::System)
+            .update_worker_connection_limit(account_id, worker_id, added)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),

@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use crate::command::api::ApiSubcommand;
-use crate::command::app::AppSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
+use crate::command::exec::ExecSubcommand;
+use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
-use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
+use crate::command::shared_args::{
+    AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
+};
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
@@ -28,7 +31,7 @@ use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
-use crate::model::worker::WorkerName;
+use crate::model::worker::{AgentUpdateMode, WorkerName};
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
@@ -37,7 +40,10 @@ use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::deployment::DeploymentRevision;
+use golem_templates::model::GuestLanguage;
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -100,18 +106,15 @@ pub struct GolemCliGlobalFlags {
     pub format: Option<Format>,
 
     /// Select Golem environment by name
-    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102
-    )]
+    #[arg(long, short = 'E', global = true, display_order = 102)]
     pub environment: Option<EnvironmentReference>,
 
-    /// Select" local" environment from the manifest, or "local" profile
-    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103
-    )]
+    /// Select "local" environment from the manifest, or "local" profile
+    #[arg(long, short = 'L', global = true, conflicts_with_all = ["cloud"], display_order = 103)]
     pub local: bool,
 
     /// Select "cloud" environment from the manifest, or "cloud" profile
-    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104
-    )]
+    #[arg(long, short = 'C', global = true, conflicts_with_all = ["local"], display_order = 104)]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
@@ -138,7 +141,7 @@ pub struct GolemCliGlobalFlags {
 
     /// Custom path to the config directory (defaults to $HOME/.golem)
     #[arg(long, global = true, display_order = 109)]
-    pub config_dir: Option<PathBuf>,
+    config_dir: Option<PathBuf>,
 
     /// Automatically answer "yes" to any interactive confirm questions
     #[arg(long, short = 'Y', global = true, display_order = 110)]
@@ -166,7 +169,7 @@ pub struct GolemCliGlobalFlags {
     pub template_group: Option<String>,
 
     #[command(flatten)]
-    pub verbosity: Verbosity,
+    verbosity: Verbosity,
 
     // The flags below can only be set through env vars, as they are mostly
     // useful for testing, so we do not want to pollute the flag space with them
@@ -186,7 +189,10 @@ pub struct GolemCliGlobalFlags {
     pub wasm_rpc_offline: bool,
 
     #[arg(skip)]
-    pub http_batch_size: Option<u64>,
+    http_batch_size: Option<u64>,
+
+    #[arg(skip)]
+    http_parallelism: Option<usize>,
 
     #[arg(skip)]
     pub auth_token: Option<String>,
@@ -279,6 +285,12 @@ impl GolemCliGlobalFlags {
                 })?)
         }
 
+        if let Ok(parallelism) = std::env::var("GOLEM_HTTP_PARALLELISM") {
+            self.http_parallelism = Some(parallelism.parse().with_context(|| {
+                format!("Failed to parse GOLEM_HTTP_PARALLELISM: {parallelism}")
+            })?)
+        }
+
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
             self.auth_token = Some(
                 auth_token
@@ -308,6 +320,14 @@ impl GolemCliGlobalFlags {
         self.config_dir
             .clone()
             .unwrap_or_else(|| dirs::home_dir().unwrap().join(".golem"))
+    }
+
+    pub fn http_batch_size(&self) -> u64 {
+        self.http_batch_size.unwrap_or(50)
+    }
+
+    pub fn http_parallelism(&self) -> usize {
+        self.http_parallelism.unwrap_or(4)
     }
 
     pub fn verbosity(&self) -> clap_verbosity_flag::Verbosity {
@@ -405,7 +425,8 @@ impl GolemCliCommand {
                             .map(|arg| arg.as_ref())
                             .collect::<Vec<_>>();
                         match positional_args.as_slice() {
-                            ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
+                            [] => Some(GolemCliCommandPartialMatch::AppHelp),
+                            ["exec"] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
                             ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
                             ["agent"] => Some(GolemCliCommandPartialMatch::AgentHelp),
                             _ => None,
@@ -431,7 +452,8 @@ impl GolemCliCommand {
                             .map(|arg| arg.as_ref())
                             .collect::<Vec<_>>();
                         match positional_args.as_slice() {
-                            ["app"] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
+                            [] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
+                            ["exec"] => Some(GolemCliCommandPartialMatch::AppMissingSubcommandHelp),
                             ["component"] => {
                                 Some(GolemCliCommandPartialMatch::ComponentMissingSubcommandHelp)
                             }
@@ -579,11 +601,95 @@ pub enum GolemCliCommandPartialMatch {
 
 #[derive(Debug, Subcommand)]
 pub enum GolemCliSubcommand {
-    #[command(alias = "application")]
-    /// Build, deploy application
-    App {
+    // App scoped root commands---------------------------------------------------------------------
+    /// Create a new application
+    New {
+        /// Application folder name where the new application should be created
+        application_name: Option<ApplicationName>,
+        /// Languages that the application should support
+        language: Vec<GuestLanguage>,
+    },
+    /// Build all or selected components in the application
+    Build {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+        #[command(flatten)]
+        build: BuildArgs,
+    },
+    /// Start Rib REPL for a selected component
+    Repl {
+        #[command(flatten)]
+        component_name: ComponentOptionalComponentName,
+        /// Optional component revision to use, defaults to latest deployed component revision
+        revision: Option<ComponentRevision>,
+        #[command(flatten)]
+        deploy_args: Option<DeployArgs>,
+        /// Optional script to run, when defined the repl will execute the script and exit
+        #[clap(long, short, conflicts_with_all = ["script_file"])]
+        script: Option<String>,
+        /// Optional script_file to run, when defined the repl will execute the script and exit
+        #[clap(long, conflicts_with_all = ["script"])]
+        script_file: Option<PathBuf>,
+        /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
+        #[clap(long)]
+        disable_stream: bool,
+    },
+    /// Deploy application
+    Deploy {
+        /// Only plan deployment, but apply no changes to the staging area or the environment
+        #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
+        plan: bool,
+        /// Only plan and stage changes, but do not apply them to the environment; used for testing
+        #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+        stage: bool,
+        /// Ask for approval for every staging step; used for testing
+        #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+        approve_staging_steps: bool,
+        /// Revert to the specified version
+        #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
+        version: Option<String>,
+        /// Revert to the specified revision
+        #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
+        revision: Option<DeploymentRevision>,
+        #[command(flatten)]
+        force_build: ForceBuildArg,
+        #[command(flatten)]
+        deploy_args: DeployArgs,
+    },
+    /// Clean all components in the application or by selection
+    Clean {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+    },
+    /// Try to automatically update all existing agents of the application to the latest version
+    UpdateAgents {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+        /// Update mode - auto or manual, defaults to "auto"
+        #[arg(long, short, default_value = "auto")]
+        update_mode: AgentUpdateMode,
+        /// Await the update to be completed
+        #[arg(long, default_value_t = false)]
+        r#await: bool,
+    },
+    /// Redeploy all agents of the application using the latest version
+    RedeployAgents {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+    },
+    /// Diagnose possible tooling problems
+    Diagnose {
+        #[command(flatten)]
+        component_name: AppOptionalComponentNames,
+    },
+    /// List all the deployed agent types
+    ListAgentTypes {},
+
+    // Other entities ------------------------------------------------------------------------------
+    /// Execute custom, application manifest defined commands
+    Exec {
         #[clap(subcommand)]
-        subcommand: AppSubcommand,
+        subcommand: ExecSubcommand,
     },
     /// Manage environments
     Environment {
@@ -605,13 +711,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ApiSubcommand,
     },
-    // TODO: atomic /// Manage plugins
-    /*
+    /// Manage plugins
     Plugin {
         #[clap(subcommand)]
         subcommand: PluginSubcommand,
     },
-    */
     /// Manage global CLI profiles
     Profile {
         #[clap(subcommand)]
@@ -627,24 +731,6 @@ pub enum GolemCliSubcommand {
     Cloud {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
-    },
-    /// Start Rib REPL for a selected component
-    Repl {
-        #[command(flatten)]
-        component_name: ComponentOptionalComponentName,
-        /// Optional component revision to use, defaults to latest deployed component revision
-        revision: Option<ComponentRevision>,
-        #[command(flatten)]
-        deploy_args: Option<DeployArgs>,
-        /// Optional script to run, when defined the repl will execute the script and exit
-        #[clap(long, short, conflicts_with_all = ["script_file"])]
-        script: Option<String>,
-        /// Optional script_file to run, when defined the repl will execute the script and exit
-        #[clap(long, conflicts_with_all = ["script"])]
-        script_file: Option<PathBuf>,
-        /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
-        #[clap(long)]
-        disable_stream: bool,
     },
     /// Generate shell completion
     Completion {
@@ -774,8 +860,13 @@ pub mod shared_args {
     }
 
     impl DeployArgs {
-        pub fn is_any_set(&self) -> bool {
-            self.update_agents.is_some() || self.redeploy_agents || self.reset
+        pub fn is_any_set(&self, env_args: &DeployArgs) -> bool {
+            env_args.update_agents.is_some()
+                || env_args.redeploy_agents
+                || env_args.reset
+                || self.update_agents.is_some()
+                || self.redeploy_agents
+                || self.reset
         }
 
         pub fn none() -> Self {
@@ -803,119 +894,14 @@ pub mod shared_args {
         #[arg(long)]
         pub account_id: Option<AccountId>,
     }
-
-    // TODO: atomic
-    /*#[derive(Debug, Args)]
-    pub struct PluginArg {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Plugin, accepted formats:
-        ///   - <PLUGIN_NAME>/<PLUGIN_VERSION>
-        ///   - <ACCOUNT_EMAIL>/<PLUGIN_NAME>/<PLUGIN_VERSION>
-        #[arg(verbatim_doc_comment)]
-        pub plugin: PluginReference,
-    }
-
-    #[derive(clap::Args, Debug, Clone)]
-    pub struct PluginScopeArgs {
-        /// Global scope (plugin available for all components)
-        #[arg(long, conflicts_with_all=["account", "project", "component"])]
-        pub global: bool,
-        /// Account id, optionally specifies the account id for the project name
-        #[arg(long, conflicts_with_all = ["global"])]
-        pub account: Option<String>,
-        /// Project name; Required when component name is used. Without a given component, it defines a project scope.
-        #[arg(long, conflicts_with_all = ["global"])]
-        pub project: Option<ProjectName>,
-        /// Component scope given by the component's name (plugin only available for this component)
-        #[arg(long, conflicts_with_all=["global"])]
-        pub component: Option<ComponentName>,
-    }
-
-    impl PluginScopeArgs {
-        pub fn is_global(&self) -> bool {
-            self.global
-                || (self.account.is_none() && self.project.is_none() && self.component.is_none())
-        }
-    }*/
 }
 
-pub mod app {
-    use crate::command::shared_args::{
-        AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
-    };
-    use crate::model::worker::AgentUpdateMode;
+pub mod exec {
     use clap::Subcommand;
-    use golem_common::model::application::ApplicationName;
-    use golem_common::model::component::ComponentRevision;
-    use golem_templates::model::GuestLanguage;
 
     #[derive(Debug, Subcommand)]
-    pub enum AppSubcommand {
-        /// Create a new application
-        New {
-            /// Application folder name where the new application should be created
-            application_name: Option<ApplicationName>,
-            /// Languages that the application should support
-            language: Vec<GuestLanguage>,
-        },
-        /// Build all or selected components in the application
-        Build {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-            #[command(flatten)]
-            build: BuildArgs,
-        },
-        /// Deploy application
-        Deploy {
-            /// Only plan deployment, but apply no changes to the staging area or the environment
-            #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
-            plan: bool,
-            /// Only plan and stage changes, but do not apply them to the environment; used for testing
-            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
-            stage: bool,
-            /// Ask for approval for every staging step; used for testing
-            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
-            approve_staging_steps: bool,
-            /// Revert to the specified version
-            #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
-            version: Option<String>,
-            /// Revert to the specified revision
-            #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
-            revision: Option<ComponentRevision>,
-            #[command(flatten)]
-            force_build: ForceBuildArg,
-            #[command(flatten)]
-            deploy_args: DeployArgs,
-        },
-        /// Clean all components in the application or by selection
-        Clean {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-        },
-        /// Try to automatically update all existing agents of the application to the latest version
-        UpdateAgents {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-            /// Update mode - auto or manual, defaults to "auto"
-            #[arg(long, short, default_value = "auto")]
-            update_mode: AgentUpdateMode,
-            /// Await the update to be completed
-            #[arg(long, default_value_t = false)]
-            r#await: bool,
-        },
-        /// Redeploy all agents of the application using the latest version
-        RedeployAgents {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-        },
-        /// Diagnose possible tooling problems
-        Diagnose {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
-        },
-        /// List all the deployed agent types
-        ListAgentTypes {},
-        /// Run custom command
+    pub enum ExecSubcommand {
+        /// Execute custom, application manifest specified command
         #[clap(external_subcommand)]
         CustomCommand(Vec<String>),
     }
@@ -925,21 +911,21 @@ pub mod environment {
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
-    pub enum EnvironmentSubcommand {}
+    pub enum EnvironmentSubcommand {
+        /// Check and optionally update environment deployment options
+        SyncDeploymentOptions,
+        /// List application environments on the current server
+        List,
+    }
 }
 
 pub mod component {
-    use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
-        BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplateName,
+        ComponentOptionalComponentName, ComponentOptionalComponentNames, ComponentTemplateName,
     };
-    use crate::model::app::DependencyType;
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use std::path::PathBuf;
-    use url::Url;
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {
@@ -954,36 +940,6 @@ pub mod component {
         Templates {
             /// Optional filter for language or template name
             filter: Option<String>,
-        },
-        /// Build component(s) based on the current directory or by selection
-        Build {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
-            #[command(flatten)]
-            build: BuildArgs,
-        },
-        /// Clean component(s) based on the current directory or by selection
-        Clean {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
-        },
-        /// Add or update a component dependency
-        AddDependency {
-            /// The name of the component to which the dependency should be added
-            #[arg(long)]
-            component_name: Option<ComponentName>,
-            /// The name of the component that will be used as the target component
-            #[arg(long, conflicts_with_all = ["target_component_path", "target_component_url"])]
-            target_component_name: Option<ComponentName>,
-            /// The path to the local component WASM that will be used as the target
-            #[arg(long, conflicts_with_all = ["target_component_name", "target_component_url"])]
-            target_component_path: Option<PathBuf>,
-            /// The URL to the remote component WASM that will be used as the target
-            #[arg(long, conflicts_with_all = ["target_component_name", "target_component_path"])]
-            target_component_url: Option<Url>,
-            /// The type of the dependency, defaults to wasm-rpc
-            #[arg(long)]
-            dependency_type: Option<DependencyType>,
         },
         /// List deployed component versions' metadata
         List,
@@ -1009,11 +965,6 @@ pub mod component {
         RedeployAgents {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
-        },
-        /// Manage component plugin installations
-        Plugin {
-            #[command(subcommand)]
-            subcommand: ComponentPluginSubcommand,
         },
         /// Diagnose possible tooling problems
         Diagnose {
@@ -1259,7 +1210,6 @@ pub mod worker {
 }
 
 pub mod api {
-    use crate::command::api::certificate::ApiCertificateSubcommand;
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
     use crate::command::api::domain::ApiDomainSubcommand;
@@ -1287,11 +1237,6 @@ pub mod api {
         Domain {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
-        },
-        /// Manage API Certificates
-        Certificate {
-            #[clap(subcommand)]
-            subcommand: ApiCertificateSubcommand,
         },
     }
 
@@ -1357,14 +1302,14 @@ pub mod api {
 
     pub mod security_scheme {
         use clap::Subcommand;
-        use golem_common::model::security_scheme::Provider;
+        use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
-            /// Create API Security Scheme
+            /// Create HTTP API Security Scheme
             Create {
-                /// Security Scheme ID
-                security_scheme_id: String,
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
                 /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
                 #[arg(long)]
                 provider_type: Provider,
@@ -1382,11 +1327,14 @@ pub mod api {
                 redirect_url: String,
             },
 
-            /// Get API security
+            /// Get HTTP API Security Scheme
             Get {
-                /// Security Scheme ID
-                security_scheme_id: String,
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
             },
+
+            /// List HTTP API Security Schemes
+            List,
         }
     }
 
@@ -1409,74 +1357,33 @@ pub mod api {
             },
         }
     }
-
-    pub mod certificate {
-        use crate::model::PathBufOrStdin;
-        use clap::Subcommand;
-        use uuid::Uuid;
-
-        #[derive(Debug, Subcommand)]
-        pub enum ApiCertificateSubcommand {
-            /// Retrieves metadata about an existing certificate
-            Get {
-                /// Certificate ID
-                certificate_id: Option<Uuid>,
-            },
-            /// Create a new certificate
-            New {
-                /// Domain name
-                #[arg(short, long)]
-                domain_name: String,
-                /// Certificate
-                #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                certificate_body: PathBufOrStdin,
-                /// Certificate private key
-                #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                certificate_private_key: PathBufOrStdin,
-            },
-            /// Delete an existing certificate
-            #[command()]
-            Delete {
-                /// Certificate ID
-                certificate_id: Uuid,
-            },
-        }
-    }
 }
 
 pub mod plugin {
-    // TODO: atomic
-    /*
     use crate::model::PathBufOrStdin;
     use clap::Subcommand;
+    use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
     pub enum PluginSubcommand {
-        /// List component for the select scope
-        List {
-            /// The scope to list components from
-            #[command(flatten)]
-            scope: PluginScopeArgs,
-        },
-        /// Get information about a registered plugin
+        /// List account components
+        List,
+        /// Get
         Get {
-            #[clap(flatten)]
-            plugin: PluginArg,
+            /// PluginID
+            plugin_id: Uuid, // TODO: atomic: missing method for looking up by name
         },
-        /// Register a new plugin
+        /// Register a new plugin for the account
         Register {
-            #[command(flatten)]
-            scope: PluginScopeArgs,
             /// Path to the plugin manifest JSON or '-' to use STDIN
             manifest: PathBufOrStdin,
         },
         /// Unregister a plugin
         Unregister {
-            #[clap(flatten)]
-            plugin: PluginArg,
+            /// PluginID
+            plugin_id: Uuid, // TODO: atomic: missing method for deleting by name
         },
     }
-    */
 }
 
 pub mod profile {
@@ -1602,7 +1509,6 @@ pub mod cloud {
     }
 
     pub mod account {
-        use crate::command::cloud::account::grant::GrantSubcommand;
         use crate::command::shared_args::AccountIdOptionalArg;
         use clap::Subcommand;
 
@@ -1634,179 +1540,8 @@ pub mod cloud {
                 #[command(flatten)]
                 account_id: AccountIdOptionalArg,
             },
-            /// Manage the account roles
-            Grant {
-                #[command(subcommand)]
-                subcommand: GrantSubcommand,
-            },
-        }
-
-        pub mod grant {
-            use crate::command::shared_args::AccountIdOptionalArg;
-            use clap::Subcommand;
-
-            #[derive(Subcommand, Debug)]
-            pub enum GrantSubcommand {
-                /// Get the roles granted to the account
-                Get {
-                    #[command(flatten)]
-                    account_id: AccountIdOptionalArg,
-                },
-                /// Grant a new role to the account
-                New {
-                    #[command(flatten)]
-                    account_id: AccountIdOptionalArg,
-                    // TODO: atomic role: Role, /// The role to be granted
-                },
-                /// Remove a role from the account
-                Delete {
-                    #[command(flatten)]
-                    account_id: AccountIdOptionalArg,
-                    // TODO: atomic role: Role, /// The role to be deleted
-                },
-            }
         }
     }
-
-    // TODO: atomic
-    /*
-    pub mod project {
-        use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
-        use crate::command::cloud::project::policy::PolicySubcommand;
-        use crate::model::{ProjectName, ProjectPolicyId, ProjectReference};
-        use clap::Subcommand;
-        use golem_common::model::auth::ProjectPermission;
-
-        #[derive(clap::Args, Debug)]
-        #[group(required = true, multiple = false)]
-        pub struct ProjectActionsOrPolicyId {
-            /// The sharing policy's identifier. If not provided, use `--action` instead
-            #[arg(long, required = true, group = "project_actions_or_policy")]
-            pub policy_id: Option<ProjectPolicyId>,
-            /// A list of actions to be granted to the recipient account. If not provided, use `--policy-id` instead
-            #[arg(long, required = true, group = "project_actions_or_policy")]
-            pub action: Option<Vec<ProjectPermission>>,
-        }
-
-        #[derive(Debug, Subcommand)]
-        pub enum ProjectSubcommand {
-            /// Create new project
-            New {
-                /// The new project's name
-                project_name: ProjectName,
-                /// The new project's description
-                #[arg(short, long)]
-                description: Option<String>,
-            },
-            /// Lists existing projects
-            List {
-                /// Optionally filter projects by name
-                project_name: Option<ProjectName>,
-            },
-            /// Gets the default project which is used when no explicit project is specified
-            GetDefault,
-            /// Share a project with another account
-            Grant {
-                /// The project to be shared
-                project_reference: ProjectReference,
-                /// Email of the user account the project will be shared with
-                recipient_email: String,
-                #[command(flatten)]
-                project_actions_or_policy_id: ProjectActionsOrPolicyId,
-            },
-            /// Manage project policies
-            Policy {
-                #[command(subcommand)]
-                subcommand: PolicySubcommand,
-            },
-            /// Manage project plugins
-            Plugin {
-                #[command(subcommand)]
-                subcommand: ProjectPluginSubcommand,
-            },
-        }
-
-        pub mod policy {
-            use crate::model::ProjectPolicyId;
-            use clap::Subcommand;
-            use golem_common::model::auth::ProjectPermission;
-
-            #[derive(Subcommand, Debug)]
-            pub enum PolicySubcommand {
-                /// Creates a new project sharing policy
-                New {
-                    /// Name of the policy
-                    policy_name: String,
-                    /// List of actions allowed by the policy
-                    actions: Vec<ProjectPermission>,
-                },
-                /// Gets the existing project sharing policies
-                #[command()]
-                Get {
-                    /// Project policy ID
-                    policy_id: ProjectPolicyId,
-                },
-            }
-        }
-
-        pub mod plugin {
-            use crate::command::parse_key_val;
-            use crate::command::shared_args::ProjectArg;
-            use clap::Subcommand;
-            use golem_common::base_model::PluginInstallationId;
-
-            #[derive(Debug, Subcommand)]
-            pub enum ProjectPluginSubcommand {
-                /// Install a plugin for a project
-                Install {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /// The plugin to install
-                    #[arg(long)]
-                    plugin_name: String,
-                    /// The version of the plugin to install
-                    #[arg(long)]
-                    plugin_version: String,
-                    /// Priority of the plugin - largest priority is applied first
-                    #[arg(long)]
-                    priority: i32,
-                    /// List of parameters (key-value pairs) passed to the plugin
-                    #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                    param: Vec<(String, String)>,
-                },
-                /// Get the installed plugins for the project
-                Get {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /* TODO: Missing from HTTP API
-                    /// The version of the component
-                    version: Option<u64>,
-                    */
-                },
-                /// Update project plugin
-                Update {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /// Installation id of the plugin to update
-                    plugin_installation_id: PluginInstallationId,
-                    /// Updated priority of the plugin - largest priority is applied first
-                    #[arg(long)]
-                    priority: i32,
-                    /// Updated list of parameters (key-value pairs) passed to the plugin
-                    #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                    param: Vec<(String, String)>,
-                },
-                /// Uninstall a plugin for selected component
-                Uninstall {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                    /// Installation id of the plugin to uninstall
-                    plugin_installation_id: PluginInstallationId,
-                },
-            }
-        }
-    }
-    */
 }
 
 pub mod server {
@@ -1862,9 +1597,9 @@ pub mod server {
     }
 }
 
-pub fn builtin_app_subcommands() -> BTreeSet<String> {
+pub fn builtin_exec_subcommands() -> BTreeSet<String> {
     GolemCliCommand::command()
-        .find_subcommand("app")
+        .find_subcommand("exec")
         .unwrap()
         .get_subcommands()
         .map(|subcommand| subcommand.get_name().to_string())
@@ -1874,13 +1609,10 @@ pub fn builtin_app_subcommands() -> BTreeSet<String> {
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
         ShowClapHelpTarget::AppNew => {
-            vec!["app", "new"]
+            vec!["new"]
         }
         ShowClapHelpTarget::ComponentNew => {
             vec!["component", "new"]
-        }
-        ShowClapHelpTarget::ComponentAddDependency => {
-            vec!["component", "add-dependency"]
         }
     }
 }
@@ -1935,7 +1667,7 @@ fn parse_instant(
 #[cfg(test)]
 mod test {
     use crate::command::{
-        builtin_app_subcommands, help_target_to_subcommand_names, GolemCliCommand,
+        builtin_exec_subcommands, help_target_to_subcommand_names, GolemCliCommand,
     };
     use crate::error::ShowClapHelpTarget;
     use assert2::assert;
@@ -2157,7 +1889,7 @@ mod test {
 
     #[test]
     fn builtin_app_subcommands_no_panic() {
-        println!("{:?}", builtin_app_subcommands())
+        println!("{:?}", builtin_exec_subcommands())
     }
 
     #[test]

@@ -30,20 +30,21 @@ use golem_api_grpc::proto::golem::registry::v1::{
     DownloadComponentRequest, DownloadComponentResponse, GetActiveRoutesForDomainRequest,
     GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest,
     GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
-    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse, GetAllComponentVersionsRequest,
-    GetAllComponentVersionsResponse, GetAllComponentVersionsSuccessResponse,
-    GetAuthDetailsForEnvironmentRequest, GetAuthDetailsForEnvironmentResponse,
-    GetAuthDetailsForEnvironmentSuccessResponse, GetComponentMetadataRequest,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
-    GetLatestComponentMetadataRequest, GetLatestComponentMetadataResponse,
-    GetLatestComponentMetadataSuccessResponse, GetResourceLimitsRequest, GetResourceLimitsResponse,
-    GetResourceLimitsSuccessResponse, RegistryServiceError, ResolveComponentRequest,
-    ResolveComponentResponse, ResolveComponentSuccessResponse, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
+    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
+    GetAllDeployedComponentRevisionsSuccessResponse, GetAuthDetailsForEnvironmentRequest,
+    GetAuthDetailsForEnvironmentResponse, GetAuthDetailsForEnvironmentSuccessResponse,
+    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    GetDeployedComponentMetadataRequest, GetDeployedComponentMetadataResponse,
+    GetDeployedComponentMetadataSuccessResponse, GetResourceLimitsRequest,
+    GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, RegistryServiceError,
+    ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
+    UpdateWorkerConnectionLimitRequest, UpdateWorkerConnectionLimitResponse,
+    UpdateWorkerLimitRequest, UpdateWorkerLimitResponse, authenticate_token_response,
+    batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_component_versions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_latest_component_metadata_response,
+    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
+    get_component_metadata_response, get_deployed_component_metadata_response,
     get_resource_limits_response, registry_service_error, resolve_component_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
@@ -124,7 +125,7 @@ impl RegistryServiceGrpcApi {
 
         let environment = self
             .environment_service
-            .get(&environment_id, request.include_deleted, &auth_ctx)
+            .get(environment_id, request.include_deleted, &auth_ctx)
             .await?;
 
         let auth_details_for_environment = AuthDetailsForEnvironment {
@@ -141,17 +142,13 @@ impl RegistryServiceGrpcApi {
         &self,
         request: GetResourceLimitsRequest,
     ) -> Result<GetResourceLimitsSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
         let account_id: AccountId = request
             .account_id
             .ok_or("missing account_id field")?
             .try_into()?;
         let limits = self
             .account_usage_service
-            .get_resouce_limits(&account_id, &auth_ctx)
+            .get_resouce_limits(account_id, &AuthCtx::System)
             .await?;
         Ok(GetResourceLimitsSuccessResponse {
             limits: Some(limits.into()),
@@ -162,21 +159,17 @@ impl RegistryServiceGrpcApi {
         &self,
         request: UpdateWorkerLimitRequest,
     ) -> Result<EmptySuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
         let account_id: AccountId = request
             .account_id
             .ok_or("missing account_id field")?
             .try_into()?;
         if request.added {
             self.account_usage_service
-                .add_worker(&account_id, &auth_ctx)
+                .add_worker(account_id, &AuthCtx::System)
                 .await?;
         } else {
             self.account_usage_service
-                .remove_worker(&account_id, &auth_ctx)
+                .remove_worker(account_id, &AuthCtx::System)
                 .await?;
         }
         Ok(EmptySuccessResponse {})
@@ -186,21 +179,17 @@ impl RegistryServiceGrpcApi {
         &self,
         request: UpdateWorkerConnectionLimitRequest,
     ) -> Result<EmptySuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
         let account_id: AccountId = request
             .account_id
             .ok_or("missing account_id field")?
             .try_into()?;
         if request.added {
             self.account_usage_service
-                .add_worker_connection(&account_id, &auth_ctx)
+                .add_worker_connection(account_id, &AuthCtx::System)
                 .await?;
         } else {
             self.account_usage_service
-                .remove_worker_connection(&account_id, &auth_ctx)
+                .remove_worker_connection(account_id, &AuthCtx::System)
                 .await?;
         }
         Ok(EmptySuccessResponse {})
@@ -210,11 +199,6 @@ impl RegistryServiceGrpcApi {
         &self,
         request: BatchUpdateFuelUsageRequest,
     ) -> Result<BatchUpdateFuelUsageSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
         let updates: HashMap<AccountId, i64> = request
             .updates
             .into_iter()
@@ -226,7 +210,7 @@ impl RegistryServiceGrpcApi {
 
         let account_resource_limits = self
             .account_usage_service
-            .record_fuel_consumption(updates, &auth_ctx)
+            .record_fuel_consumption(updates, &AuthCtx::System)
             .await?;
 
         Ok(BatchUpdateFuelUsageSuccessResponse {
@@ -238,11 +222,6 @@ impl RegistryServiceGrpcApi {
         &self,
         request: DownloadComponentRequest,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
         let component_id: ComponentId = request
             .component_id
             .ok_or("missing component_id field")?
@@ -252,7 +231,7 @@ impl RegistryServiceGrpcApi {
 
         let result = self
             .component_service
-            .download_component_wasm(&component_id, version, true, &auth_ctx)
+            .download_component_wasm(component_id, version, true, &AuthCtx::System)
             .await?;
         Ok(result)
     }
@@ -261,11 +240,6 @@ impl RegistryServiceGrpcApi {
         &self,
         request: GetComponentMetadataRequest,
     ) -> Result<GetComponentMetadataSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
         let component_id: ComponentId = request
             .component_id
             .ok_or("missing component_id field")?
@@ -275,7 +249,7 @@ impl RegistryServiceGrpcApi {
 
         let component = self
             .component_service
-            .get_component_revision(&component_id, version, true, &auth_ctx)
+            .get_component_revision(component_id, version, true, &AuthCtx::System)
             .await?;
 
         Ok(GetComponentMetadataSuccessResponse {
@@ -283,15 +257,10 @@ impl RegistryServiceGrpcApi {
         })
     }
 
-    async fn get_latest_component_metadata_internal(
+    async fn get_deployed_component_metadata_internal(
         &self,
-        request: GetLatestComponentMetadataRequest,
-    ) -> Result<GetLatestComponentMetadataSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
+        request: GetDeployedComponentMetadataRequest,
+    ) -> Result<GetDeployedComponentMetadataSuccessResponse, GrpcApiError> {
         let component_id: ComponentId = request
             .component_id
             .ok_or("missing component_id field")?
@@ -299,23 +268,18 @@ impl RegistryServiceGrpcApi {
 
         let component = self
             .component_service
-            .get_deployed_component(&component_id, &auth_ctx)
+            .get_deployed_component(component_id, &AuthCtx::System)
             .await?;
 
-        Ok(GetLatestComponentMetadataSuccessResponse {
+        Ok(GetDeployedComponentMetadataSuccessResponse {
             component: Some(ComponentDto::from(component).into()),
         })
     }
 
-    async fn get_all_component_versions_internal(
+    async fn get_all_deployed_component_revisions_internal(
         &self,
-        request: GetAllComponentVersionsRequest,
-    ) -> Result<GetAllComponentVersionsSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
+        request: GetAllDeployedComponentRevisionsRequest,
+    ) -> Result<GetAllDeployedComponentRevisionsSuccessResponse, GrpcApiError> {
         let component_id: ComponentId = request
             .component_id
             .ok_or("missing component_id field")?
@@ -323,10 +287,10 @@ impl RegistryServiceGrpcApi {
 
         let components = self
             .component_service
-            .get_all_deployed_component_versions(&component_id, &auth_ctx)
+            .get_all_deployed_component_versions(component_id, &AuthCtx::System)
             .await?;
 
-        Ok(GetAllComponentVersionsSuccessResponse {
+        Ok(GetAllDeployedComponentRevisionsSuccessResponse {
             components: components
                 .into_iter()
                 .map(|c| ComponentDto::from(c).into())
@@ -355,19 +319,14 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing resolving_environment_id field")?
             .try_into()?;
 
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
         let component = self
             .component_resolver_service
             .resolve_deployed_component(
                 component_reference,
-                &resolving_environment_id,
-                &resolving_application_id,
-                &resolving_account_id,
-                &auth_ctx,
+                resolving_environment_id,
+                resolving_application_id,
+                resolving_account_id,
+                &AuthCtx::System,
             )
             .await?;
 
@@ -387,7 +346,7 @@ impl RegistryServiceGrpcApi {
 
         let agent_types = self
             .deployment_service
-            .list_deployed_agent_types(&environment_id)
+            .list_deployed_agent_types(environment_id)
             .await?;
 
         Ok(GetAllAgentTypesSuccessResponse {
@@ -406,7 +365,7 @@ impl RegistryServiceGrpcApi {
 
         let agent_type = self
             .deployment_service
-            .get_deployed_agent_type(&environment_id, &request.agent_type)
+            .get_deployed_agent_type(environment_id, &request.agent_type)
             .await?;
 
         Ok(GetAgentTypeSuccessResponse {
@@ -647,52 +606,54 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         }))
     }
 
-    async fn get_latest_component_metadata(
+    async fn get_deployed_component_metadata(
         &self,
-        request: Request<GetLatestComponentMetadataRequest>,
-    ) -> Result<Response<GetLatestComponentMetadataResponse>, tonic::Status> {
+        request: Request<GetDeployedComponentMetadataRequest>,
+    ) -> Result<Response<GetDeployedComponentMetadataResponse>, tonic::Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
-            "get_latest_component_metadata",
+            "get_deployed_component_metadata",
             component_id = proto_component_id_string(&request.component_id)
         );
 
         let response = match self
-            .get_latest_component_metadata_internal(request)
+            .get_deployed_component_metadata_internal(request)
             .instrument(record.span.clone())
             .await
             .apply(|r| record.result(r))
         {
-            Ok(result) => get_latest_component_metadata_response::Result::Success(result),
-            Err(error) => get_latest_component_metadata_response::Result::Error(error.into()),
+            Ok(result) => get_deployed_component_metadata_response::Result::Success(result),
+            Err(error) => get_deployed_component_metadata_response::Result::Error(error.into()),
         };
 
-        Ok(Response::new(GetLatestComponentMetadataResponse {
+        Ok(Response::new(GetDeployedComponentMetadataResponse {
             result: Some(response),
         }))
     }
 
-    async fn get_all_component_versions(
+    async fn get_all_deployed_component_revisions(
         &self,
-        request: Request<GetAllComponentVersionsRequest>,
-    ) -> Result<Response<GetAllComponentVersionsResponse>, tonic::Status> {
+        request: Request<GetAllDeployedComponentRevisionsRequest>,
+    ) -> Result<Response<GetAllDeployedComponentRevisionsResponse>, tonic::Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
-            "get_all_component_versions",
+            "get_all_deployed_component_revisions",
             component_id = proto_component_id_string(&request.component_id)
         );
 
         let response = match self
-            .get_all_component_versions_internal(request)
+            .get_all_deployed_component_revisions_internal(request)
             .instrument(record.span.clone())
             .await
             .apply(|r| record.result(r))
         {
-            Ok(result) => get_all_component_versions_response::Result::Success(result),
-            Err(error) => get_all_component_versions_response::Result::Error(error.into()),
+            Ok(result) => get_all_deployed_component_revisions_response::Result::Success(result),
+            Err(error) => {
+                get_all_deployed_component_revisions_response::Result::Error(error.into())
+            }
         };
 
-        Ok(Response::new(GetAllComponentVersionsResponse {
+        Ok(Response::new(GetAllDeployedComponentRevisionsResponse {
             result: Some(response),
         }))
     }

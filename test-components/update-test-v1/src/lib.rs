@@ -3,7 +3,7 @@ mod bindings;
 
 use crate::bindings::exports::golem::component::api::*;
 use rand::RngCore;
-use reqwest::{Client, Response};
+use golem_wasi_http::{Client, Response};
 use std::cell::RefCell;
 use std::thread::sleep;
 use std::time::Duration;

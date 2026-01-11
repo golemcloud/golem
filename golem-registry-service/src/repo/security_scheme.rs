@@ -50,17 +50,17 @@ pub trait SecuritySchemeRepo: Send + Sync {
 
     async fn get_by_id(
         &self,
-        security_scheme_id: &Uuid,
+        security_scheme_id: Uuid,
     ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 
     async fn get_for_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 
     async fn get_for_environment_and_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
     ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 }
@@ -76,11 +76,11 @@ impl<Repo: SecuritySchemeRepo> LoggedSecuritySchemeRepo<Repo> {
         Self { repo }
     }
 
-    fn span_environment_id(environment_id: &Uuid) -> Span {
+    fn span_environment_id(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id=%environment_id)
     }
 
-    fn span_security_scheme_id(security_scheme_id: &Uuid) -> Span {
+    fn span_security_scheme_id(security_scheme_id: Uuid) -> Span {
         info_span!(SPAN_NAME, security_scheme_id=%security_scheme_id)
     }
 }
@@ -93,7 +93,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         name: String,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
-        let span = Self::span_environment_id(&environment_id);
+        let span = Self::span_environment_id(environment_id);
         self.repo
             .create(environment_id, name, revision)
             .instrument(span)
@@ -104,7 +104,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         &self,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
-        let span = Self::span_security_scheme_id(&revision.security_scheme_id);
+        let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo.update(revision).instrument(span).await
     }
 
@@ -112,13 +112,13 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         &self,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
-        let span = Self::span_security_scheme_id(&revision.security_scheme_id);
+        let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo.delete(revision).instrument(span).await
     }
 
     async fn get_by_id(
         &self,
-        security_scheme_id: &Uuid,
+        security_scheme_id: Uuid,
     ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         self.repo
             .get_by_id(security_scheme_id)
@@ -128,7 +128,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
 
     async fn get_for_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         self.repo
             .get_for_environment(environment_id)
@@ -138,7 +138,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
 
     async fn get_for_environment_and_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
     ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         self.repo
@@ -309,7 +309,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        security_scheme_id: &Uuid,
+        security_scheme_id: Uuid,
     ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let result: Option<SecuritySchemeExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
@@ -328,7 +328,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
 
     async fn get_for_environment(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> Result<Vec<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let results: Vec<SecuritySchemeExtRevisionRecord> = self.with_ro("get_for_environment")
             .fetch_all_as(
@@ -347,7 +347,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
 
     async fn get_for_environment_and_name(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         name: &str,
     ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let result: Option<SecuritySchemeExtRevisionRecord> = self.with_ro("get_for_environment_and_name")

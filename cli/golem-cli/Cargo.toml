@@ -71,6 +71,7 @@ indoc = { workspace = true }
 inquire = { workspace = true }
 iso8601 = { workspace = true }
 itertools = { workspace = true }
+jsonschema = { workspace = true }
 lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 moonbit-component-generator = { workspace = true }

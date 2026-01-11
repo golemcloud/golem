@@ -90,7 +90,7 @@ impl AccountService {
         accounts: &HashMap<String, PrecreatedAccount>,
     ) -> Result<(), AccountError> {
         for (name, account) in accounts {
-            let existing_account = self.get_optional(&account.id, &AuthCtx::System).await?;
+            let existing_account = self.get_optional(account.id, &AuthCtx::System).await?;
 
             if existing_account.is_none() {
                 info!("Creating initial account {} with id {}", name, account.id);
@@ -125,7 +125,7 @@ impl AccountService {
 
     pub async fn update(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         update: AccountUpdate,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
@@ -139,15 +139,19 @@ impl AccountService {
 
         info!("Updating account: {}", account_id);
 
-        account.name = update.name;
-        account.email = update.email;
+        if let Some(new_name) = update.name {
+            account.name = new_name;
+        }
+        if let Some(new_email) = update.email {
+            account.email = new_email
+        }
 
         self.update_internal(account, auth).await
     }
 
     pub async fn set_roles(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         update: AccountSetRoles,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
@@ -168,7 +172,7 @@ impl AccountService {
 
     pub async fn set_plan(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         update: AccountSetPlan,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
@@ -198,7 +202,7 @@ impl AccountService {
 
     pub async fn delete(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         current_revision: AccountRevision,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
@@ -230,17 +234,17 @@ impl AccountService {
 
     pub async fn get(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
         auth.authorize_account_action(account_id, AccountAction::ViewAccount)
-            .map_err(|_| AccountError::AccountNotFound(*account_id))?;
+            .map_err(|_| AccountError::AccountNotFound(account_id))?;
 
         let account = self
             .account_repo
-            .get_by_id(&account_id.0)
+            .get_by_id(account_id.0)
             .await?
-            .ok_or(AccountError::AccountNotFound(*account_id))?
+            .ok_or(AccountError::AccountNotFound(account_id))?
             .try_into()?;
 
         Ok(account)
@@ -260,7 +264,7 @@ impl AccountService {
             ))?
             .try_into()?;
 
-        auth.authorize_account_action(&account.id, AccountAction::ViewAccount)
+        auth.authorize_account_action(account.id, AccountAction::ViewAccount)
             .map_err(|_| AccountError::AccountByEmailNotFound(account_email.to_string()))?;
 
         Ok(account)
@@ -268,7 +272,7 @@ impl AccountService {
 
     pub async fn get_optional(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Option<Account>, AccountError> {
         match self.get(account_id, auth).await {
@@ -295,10 +299,10 @@ impl AccountService {
         let record = AccountRevisionRecord::new(
             id,
             account.name,
-            account.email,
+            account.email.0,
             plan_id,
             roles,
-            *auth.account_id(),
+            auth.account_id(),
         );
 
         let result = self.account_repo.create(record).await;

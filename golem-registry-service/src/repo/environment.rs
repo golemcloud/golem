@@ -26,10 +26,11 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{RepoError, ResultExt};
-use indoc::indoc;
+use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
+use indoc::{formatdoc, indoc};
 use sqlx::Database;
 use std::fmt::Debug;
+use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -37,30 +38,30 @@ use uuid::Uuid;
 pub trait EnvironmentRepo: Send + Sync {
     async fn get_by_name(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         name: &str,
-        actor: &Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn get_by_id(
         &self,
-        environment_id: &Uuid,
-        actor: &Uuid,
+        environment_id: Uuid,
+        actor: Uuid,
         include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_by_app(
         &self,
-        application_id: &Uuid,
-        actor: &Uuid,
+        application_id: Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn create(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
 
@@ -76,7 +77,10 @@ pub trait EnvironmentRepo: Send + Sync {
 
     async fn list_visible_to_account(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
+        account_email: Option<&str>,
+        app_name: Option<&str>,
+        env_name: Option<&str>,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError>;
 }
 
@@ -91,15 +95,15 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
         Self { repo }
     }
 
-    fn span_name(application_id: &Uuid, name: &str) -> Span {
+    fn span_name(application_id: Uuid, name: &str) -> Span {
         info_span!(SPAN_NAME, application_id = %application_id, name)
     }
 
-    fn span_env(environment_id: &Uuid) -> Span {
+    fn span_env(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
     }
 
-    fn span_app_id(application_id: &Uuid) -> Span {
+    fn span_app_id(application_id: Uuid) -> Span {
         info_span!(SPAN_NAME, application_id = %application_id)
     }
 }
@@ -108,9 +112,9 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
 impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_name(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         name: &str,
-        actor: &Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
@@ -121,8 +125,8 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
 
     async fn get_by_id(
         &self,
-        environment_id: &Uuid,
-        actor: &Uuid,
+        environment_id: Uuid,
+        actor: Uuid,
         include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
@@ -134,8 +138,8 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
 
     async fn list_by_app(
         &self,
-        application_id: &Uuid,
-        actor: &Uuid,
+        application_id: Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
@@ -146,7 +150,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
 
     async fn create(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         self.repo
@@ -159,7 +163,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let span = Self::span_env(&revision.environment_id);
+        let span = Self::span_env(revision.environment_id);
         self.repo.update(revision).instrument(span).await
     }
 
@@ -167,17 +171,26 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let span = Self::span_env(&revision.environment_id);
+        let span = Self::span_env(revision.environment_id);
         self.repo.delete(revision).instrument(span).await
     }
 
     async fn list_visible_to_account(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
+        account_email: Option<&str>,
+        app_name: Option<&str>,
+        env_name: Option<&str>,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
         self.repo
-            .list_visible_to_account(account_id)
-            .instrument(info_span!(SPAN_NAME, account_id = %account_id))
+            .list_visible_to_account(account_id, account_email, app_name, env_name)
+            .instrument(info_span!(
+                SPAN_NAME,
+                account_id = %account_id,
+                account_email = ?account_email,
+                app_name = ?app_name,
+                env_name = ?env_name
+            ))
             .await
     }
 }
@@ -224,9 +237,9 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
 impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_name(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         name: &str,
-        actor: &Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -244,6 +257,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
@@ -295,8 +309,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn get_by_id(
         &self,
-        environment_id: &Uuid,
-        actor: &Uuid,
+        environment_id: Uuid,
+        actor: Uuid,
         include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
@@ -315,6 +329,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
@@ -376,8 +391,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn list_by_app(
         &self,
-        application_id: &Uuid,
-        actor: &Uuid,
+        application_id: Uuid,
+        actor: Uuid,
         override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -395,6 +410,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
+                        dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     INNER JOIN applications ap
@@ -446,10 +462,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn create(
         &self,
-        application_id: &Uuid,
+        application_id: Uuid,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let application_id = *application_id;
         // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
         self.with_tx_err("create", |tx| async move {
             let environment_record: EnvironmentExtRecord = tx.fetch_one_as(
@@ -478,6 +493,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       0 AS environment_roles_from_shares,
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
+                      NULL AS current_deployment_deployment_version,
                       NULL AS current_deployment_deployment_hash;
                 "# })
                     .bind(revision.environment_id)
@@ -499,6 +515,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                 current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash
             })
         }.boxed()).await
@@ -511,6 +528,16 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         self.with_tx_err("update", |tx| {
             async move {
                 let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
+
+                // TODO: atomic:
+                //       should use something like:
+                //         WITH updated AS (
+                //            UPDATE..
+                //            RETURNING..
+                //         )
+                //         SELECT -- with joins...
+                //       so we avoid selecting the same tables multiple times, same goes for logical DELETE
+
 
                 // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
@@ -566,6 +593,18 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             ) AS current_deployment_deployment_revision,
 
                             (
+                                SELECT dr.version
+                                FROM current_deployments cd
+                                JOIN current_deployment_revisions cdr
+                                    ON cdr.environment_id = cd.environment_id
+                                    AND cdr.revision_id = cd.current_revision_id
+                                JOIN deployment_revisions dr
+                                    ON dr.environment_id = cdr.environment_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_deployment_version,
+
+                            (
                                 SELECT dr.hash
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
@@ -596,6 +635,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                     current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
@@ -666,6 +706,18 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             ) AS current_deployment_deployment_revision,
 
                             (
+                                SELECT dr.version
+                                FROM current_deployments cd
+                                JOIN current_deployment_revisions cdr
+                                    ON cdr.environment_id = cd.environment_id
+                                    AND cdr.revision_id = cd.current_revision_id
+                                JOIN deployment_revisions dr
+                                    ON dr.environment_id = cdr.environment_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_deployment_version,
+
+                            (
                                 SELECT dr.hash
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
@@ -696,6 +748,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
                     current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
@@ -706,85 +759,120 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn list_visible_to_account(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
+        account_email: Option<&str>,
+        app_name: Option<&str>,
+        env_name: Option<&str>,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
+        let mut binding_stack = BindingsStack::new(2);
+
+        let account_email_filter = if let Some(account_email) = account_email {
+            let i = binding_stack.push(account_email);
+            format!("AND a.email = ${i}")
+        } else {
+            "".to_string()
+        };
+
+        let app_name_filter = if let Some(app_name) = app_name {
+            let i = binding_stack.push(app_name);
+            format!("AND ap.name = ${i}")
+        } else {
+            "".to_string()
+        };
+
+        let env_name_filter = if let Some(env_name) = env_name {
+            let i = binding_stack.push(env_name);
+            format!("AND e.name = ${i}")
+        } else {
+            "".to_string()
+        };
+
+        let query = formatdoc! { r#"
+            SELECT
+                -- Environment
+                e.environment_id,
+                r.revision_id AS environment_revision_id,
+                e.name AS environment_name,
+                r.compatibility_check AS environment_compatibility_check,
+                r.version_check AS environment_version_check,
+                r.security_overrides AS environment_security_overrides,
+
+                COALESCE(esr.roles, 0) AS environment_roles_from_shares,
+
+                -- Current deployment (optional)
+                cdr.revision_id AS current_deployment_revision,
+                dr.revision_id AS current_deployment_deployment_revision,
+                dr.version AS current_deployment_deployment_version,
+                dr.hash AS current_deployment_deployment_hash,
+
+                -- Parent application
+                ap.application_id,
+                ap.name AS application_name,
+
+                -- Parent account (owner of the application)
+                a.account_id,
+                ar.name AS account_name,
+                ar.email AS account_email
+
+            FROM accounts a
+            INNER JOIN account_revisions ar
+                ON ar.account_id = a.account_id
+                AND ar.revision_id = a.current_revision_id
+
+            INNER JOIN applications ap
+                ON ap.account_id = a.account_id
+                AND ap.deleted_at IS NULL
+
+            INNER JOIN environments e
+                ON e.application_id = ap.application_id
+                AND e.deleted_at IS NULL
+
+            INNER JOIN environment_revisions r
+                ON r.environment_id = e.environment_id
+                AND r.revision_id = e.current_revision_id
+
+            -- Environment shares
+            LEFT JOIN environment_shares es
+                ON es.environment_id = e.environment_id
+                AND es.grantee_account_id = $1
+                AND es.deleted_at IS NULL
+
+            LEFT JOIN environment_share_revisions esr
+                ON esr.environment_share_id = es.environment_share_id
+                AND esr.revision_id = es.current_revision_id
+
+            -- Current deployment
+            LEFT JOIN current_deployments cd
+                ON cd.environment_id = e.environment_id
+            LEFT JOIN current_deployment_revisions cdr
+                ON cdr.environment_id = cd.environment_id
+                AND cdr.revision_id = cd.current_revision_id
+            LEFT JOIN deployment_revisions dr
+                ON dr.environment_id = cdr.environment_id
+                AND dr.revision_id = cdr.deployment_revision_id
+
+            WHERE
+                a.deleted_at IS NULL
+                AND (
+                    a.account_id = $1
+                    OR esr.roles IS NOT NULL
+                )
+                {account_email_filter}
+                {app_name_filter}
+                {env_name_filter}
+            ORDER BY a.email, ap.name, e.name
+        "#};
+
+        let query_as = {
+            let binding_stack = binding_stack;
+            sqlx::query_as(&query)
+                .bind(account_id)
+                .pipe(|q| binding_stack.apply(q))
+        };
+
         let result = self
             .with_ro("list_visible_to_account")
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT
-                        -- Environment
-                        e.environment_id,
-                        r.revision_id AS environment_revision_id,
-                        e.name AS environment_name,
-                        r.compatibility_check AS environment_compatibility_check,
-                        r.version_check AS environment_version_check,
-                        r.security_overrides AS environment_security_overrides,
-
-                        COALESCE(esr.roles, 0) AS environment_roles_from_shares,
-
-                        -- Current deployment (optional)
-                        cdr.revision_id AS current_deployment_revision,
-                        dr.revision_id AS current_deployment_deployment_revision,
-                        dr.hash AS current_deployment_deployment_hash,
-
-                        -- Parent application
-                        ap.application_id,
-                        ap.name AS application_name,
-
-                        -- Parent account (owner of the application)
-                        a.account_id,
-                        ar.name AS account_name,
-                        ar.email AS account_email
-
-                    FROM accounts a
-                    INNER JOIN account_revisions ar
-                        ON ar.account_id = a.account_id
-                        AND ar.revision_id = a.current_revision_id
-
-                    INNER JOIN applications ap
-                        ON ap.account_id = a.account_id
-                        AND ap.deleted_at IS NULL
-
-                    INNER JOIN environments e
-                        ON e.application_id = ap.application_id
-                        AND e.deleted_at IS NULL
-
-                    INNER JOIN environment_revisions r
-                        ON r.environment_id = e.environment_id
-                        AND r.revision_id = e.current_revision_id
-
-                    -- Environment shares
-                    LEFT JOIN environment_shares es
-                        ON es.environment_id = e.environment_id
-                        AND es.grantee_account_id = $1
-                        AND es.deleted_at IS NULL
-
-                    LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_share_id
-                        AND esr.revision_id = es.current_revision_id
-
-                    -- Current deployment
-                    LEFT JOIN current_deployments cd
-                        ON cd.environment_id = e.environment_id
-                    LEFT JOIN current_deployment_revisions cdr
-                        ON cdr.environment_id = cd.environment_id
-                        AND cdr.revision_id = cd.current_revision_id
-                    LEFT JOIN deployment_revisions dr
-                        ON dr.environment_id = cdr.environment_id
-                        AND dr.revision_id = cdr.deployment_revision_id
-
-                    WHERE
-                        a.deleted_at IS NULL
-                        AND (
-                            a.account_id = $1
-                            OR esr.roles IS NOT NULL
-                        )
-
-                    ORDER BY e.name;
-                "#})
-                .bind(account_id),
-            )
+            .fetch_all_as(query_as)
             .await?;
 
         Ok(result)

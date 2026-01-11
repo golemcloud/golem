@@ -29,20 +29,24 @@ use crate::model::app::{
     WithSource,
 };
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
-use crate::model::app_raw::{BuiltinServer, Environment, Marker, Server};
+use crate::model::app_raw::{
+    BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker, Server,
+};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
+use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
+use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_definition::{
     HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
 };
@@ -52,7 +56,7 @@ use golem_common::model::http_api_deployment::{
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};
@@ -69,8 +73,10 @@ pub struct Context {
     profile: NamedProfile,
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<SelectedManifestEnvironment>,
+    manifest_environment_deployment_options: Option<DeploymentOptions>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
+    http_parallelism: usize,
     auth_token_override: Option<String>,
     client_config: ClientConfig,
     yes: bool,
@@ -101,7 +107,15 @@ impl Context {
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
     ) -> anyhow::Result<Self> {
-        let (environment_reference, env_ref_can_be_builtin_server) = {
+        if matches!(
+            global_flags.environment,
+            Some(EnvironmentReference::Environment { .. })
+        ) && (global_flags.local || global_flags.cloud)
+        {
+            bail!(ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags);
+        }
+
+        let (environment_reference, env_ref_can_be_builtin_profile) = {
             if let Some(environment) = &global_flags.environment {
                 (Some(environment.clone()), false)
             } else if global_flags.local {
@@ -163,7 +177,7 @@ impl Context {
                                 }
                             },
                             None => {
-                                if env_ref_can_be_builtin_server {
+                                if env_ref_can_be_builtin_profile {
                                     None
                                 } else {
                                     bail!(ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
@@ -194,6 +208,18 @@ impl Context {
                 None => None,
             },
         };
+
+        let manifest_environment_deployment_options = manifest_environment.as_ref().map(|env| {
+            let is_local = env.environment_name.0 == "local";
+            match env.environment.deployment.as_ref() {
+                Some(options) if is_local => options
+                    .clone()
+                    .with_defaults_from(DeploymentOptions::new_local()),
+                Some(options) => options.clone(),
+                None if is_local => DeploymentOptions::new_local(),
+                None => DeploymentOptions::new_cloud(),
+            }
+        });
 
         let use_cloud_profile_for_env = manifest_environment
             .as_ref()
@@ -270,16 +296,18 @@ impl Context {
                             ComponentPresetSelector {
                                 environment: selected_environment.environment_name.clone(),
                                 presets: {
-                                    let mut presets = selected_environment
-                                        .environment
-                                        .component_presets
-                                        .clone()
-                                        .into_vec()
-                                        .into_iter()
-                                        .map(ComponentPresetName)
-                                        .collect::<Vec<_>>();
-                                    presets.extend(global_flags.preset.iter().cloned());
-                                    presets
+                                    if global_flags.preset.is_empty() {
+                                        selected_environment
+                                            .environment
+                                            .component_presets
+                                            .clone()
+                                            .into_vec()
+                                            .into_iter()
+                                            .map(ComponentPresetName)
+                                            .collect::<Vec<_>>()
+                                    } else {
+                                        global_flags.preset.clone()
+                                    }
                                 },
                             },
                         )
@@ -309,10 +337,12 @@ impl Context {
             deploy_args,
             profile,
             app_context_config,
-            http_batch_size: global_flags.http_batch_size.unwrap_or(50),
+            http_batch_size: global_flags.http_batch_size(),
+            http_parallelism: global_flags.http_parallelism(),
             auth_token_override: global_flags.auth_token,
             environment_reference,
             manifest_environment,
+            manifest_environment_deployment_options,
             yes,
             dev_mode: global_flags.dev_mode,
             show_sensitive: global_flags.show_sensitive,
@@ -394,6 +424,11 @@ impl Context {
         self.manifest_environment.as_ref()
     }
 
+    pub fn manifest_environment_deployment_options(&self) -> Option<&DeploymentOptions> {
+        self.log_context_selection_once();
+        self.manifest_environment_deployment_options.as_ref()
+    }
+
     pub fn caches(&self) -> &Caches {
         &self.caches
     }
@@ -402,13 +437,17 @@ impl Context {
         self.http_batch_size
     }
 
+    pub fn http_parallelism(&self) -> usize {
+        self.http_parallelism
+    }
+
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
         self.golem_clients
             .get_or_try_init(|| async {
                 let clients = GolemClients::new(
                     &self.client_config,
                     self.auth_token_override.clone(),
-                    &self.auth_config(),
+                    &self.auth_config()?,
                     self.config_dir(),
                 )
                 .await?;
@@ -438,11 +477,11 @@ impl Context {
         Ok(self.golem_clients().await?.auth_token().clone())
     }
 
-    fn auth_config(&self) -> AuthenticationConfigWithSource {
+    fn auth_config(&self) -> anyhow::Result<AuthenticationConfigWithSource> {
         match self.manifest_environment() {
             Some(env) => match &env.environment.server {
                 Some(Server::Builtin(BuiltinServer::Local)) | None => {
-                    AuthenticationConfigWithSource {
+                    Ok(AuthenticationConfigWithSource {
                         authentication: AuthenticationConfig::static_builtin_local(),
                         source: AuthenticationSource::ApplicationEnvironment(
                             ApplicationEnvironmentConfigId {
@@ -451,32 +490,45 @@ impl Context {
                                 server_url: BUILTIN_LOCAL_URL.parse().unwrap(),
                             },
                         ),
-                    }
+                    })
                 }
                 Some(Server::Builtin(BuiltinServer::Cloud)) => {
                     if !self.profile.name.is_builtin_cloud() {
                         panic!("when using the builtin cloud environment, the selected profile must be the builtin cloud profile");
                     }
-                    AuthenticationConfigWithSource {
+                    Ok(AuthenticationConfigWithSource {
                         authentication: self.profile.profile.auth.clone(),
                         source: AuthenticationSource::Profile(self.profile.name.clone()),
-                    }
+                    })
                 }
-                Some(Server::Custom(server)) => AuthenticationConfigWithSource {
-                    authentication: Default::default(),
-                    source: AuthenticationSource::ApplicationEnvironment(
-                        ApplicationEnvironmentConfigId {
-                            application_name: env.application_name.clone(),
-                            environment_name: env.environment_name.clone(),
-                            server_url: server.url.clone(),
-                        },
-                    ),
-                },
+                Some(Server::Custom(server)) => {
+                    let app_env_cfg_id = ApplicationEnvironmentConfigId {
+                        application_name: env.application_name.clone(),
+                        environment_name: env.environment_name.clone(),
+                        server_url: server.url.clone(),
+                    };
+
+                    let authentication = match &server.auth {
+                        CustomServerAuth::OAuth2 { .. } => {
+                            Config::get_application_environment(&self.config_dir, &app_env_cfg_id)?
+                                .map(|cfg| AuthenticationConfig::OAuth2(cfg.auth))
+                                .unwrap_or_default()
+                        }
+                        CustomServerAuth::Static { static_token } => {
+                            AuthenticationConfig::static_token(static_token.clone())
+                        }
+                    };
+
+                    Ok(AuthenticationConfigWithSource {
+                        authentication,
+                        source: AuthenticationSource::ApplicationEnvironment(app_env_cfg_id),
+                    })
+                }
             },
-            _ => AuthenticationConfigWithSource {
+            _ => Ok(AuthenticationConfigWithSource {
                 authentication: self.profile.profile.auth.clone(),
                 source: AuthenticationSource::Profile(self.profile.name.clone()),
-            },
+            }),
         }
     }
 
@@ -658,14 +710,15 @@ impl Context {
         global_flags: &GolemCliGlobalFlags,
         force_use_cloud_profile: bool,
     ) -> anyhow::Result<NamedProfile> {
+        let config = Config::from_dir(&global_flags.config_dir())?;
+
         let profile_name = force_use_cloud_profile
             .then(ProfileName::cloud)
             .or_else(|| global_flags.profile.clone())
             .or_else(|| global_flags.local.then(ProfileName::local))
             .or_else(|| global_flags.cloud.then(ProfileName::cloud))
+            .or(config.default_profile)
             .unwrap_or_else(ProfileName::local);
-
-        let config = Config::from_dir(&global_flags.config_dir())?;
 
         let Some(profile) = config.profiles.get(&profile_name) else {
             bail!(ContextInitHintError::ProfileNotFound {
@@ -896,6 +949,12 @@ pub struct Caches {
         HttpApiDeployment,
         Arc<anyhow::Error>,
     >,
+    pub plugin_grants: Cache<
+        EnvironmentId,
+        (),
+        HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+        Arc<anyhow::Error>,
+    >,
 }
 
 impl Default for Caches {
@@ -924,6 +983,12 @@ impl Caches {
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
                 "http_api_deployment_revision",
+            ),
+            plugin_grants: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "plugin_grants",
             ),
         }
     }

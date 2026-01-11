@@ -157,6 +157,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::environment_plugin_grant::EnvironmentPluginGrant",
             ),
             (
+                "EnvironmentPluginGrantWithDetails",
+                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrantWithDetails",
+            ),
+            (
                 "EnvironmentPluginGrantCreation",
                 "golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation",
             ),

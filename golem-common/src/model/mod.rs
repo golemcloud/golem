@@ -57,7 +57,7 @@ use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
-use crate::{declare_structs, SafeDisplay};
+use crate::{declare_structs, grpc_uri, SafeDisplay};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -249,9 +249,9 @@ pub struct OwnedWorkerId {
 }
 
 impl OwnedWorkerId {
-    pub fn new(environment_id: &EnvironmentId, worker_id: &WorkerId) -> Self {
+    pub fn new(environment_id: EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            environment_id: *environment_id,
+            environment_id,
             worker_id: worker_id.clone(),
         }
     }
@@ -323,7 +323,7 @@ impl ScheduledAction {
                 environment_id,
                 promise_id,
                 ..
-            } => OwnedWorkerId::new(environment_id, &promise_id.worker_id),
+            } => OwnedWorkerId::new(*environment_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
@@ -377,13 +377,14 @@ pub struct Pod {
 }
 
 impl Pod {
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build URI")
+    pub fn uri(&self, use_tls: bool) -> Uri {
+        grpc_uri(&self.host, self.port, use_tls)
+    }
+}
+
+impl Display for Pod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
     }
 }
 
@@ -604,7 +605,7 @@ impl WorkerMetadata {
     }
 
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(&self.environment_id, &self.worker_id)
+        OwnedWorkerId::new(self.environment_id, &self.worker_id)
     }
 }
 
@@ -1815,7 +1816,10 @@ impl Display for RdbmsPoolKey {
     }
 }
 
-fn validate_lower_kebab_case_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
+pub fn validate_lower_kebab_case_identifier(
+    field_name: &str,
+    identifier: &str,
+) -> Result<(), String> {
     if identifier.is_empty() {
         return Err(format!("{} cannot be empty", field_name));
     }

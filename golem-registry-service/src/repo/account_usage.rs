@@ -34,11 +34,11 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait AccountUsageRepo: Send + Sync {
-    async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>>;
+    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>>;
 
     async fn get_for_type(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>>;
@@ -57,14 +57,14 @@ impl<Repo: AccountUsageRepo> LoggedAccountUsageRepo<Repo> {
         Self { repo }
     }
 
-    fn span_account_id(account_id: &Uuid) -> Span {
+    fn span_account_id(account_id: Uuid) -> Span {
         info_span!(SPAN_NAME, account_id=%account_id)
     }
 }
 
 #[async_trait]
 impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
-    async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
+    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         self.repo
             .get(account_id, date)
             .instrument(Self::span_account_id(account_id))
@@ -73,7 +73,7 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
 
     async fn get_for_type(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
@@ -86,7 +86,7 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()> {
         self.repo
             .add(account_usage)
-            .instrument(Self::span_account_id(&account_usage.account_id))
+            .instrument(Self::span_account_id(account_usage.account_id))
             .await
     }
 }
@@ -128,7 +128,7 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
-    async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
+    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         let Some(plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
@@ -192,7 +192,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         }
 
         Ok(Some(AccountUsage {
-            account_id: *account_id,
+            account_id,
             year: date.as_utc().year(),
             month: date.as_utc().month(),
             usage,
@@ -203,7 +203,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
 
     async fn get_for_type(
         &self,
-        account_id: &Uuid,
+        account_id: Uuid,
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
@@ -322,7 +322,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         }
 
         Ok(Some(AccountUsage {
-            account_id: *account_id,
+            account_id,
             year: date.as_utc().year(),
             month: date.as_utc().month(),
             usage,
@@ -394,7 +394,7 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>>;
+    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<PlanRecord>>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -403,7 +403,7 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>> {
+    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<PlanRecord>> {
         let plan: Option<PlanRecord> = self
             .with_ro("get_plan - plan")
             .fetch_optional_as(

@@ -85,7 +85,7 @@ async fn env_vars(
     otlp: bool,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
-        .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
+        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with("GOLEM__PERSISTENCE__TYPE", "Redis".to_string())
         .with("GOLEM__PERSISTENCE__CONFIG__HOST", redis.private_host())

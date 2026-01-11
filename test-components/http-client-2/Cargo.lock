@@ -65,10 +65,29 @@ dependencies = [
 name = "golem-it-http-client"
 version = "0.0.1"
 dependencies = [
- "reqwest",
+ "golem-wasi-http",
  "serde",
  "serde_json",
  "wit-bindgen-rt 0.40.0",
+]
+
+[[package]]
+name = "golem-wasi-http"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4432afa382b4bb6bb4a90cef6064e72b2a93696e65461b37271a37fb0b15e977"
+dependencies = [
+ "base64",
+ "bytes",
+ "encoding_rs",
+ "http",
+ "mime",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "url",
+ "wasi",
 ]
 
 [[package]]
@@ -244,24 +263,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1885c039570dc00dcb4ff087a89e185fd56bae234ddc7f056a945bf36467248d"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "reqwest"
-version = "0.12.15"
-source = "git+https://github.com/zivergetech/reqwest?branch=update-sep-2025#284dbe506fc18c8ac0a21e6bf19b254f0b417e05"
-dependencies = [
- "base64",
- "bytes",
- "encoding_rs",
- "http",
- "mime",
- "percent-encoding",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "url",
- "wasi",
 ]
 
 [[package]]

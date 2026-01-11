@@ -12,48 +12,92 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: atomic
-/*
-use crate::log::logln;
 use crate::model::text::fmt::*;
 use cli_table::Table;
+use golem_client::model::SecuritySchemeDto;
+use serde_derive::{Deserialize, Serialize};
 
-impl TextView for SecurityScheme {
-    fn log(&self) {
-        logln(format!(
-            "API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}",
-            format_message_highlight(&self.scheme_identifier),
-            &self.scopes.join(", "),
-            format_message_highlight(&self.client_id),
-            format_message_highlight(&self.client_secret),
-            format_message_highlight(&self.redirect_url),
-        ));
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpSecuritySchemeCreateView(pub SecuritySchemeDto);
+
+impl MessageWithFields for HttpSecuritySchemeCreateView {
+    fn message(&self) -> String {
+        format!(
+            "Created new HTTP API Security scheme {}",
+            format_message_highlight(&self.0.name),
+        )
     }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        security_scheme_view_fields(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpSecuritySchemeGetView(pub SecuritySchemeDto);
+
+impl MessageWithFields for HttpSecuritySchemeGetView {
+    fn message(&self) -> String {
+        format!(
+            "Got metadata for HTTP API Security scheme {}",
+            format_message_highlight(&self.0.name),
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        security_scheme_view_fields(&self.0)
+    }
+}
+
+fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)> {
+    let mut fields = FieldsBuilder::new();
+
+    fields
+        .fmt_field("Name", &view.name.0, format_main_id)
+        .fmt_field("ID", &view.id, format_id)
+        .fmt_field("Revision", &view.revision.get(), format_id)
+        .field("Provider", &view.provider_type)
+        .field("Client ID", &view.client_id)
+        .field("Redirect URL", &view.redirect_url)
+        .field("Scopes", &view.scopes.join("\n"));
+
+    fields.build()
 }
 
 #[derive(Table)]
 struct HttpApiSecuritySchemeTableView {
+    #[table(title = "Name")]
+    pub name: String,
     #[table(title = "ID")]
     pub id: String,
+    #[table(title = "Revision", Justify = "Right")]
+    pub revision: u64,
     #[table(title = "Provider")]
     pub provider: String,
     #[table(title = "Client ID")]
     pub client_id: String,
-    #[table(title = "Client Secret")]
-    pub client_secret: String,
     #[table(title = "Redirect URL")]
     pub redirect_url: String,
+    #[table(title = "Scopes")]
+    pub scopes: String,
 }
 
-impl From<&SecurityScheme> for HttpApiSecuritySchemeTableView {
-    fn from(value: &SecurityScheme) -> Self {
+impl From<&SecuritySchemeDto> for HttpApiSecuritySchemeTableView {
+    fn from(value: &SecuritySchemeDto) -> Self {
         Self {
-            id: value.scheme_identifier.clone(),
+            name: value.name.0.clone(),
+            id: value.id.to_string(),
+            revision: value.revision.get(),
             provider: value.provider_type.to_string(),
             client_id: value.client_id.clone(),
-            client_secret: value.client_secret.clone(),
             redirect_url: value.redirect_url.clone(),
+            scopes: value.scopes.join("\n"),
         }
     }
 }
-*/
+
+impl TextView for Vec<SecuritySchemeDto> {
+    fn log(&self) {
+        log_table::<_, HttpApiSecuritySchemeTableView>(self.as_slice())
+    }
+}

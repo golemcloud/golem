@@ -5,7 +5,7 @@ use crate::bindings::exports::golem::ictest_exports::golem_ictest_api::Guest;
 use crate::bindings::golem::ictest_client::golem_ictest_client::GolemIctestApi;
 use golem_rust::bindings::golem::api::context::{current_context, start_span, AttributeValue};
 use golem_rust::bindings::golem::api::host::resolve_agent_id;
-use reqwest::Client;
+use golem_wasi_http::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 

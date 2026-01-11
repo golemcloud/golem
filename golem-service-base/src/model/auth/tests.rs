@@ -138,7 +138,7 @@ fn user_can_modify_own_account_basic_fields() {
     let account_id = AccountId::new();
     let ctx = mk_user_ctx(&[], PlanId::new(), account_id);
     assert!(
-        ctx.authorize_account_action(&account_id, AccountAction::UpdateAccount)
+        ctx.authorize_account_action(account_id, AccountAction::UpdateAccount)
             .is_ok()
     );
 }
@@ -147,7 +147,7 @@ fn user_can_modify_own_account_basic_fields() {
 fn user_cannot_modify_other_account() {
     let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
     assert!(
-        ctx.authorize_account_action(&AccountId::new(), AccountAction::UpdateAccount)
+        ctx.authorize_account_action(AccountId::new(), AccountAction::UpdateAccount)
             .is_err()
     );
 }
@@ -156,7 +156,7 @@ fn user_cannot_modify_other_account() {
 fn admin_can_modify_any_account() {
     let ctx = mk_user_ctx(&[AccountRole::Admin], PlanId::new(), AccountId::new());
     assert!(
-        ctx.authorize_account_action(&AccountId::new(), AccountAction::SetPlan)
+        ctx.authorize_account_action(AccountId::new(), AccountAction::SetPlan)
             .is_ok()
     );
 }
@@ -166,16 +166,16 @@ fn impersonated_cannot_modify_account() {
     let account_id = AccountId::new();
     let ctx = mk_impersonated(account_id);
     assert!(
-        ctx.authorize_account_action(&account_id, AccountAction::UpdateAccount)
+        ctx.authorize_account_action(account_id, AccountAction::UpdateAccount)
             .is_ok()
     );
 
     assert!(
-        ctx.authorize_account_action(&account_id, AccountAction::SetPlan)
+        ctx.authorize_account_action(account_id, AccountAction::SetPlan)
             .is_err()
     );
     assert!(
-        ctx.authorize_account_action(&account_id, AccountAction::SetRoles)
+        ctx.authorize_account_action(account_id, AccountAction::SetRoles)
             .is_err()
     );
 }
@@ -187,7 +187,7 @@ fn owner_can_do_everything() {
 
     assert!(
         ctx.authorize_environment_action(
-            &account_id,
+            account_id,
             &make_env_roles(&[]),
             EnvironmentAction::DeleteEnvironment,
         )
@@ -202,7 +202,7 @@ fn non_owner_with_viewer_role_can_view_env() {
 
     assert!(
         ctx.authorize_environment_action(
-            &env_owner,
+            env_owner,
             &make_env_roles(&[EnvironmentRole::Viewer]),
             EnvironmentAction::ViewEnvironment,
         )
@@ -217,7 +217,7 @@ fn non_owner_cannot_update_env_without_admin_role() {
 
     assert!(
         ctx.authorize_environment_action(
-            &env_owner,
+            env_owner,
             &make_env_roles(&[EnvironmentRole::Viewer]),
             EnvironmentAction::UpdateEnvironment,
         )
@@ -231,7 +231,7 @@ fn impersonated_with_deployer_role_can_deploy() {
 
     assert!(
         ctx.authorize_environment_action(
-            &AccountId::new(),
+            AccountId::new(),
             &make_env_roles(&[EnvironmentRole::Deployer]),
             EnvironmentAction::DeployEnvironment,
         )
@@ -246,7 +246,7 @@ fn impersonated_cannot_do_admin_operations_without_admin_role() {
 
     assert!(
         ctx.authorize_environment_action(
-            &env_owner,
+            env_owner,
             &make_env_roles(&[EnvironmentRole::Viewer]),
             EnvironmentAction::DeleteEnvironment,
         )
@@ -261,7 +261,7 @@ fn admin_user_can_do_any_environment_action() {
 
     assert!(
         ctx.authorize_environment_action(
-            &env_owner,
+            env_owner,
             &make_env_roles(&[]),
             EnvironmentAction::DeleteEnvironment
         )

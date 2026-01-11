@@ -920,6 +920,7 @@ mod tests {
                             }),
                         }],
                     }),
+                    http_endpoint: Vec::new(),
                 },
                 AgentMethod {
                     name: "f2".to_string(),
@@ -941,10 +942,12 @@ mod tests {
                             }),
                         }],
                     }),
+                    http_endpoint: Vec::new(),
                 },
             ],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         }];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1177,44 +1180,44 @@ mod tests {
 
             interface types {
               use golem:agent/common.{text-reference, binary-reference};
-            
+
               record element {
                 x: string,
               }
-            
+
               record element1 {
                 data: string,
                 value: s32,
               }
             }
-            
+
             /// AssistantAgent
             interface assistant-agent {
               use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{element};
-            
+
               /// Constructs [object Object]
               initialize: func();
-            
+
               get-definition: func() -> agent-type;
-            
+
               ask-more: func(name: string) -> element;
             }
-            
+
             /// WeatherAgent
             interface weather-agent {
               use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{element, element1};
-            
+
               /// Constructs [object Object]
               initialize: func(username: string);
-            
+
               get-definition: func() -> agent-type;
-            
+
               /// Weather forecast weather for you
               get-weather: func(name: string, param2: element1) -> string;
             }
-            
+
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
@@ -1224,7 +1227,7 @@ mod tests {
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
-            
+
               export golem:agent/guest;
               export golem:api/save-snapshot@1.3.0;
               export golem:api/load-snapshot@1.3.0;
@@ -1343,12 +1346,12 @@ mod tests {
                 /// Constructs the agent bar-agent
                 interface bar-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                
+
                   /// Constructs the agent bar-agent
                   initialize: func();
-                
+
                   get-definition: func() -> agent-type;
-                
+
                   fun-either: func(either: result<string, string>) -> result<string, string>;
                 }
             "#},

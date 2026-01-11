@@ -169,7 +169,7 @@ impl SecuritySchemesApi {
     ) -> ApiResult<Json<SecuritySchemeDto>> {
         let security_scheme = self
             .security_scheme_service
-            .get(&security_scheme_id, &auth)
+            .get(security_scheme_id, &auth)
             .await?;
         Ok(Json(security_scheme.into()))
     }
@@ -209,7 +209,7 @@ impl SecuritySchemesApi {
     ) -> ApiResult<Json<SecuritySchemeDto>> {
         let security_scheme = self
             .security_scheme_service
-            .update(&security_scheme_id, data, &auth)
+            .update(security_scheme_id, data, &auth)
             .await?;
         Ok(Json(security_scheme.into()))
     }
@@ -249,7 +249,7 @@ impl SecuritySchemesApi {
     ) -> ApiResult<Json<SecuritySchemeDto>> {
         let security_scheme = self
             .security_scheme_service
-            .delete(&security_scheme_id, current_revision, &auth)
+            .delete(security_scheme_id, current_revision, &auth)
             .await?;
         Ok(Json(security_scheme.into()))
     }

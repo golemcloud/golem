@@ -1,10 +1,10 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
-# Schema for vscode-yaml
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
 
 components:
-  caller:
+  golem-it:caller:
     templates: rust
     presets:
       debug:
@@ -22,7 +22,6 @@ components:
           copy:
             - command: cp ../target/wasm32-wasip1/release/caller.wasm ../..
             - command: cp ../target/golem-components/release/caller_composed.wasm ../..
-dependencies:
-  caller:
-    - target: counters
-      type: static-wasm-rpc
+    dependencies:
+      - target: golem-it:counters
+        type: static-wasm-rpc

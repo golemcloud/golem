@@ -28,7 +28,7 @@ use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
 use anyhow::anyhow;
 use applying::Apply;
 use chrono::{Duration, Utc};
-use golem_common::model::account::{AccountCreation, AccountId};
+use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
     EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
@@ -39,6 +39,7 @@ use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use std::sync::Arc;
+use tap::Pipe;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
@@ -127,11 +128,7 @@ impl OAuth2Service {
         };
 
         let token = match existing_data.and_then(|token| token.token_id) {
-            Some(token_id) => {
-                self.token_service
-                    .get(&token_id, &AuthCtx::system())
-                    .await?
-            }
+            Some(token_id) => self.token_service.get(token_id, &AuthCtx::system()).await?,
             None => {
                 // This will also link the external id to the account id, ensure that no additional
                 // accounts are created in the future.
@@ -176,7 +173,7 @@ impl OAuth2Service {
 
         let state: OAuth2WebflowState = self
             .oauth2_web_flow_state_repo
-            .get_by_id(&state_id.0)
+            .get_by_id(state_id.0)
             .await?
             .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(*state_id))?
             .into();
@@ -190,7 +187,7 @@ impl OAuth2Service {
             .await?;
 
         self.oauth2_web_flow_state_repo
-            .set_token_id(&state_id.0, &token.id.0)
+            .set_token_id(state_id.0, token.id.0)
             .await?;
 
         Ok(state.metadata)
@@ -206,7 +203,7 @@ impl OAuth2Service {
 
         let state: OAuth2WebflowState = self
             .oauth2_web_flow_state_repo
-            .get_by_id(&state_id.0)
+            .get_by_id(state_id.0)
             .await?
             .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(*state_id))?
             .into();
@@ -215,7 +212,7 @@ impl OAuth2Service {
         // If we found a token attached to this state, invalidate it for future use.
         if state.token.is_some() {
             self.oauth2_web_flow_state_repo
-                .delete_by_id(&state_id.0)
+                .delete_by_id(state_id.0)
                 .await?;
         }
 
@@ -335,10 +332,14 @@ impl OAuth2Service {
     }
 
     async fn make_account(&self, external_login: &ExternalLogin) -> Result<AccountId, OAuth2Error> {
-        let email = external_login.email.clone().ok_or(anyhow!(
-            "No user email from OAuth2 Provider for login {}",
-            external_login.external_id
-        ))?;
+        let email = external_login
+            .email
+            .clone()
+            .ok_or(anyhow!(
+                "No user email from OAuth2 Provider for login {}",
+                external_login.external_id
+            ))?
+            .pipe(AccountEmail);
 
         let name = external_login
             .name

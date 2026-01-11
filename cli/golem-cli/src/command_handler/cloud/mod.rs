@@ -20,9 +20,6 @@ use std::sync::Arc;
 pub mod account;
 pub mod token;
 
-// TODO: atomic
-// pub mod project;
-
 pub struct CloudCommandHandler {
     ctx: Arc<Context>,
 }
@@ -34,14 +31,6 @@ impl CloudCommandHandler {
 
     pub async fn handle_command(&self, subcommand: CloudSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            // TODO: atomic
-            /*CloudSubcommand::Project { subcommand } => {
-                self.ctx
-                    .cloud_project_handler()
-                    .handle_command(subcommand)
-                    .await
-            }
-            */
             CloudSubcommand::Account { subcommand } => {
                 self.ctx
                     .cloud_account_handler()

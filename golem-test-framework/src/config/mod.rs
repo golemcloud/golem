@@ -28,7 +28,7 @@ pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::api::RegistryServiceClient;
 use golem_client::model::{AccountSetRoles, TokenCreation};
-use golem_common::model::account::AccountCreation;
+use golem_common::model::account::{AccountCreation, AccountEmail};
 use golem_common::model::auth::AccountRole;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -83,7 +83,7 @@ pub trait TestDependencies: Send + Sync + Clone {
 
         let name = Uuid::new_v4().to_string();
         let account_data = AccountCreation {
-            email: format!("{name}@golem.cloud"),
+            email: AccountEmail(format!("{name}@golem.cloud")),
             name,
         };
 
@@ -119,7 +119,7 @@ pub trait TestDependencies: Send + Sync + Clone {
 
         let name = Uuid::new_v4().to_string();
         let account_data = AccountCreation {
-            email: format!("{name}@golem.cloud"),
+            email: AccountEmail(format!("{name}@golem.cloud")),
             name,
         };
 

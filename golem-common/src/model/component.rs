@@ -50,7 +50,7 @@ declare_transparent_newtypes! {
 
     /// Key that can be used to identify a component file.
     /// All files with the same content will have the same key.
-    #[derive(Display, Eq, Hash)]
+    #[derive(Copy, Display, Eq, Hash)]
     pub struct ComponentFileContentHash(pub diff::Hash);
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
@@ -195,15 +195,15 @@ declare_structs! {
     }
 
     pub struct PluginInstallationUpdate {
-        /// Priority will be used to identify the plugin to update
-        pub plugin_priority: PluginPriority,
+        /// EnvironmentPluginGrantId to identify the plugin to update
+        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         pub new_priority: Option<PluginPriority>,
         pub new_parameters: Option<BTreeMap<String, String>>,
     }
 
     pub struct PluginUninstallation {
-        /// Priority will be used to identify the plugin to delete
-        pub plugin_priority: PluginPriority
+        /// EnvironmentPluginGrantId to identify the plugin to update
+        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
     }
 
     pub struct InitialComponentFile {
@@ -243,14 +243,17 @@ impl ComponentDto {
                     )
                 })
                 .collect(),
-            plugins_by_priority: self
+            plugins_by_grant_id: self
                 .installed_plugins
                 .iter()
                 .map(|plugin| {
                     (
-                        plugin.priority.to_string(),
+                        plugin.environment_plugin_grant_id.0,
                         diff::PluginInstallation {
-                            plugin_id: plugin.plugin_registration_id.0,
+                            priority: plugin.priority.0,
+                            name: plugin.plugin_name.clone(),
+                            version: plugin.plugin_version.clone(),
+                            grant_id: plugin.environment_plugin_grant_id.0,
                             parameters: plugin.parameters.clone(),
                         },
                     )

@@ -255,6 +255,13 @@ impl Config {
         config.store_file(config_dir)
     }
 
+    pub fn application_environment(
+        &self,
+        env_id: &ApplicationEnvironmentConfigId,
+    ) -> Option<&ApplicationEnvironmentConfig> {
+        self.application_environments.get(&env_id.to_hashed_key())
+    }
+
     pub fn get_application_environment(
         config_dir: &Path,
         env_id: &ApplicationEnvironmentConfigId,
@@ -344,10 +351,14 @@ impl From<&Server> for ClientConfig {
                     }
                 }
             },
-            Server::Custom(_custom) => {
-                // TODO: atomic
-                todo!()
-            }
+            Server::Custom(custom) => BaseConfig {
+                registry_url: custom.url.clone(),
+                worker_url: custom
+                    .worker_url
+                    .clone()
+                    .unwrap_or_else(|| custom.url.clone()),
+                allow_insecure: custom.allow_insecure.unwrap_or(false),
+            },
         };
 
         ClientConfig {

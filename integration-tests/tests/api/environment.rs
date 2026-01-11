@@ -226,7 +226,10 @@ async fn cannot_create_two_environments_with_same_name(
                 &env_2.id.0,
                 &EnvironmentUpdate {
                     current_revision: env_2.revision,
-                    new_name: Some(env_1.name.clone()),
+                    name: Some(env_1.name.clone()),
+                    compatibility_check: None,
+                    version_check: None,
+                    security_overrides: None,
                 },
             )
             .await;
@@ -268,7 +271,10 @@ async fn cannot_create_two_environments_with_same_name(
             &env_2.id.0,
             &EnvironmentUpdate {
                 current_revision: env_2.revision,
-                new_name: Some(env_1.name.clone()),
+                name: Some(env_1.name.clone()),
+                compatibility_check: None,
+                version_check: None,
+                security_overrides: None,
             },
         )
         .await?;
@@ -297,7 +303,9 @@ async fn list_visible_environments_shows_owned_and_shared(
         .await?;
 
     // Owner sees all environments
-    let visible_owner = client_owner.list_visible_environments().await?;
+    let visible_owner = client_owner
+        .list_visible_environments(None, None, None)
+        .await?;
     let owner_env_ids: HashSet<_> = visible_owner
         .values
         .into_iter()
@@ -308,7 +316,10 @@ async fn list_visible_environments_shows_owned_and_shared(
     assert!(owner_env_ids.contains(&env_2a.id));
 
     // Grantee sees only shared environment
-    let visible_grantee = client_grantee.list_visible_environments().await?.values;
+    let visible_grantee = client_grantee
+        .list_visible_environments(None, None, None)
+        .await?
+        .values;
     let grantee_env_ids: HashSet<_> = visible_grantee
         .into_iter()
         .map(|e| e.environment.id)
@@ -336,14 +347,20 @@ async fn list_visible_environments_excludes_deleted_entities(
         .await?;
 
     // Deleted env should not appear
-    let visible = client.list_visible_environments().await?.values;
+    let visible = client
+        .list_visible_environments(None, None, None)
+        .await?
+        .values;
     assert!(!visible.iter().any(|e| e.environment.id == env.id));
 
     // Delete application
     client
         .delete_application(&app.id.0, app.revision.into())
         .await?;
-    let visible_after_app_delete = client.list_visible_environments().await?.values;
+    let visible_after_app_delete = client
+        .list_visible_environments(None, None, None)
+        .await?
+        .values;
     assert!(visible_after_app_delete.is_empty());
 
     Ok(())
@@ -364,11 +381,17 @@ async fn list_visible_environments_multiple_accounts_isolated(
     let (_app2, env2) = user_2.app_and_env().await?;
 
     // Each user sees only their own environments
-    let visible_1 = client_1.list_visible_environments().await?.values;
+    let visible_1 = client_1
+        .list_visible_environments(None, None, None)
+        .await?
+        .values;
     assert!(visible_1.iter().any(|e| e.environment.id == env1.id));
     assert!(!visible_1.iter().any(|e| e.environment.id == env2.id));
 
-    let visible_2 = client_2.list_visible_environments().await?.values;
+    let visible_2 = client_2
+        .list_visible_environments(None, None, None)
+        .await?
+        .values;
     assert!(visible_2.iter().any(|e| e.environment.id == env2.id));
     assert!(!visible_2.iter().any(|e| e.environment.id == env1.id));
 
@@ -395,7 +418,10 @@ async fn deleted_account_hides_shared_environments_from_grantee(
         .await?;
 
     // Grantee can see the shared environment
-    let visible_before_delete = grantee_client.list_visible_environments().await?.values;
+    let visible_before_delete = grantee_client
+        .list_visible_environments(None, None, None)
+        .await?
+        .values;
     assert!(
         visible_before_delete
             .iter()
@@ -410,13 +436,130 @@ async fn deleted_account_hides_shared_environments_from_grantee(
         .await?;
 
     // Grantee should no longer see the environment
-    let visible_after_delete = grantee_client.list_visible_environments().await?.values;
+    let visible_after_delete = grantee_client
+        .list_visible_environments(None, None, None)
+        .await?
+        .values;
     assert!(
         !visible_after_delete
             .iter()
             .any(|e| e.environment.id == env.id),
         "Environment from deleted account should no longer be visible to grantee"
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_visible_environments_filters_by_account_email(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user_1 = deps.user().await?;
+    let user_2 = deps.user().await?;
+    let client_1 = deps.registry_service().client(&user_1.token).await;
+    let client_2 = deps.registry_service().client(&user_2.token).await;
+
+    let (_app1, env1) = user_1.app_and_env().await?;
+    let (_app2, env2) = user_2.app_and_env().await?;
+
+    // Filter by user_1 email
+    let filtered_1 = client_1
+        .list_visible_environments(Some(&user_1.account_email.0), None, None)
+        .await?
+        .values;
+    assert!(filtered_1
+        .iter()
+        .all(|e| e.account.email == user_1.account_email));
+    assert!(filtered_1.iter().any(|e| e.environment.id == env1.id));
+    assert!(filtered_1.iter().all(|e| e.environment.id != env2.id));
+
+    // Filter by user_2 email
+    let filtered_2 = client_2
+        .list_visible_environments(Some(&user_2.account_email.0), None, None)
+        .await?
+        .values;
+    assert!(filtered_2
+        .iter()
+        .all(|e| e.account.email == user_2.account_email));
+    assert!(filtered_2.iter().any(|e| e.environment.id == env2.id));
+    assert!(filtered_2.iter().all(|e| e.environment.id != env1.id));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_visible_environments_filters_by_app_name(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    let (app_1, env_1a) = user.app_and_env().await?;
+    let env_1b = user.env(&app_1.id).await?;
+    let (_, env_2a) = user.app_and_env().await?;
+
+    // Filter by app_1 name
+    let filtered = client
+        .list_visible_environments(None, Some(&app_1.name.0), None)
+        .await?
+        .values;
+    let env_ids: HashSet<_> = filtered.iter().map(|e| e.environment.id).collect();
+    assert!(env_ids.contains(&env_1a.id));
+    assert!(env_ids.contains(&env_1b.id));
+    assert!(!env_ids.contains(&env_2a.id));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_visible_environments_filters_by_environment_name(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    let (_app, env_1) = user.app_and_env().await?;
+    let env_2 = user.env(&_app.id).await?;
+
+    // Filter by env_1 name
+    let filtered = client
+        .list_visible_environments(None, None, Some(&env_1.name.0))
+        .await?
+        .values;
+    let env_ids: HashSet<_> = filtered.iter().map(|e| e.environment.id).collect();
+    assert!(env_ids.contains(&env_1.id));
+    assert!(!env_ids.contains(&env_2.id));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_visible_environments_combined_filters(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    let (app_1, env_1) = user.app_and_env().await?;
+    let (_, env_2) = user.app_and_env().await?;
+
+    // Apply all filters together (account_email + app_name + environment_name)
+    let filtered = client
+        .list_visible_environments(
+            Some(&user.account_email.0),
+            Some(&app_1.name.0),
+            Some(&env_1.name.0),
+        )
+        .await?
+        .values;
+
+    let env_ids: HashSet<_> = filtered.iter().map(|e| e.environment.id).collect();
+    assert!(env_ids.contains(&env_1.id));
+    assert!(!env_ids.contains(&env_2.id));
 
     Ok(())
 }

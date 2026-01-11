@@ -47,46 +47,46 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait DeploymentRepo: Send + Sync {
-    async fn get_next_revision_number(&self, environment_id: &Uuid) -> RepoResult<Option<i64>>;
+    async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>>;
 
     async fn get_currently_deployed_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Option<DeploymentRevisionRecord>>;
 
     async fn get_latest_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Option<DeploymentRevisionRecord>>;
 
     async fn list_deployment_revisions(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         version: Option<&str>,
     ) -> RepoResult<Vec<DeploymentRevisionRecord>>;
 
     async fn list_deployment_history(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<CurrentDeploymentRevisionRecord>>;
 
-    async fn get_staged_identity(&self, environment_id: &Uuid) -> RepoResult<DeploymentIdentity>;
+    async fn get_staged_identity(&self, environment_id: Uuid) -> RepoResult<DeploymentIdentity>;
 
     async fn get_deployment_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>>;
 
     async fn get_deployment_identity(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeployedDeploymentIdentity>>;
 
     async fn deploy(
         &self,
-        user_account_id: &Uuid,
+        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
@@ -98,39 +98,54 @@ pub trait DeploymentRepo: Send + Sync {
 
     async fn list_compiled_http_api_routes_for_http_api_definition(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         http_api_definition_name: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
 
     async fn get_deployment_agent_type(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
 
     async fn list_deployment_agent_types(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
 
     async fn get_deployed_agent_type(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
 
     async fn list_deployed_agent_types(
         &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn get_latest_deployed_agent_type_by_component_revision(
+        &self,
         environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn list_latest_deployed_agent_types_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
 
     async fn set_current_deployment(
         &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
+        user_account_id: Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 }
@@ -146,14 +161,14 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
         Self { repo }
     }
 
-    fn span_env(environment_id: &Uuid) -> Span {
+    fn span_env(environment_id: Uuid) -> Span {
         info_span!(
             SPAN_NAME,
             environment_id = %environment_id,
         )
     }
 
-    fn span_env_and_revision(environment_id: &Uuid, revision_id: i64) -> Span {
+    fn span_env_and_revision(environment_id: Uuid, revision_id: i64) -> Span {
         info_span!(
             SPAN_NAME,
             environment_id = %environment_id,
@@ -161,7 +176,7 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
         )
     }
 
-    fn span_user_and_env(user_account_id: &Uuid, environment_id: &Uuid) -> Span {
+    fn span_user_and_env(user_account_id: Uuid, environment_id: Uuid) -> Span {
         info_span!(
             SPAN_NAME,
             user_account_id = %user_account_id,
@@ -179,7 +194,7 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
 
 #[async_trait]
 impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
-    async fn get_next_revision_number(&self, environment_id: &Uuid) -> RepoResult<Option<i64>> {
+    async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>> {
         self.repo
             .get_next_revision_number(environment_id)
             .instrument(Self::span_env(environment_id))
@@ -188,7 +203,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn get_deployment_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.repo
@@ -199,7 +214,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn get_currently_deployed_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.repo
             .get_currently_deployed_revision(environment_id)
@@ -209,7 +224,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn get_latest_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.repo
             .get_latest_revision(environment_id)
@@ -219,7 +234,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn list_deployment_revisions(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         version: Option<&str>,
     ) -> RepoResult<Vec<DeploymentRevisionRecord>> {
         self.repo
@@ -234,7 +249,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn list_deployment_history(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<CurrentDeploymentRevisionRecord>> {
         self.repo
             .list_deployment_history(environment_id)
@@ -242,7 +257,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn get_staged_identity(&self, environment_id: &Uuid) -> RepoResult<DeploymentIdentity> {
+    async fn get_staged_identity(&self, environment_id: Uuid) -> RepoResult<DeploymentIdentity> {
         self.repo
             .get_staged_identity(environment_id)
             .instrument(Self::span_env(environment_id))
@@ -251,7 +266,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn get_deployment_identity(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeployedDeploymentIdentity>> {
         self.repo
@@ -262,11 +277,11 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn deploy(
         &self,
-        user_account_id: &Uuid,
+        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        let span = Self::span_user_and_env(user_account_id, &deployment_creation.environment_id);
+        let span = Self::span_user_and_env(user_account_id, deployment_creation.environment_id);
         self.repo
             .deploy(user_account_id, deployment_creation, version_check)
             .instrument(span)
@@ -285,7 +300,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn list_compiled_http_api_routes_for_http_api_definition(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         http_api_definition_name: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
@@ -306,7 +321,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn get_deployment_agent_type(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
@@ -323,7 +338,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn list_deployment_agent_types(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
@@ -338,7 +353,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn get_deployed_agent_type(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
@@ -353,7 +368,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn list_deployed_agent_types(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
             .list_deployed_agent_types(environment_id)
@@ -364,10 +379,55 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
+    async fn get_latest_deployed_agent_type_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .get_latest_deployed_agent_type_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision_id,
+                agent_type_name,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                component_id = %component_id,
+                component_revision_id = %component_revision_id,
+                agent_type_name = %agent_type_name,
+            ))
+            .await
+    }
+
+    async fn list_latest_deployed_agent_types_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .list_latest_deployed_agent_types_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision_id,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                component_id = %component_id,
+                component_revision_id = %component_revision_id,
+            ))
+            .await
+    }
+
     async fn set_current_deployment(
         &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
+        user_account_id: Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         self.repo
@@ -422,7 +482,7 @@ impl<DBP: Pool> DbDeploymentRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
-    async fn get_next_revision_number(&self, environment_id: &Uuid) -> RepoResult<Option<i64>> {
+    async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>> {
         let current_staged_revision_id_row = self
             .with_ro("deploy - get current staged revision")
             .fetch_optional(
@@ -446,7 +506,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn get_deployment_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.with_ro("get_deployment_revision").fetch_optional_as(
@@ -462,7 +522,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn get_currently_deployed_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.with_ro("get_currently_deployed_revision").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
@@ -478,7 +538,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn get_latest_revision(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.with_ro("get_latest_revision").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
@@ -493,7 +553,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn list_deployment_revisions(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         version: Option<&str>,
     ) -> RepoResult<Vec<DeploymentRevisionRecord>> {
         self.with_ro("list_deployment_revisions")
@@ -513,7 +573,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn list_deployment_history(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<CurrentDeploymentRevisionRecord>> {
         self.with_ro("list_deployment_history")
             .fetch_all_as(
@@ -528,7 +588,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .await
     }
 
-    async fn get_staged_identity(&self, environment_id: &Uuid) -> RepoResult<DeploymentIdentity> {
+    async fn get_staged_identity(&self, environment_id: Uuid) -> RepoResult<DeploymentIdentity> {
         // TODO: maybe add helper for readonly tx helpers OR create common abstraction on top
         //      of transactions and pool, so both cna be used for selects
         let mut tx = self.with_ro("get_staged_identity").begin().await?;
@@ -546,7 +606,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn get_deployment_identity(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeployedDeploymentIdentity>> {
         let deployment_revision = self
@@ -576,14 +636,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn deploy(
         &self,
-        user_account_id: &Uuid,
+        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
         if version_check
             && self
                 .version_exists(
-                    &deployment_creation.environment_id,
+                    deployment_creation.environment_id,
                     &deployment_creation.version,
                 )
                 .await?
@@ -593,17 +653,15 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             });
         }
 
-        let user_account_id = *user_account_id;
-
         self.with_tx_err("deploy", |tx| {
             async move {
-                let environment_id = &deployment_creation.environment_id;
+                let environment_id = deployment_creation.environment_id;
                 let deployment_revision_id = deployment_creation.deployment_revision_id;
 
                 let deployment_revision = Self::create_deployment_revision(
                     tx,
                     user_account_id,
-                    *environment_id,
+                    environment_id,
                     deployment_creation.deployment_revision_id,
                     deployment_creation.version,
                     deployment_creation.hash,
@@ -648,8 +706,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                 let revision = Self::set_current_deployment_internal(
                     tx,
-                    &user_account_id,
-                    &deployment_revision.environment_id,
+                    user_account_id,
+                    deployment_revision.environment_id,
                     deployment_revision.revision_id,
                 )
                 .await?;
@@ -738,7 +796,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn list_compiled_http_api_routes_for_http_api_definition(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         http_api_definition_name: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
@@ -802,7 +860,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn get_deployment_agent_type(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
@@ -830,7 +888,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn list_deployment_agent_types(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.with_ro("list_deployment_agent_types")
@@ -856,7 +914,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn get_deployed_agent_type(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
         self.with_ro("get_deployed_agent_type")
@@ -885,7 +943,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn list_deployed_agent_types(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.with_ro("get_deployed_agent_type")
             .fetch_all_as(
@@ -913,25 +971,93 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn set_current_deployment(
         &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
+        user_account_id: Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
-        let user_account_id = *user_account_id;
-        let environment_id = *environment_id;
-
         self.with_tx_err("set_current_deployment", |tx| {
             Box::pin(async move {
                 Self::set_current_deployment_internal(
                     tx,
-                    &user_account_id,
-                    &environment_id,
+                    user_account_id,
+                    environment_id,
                     deployment_revision_id,
                 )
                 .await
             })
         })
         .await
+    }
+
+    async fn get_latest_deployed_agent_type_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("get_latest_deployed_agent_type_by_component_revision")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.agent_wrapper_type_name,
+                        r.component_id,
+                        r.component_revision_id,
+                        r.agent_type
+                    FROM deployment_registered_agent_types r
+                    WHERE r.environment_id = $1
+                        AND r.deployment_revision_id = (
+                            SELECT deployment_revision_id FROM deployment_registered_agent_types
+                            WHERE component_id = $2 AND component_revision_id = $3
+                            ORDER BY deployment_revision_id DESC
+                            LIMIT 1
+                        )
+                        AND (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
+                    ORDER BY r.agent_type_name
+                "#})
+                .bind(environment_id)
+                .bind(component_id)
+                .bind(component_revision_id)
+                .bind(agent_type_name),
+            )
+            .await
+    }
+
+    async fn list_latest_deployed_agent_types_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("get_deployed_agent_type")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.agent_wrapper_type_name,
+                        r.component_id,
+                        r.component_revision_id,
+                        r.agent_type
+                    FROM deployment_registered_agent_types r
+                    WHERE r.environment_id = $1
+                        AND r.deployment_revision_id = (
+                            SELECT deployment_revision_id FROM deployment_registered_agent_types
+                            WHERE component_id = $2 AND component_revision_id = $3
+                            ORDER BY deployment_revision_id DESC
+                            LIMIT 1
+                        )
+                    ORDER BY r.agent_type_name
+                "#})
+                .bind(environment_id)
+                .bind(component_id)
+                .bind(component_revision_id),
+            )
+            .await
     }
 }
 
@@ -951,27 +1077,27 @@ trait DeploymentRepoInternal: DeploymentRepo {
 
     async fn get_staged_deployment(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<DeploymentIdentity>;
 
     async fn get_staged_components(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>>;
 
     async fn get_staged_http_api_definitions(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
 
     async fn get_staged_http_api_deployments(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
     async fn create_deployment_component_revision(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         component: &DeploymentComponentRevisionRecord,
     ) -> RepoResult<()>;
@@ -1003,30 +1129,30 @@ trait DeploymentRepoInternal: DeploymentRepo {
 
     async fn set_current_deployment_internal(
         tx: &mut Self::Tx,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
+        user_account_id: Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 
     async fn get_deployed_components(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>>;
 
     async fn get_deployed_http_api_definitions(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
 
     async fn get_deployed_http_api_deployments(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
-    async fn version_exists(&self, environment_id: &Uuid, version: &str) -> RepoResult<bool>;
+    async fn version_exists(&self, environment_id: Uuid, version: &str) -> RepoResult<bool>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -1070,7 +1196,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn get_staged_deployment(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<DeploymentIdentity> {
         Ok(DeploymentIdentity {
             components: Self::get_staged_components(tx, environment_id).await?,
@@ -1081,7 +1207,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn get_staged_components(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
@@ -1099,7 +1225,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn get_staged_http_api_definitions(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
@@ -1117,7 +1243,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn get_staged_http_api_deployments(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
@@ -1135,7 +1261,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn create_deployment_component_revision(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
         component: &DeploymentComponentRevisionRecord,
     ) -> RepoResult<()> {
@@ -1263,8 +1389,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn set_current_deployment_internal(
         tx: &mut Self::Tx,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
+        user_account_id: Uuid,
+        environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         let opt_row = tx
@@ -1294,7 +1420,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 "#})
                 .bind(environment_id)
                 .bind(revision_id)
-                .bind_revision_audit(RevisionAuditFields::new(*user_account_id))
+                .bind_revision_audit(RevisionAuditFields::new(user_account_id))
                 .bind(deployment_revision_id)
             )
             .await
@@ -1317,7 +1443,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn get_deployed_components(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>> {
         self.with_ro("get_deployed_components")
@@ -1339,7 +1465,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn get_deployed_http_api_definitions(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
         self.with_ro("get_deployed_http_api_definitions")
@@ -1362,7 +1488,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn get_deployed_http_api_deployments(
         &self,
-        environment_id: &Uuid,
+        environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
         let deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = self.with_ro("get_deployed_http_api_deployments - deployments")
@@ -1385,7 +1511,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         Ok(deployments)
     }
 
-    async fn version_exists(&self, environment_id: &Uuid, version: &str) -> RepoResult<bool> {
+    async fn version_exists(&self, environment_id: Uuid, version: &str) -> RepoResult<bool> {
         Ok(self
             .with_ro("version_exists")
             .fetch_optional(

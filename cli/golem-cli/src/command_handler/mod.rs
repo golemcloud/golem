@@ -22,6 +22,7 @@ use crate::command::{
 use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
+use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
@@ -32,6 +33,7 @@ use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::partial_match::ErrorHandler;
+use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::rib_repl::RibReplHandler;
@@ -59,7 +61,7 @@ mod environment;
 pub(crate) mod interactive;
 mod log;
 mod partial_match;
-// TODO: atomic: mod plugin;
+mod plugin;
 mod profile;
 mod rib_repl;
 mod worker;
@@ -192,13 +194,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 fallback_command,
                 partial_match,
             } => {
-                init_tracing(
-                    fallback_command
-                        .global_flags
-                        .verbosity
-                        .as_clap_verbosity_flag(),
-                    false,
-                );
+                init_tracing(fallback_command.global_flags.verbosity(), false);
 
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error, &fallback_command);
@@ -268,44 +264,24 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         }
 
         match command.subcommand {
-            GolemCliSubcommand::App { subcommand } => {
-                self.ctx.app_handler().handle_command(subcommand).await
-            }
-            GolemCliSubcommand::Environment { subcommand } => {
+            // App scoped root commands
+            GolemCliSubcommand::New {
+                application_name,
+                language,
+            } => {
                 self.ctx
-                    .environment_handler()
-                    .handle_command(subcommand)
+                    .app_handler()
+                    .cmd_new(application_name, language)
                     .await
             }
-            GolemCliSubcommand::Component { subcommand } => {
+            GolemCliSubcommand::Build {
+                component_name,
+                build: build_args,
+            } => {
                 self.ctx
-                    .component_handler()
-                    .handle_command(subcommand)
+                    .app_handler()
+                    .cmd_build(component_name, build_args)
                     .await
-            }
-            GolemCliSubcommand::Agent { subcommand } => {
-                self.ctx.worker_handler().handle_command(subcommand).await
-            }
-            GolemCliSubcommand::Api { subcommand } => {
-                self.ctx.api_handler().handle_command(subcommand).await
-            }
-            // TODO: atomic
-            /*
-            GolemCliSubcommand::Plugin { subcommand } => {
-                self.ctx.plugin_handler().handle_command(subcommand).await
-            }
-            */
-            GolemCliSubcommand::Profile { subcommand } => {
-                self.ctx.profile_handler().handle_command(subcommand).await
-            }
-            #[cfg(feature = "server-commands")]
-            GolemCliSubcommand::Server { subcommand } => {
-                self.hooks
-                    .handler_server_commands(self.ctx.clone(), subcommand)
-                    .await
-            }
-            GolemCliSubcommand::Cloud { subcommand } => {
-                self.ctx.cloud_handler().handle_command(subcommand).await
             }
             GolemCliSubcommand::Repl {
                 component_name,
@@ -327,6 +303,91 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     )
                     .await
             }
+            GolemCliSubcommand::Deploy {
+                plan,
+                stage,
+                approve_staging_steps,
+                version,
+                revision,
+                force_build,
+                deploy_args,
+            } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_deploy(
+                        plan,
+                        stage,
+                        approve_staging_steps,
+                        version,
+                        revision,
+                        force_build,
+                        deploy_args,
+                    )
+                    .await
+            }
+            GolemCliSubcommand::Clean { component_name } => {
+                self.ctx.app_handler().cmd_clean(component_name).await
+            }
+            GolemCliSubcommand::UpdateAgents {
+                component_name,
+                update_mode,
+                r#await,
+            } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_update_workers(component_name.component_name, update_mode, r#await)
+                    .await
+            }
+            GolemCliSubcommand::RedeployAgents { component_name } => {
+                self.ctx
+                    .app_handler()
+                    .cmd_redeploy_workers(component_name.component_name)
+                    .await
+            }
+            GolemCliSubcommand::Diagnose { component_name } => {
+                self.ctx.app_handler().cmd_diagnose(component_name).await
+            }
+            GolemCliSubcommand::ListAgentTypes {} => {
+                self.ctx.app_handler().cmd_list_agent_types().await
+            }
+            GolemCliSubcommand::Exec { subcommand } => {
+                self.ctx.app_handler().exec_custom_command(subcommand).await
+            }
+
+            // Other entities
+            GolemCliSubcommand::Environment { subcommand } => {
+                self.ctx
+                    .environment_handler()
+                    .handle_command(subcommand)
+                    .await
+            }
+            GolemCliSubcommand::Component { subcommand } => {
+                self.ctx
+                    .component_handler()
+                    .handle_command(subcommand)
+                    .await
+            }
+            GolemCliSubcommand::Agent { subcommand } => {
+                self.ctx.worker_handler().handle_command(subcommand).await
+            }
+            GolemCliSubcommand::Api { subcommand } => {
+                self.ctx.api_handler().handle_command(subcommand).await
+            }
+            GolemCliSubcommand::Plugin { subcommand } => {
+                self.ctx.plugin_handler().handle_command(subcommand).await
+            }
+            GolemCliSubcommand::Profile { subcommand } => {
+                self.ctx.profile_handler().handle_command(subcommand).await
+            }
+            #[cfg(feature = "server-commands")]
+            GolemCliSubcommand::Server { subcommand } => {
+                self.hooks
+                    .handler_server_commands(self.ctx.clone(), subcommand)
+                    .await
+            }
+            GolemCliSubcommand::Cloud { subcommand } => {
+                self.ctx.cloud_handler().handle_command(subcommand).await
+            }
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
         }
     }
@@ -344,25 +405,22 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       by moving these simple factory methods into the specific handlers on demand,
 //       if the need ever arises
 pub trait Handlers {
-    // TODO: atomic: fn api_certificate_handler(&self) -> ApiCertificateCommandHandler;
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
     fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
     fn api_handler(&self) -> ApiCommandHandler;
-    // TODO: atomic: fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
+    fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
     fn app_handler(&self) -> AppCommandHandler;
     // TODO: atomic: fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler;
     fn cloud_account_handler(&self) -> CloudAccountCommandHandler;
     fn cloud_handler(&self) -> CloudCommandHandler;
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
-    // TODO: atomic: fn component_plugin_handler(&self) -> ComponentPluginCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
-    // TODO: atomic: fn plugin_installation_handler(&self) -> PluginInstallationHandler;
-    // TODO: atomic: fn plugin_handler(&self) -> PluginCommandHandler;
+    fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn rib_repl_handler(&self) -> RibReplHandler;
@@ -370,11 +428,6 @@ pub trait Handlers {
 }
 
 impl Handlers for Arc<Context> {
-    // TODO: atomic
-    // fn api_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
-    //     ApiCloudCertificateCommandHandler::new(self.clone())
-    // }
-
     fn api_domain_handler(&self) -> ApiDomainCommandHandler {
         ApiDomainCommandHandler::new(self.clone())
     }
@@ -391,10 +444,9 @@ impl Handlers for Arc<Context> {
         ApiCommandHandler::new(self.clone())
     }
 
-    // TODO: atomic
-    // fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler {
-    //     ApiSecuritySchemeCommandHandler::new(self.clone())
-    // }
+    fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler {
+        ApiSecuritySchemeCommandHandler::new(self.clone())
+    }
 
     fn app_handler(&self) -> AppCommandHandler {
         AppCommandHandler::new(self.clone())
@@ -453,12 +505,9 @@ impl Handlers for Arc<Context> {
     }
     */
 
-    // TODO: atomic
-    /*
     fn plugin_handler(&self) -> PluginCommandHandler {
         PluginCommandHandler::new(self.clone())
     }
-    */
 
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler {
         ProfileConfigCommandHandler::new(self.clone())

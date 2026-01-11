@@ -17,15 +17,16 @@ use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::AccountSummary;
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::application::ApplicationSummary;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{self};
 use golem_common::model::environment::{
-    AccountSummary, ApplicationSummary, Environment, EnvironmentCreation,
-    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName, EnvironmentRevision,
-    EnvironmentSummary, EnvironmentWithDetails,
+    Environment, EnvironmentCreation, EnvironmentCurrentDeploymentView, EnvironmentId,
+    EnvironmentName, EnvironmentRevision, EnvironmentSummary, EnvironmentWithDetails,
 };
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
@@ -58,6 +59,7 @@ pub struct EnvironmentExtRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -131,6 +133,7 @@ pub struct EnvironmentExtRevisionRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -154,15 +157,20 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             current_deployment: match (
                 value.current_deployment_revision,
                 value.current_deployment_deployment_revision,
+                value.current_deployment_deployment_version,
                 value.current_deployment_deployment_hash,
             ) {
-                (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
-                    Some(EnvironmentCurrentDeploymentView {
-                        revision: revision.try_into()?,
-                        deployment_revision: deployment_revision.try_into()?,
-                        deployment_hash: deployment_hash.into_blake3_hash().into(),
-                    })
-                }
+                (
+                    Some(revision),
+                    Some(deployment_revision),
+                    Some(deployment_version),
+                    Some(deployment_hash),
+                ) => Some(EnvironmentCurrentDeploymentView {
+                    revision: revision.try_into()?,
+                    deployment_revision: deployment_revision.try_into()?,
+                    deployment_version: deployment_version.into(),
+                    deployment_hash: deployment_hash.into_blake3_hash().into(),
+                }),
                 _ => None,
             },
         })
@@ -190,6 +198,7 @@ pub struct OptionalEnvironmentExtRevisionRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
@@ -235,6 +244,7 @@ impl OptionalEnvironmentExtRevisionRecord {
 
             current_deployment_revision: self.current_deployment_revision,
             current_deployment_deployment_revision: self.current_deployment_deployment_revision,
+            current_deployment_deployment_version: self.current_deployment_deployment_version,
             current_deployment_deployment_hash: self.current_deployment_deployment_hash,
         })
     }
@@ -254,6 +264,7 @@ pub struct EnvironmentWithDetailsRecord {
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 
     pub application_id: Uuid,
@@ -281,15 +292,20 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
                 current_deployment: match (
                     value.current_deployment_revision,
                     value.current_deployment_deployment_revision,
+                    value.current_deployment_deployment_version,
                     value.current_deployment_deployment_hash,
                 ) {
-                    (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
-                        Some(EnvironmentCurrentDeploymentView {
-                            revision: revision.try_into()?,
-                            deployment_revision: deployment_revision.try_into()?,
-                            deployment_hash: deployment_hash.into_blake3_hash().into(),
-                        })
-                    }
+                    (
+                        Some(revision),
+                        Some(deployment_revision),
+                        Some(deployment_version),
+                        Some(deployment_hash),
+                    ) => Some(EnvironmentCurrentDeploymentView {
+                        revision: revision.try_into()?,
+                        deployment_revision: deployment_revision.try_into()?,
+                        deployment_version: deployment_version.into(),
+                        deployment_hash: deployment_hash.into_blake3_hash().into(),
+                    }),
                     _ => None,
                 },
             },
@@ -300,7 +316,7 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
             account: AccountSummary {
                 id: AccountId(value.account_id),
                 name: value.account_name,
-                email: value.account_email,
+                email: AccountEmail(value.account_email),
             },
         })
     }

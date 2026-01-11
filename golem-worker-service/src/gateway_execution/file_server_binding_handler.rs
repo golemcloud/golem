@@ -56,9 +56,9 @@ impl FileServerBindingHandler {
     pub async fn handle_file_server_binding_result(
         &self,
         worker_name: &str,
-        component_id: &ComponentId,
-        environment_id: &EnvironmentId,
-        account_id: &AccountId,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
         original_result: RibResult,
     ) -> Result<FileServerBindingSuccess, FileServerBindingError> {
         let binding_details = FileServerBindingDetails::from_rib_result(original_result)
@@ -77,7 +77,7 @@ impl FileServerBindingHandler {
         if let Some(file) = matching_ro_file {
             let data = self
                 .initial_component_files_service
-                .get(environment_id, &file.content_hash)
+                .get(environment_id, file.content_hash)
                 .await
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!(
@@ -102,7 +102,7 @@ impl FileServerBindingHandler {
             // Ask the worker service to get the file contents. If no worker is running, one will be started.
 
             let worker_id = WorkerId::from_component_metadata_and_worker_id(
-                *component_id,
+                component_id,
                 &component_metadata.metadata,
                 worker_name,
             )
@@ -115,7 +115,7 @@ impl FileServerBindingHandler {
                 .get_file_contents(
                     &worker_id,
                     binding_details.file_path.clone(),
-                    AuthCtx::impersonated_user(*account_id),
+                    AuthCtx::impersonated_user(account_id),
                 )
                 .await?;
 
@@ -131,8 +131,8 @@ impl FileServerBindingHandler {
     async fn get_component_metadata(
         &self,
         worker_name: &str,
-        component_id: &ComponentId,
-        account_id: &AccountId,
+        component_id: ComponentId,
+        account_id: AccountId,
     ) -> Result<ComponentDto, FileServerBindingError> {
         // Two cases, we either have an existing worker or not (either not configured or not existing).
         // If there is no worker we need use the lastest component version, if there is none we need to use the exact component version
@@ -143,10 +143,10 @@ impl FileServerBindingHandler {
                 .worker_service
                 .get_metadata(
                     &WorkerId {
-                        component_id: *component_id,
+                        component_id,
                         worker_name: worker_name.to_string(),
                     },
-                    AuthCtx::impersonated_user(*account_id),
+                    AuthCtx::impersonated_user(account_id),
                 )
                 .await;
 

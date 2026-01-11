@@ -15,7 +15,7 @@
 use anyhow::anyhow;
 use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceGetComponentError,
+    RegistryServiceClient, RegistryServiceCreateComponentError, RegistryServiceGetComponentError,
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
 use golem_common::model::agent::{
@@ -254,7 +254,7 @@ async fn create_component_with_plugins_and_update_installations(
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
-                    plugin_priority: installed_plugin.priority,
+                    environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
                     new_priority: Some(PluginPriority(1)),
                     new_parameters: None,
                 })],
@@ -282,7 +282,7 @@ async fn create_component_with_plugins_and_update_installations(
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
-                    plugin_priority: installed_plugin.priority,
+                    environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
                 })],
             },
             None::<Vec<u8>>,
@@ -583,9 +583,11 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     };
 
     let component = client
@@ -625,6 +627,380 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                     component_revision: component.revision,
                 }
             }]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_component_with_duplicate_plugin_priorities_fails(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let plugin_1 = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "plugin-1".to_string(),
+                version: "1.0.0".to_string(),
+                description: "".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::read(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let plugin_2 = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "plugin-2".to_string(),
+                version: "1.0.0".to_string(),
+                description: "".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::read(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let grant_1 = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin_1.id,
+            },
+        )
+        .await?;
+
+    let grant_2 = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin_2.id,
+            },
+        )
+        .await?;
+
+    let result = client
+        .create_component(
+            &env.id.0,
+            &ComponentCreation {
+                component_name: ComponentName("duplicate-priority".to_string()),
+                file_options: BTreeMap::new(),
+                dynamic_linking: HashMap::new(),
+                env: BTreeMap::new(),
+                agent_types: Vec::new(),
+                plugins: vec![
+                    PluginInstallation {
+                        environment_plugin_grant_id: grant_1.id,
+                        priority: PluginPriority(0),
+                        parameters: BTreeMap::new(),
+                    },
+                    PluginInstallation {
+                        environment_plugin_grant_id: grant_2.id,
+                        priority: PluginPriority(0),
+                        parameters: BTreeMap::new(),
+                    },
+                ],
+            },
+            tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
+                .await?,
+            None::<Vec<u8>>,
+        )
+        .await;
+
+    assert!(
+        let Err(golem_client::Error::Item(
+            RegistryServiceCreateComponentError::Error409(_)
+        )) = result
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_component_with_duplicate_plugin_grant_ids_fails(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: "".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::read(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin.id,
+            },
+        )
+        .await?;
+
+    let result = client
+        .create_component(
+            &env.id.0,
+            &ComponentCreation {
+                component_name: ComponentName("duplicate-grant".to_string()),
+                file_options: BTreeMap::new(),
+                dynamic_linking: HashMap::new(),
+                env: BTreeMap::new(),
+                agent_types: Vec::new(),
+                plugins: vec![
+                    PluginInstallation {
+                        environment_plugin_grant_id: grant.id,
+                        priority: PluginPriority(0),
+                        parameters: BTreeMap::new(),
+                    },
+                    PluginInstallation {
+                        environment_plugin_grant_id: grant.id,
+                        priority: PluginPriority(1),
+                        parameters: BTreeMap::new(),
+                    },
+                ],
+            },
+            tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
+                .await?,
+            None::<Vec<u8>>,
+        )
+        .await;
+
+    assert!(
+        let Err(golem_client::Error::Item(
+            RegistryServiceCreateComponentError::Error409(_)
+        )) = result
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn update_component_with_duplicate_plugin_priorities_fails(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let plugin_1 = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "plugin-1".to_string(),
+                version: "1.0.0".to_string(),
+                description: "".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::read(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let plugin_2 = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "plugin-2".to_string(),
+                version: "1.0.0".to_string(),
+                description: "".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::read(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let grant_1 = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin_1.id,
+            },
+        )
+        .await?;
+
+    let grant_2 = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin_2.id,
+            },
+        )
+        .await?;
+
+    let component = user
+        .component(&env.id, "app_and_library_app")
+        .store()
+        .await?;
+
+    let result = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                removed_files: Vec::new(),
+                new_file_options: BTreeMap::new(),
+                dynamic_linking: None,
+                env: None,
+                agent_types: None,
+                plugin_updates: vec![
+                    PluginInstallationAction::Install(PluginInstallation {
+                        environment_plugin_grant_id: grant_1.id,
+                        priority: PluginPriority(0),
+                        parameters: BTreeMap::new(),
+                    }),
+                    PluginInstallationAction::Install(PluginInstallation {
+                        environment_plugin_grant_id: grant_2.id,
+                        priority: PluginPriority(0),
+                        parameters: BTreeMap::new(),
+                    }),
+                ],
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await;
+
+    assert!(
+        let Err(golem_client::Error::Item(
+            RegistryServiceUpdateComponentError::Error409(_)
+        )) = result
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn update_component_with_duplicate_plugin_grant_ids_fails(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: "".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(
+                tokio::fs::read(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
+        )
+        .await?;
+
+    let grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin.id,
+            },
+        )
+        .await?;
+
+    let component = user
+        .component(&env.id, "app_and_library_app")
+        .store()
+        .await?;
+
+    let result = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                removed_files: Vec::new(),
+                new_file_options: BTreeMap::new(),
+                dynamic_linking: None,
+                env: None,
+                agent_types: None,
+                plugin_updates: vec![
+                    PluginInstallationAction::Install(PluginInstallation {
+                        environment_plugin_grant_id: grant.id,
+                        priority: PluginPriority(0),
+                        parameters: BTreeMap::new(),
+                    }),
+                    PluginInstallationAction::Install(PluginInstallation {
+                        environment_plugin_grant_id: grant.id,
+                        priority: PluginPriority(1),
+                        parameters: BTreeMap::new(),
+                    }),
+                ],
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await;
+
+    assert!(
+        let Err(golem_client::Error::Item(
+            RegistryServiceUpdateComponentError::Error409(_)
+        )) = result
     );
 
     Ok(())

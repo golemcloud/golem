@@ -1,0 +1,5 @@
+.metadata/
+agent-template/
+dist/
+node_modules/
+wasm/*.wasm

@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     )?;
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let fd_path = out_dir.join("services.bin");
 
     std::fs::write(fd_path, file_descriptors.encode_to_vec())?;

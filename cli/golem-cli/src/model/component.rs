@@ -21,7 +21,9 @@ use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::component::{
+    ComponentDto, ComponentId, ComponentRevision, InstalledPlugin,
+};
 use golem_common::model::component::{ComponentName, InitialComponentFile};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
@@ -130,6 +132,7 @@ pub struct ComponentView {
     pub agent_types: Vec<AgentType>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
     pub files: Vec<InitialComponentFile>,
+    pub plugins: Vec<InstalledPlugin>,
     pub env: BTreeMap<String, String>,
 }
 
@@ -205,6 +208,7 @@ impl ComponentView {
                 })
                 .collect(),
             files: value.files,
+            plugins: value.installed_plugins,
             env: value.env,
         }
     }
@@ -216,6 +220,7 @@ pub struct ComponentDeployProperties {
     pub agent_types: Vec<AgentType>,
     pub files: Vec<crate::model::app::InitialComponentFile>,
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    pub plugins: Vec<crate::model::app::PluginInstallation>,
     pub env: BTreeMap<String, String>,
 }
 

@@ -3719,7 +3719,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/{environment_id}/domain-registrations:
+  /v1/envs/{environment_id}/domain-registrations:
     get:
       tags:
       - RegistryService
@@ -4021,7 +4021,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_EnvironmentPluginGrant'
+                $ref: '#/components/schemas/Page_EnvironmentPluginGrantWithDetails'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4174,7 +4174,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/EnvironmentPluginGrant'
+                $ref: '#/components/schemas/EnvironmentPluginGrantWithDetails'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4515,6 +4515,28 @@ paths:
       - Environment
       summary: List all environments that are visible to the current user, either directly or through shares.
       operationId: list_visible_environments
+      parameters:
+      - in: query
+        name: account_email
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: app_name
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: env_name
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -5687,14 +5709,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-definitions:
+  /stubs/envs/{environment_id}/http-api-definitions:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       - Environment
       summary: List http api definitions in the environment
-      operationId: list_environment_http_api_definitions
+      operationId: list_environment_http_api_definitions_legacy
       parameters:
       - in: path
         name: environment_id
@@ -5763,7 +5785,7 @@ paths:
       - HttpApiDefinition
       - Environment
       summary: Create a new api-definition in the environment
-      operationId: create_http_api_definition
+      operationId: create_http_api_definition_legacy
       parameters:
       - in: path
         name: environment_id
@@ -5832,13 +5854,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-definitions/{http_api_definition_id}:
+  /stubs/http-api-definitions/{http_api_definition_id}:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       summary: Get http api definition
-      operationId: get_http_api_definition
+      operationId: get_http_api_definition_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -5906,7 +5928,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Delete http api definition
-      operationId: delete_http_api_definition
+      operationId: delete_http_api_definition_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -5979,7 +6001,7 @@ paths:
       - RegistryService
       - HttpApiDefinition
       summary: Update http api definition
-      operationId: update_http_api_definition
+      operationId: update_http_api_definition_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6048,13 +6070,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-definitions/{http_api_definition_id}/revisions/{revision}:
+  /stubs/http-api-definitions/{http_api_definition_id}/revisions/{revision}:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       summary: Get a specific http api definition revision
-      operationId: get_http_api_definition_revision
+      operationId: get_http_api_definition_revision_legacy
       parameters:
       - in: path
         name: http_api_definition_id
@@ -6126,14 +6148,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-definitions/{http_api_definition_name}:
+  /stubs/envs/{environment_id}/http-api-definitions/{http_api_definition_name}:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       - Environment
       summary: Get http api definition by name in the environment
-      operationId: get_http_api_definition_in_environment
+      operationId: get_http_api_definition_in_environment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6204,7 +6226,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}:
     get:
       tags:
       - RegistryService
@@ -6212,7 +6234,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api definition by name in the deployment
-      operationId: get_http_api_definition_in_deployment
+      operationId: get_http_api_definition_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6292,7 +6314,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi:
     get:
       tags:
       - RegistryService
@@ -6300,7 +6322,7 @@ paths:
       - Environment
       - Deployment
       summary: Get openapi spec of http api definition in the deployment
-      operationId: get_openapi_of_http_api_definition_in_deployment
+      operationId: get_openapi_of_http_api_definition_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6380,14 +6402,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
     get:
       tags:
       - RegistryService
       - HttpApiDefinition
       - Environment
       summary: List http api definitions in the deployment
-      operationId: list_deployment_http_api_definitions
+      operationId: list_deployment_http_api_definitions_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6459,14 +6481,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-deployments:
+  /stubs/envs/{environment_id}/http-api-deployments:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       - Environment
       summary: List http api deployment by domain in the environment
-      operationId: list_http_api_deployments_in_environment
+      operationId: list_http_api_deployments_in_environment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6535,7 +6557,7 @@ paths:
       - ApiDeployment
       - Environment
       summary: Create a new api-deployment in the environment
-      operationId: create_http_api_deployment
+      operationId: create_http_api_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6604,13 +6626,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-deployments/{http_api_deployment_id}:
+  /stubs/http-api-deployments/{http_api_deployment_id}:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       summary: Get an api-deployment by id
-      operationId: get_http_api_deployment
+      operationId: get_http_api_deployment_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6678,7 +6700,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Delete an api-deployment
-      operationId: delete_http_api_deployment
+      operationId: delete_http_api_deployment_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6751,7 +6773,7 @@ paths:
       - RegistryService
       - ApiDeployment
       summary: Update an api-deployment
-      operationId: update_http_api_deployment
+      operationId: update_http_api_deployment_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6820,13 +6842,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/http-api-deployment/{http_api_deployment_id}/revisions/{revision}:
+  /stubs/http-api-deployment/{http_api_deployment_id}/revisions/{revision}:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       summary: Get a specific http api deployment revision
-      operationId: get_http_api_deployment_revision
+      operationId: get_http_api_deployment_revision_legacy
       parameters:
       - in: path
         name: http_api_deployment_id
@@ -6898,14 +6920,14 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/http-api-deployments/{domain}:
+  /stubs/envs/{environment_id}/http-api-deployments/{domain}:
     get:
       tags:
       - RegistryService
       - ApiDeployment
       - Environment
       summary: Get http api deployment by domain in the environment
-      operationId: get_http_api_deployment_in_environment
+      operationId: get_http_api_deployment_in_environment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -6976,7 +6998,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}:
     get:
       tags:
       - RegistryService
@@ -6984,7 +7006,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api deployment by domain in the deployment
-      operationId: get_http_api_deployment_in_deployment
+      operationId: get_http_api_deployment_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -7064,7 +7086,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
+  /stubs/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
       - RegistryService
@@ -7072,7 +7094,7 @@ paths:
       - Environment
       - Deployment
       summary: Get http api deployment by domain in the deployment
-      operationId: list_http_api_deployments_in_deployment
+      operationId: list_http_api_deployments_in_deployment_legacy
       parameters:
       - in: path
         name: environment_id
@@ -11383,8 +11405,6 @@ components:
           type: string
       required:
       - currentRevision
-      - name
-      - email
     AgentConstructor:
       title: AgentConstructor
       type: object
@@ -11418,6 +11438,14 @@ components:
       - typeName
       - constructor
       - methods
+    AgentHttpAuthDetails:
+      title: AgentHttpAuthDetails
+      type: object
+      properties:
+        required:
+          type: boolean
+      required:
+      - required
     AgentMethod:
       title: AgentMethod
       type: object
@@ -11432,11 +11460,16 @@ components:
           $ref: '#/components/schemas/DataSchema'
         outputSchema:
           $ref: '#/components/schemas/DataSchema'
+        httpEndpoint:
+          type: array
+          items:
+            $ref: '#/components/schemas/HttpEndpointDetails'
       required:
       - name
       - description
       - inputSchema
       - outputSchema
+      - httpEndpoint
     AgentMode:
       type: string
       enum:
@@ -11462,6 +11495,8 @@ components:
             $ref: '#/components/schemas/AgentDependency'
         mode:
           $ref: '#/components/schemas/AgentMode'
+        httpMount:
+          $ref: '#/components/schemas/HttpMountDetails'
       required:
       - typeName
       - description
@@ -11597,7 +11632,7 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
       required:
       - currentRevision
@@ -11830,6 +11865,16 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
       required:
       - currentRevision
+    CorsOptions:
+      title: CorsOptions
+      type: object
+      properties:
+        allowedPatterns:
+          type: array
+          items:
+            type: string
+      required:
+      - allowedPatterns
     CorsPreflightBinding:
       title: CorsPreflightBinding
       type: object
@@ -11860,6 +11905,14 @@ components:
       - version
       - deploymentHash
       - currentRevision
+    CustomHttpMethod:
+      title: CustomHttpMethod
+      type: object
+      properties:
+        value:
+          type: string
+      required:
+      - value
     DataSchema:
       discriminator:
         propertyName: type
@@ -12220,12 +12273,15 @@ components:
         deploymentRevision:
           type: integer
           format: uint64
+        deploymentVersion:
+          type: string
         deploymentHash:
           type: string
           format: hash
       required:
       - revision
       - deploymentRevision
+      - deploymentVersion
       - deploymentHash
     EnvironmentPluginGrant:
       title: EnvironmentPluginGrant
@@ -12237,12 +12293,13 @@ components:
         environmentId:
           type: string
           format: uuid
-        plugin:
-          $ref: '#/components/schemas/PluginRegistrationDto'
+        pluginId:
+          type: string
+          format: uuid
       required:
       - id
       - environmentId
-      - plugin
+      - pluginId
     EnvironmentPluginGrantCreation:
       title: EnvironmentPluginGrantCreation
       type: object
@@ -12252,6 +12309,25 @@ components:
           format: uuid
       required:
       - pluginRegistrationId
+    EnvironmentPluginGrantWithDetails:
+      title: EnvironmentPluginGrantWithDetails
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        plugin:
+          $ref: '#/components/schemas/PluginRegistrationDto'
+        pluginAccount:
+          $ref: '#/components/schemas/AccountSummary'
+      required:
+      - id
+      - environmentId
+      - plugin
+      - pluginAccount
     EnvironmentRole:
       type: string
       enum:
@@ -12305,13 +12381,13 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newRoles:
+        roles:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentRole'
       required:
       - currentRevision
-      - newRoles
+      - roles
     EnvironmentSummary:
       title: EnvironmentSummary
       type: object
@@ -12351,8 +12427,14 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        newName:
+        name:
           type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
       required:
       - currentRevision
     EnvironmentWithDetails:
@@ -12483,6 +12565,17 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerGatewayBinding'
+    HeaderVariable:
+      title: HeaderVariable
+      type: object
+      properties:
+        headerName:
+          type: string
+        variableName:
+          type: string
+      required:
+      - headerName
+      - variableName
     HttpApiDefinition:
       title: HttpApiDefinition
       type: object
@@ -12629,6 +12722,34 @@ components:
       - method
       - path
       - binding
+    HttpEndpointDetails:
+      title: HttpEndpointDetails
+      type: object
+      properties:
+        httpMethod:
+          $ref: '#/components/schemas/HttpMethod'
+        pathSuffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+        headerVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/HeaderVariable'
+        queryVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryVariable'
+        authDetails:
+          $ref: '#/components/schemas/AgentHttpAuthDetails'
+        corsOptions:
+          $ref: '#/components/schemas/CorsOptions'
+      required:
+      - httpMethod
+      - pathSuffix
+      - headerVars
+      - queryVars
+      - corsOptions
     HttpHandlerBinding:
       title: HttpHandlerBinding
       type: object
@@ -12647,6 +12768,79 @@ components:
       - componentName
       - workerName
       - response
+    HttpMethod:
+      discriminator:
+        propertyName: type
+        mapping:
+          Get: '#/components/schemas/HttpMethod_Empty'
+          Put: '#/components/schemas/HttpMethod_Empty'
+          Post: '#/components/schemas/HttpMethod_Empty'
+          Delete: '#/components/schemas/HttpMethod_Empty'
+          Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
+    HttpMethod_CustomHttpMethod:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Custom
+            type: string
+            enum:
+            - Custom
+        required:
+        - type
+      - $ref: '#/components/schemas/CustomHttpMethod'
+    HttpMethod_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Delete
+            type: string
+            enum:
+            - Delete
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    HttpMountDetails:
+      title: HttpMountDetails
+      type: object
+      properties:
+        pathPrefix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+        headerVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/HeaderVariable'
+        queryVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryVariable'
+        authDetails:
+          $ref: '#/components/schemas/AgentHttpAuthDetails'
+        phantomAgent:
+          type: boolean
+        corsOptions:
+          $ref: '#/components/schemas/CorsOptions'
+        webhookSuffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+      required:
+      - pathPrefix
+      - headerVars
+      - queryVars
+      - phantomAgent
+      - corsOptions
+      - webhookSuffix
     InitialComponentFile:
       title: InitialComponentFile
       type: object
@@ -12717,6 +12911,14 @@ components:
           format: uint64
       required:
       - initial
+    LiteralSegment:
+      title: LiteralSegment
+      type: object
+      properties:
+        value:
+          type: string
+      required:
+      - value
     NamedElementSchema:
       title: NamedElementSchema
       type: object
@@ -12853,14 +13055,14 @@ components:
             $ref: '#/components/schemas/Environment'
       required:
       - values
-    Page_EnvironmentPluginGrant:
-      title: Page_EnvironmentPluginGrant
+    Page_EnvironmentPluginGrantWithDetails:
+      title: Page_EnvironmentPluginGrantWithDetails
       type: object
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/EnvironmentPluginGrant'
+            $ref: '#/components/schemas/EnvironmentPluginGrantWithDetails'
       required:
       - values
     Page_EnvironmentShare:
@@ -12943,6 +13145,72 @@ components:
             $ref: '#/components/schemas/Token'
       required:
       - values
+    PathSegment:
+      title: PathSegment
+      type: object
+      properties:
+        concat:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegmentNode'
+      required:
+      - concat
+    PathSegmentNode:
+      discriminator:
+        propertyName: type
+        mapping:
+          Literal: '#/components/schemas/PathSegmentNode_LiteralSegment'
+          SystemVariable: '#/components/schemas/PathSegmentNode_SystemVariableSegment'
+          PathVariable: '#/components/schemas/PathSegmentNode_PathVariable'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PathSegmentNode_LiteralSegment'
+      - $ref: '#/components/schemas/PathSegmentNode_SystemVariableSegment'
+      - $ref: '#/components/schemas/PathSegmentNode_PathVariable'
+    PathSegmentNode_LiteralSegment:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Literal
+            type: string
+            enum:
+            - Literal
+        required:
+        - type
+      - $ref: '#/components/schemas/LiteralSegment'
+    PathSegmentNode_PathVariable:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PathVariable
+            type: string
+            enum:
+            - PathVariable
+        required:
+        - type
+      - $ref: '#/components/schemas/PathVariable'
+    PathSegmentNode_SystemVariableSegment:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SystemVariable
+            type: string
+            enum:
+            - SystemVariable
+        required:
+        - type
+      - $ref: '#/components/schemas/SystemVariableSegment'
+    PathVariable:
+      title: PathVariable
+      type: object
+      properties:
+        variableName:
+          type: string
+      required:
+      - variableName
     Plan:
       title: Plan
       type: object
@@ -13065,13 +13333,10 @@ components:
       title: PluginInstallationUpdate
       type: object
       properties:
-        pluginPriority:
-          title: |-
-            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-            There can only be a single plugin with a given priority installed to a component.
-          description: Priority will be used to identify the plugin to update
-          type: integer
-          format: int32
+        environmentPluginGrantId:
+          description: EnvironmentPluginGrantId to identify the plugin to update
+          type: string
+          format: uuid
         newPriority:
           title: |-
             Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
@@ -13083,7 +13348,7 @@ components:
           additionalProperties:
             type: string
       required:
-      - pluginPriority
+      - environmentPluginGrantId
     PluginRegistrationCreation:
       title: PluginRegistrationCreation
       type: object
@@ -13194,15 +13459,12 @@ components:
       title: PluginUninstallation
       type: object
       properties:
-        pluginPriority:
-          title: |-
-            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-            There can only be a single plugin with a given priority installed to a component.
-          description: Priority will be used to identify the plugin to delete
-          type: integer
-          format: int32
+        environmentPluginGrantId:
+          description: EnvironmentPluginGrantId to identify the plugin to update
+          type: string
+          format: uuid
       required:
-      - pluginPriority
+      - environmentPluginGrantId
     ProducerField:
       title: ProducerField
       type: object
@@ -13233,6 +13495,17 @@ components:
       - facebook
       - microsoft
       - gitlab
+    QueryVariable:
+      title: QueryVariable
+      type: object
+      properties:
+        queryParamName:
+          type: string
+        variableName:
+          type: string
+      required:
+      - queryParamName
+      - variableName
     RegisteredAgentType:
       title: RegisteredAgentType
       type: object
@@ -13349,6 +13622,19 @@ components:
             type: string
       required:
       - currentRevision
+    SystemVariable:
+      type: string
+      enum:
+      - AgentType
+      - AgentVersion
+    SystemVariableSegment:
+      title: SystemVariableSegment
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/SystemVariable'
+      required:
+      - value
     TextDescriptor:
       title: TextDescriptor
       type: object

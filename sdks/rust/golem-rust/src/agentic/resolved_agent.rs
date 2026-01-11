@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::Agent;
+use crate::agentic::BaseAgent;
 use std::cell::RefCell;
 
 pub struct ResolvedAgent {
-    pub agent: RefCell<Box<dyn Agent>>,
+    pub agent: RefCell<Box<dyn BaseAgent>>,
 }
 
 impl ResolvedAgent {
-    pub fn new(agent: Box<dyn Agent>) -> ResolvedAgent {
+    pub fn new(agent: Box<dyn BaseAgent>) -> ResolvedAgent {
         ResolvedAgent {
             agent: RefCell::new(agent),
         }

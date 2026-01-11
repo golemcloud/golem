@@ -19,6 +19,7 @@ use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,9 +44,9 @@ pub struct ComponentFileDiff {
 impl Diffable for ComponentFile {
     type DiffResult = ComponentFileDiff;
 
-    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
-        let content_changed = local.hash != remote.hash;
-        let permissions_changed = local.permissions != remote.permissions;
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let content_changed = new.hash != current.hash;
+        let permissions_changed = new.permissions != current.permissions;
 
         if content_changed || permissions_changed {
             Some(ComponentFileDiff {
@@ -92,7 +93,7 @@ pub struct Component {
     #[serde(serialize_with = "serialize_with_mode")]
     pub files_by_path: BTreeMap<String, HashOf<ComponentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins_by_priority: BTreeMap<String, PluginInstallation>,
+    pub plugins_by_grant_id: BTreeMap<Uuid, PluginInstallation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -102,27 +103,35 @@ pub struct ComponentDiff {
     pub metadata_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
-    pub plugins_changed: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_changes: BTreeMapDiff<Uuid, PluginInstallation>,
 }
 
 impl Diffable for Component {
     type DiffResult = ComponentDiff;
 
-    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
-        let metadata_changed = local.metadata != remote.metadata;
-        let wasm_changed = local.wasm_hash != remote.wasm_hash;
-        let file_changes = local
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let metadata_changed = new.metadata != current.metadata;
+        let wasm_changed = new.wasm_hash != current.wasm_hash;
+        let file_changes = new
             .files_by_path
-            .diff_with_server(&remote.files_by_path)
+            .diff_with_current(&current.files_by_path)
             .unwrap_or_default();
-        let plugins_changed = local.plugins_by_priority != remote.plugins_by_priority;
+        let plugin_changes = new
+            .plugins_by_grant_id
+            .diff_with_current(&current.plugins_by_grant_id)
+            .unwrap_or_default();
 
-        if metadata_changed || wasm_changed || !file_changes.is_empty() || plugins_changed {
+        if metadata_changed
+            || wasm_changed
+            || !file_changes.is_empty()
+            || !plugin_changes.is_empty()
+        {
             Some(ComponentDiff {
                 metadata_changed,
                 wasm_changed,
                 file_changes,
-                plugins_changed,
+                plugin_changes,
             })
         } else {
             None

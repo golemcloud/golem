@@ -55,12 +55,17 @@ declare_structs! {
         pub name: ApplicationName,
     }
 
+    pub struct ApplicationSummary {
+        pub id: ApplicationId,
+        pub name: ApplicationName,
+    }
+
     pub struct ApplicationCreation {
         pub name: ApplicationName,
     }
 
     pub struct ApplicationUpdate {
         pub current_revision: ApplicationRevision,
-        pub new_name: Option<ApplicationName>,
+        pub name: Option<ApplicationName>,
     }
 }

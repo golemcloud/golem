@@ -65,7 +65,7 @@ impl TokensApi {
     }
 
     async fn get_token_internal(&self, token_id: TokenId, auth: AuthCtx) -> ApiResult<Json<Token>> {
-        let result = self.token_service.get(&token_id, &auth).await?;
+        let result = self.token_service.get(token_id, &auth).await?;
 
         Ok(Json(result.without_secret()))
     }
@@ -96,7 +96,7 @@ impl TokensApi {
         token_id: TokenId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Empty>> {
-        self.token_service.delete(&token_id, &auth).await?;
+        self.token_service.delete(token_id, &auth).await?;
         Ok(Json(Empty {}))
     }
 }

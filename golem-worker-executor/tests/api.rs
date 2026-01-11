@@ -1497,7 +1497,7 @@ async fn get_worker_metadata(
     check!(metadata1.worker_id == worker_id);
     check!(metadata1.created_by == context.account_id);
 
-    check!(metadata2.component_size == 200406);
+    check!(metadata2.component_size == 200574);
     check!(metadata2.total_linear_memory_size == 1245184);
     Ok(())
 }
@@ -1746,12 +1746,12 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
         assert2::let_assert!(
             Err(WorkerExecutorError::ComponentParseFailed {
                 component_id,
-                component_version,
+                component_revision,
                 reason
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision::INITIAL);
+        assert!(component_revision == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
 
@@ -1803,12 +1803,12 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         assert2::let_assert!(
             Err(WorkerExecutorError::ComponentParseFailed {
                 component_id,
-                component_version,
+                component_revision,
                 reason
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision::INITIAL);
+        assert!(component_revision == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
     Ok(())
@@ -1874,12 +1874,12 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         assert2::let_assert!(
             Err(WorkerExecutorError::ComponentParseFailed {
                 component_id,
-                component_version,
+                component_revision,
                 reason
             }) = result
         );
         assert!(component_id == component.id);
-        assert!(component_version == ComponentRevision::INITIAL);
+        assert!(component_revision == ComponentRevision::INITIAL);
         assert!(reason == "failed to parse WebAssembly module");
     };
 

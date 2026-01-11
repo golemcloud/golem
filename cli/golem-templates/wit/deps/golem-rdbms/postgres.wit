@@ -1,4 +1,4 @@
-package golem:rdbms@0.0.1;
+package golem:rdbms@0.0.2;
 
 interface postgres {
   use types.{date, time, timetz, timestamp, timestamptz, uuid, ip-address, mac-address};
@@ -133,6 +133,12 @@ interface postgres {
     value: values-range
   }
 
+  record sparse-vec {
+    dim: s32,
+    indices: list<s32>,
+    values: list<f32>
+  }
+
   variant db-column-type {
     character,
     int2,
@@ -174,7 +180,10 @@ interface postgres {
     composite(composite-type),
     domain(domain-type),
     array(lazy-db-column-type),
-    range(range-type)
+    range(range-type),
+    vector,
+    halfvec,
+    sparsevec
   }
 
   variant db-value {
@@ -219,7 +228,10 @@ interface postgres {
     domain(domain),
     array(list<lazy-db-value>),
     range(range),
-    null
+    null,
+    vector(list<f32>),
+    halfvec(list<f32>),
+    sparsevec(sparse-vec)
   }
 
   resource lazy-db-value {

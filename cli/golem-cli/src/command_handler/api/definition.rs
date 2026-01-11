@@ -19,11 +19,11 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::text::fmt::log_error;
+use crate::model::text::fmt::{log_error, log_warn};
 use crate::model::text::http_api_definition::HttpApiDefinitionGetView;
 use crate::model::{app, OpenApiDefinitionOutputFormat};
 use anyhow::{anyhow, bail};
-use golem_client::api::HttpApiDefinitionClient;
+use golem_client::api::{ApiDeploymentClient, EnvironmentClient, HttpApiDefinitionClient};
 use golem_client::model::{HttpApiDefinitionCreation, HttpApiDefinitionUpdate};
 use golem_common::cache::SimpleCache;
 use golem_common::model::deployment::{DeploymentPlanHttpApiDefintionEntry, DeploymentRevision};
@@ -57,7 +57,7 @@ impl ApiDefinitionCommandHandler {
                 format,
                 output_name,
             } => {
-                self.cmd_export(name, deployment_revision, format, output_name)
+                self.cmd_openapi(name, deployment_revision, format, output_name)
                     .await
             }
             ApiDefinitionSubcommand::Swagger {
@@ -102,21 +102,31 @@ impl ApiDefinitionCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let clients = self.ctx.golem_clients().await?;
-
-        let definitions = clients
-            .api_definition
-            .list_environment_http_api_definitions(&environment.environment_id.0)
-            .await
-            .map_service_error()?
-            .values;
+        let definitions = environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    Ok(self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .list_deployment_http_api_definitions_legacy(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                        )
+                        .await
+                        .map_service_error()?
+                        .values)
+                },
+            )
+            .await?;
 
         self.ctx.log_handler().log_view(&definitions);
 
         Ok(())
     }
 
-    async fn cmd_export(
+    async fn cmd_openapi(
         &self,
         name: HttpApiDefinitionName,
         deployment_revision: Option<DeploymentRevision>,
@@ -175,6 +185,8 @@ impl ApiDefinitionCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
+        let current_deployment = environment.current_deployment_or_err()?;
+
         let mut openapi_spec = self
             .get_deployed_openapi_spec(&environment, &name, deployment_revision.as_ref())
             .await?;
@@ -182,51 +194,47 @@ impl ApiDefinitionCommandHandler {
         // Filter paths to only include methods with binding-type: default
         filter_routes(&mut openapi_spec);
 
-        // TODO: atomic
-        /*
         // Fetch deployments
-        let project_id = self
+        let deployments = self
             .ctx
-            .cloud_project_handler()
-            .selected_project_id_or_default(project.as_ref())
+            .golem_clients()
             .await?
-            .0;
-
-        let deployments = clients
             .api_deployment
-            .list_deployments(&project_id, Some(&id.0))
+            .list_http_api_deployments_in_deployment_legacy(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.get(),
+            )
             .await
-            .map_service_error()?;
+            .map_service_error()?
+            .values
+            .into_iter()
+            .filter(|d| d.api_definitions.contains(&name))
+            .collect::<Vec<_>>();
 
         // Add server information if deployments exist
         if !deployments.is_empty() {
             // Initialize servers array if it doesn't exist
-            if !spec.as_object().unwrap().contains_key("servers") {
-                spec.as_object_mut()
+            if !openapi_spec.as_object().unwrap().contains_key("servers") {
+                openapi_spec
+                    .as_object_mut()
                     .unwrap()
                     .insert("servers".to_string(), serde_json::Value::Array(Vec::new()));
             }
 
             // Add servers to the spec
-            if let Some(servers) = spec.get_mut("servers") {
+            if let Some(servers) = openapi_spec.get_mut("servers") {
                 if let Some(servers) = servers.as_array_mut() {
                     // Add deployment servers with HTTP
                     for deployment in &deployments {
-                        let url = match &deployment.site.subdomain {
-                            Some(subdomain) => {
-                                format!("http://{}.{}", subdomain, deployment.site.host)
-                            }
-                            None => format!("http://{}", deployment.site.host),
-                        };
+                        // TODO: how should we know if it is HTTP or HTTPS?
                         servers.push(serde_json::json!({
-                            "url": url,
+                            "url": format!("http://{}", deployment.domain),
                             "description": "Deployed instance"
                         }));
                     }
                 }
             }
         }
-        */
 
         // Validate port
         if port == 0 {
@@ -245,23 +253,16 @@ impl ApiDefinitionCommandHandler {
             format!("Swagger UI, running at http://localhost:{}", port),
         );
         logln("");
+        if deployments.is_empty() {
+            log_warn("No deployments found - displaying API schema without server information")
+        } else {
+            logln("API is deployed at:".log_color_help_group().to_string());
+            for deployment in &deployments {
+                logln(format!("- {}", deployment.domain));
+            }
+        }
+        logln("");
         logln("Press Ctrl+C to quit");
-
-        // TODO: atomic
-        /*
-        self.ctx
-            .log_handler()
-            .log_view(&ApiDefinitionExportView(format!(
-                "Swagger UI running at http://localhost:{}\n{}",
-                port,
-                if deployments.is_empty() {
-                    "No deployments found - displaying API schema without server information"
-                        .to_string()
-                } else {
-                    format!("API is deployed at {} locations", deployments.len())
-                }
-            )));
-        */
 
         // Wait for ctrl+c
         tokio::signal::ctrl_c().await?;
@@ -355,26 +356,38 @@ impl ApiDefinitionCommandHandler {
         name: &HttpApiDefinitionName,
         revision: Option<&HttpApiDefinitionRevision>,
     ) -> anyhow::Result<Option<HttpApiDefinition>> {
-        let clients = self.ctx.golem_clients().await?;
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    let clients = self.ctx.golem_clients().await?;
+                    let Some(definition) = clients
+                        .api_definition
+                        .get_http_api_definition_in_deployment_legacy(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                            &name.0,
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()?
+                    else {
+                        return Ok(None);
+                    };
 
-        let Some(definition) = clients
-            .api_definition
-            .get_http_api_definition_in_environment(&environment.environment_id.0, &name.0)
+                    let Some(revision) = revision else {
+                        return Ok(Some(definition));
+                    };
+
+                    clients
+                        .api_definition
+                        .get_http_api_definition_revision_legacy(
+                            &definition.id.0,
+                            (*revision).into(),
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()
+                },
+            )
             .await
-            .map_service_error_not_found_as_opt()?
-        else {
-            return Ok(None);
-        };
-
-        let Some(revision) = revision else {
-            return Ok(Some(definition));
-        };
-
-        clients
-            .api_definition
-            .get_http_api_definition_revision(&definition.id.0, (*revision).into())
-            .await
-            .map_service_error_not_found_as_opt()
     }
 
     pub async fn get_http_api_definition_revision_by_id(
@@ -391,7 +404,7 @@ impl ApiDefinitionCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .api_definition
-                        .get_http_api_definition_revision(
+                        .get_http_api_definition_revision_legacy(
                             &http_api_definition_id.0,
                             revision.into(),
                         )
@@ -412,10 +425,13 @@ impl ApiDefinitionCommandHandler {
     ) -> anyhow::Result<Value> {
         let deployment_revision = match deployment_revision {
             Some(deployment_revision) => deployment_revision.to_owned(),
-            None => match &environment.remote_environment.current_deployment {
+            None => match &environment.server_environment.current_deployment {
                 Some(deployment) => deployment.deployment_revision,
                 None => {
-                    log_error("The application is not deployed. Run {}, then export!");
+                    log_error(format!(
+                        "The application is not deployed. Run {}, then retry the command!",
+                        "golem deploy"
+                    ));
                     bail!(NonSuccessfulExit);
                 }
             },
@@ -426,7 +442,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .get_openapi_of_http_api_definition_in_deployment(
+            .get_openapi_of_http_api_definition_in_deployment_legacy(
                 &environment.environment_id.0,
                 deployment_revision.into(),
                 &name.0,
@@ -469,7 +485,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .create_http_api_definition(
+            .create_http_api_definition_legacy(
                 &environment.environment_id.0,
                 &HttpApiDefinitionCreation {
                     name: http_api_definition_name.clone(),
@@ -511,7 +527,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .delete_http_api_definition(
+            .delete_http_api_definition_legacy(
                 &http_api_definition.id.0,
                 http_api_definition.revision.into(),
             )
@@ -553,7 +569,7 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .update_http_api_definition(
+            .update_http_api_definition_legacy(
                 &http_api_definition.id.0,
                 &HttpApiDefinitionUpdate {
                     current_revision: http_api_definition.revision,

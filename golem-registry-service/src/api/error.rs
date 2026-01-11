@@ -266,7 +266,6 @@ impl From<ComponentError> for ApiError {
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. }
             | ComponentError::EnvironmentPluginNotFound(_)
-            | ComponentError::ConflictingPluginPriority(_)
             | ComponentError::ComponentTransformerPluginFailed { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
@@ -282,6 +281,8 @@ impl From<ComponentError> for ApiError {
 
             ComponentError::ComponentWithNameAlreadyExists(_)
             | ComponentError::ComponentVersionAlreadyExists(_)
+            | ComponentError::ConflictingPluginPriority(_)
+            | ComponentError::ConflictingEnvironmentPluginGrantId(_)
             | ComponentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
