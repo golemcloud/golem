@@ -20,6 +20,7 @@ use test_r::{tag_suite, test_dep};
 test_r::enable!();
 
 mod app;
+mod error_ux;
 mod stubgen;
 
 tag_suite!(stubgen, group1);

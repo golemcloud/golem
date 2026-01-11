@@ -28,6 +28,7 @@ pub mod config;
 pub mod context;
 pub mod diagnose;
 pub mod error;
+pub mod error_display;
 pub mod fs;
 pub mod fuzzy;
 pub mod log;
