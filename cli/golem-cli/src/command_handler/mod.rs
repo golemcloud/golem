@@ -40,6 +40,7 @@ use crate::command_handler::rib_repl::RibReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
+use crate::error_display::format_error;
 use crate::log::{logln, set_log_output, Output};
 use crate::model::text::fmt::log_error;
 use crate::{command_name, init_tracing};
@@ -247,10 +248,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 // App validation errors are already formatted and usually contain multiple
                 // errors (and warns)
                 logln("");
-                logln(format!("{error:#}"));
+                logln(format_error(&error));
             } else {
                 logln("");
-                log_error(format!("{error:#}"));
+                log_error(format_error(&error));
             }
             ExitCode::FAILURE
         })
