@@ -13,7 +13,7 @@ build = "build.rs"
 [features]
 default = []
 server-commands = []
-mcp = ["dep:rmcp", "dep:tokio-util"]
+mcp = ["dep:rmcp", "dep:tokio-util", "dep:actix-web", "dep:rmcp-actix-web"]
 
 [lib]
 harness = false
@@ -42,6 +42,7 @@ golem-wasm-derive = { workspace = true }
 anyhow = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
+async-stream = "0.3.5"
 async_zip = { workspace = true }
 auditable-serde = { workspace = true }
 base64 = { workspace = true }
@@ -126,7 +127,9 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
-rmcp = { version = "0.1.5", features = ["server"], optional = true }
+actix-web = { version = "4.12.0", optional = true }
+rmcp-actix-web = { version = "0.8.17", optional = true }
+rmcp = { version = "0.10.0", features = ["server", "transport-streamable-http-server-session", "transport-streamable-http-server", "transport-worker"], optional = true }
 tokio-util = { workspace = true, optional = true }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]

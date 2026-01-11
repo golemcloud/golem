@@ -57,7 +57,7 @@ pub struct GolemCliCommand {
     pub global_flags: GolemCliGlobalFlags,
 
     #[clap(subcommand)]
-    pub subcommand: GolemCliSubcommand,
+    pub subcommand: Option<GolemCliSubcommand>,
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,

@@ -21,13 +21,13 @@ test_r::enable!();
 
 mod app;
 #[cfg(feature = "mcp")]
-mod mcp_server;
+mod mcpserver;
 mod stubgen;
 
 tag_suite!(stubgen, group1);
 
 #[cfg(feature = "mcp")]
-tag_suite!(mcp_server, mcp_server);
+tag_suite!(mcpserver, mcpserver);
 
 #[derive(Debug)]
 pub struct Tracing;
