@@ -129,7 +129,8 @@ impl Default for TestTypes {
         ])
         .named("UnionWithLiterals");
 
-        let union_with_only_literals = r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
+        let union_with_only_literals =
+            r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
 
         let object_with_union_undefined = record(vec![field("a", option(str()))]);
 
@@ -236,8 +237,7 @@ fn ts_counter_agent() -> GeneratedPackage {
 
 #[test_dep(tagged_as = "code_first_snippets")]
 fn ts_ts_code_first_snippets() -> GeneratedPackage {
-    let agent_type =
-        super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
+    let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
     let dir = TempDir::new().unwrap();
 
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -251,42 +251,29 @@ fn ts_ts_code_first_snippets() -> GeneratedPackage {
 fn single_agent_wrapper_1_compiles(
     #[tagged_as("single_agent_wrapper_types_1")] _pkg: &GeneratedPackage,
 ) {
-    assert!(true)
 }
 
 #[test]
 fn multi_agent_wrapper_2_types_1_compiles(
     #[tagged_as("multi_agent_wrapper_2_types_1")] _pkg: &GeneratedPackage,
 ) {
-    assert!(true)
 }
 
 #[test]
 fn multi_agent_wrapper_2_types_2_compiles(
     #[tagged_as("multi_agent_wrapper_2_types_2")] _pkg: &GeneratedPackage,
 ) {
-    assert!(true)
 }
 
 #[test]
-fn counter_agent_compiles(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {
-    assert!(true)
-}
+fn counter_agent_compiles(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {}
 
 #[test]
-fn code_first_snippets_compiles(#[tagged_as("code_first_snippets")] _pkg: &GeneratedPackage) {
-    assert!(true)
-}
+fn code_first_snippets_compiles(#[tagged_as("code_first_snippets")] _pkg: &GeneratedPackage) {}
 
 #[test]
-fn playground4() {
-    let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen4");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
-
-    let types = TestTypes::default();
+fn bridge_tests_optional_q_mark(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -312,6 +299,12 @@ fn playground4() {
             ],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_optional(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -380,11 +373,133 @@ fn playground4() {
             ],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_number(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunNumber",
+        json!([42]),
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: 42i32.into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+    );
+}
+
+#[test]
+fn bridge_tests_string(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunString",
+        json!(["hello"]),
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: "hello".into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+    );
+}
+
+#[test]
+fn bridge_tests_boolean(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunBoolean",
+        json!([true]),
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: true.into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+    );
+}
+
+#[test]
+fn bridge_tests_void_return(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunVoidReturn",
+        json!(["test"]),
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: "test".into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+    );
+}
+
+#[test]
+fn bridge_tests_tuple_complex_type_output(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunTupleComplexType",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: json! {
+                        [
+                            "hello".into_value_and_type().to_json_value().unwrap(),
+                            100i32.into_value_and_type().to_json_value().unwrap(),
+                            ValueAndType::new(
+                                Value::Record(vec![
+                                    Value::String("x".to_string()),
+                                    Value::S32(200),
+                                    Value::Bool(true),
+                                ]),
+                                record(vec![
+                                    field("a", str()),
+                                    field("b", s32()),
+                                    field("c", bool()),
+                                ]),
+                            )
+                            .to_json_value()
+                            .unwrap()
+                        ]
+                    },
+                },
+            )],
+        }),
+        json!(["hello", 100, { "a": "x", "b": 200, "c": true }]),
+    );
+}
+
+#[test]
+fn bridge_tests_optionalqmark(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
         "FunOptionalQMark",
-        json!(["value1", 10, null]),
+        json! {
+            [
+                "value1",
+                10,
+                null
+            ]
+        },
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![
                 UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
@@ -399,45 +514,12 @@ fn playground4() {
             ],
         }),
     );
+}
 
-    assert_function_input_encoding(
-        target_dir,
-        "FunNumber",
-        json!([42]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: (42i32).into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunString",
-        json!(["hello"]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: "hello".into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunBoolean",
-        json!([true]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: true.into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
+#[test]
+fn bridge_tests_objectcomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -506,6 +588,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_uniontype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -527,6 +615,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_unioncomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -548,45 +642,11 @@ fn playground4() {
             )],
         }),
     );
+}
 
-    assert_function_input_encoding(
-        target_dir,
-        "FunNumber",
-        json!([42]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: (42i32).into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunString",
-        json!(["hello"]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: "hello".into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunBoolean",
-        json!([true]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: true.into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
-    );
+#[test]
+fn bridge_tests_map(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -605,6 +665,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_taggedunion(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -630,6 +696,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_tuplecomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -656,6 +728,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_tupletype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -672,6 +749,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_listcomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -701,6 +784,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_objecttype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -723,6 +812,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_unionwithliterals(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -744,6 +839,14 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_unionwithliterals_with_value(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -765,6 +868,12 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_unionwithonlyliterals(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -773,13 +882,21 @@ fn playground4() {
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
-                    value: ValueAndType::new(Value::Enum(1), types.union_with_only_literals.clone())
-                        .to_json_value()
-                        .unwrap(),
+                    value: ValueAndType::new(
+                        Value::Enum(1),
+                        types.union_with_only_literals.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
                 },
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_voidreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -793,6 +910,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_nullreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -806,6 +928,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_undefinedreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -819,6 +946,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_unstructuredtext(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -835,6 +967,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_unstructuredbinary(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -853,6 +990,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_multimodal(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -870,6 +1012,11 @@ fn playground4() {
             }],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_multimodaladvanced(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -884,6 +1031,11 @@ fn playground4() {
             }],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_eitheroptional(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -897,6 +1049,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_resultexact(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -910,6 +1067,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_resultlike(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -923,6 +1085,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_resultlikewithvoid(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -936,6 +1103,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_builtinresultvs(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -949,6 +1121,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_builtinresultsv(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -962,6 +1139,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_builtinresultsn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -975,6 +1157,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_noreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -988,6 +1175,11 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_arrowsync(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
         target_dir,
@@ -1001,6 +1193,13 @@ fn playground4() {
             )],
         }),
     );
+}
+
+#[test]
+fn bridge_tests_tuplecomplextype_output(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_output_decoding(
         target_dir,
