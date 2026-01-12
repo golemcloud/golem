@@ -243,6 +243,12 @@ impl Display for AgentTypeName {
     }
 }
 
+impl AgentTypeName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(
     Debug,
     Clone,
