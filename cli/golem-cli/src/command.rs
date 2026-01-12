@@ -40,10 +40,11 @@ use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::deployment::DeploymentRevision;
-use golem_templates::model::GuestLanguage;
+use golem_templates::model::{ComponentName, GuestLanguage};
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -606,6 +607,21 @@ pub enum GolemCliSubcommand {
         component_name: AppOptionalComponentNames,
         #[command(flatten)]
         build: BuildArgs,
+    },
+    /// Generate bridge SDK for the selected components and agents using the the target language
+    GenerateBridge {
+        /// Selects the target language for the generated bridge SDK, defaults to the component's language
+        #[clap(long)]
+        language: Option<GuestLanguage>,
+        /// Optional filter for component names
+        #[clap(long)]
+        component_name: Vec<ComponentName>,
+        /// Optional filter for agent type names
+        #[clap(long)]
+        agent_type_name: Vec<AgentTypeName>,
+        /// Optional output directory for the generated SDK, when not specified, will use a temporary directory in the application's directory
+        #[clap(long)]
+        output_dir: Option<PathBuf>,
     },
     /// Start Rib REPL for a selected component
     Repl {

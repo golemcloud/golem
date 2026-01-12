@@ -22,8 +22,10 @@ use crate::model::app_raw::{
     InjectToPrebuiltQuickJs,
 };
 use anyhow::{anyhow, bail, Context};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
+use golem_templates::model::GuestLanguage;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -341,6 +343,29 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
                 self.target_path
             ),
         }
+    }
+}
+
+pub struct GenerateBridgeSdkMarkerHash<'a> {
+    pub component_name: &'a ComponentName,
+    pub agent_type_name: &'a AgentTypeName,
+    pub language: &'a GuestLanguage,
+}
+
+impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GenerateBridgeSdkMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(format!(
+            "{}-{}-{}",
+            self.component_name, self.agent_type_name, self.language
+        )))
     }
 }
 

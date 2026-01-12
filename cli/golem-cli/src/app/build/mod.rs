@@ -14,6 +14,7 @@
 
 use crate::app::build::add_metadata::add_metadata_to_selected_components;
 use crate::app::build::componentize::componentize;
+use crate::app::build::gen_bridge::gen_bridge;
 use crate::app::build::gen_rpc::gen_rpc;
 use crate::app::build::link::link;
 use crate::app::build::task_result_marker::{TaskResultMarker, TaskResultMarkerHashSource};
@@ -34,6 +35,7 @@ pub mod add_metadata;
 pub mod clean;
 pub mod command;
 pub mod componentize;
+pub mod gen_bridge;
 pub mod gen_rpc;
 pub mod link;
 pub mod task_result_marker;
@@ -50,6 +52,9 @@ pub async fn build_app(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     }
     if ctx.config.should_run_step(AppBuildStep::AddMetadata) {
         add_metadata_to_selected_components(ctx).await?;
+    }
+    if ctx.config.should_run_step(AppBuildStep::GenBridge) {
+        gen_bridge(ctx).await?;
     }
 
     Ok(())

@@ -26,7 +26,7 @@ use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{
     AppBuildStep, ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName,
-    WithSource,
+    CustomBridgeSdkTarget, WithSource,
 };
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app_raw::{
@@ -801,10 +801,13 @@ pub struct ApplicationContextState {
     yes: bool,
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
+
     pub skip_up_to_date_checks: bool,
     skip_up_to_date_checks_was_set: bool,
     pub build_steps_filter: HashSet<AppBuildStep>,
     build_steps_filter_was_set: bool,
+    pub custom_gen_bridge_target: Option<CustomBridgeSdkTarget>,
+    custom_gen_bridge_target_was_set: bool,
 
     app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
@@ -819,6 +822,8 @@ impl ApplicationContextState {
             skip_up_to_date_checks_was_set: false,
             build_steps_filter: HashSet::new(),
             build_steps_filter_was_set: false,
+            custom_gen_bridge_target: None,
+            custom_gen_bridge_target_was_set: false,
             app_context: None,
         }
     }
@@ -845,6 +850,7 @@ impl ApplicationContextState {
             skip_up_to_date_checks: self.skip_up_to_date_checks,
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
+            custom_bridge_sdk_target: self.custom_gen_bridge_target.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
             dev_mode: config.dev_mode,
             enable_wasmtime_fs_cache: config.enable_wasmtime_fs_cache,

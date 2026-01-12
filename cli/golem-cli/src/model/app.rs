@@ -27,6 +27,8 @@ use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
 use golem_common::model::domain_registration::Domain;
@@ -35,6 +37,7 @@ use golem_common::model::http_api_definition::{
     HttpApiDefinitionName, HttpApiDefinitionVersion, HttpApiRoute,
 };
 use golem_common::model::{diff, validate_lower_kebab_case_identifier};
+use golem_templates::model::GuestLanguage;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -62,6 +65,7 @@ pub struct ApplicationConfig {
     pub skip_up_to_date_checks: bool,
     pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
+    pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
     pub golem_rust_override: RustDependencyOverride,
     pub dev_mode: bool,
     pub enable_wasmtime_fs_cache: bool,
@@ -224,6 +228,23 @@ pub enum AppBuildStep {
     Componentize,
     Link,
     AddMetadata,
+    GenBridge,
+}
+
+#[derive(Debug, Clone)]
+pub struct BridgeSdkTarget {
+    pub component_name: ComponentName,
+    pub agent_type: AgentType,
+    pub target_language: GuestLanguage,
+    pub output_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomBridgeSdkTarget {
+    pub component_names: Vec<ComponentName>,
+    pub agent_type_names: HashSet<AgentTypeName>,
+    pub target_language: Option<GuestLanguage>,
+    pub output_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -607,6 +628,17 @@ impl Application {
 
     pub fn task_result_marker_dir(&self) -> PathBuf {
         self.temp_dir().join("task-results")
+    }
+
+    pub fn default_bridge_sdk_dir(
+        &self,
+        agent_type_name: &AgentTypeName,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(agent_type_name.to_wit_naming().as_str())
     }
 
     pub fn rib_repl_history_file(&self) -> PathBuf {
@@ -1120,6 +1152,17 @@ impl<'a> Component<'a> {
 
     pub fn component_type(&self) -> AppComponentType {
         self.properties().component_type
+    }
+
+    pub fn guess_language(&self) -> Option<GuestLanguage> {
+        self.applied_layers().iter().find_map(|(id, _)| {
+            id.template_name()
+                .and_then(|template_name| match template_name.as_str() {
+                    "ts" => Some(GuestLanguage::TypeScript),
+                    "rust" => Some(GuestLanguage::Rust),
+                    _ => None,
+                })
+        })
     }
 
     pub fn source(&self) -> &Path {
