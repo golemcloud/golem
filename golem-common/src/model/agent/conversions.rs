@@ -20,7 +20,7 @@ use super::{
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentIdWithComponent, AgentMethod, AgentMode,
-    AgentType, AnonymousPrincipal, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
+    AgentType, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
     ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     GolemUserPrincipal, NamedElementSchema, NamedElementSchemas, NamedElementValue,
     NamedElementValues, OidcPrincipal, Principal, RegisteredAgentType, TextDescriptor,
@@ -839,7 +839,7 @@ impl From<super::bindings::golem::agent::common::Principal> for Principal {
             Value::Oidc(inner) => Self::Oidc(inner.into()),
             Value::Agent(inner) => Self::Agent(inner.into()),
             Value::GolemUser(inner) => Self::GolemUser(inner.into()),
-            Value::Anonymous => Self::Anonymous(AnonymousPrincipal {}),
+            Value::Anonymous => Self::Anonymous(Empty {}),
         }
     }
 }

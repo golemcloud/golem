@@ -1,6 +1,6 @@
 use super::{
     AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentIdWithComponent, AgentMethod,
-    AgentMode, AgentPrincipal, AgentType, AnonymousPrincipal, BinaryDescriptor, BinaryReference,
+    AgentMode, AgentPrincipal, AgentType, BinaryDescriptor, BinaryReference,
     BinarySource, BinaryType, ComponentModelElementSchema, CorsOptions, CustomHttpMethod,
     DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, GolemUserPrincipal,
     HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
@@ -1158,7 +1158,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Principal> for Principal {
             Value::Oidc(v) => Ok(Self::Oidc(v.try_into()?)),
             Value::Agent(v) => Ok(Self::Agent(v.try_into()?)),
             Value::GolemUser(v) => Ok(Self::GolemUser(v.try_into()?)),
-            Value::Anonymous(v) => Ok(Self::Anonymous(v.try_into()?)),
+            Value::Anonymous(_) => Ok(Self::Anonymous(Empty {})),
         }
     }
 }
@@ -1172,7 +1172,7 @@ impl From<Principal> for golem_api_grpc::proto::golem::component::Principal {
                 Principal::Oidc(v) => Value::Oidc(v.into()),
                 Principal::Agent(v) => Value::Agent(v.into()),
                 Principal::GolemUser(v) => Value::GolemUser(v.into()),
-                Principal::Anonymous(v) => Value::Anonymous(v.into()),
+                Principal::Anonymous(_) => Value::Anonymous(golem_api_grpc::proto::golem::common::Empty {}),
             }),
         }
     }
@@ -1259,21 +1259,5 @@ impl From<GolemUserPrincipal> for golem_api_grpc::proto::golem::component::Golem
         Self {
             account_id: Some(value.account_id.into()),
         }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::AnonymousPrincipal> for AnonymousPrincipal {
-    type Error = String;
-
-    fn try_from(
-        _: golem_api_grpc::proto::golem::component::AnonymousPrincipal,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {})
-    }
-}
-
-impl From<AnonymousPrincipal> for golem_api_grpc::proto::golem::component::AnonymousPrincipal {
-    fn from(_: AnonymousPrincipal) -> Self {
-        Self {}
     }
 }

@@ -1445,12 +1445,13 @@ pub enum Principal {
     Oidc(OidcPrincipal),
     Agent(AgentPrincipal),
     GolemUser(GolemUserPrincipal),
-    Anonymous(AnonymousPrincipal),
+    #[unit_case]
+    Anonymous(Empty),
 }
 
 impl Principal {
     pub fn anonymous() -> Self {
-        Self::Anonymous(AnonymousPrincipal {})
+        Self::Anonymous(Empty {})
     }
 }
 
@@ -1520,20 +1521,3 @@ pub struct AgentPrincipal {
 pub struct GolemUserPrincipal {
     pub account_id: AccountId,
 }
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AnonymousPrincipal {}

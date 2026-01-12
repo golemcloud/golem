@@ -228,7 +228,7 @@ message Principal {
     OidcPrincipal oidc = 1;
     AgentPrincipal agent = 2;
     GolemUserPrincipal golem_user = 3;
-    AnonymousPrincipal anonymous = 4;
+    golem.common.Empty anonymous = 4;
   }
 }
 
@@ -254,9 +254,6 @@ message AgentPrincipal {
 
 message GolemUserPrincipal {
   golem.common.AccountId account_id = 1;
-}
-
-message AnonymousPrincipal {
 }
 
 message AgentIdWithComponent {
