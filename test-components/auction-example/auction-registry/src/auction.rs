@@ -1,6 +1,6 @@
 use crate::bindings::auction::auction_client::auction_client;
 use crate::model::*;
-use golem_rust::wasm_rpc::{AgentId, ComponentId};
+use golem_rust::golem_wasm::{AgentId, ComponentId};
 use std::env;
 use std::str::FromStr;
 

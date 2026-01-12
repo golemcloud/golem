@@ -4,7 +4,7 @@ mod bindings;
 use crate::bindings::exports::golem::api::save_snapshot;
 use crate::bindings::exports::golem::component::api::*;
 use bytes::BufMut;
-use reqwest::{Client, Response};
+use golem_wasi_http::{Client, Response};
 use std::cell::RefCell;
 use std::thread::sleep;
 use std::time::Duration;

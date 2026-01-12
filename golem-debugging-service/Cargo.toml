@@ -34,7 +34,7 @@ log = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
-rustls = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

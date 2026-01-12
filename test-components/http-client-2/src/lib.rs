@@ -3,7 +3,7 @@ mod bindings;
 
 use crate::bindings::exports::golem::it::api::Guest;
 
-use reqwest::*;
+use golem_wasi_http::*;
 use serde::{Deserialize, Serialize};
 
 struct Component;

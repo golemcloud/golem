@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{
+    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
+    PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
+};
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
@@ -21,6 +26,7 @@ use crate::model::agent::{
     RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
     UntypedElementValue, UntypedJsonDataValue, UntypedJsonElementValue, Url,
 };
+use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{Value, ValueAndType};
@@ -139,6 +145,7 @@ impl From<super::bindings::golem::agent::common::AgentMethod> for AgentMethod {
             prompt_hint: value.prompt_hint,
             input_schema: DataSchema::from(value.input_schema),
             output_schema: DataSchema::from(value.output_schema),
+            http_endpoint: value.http_endpoint.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -151,6 +158,7 @@ impl From<AgentMethod> for super::bindings::golem::agent::common::AgentMethod {
             prompt_hint: value.prompt_hint,
             input_schema: value.input_schema.into(),
             output_schema: value.output_schema.into(),
+            http_endpoint: value.http_endpoint.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -168,6 +176,7 @@ impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
                 .map(AgentDependency::from)
                 .collect(),
             mode: value.mode.into(),
+            http_mount: value.http_mount.map(|v| v.into()),
         }
     }
 }
@@ -185,6 +194,7 @@ impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
                 .map(AgentDependency::into)
                 .collect(),
             mode: value.mode.into(),
+            http_mount: value.http_mount.map(|v| v.into()),
         }
     }
 }
@@ -691,6 +701,268 @@ impl From<RegisteredAgentType> for host::RegisteredAgentType {
         host::RegisteredAgentType {
             agent_type: value.agent_type.into(),
             implemented_by: value.implemented_by.component_id.into(),
+        }
+    }
+}
+
+impl From<HttpMountDetails> for super::bindings::golem::agent::common::HttpMountDetails {
+    fn from(value: HttpMountDetails) -> Self {
+        Self {
+            path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
+            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+            auth_details: value.auth_details.map(Into::into),
+            phantom_agent: value.phantom_agent,
+            cors_options: value.cors_options.into(),
+            webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::HttpMountDetails> for HttpMountDetails {
+    fn from(value: super::bindings::golem::agent::common::HttpMountDetails) -> Self {
+        Self {
+            path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
+            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+            auth_details: value.auth_details.map(Into::into),
+            phantom_agent: value.phantom_agent,
+            cors_options: value.cors_options.into(),
+            webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<HttpEndpointDetails> for super::bindings::golem::agent::common::HttpEndpointDetails {
+    fn from(value: HttpEndpointDetails) -> Self {
+        Self {
+            http_method: value.http_method.into(),
+            path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+            auth_details: value.auth_details.map(Into::into),
+            cors_options: value.cors_options.into(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::HttpEndpointDetails> for HttpEndpointDetails {
+    fn from(value: super::bindings::golem::agent::common::HttpEndpointDetails) -> Self {
+        Self {
+            http_method: value.http_method.into(),
+            path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+            auth_details: value.auth_details.map(Into::into),
+            cors_options: value.cors_options.into(),
+        }
+    }
+}
+
+impl From<HttpMethod> for super::bindings::golem::agent::common::HttpMethod {
+    fn from(value: HttpMethod) -> Self {
+        match value {
+            HttpMethod::Get(_) => Self::Get,
+            HttpMethod::Put(_) => Self::Put,
+            HttpMethod::Post(_) => Self::Post,
+            HttpMethod::Delete(_) => Self::Delete,
+            HttpMethod::Custom(c) => Self::Custom(c.value),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::HttpMethod> for HttpMethod {
+    fn from(value: super::bindings::golem::agent::common::HttpMethod) -> Self {
+        match value {
+            super::bindings::golem::agent::common::HttpMethod::Get => Self::Get(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Put => Self::Put(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Post => Self::Post(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Delete => Self::Delete(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Custom(value) => {
+                Self::Custom(CustomHttpMethod { value })
+            }
+        }
+    }
+}
+
+impl From<CorsOptions> for super::bindings::golem::agent::common::CorsOptions {
+    fn from(value: CorsOptions) -> Self {
+        Self {
+            allowed_patterns: value.allowed_patterns,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::CorsOptions> for CorsOptions {
+    fn from(value: super::bindings::golem::agent::common::CorsOptions) -> Self {
+        Self {
+            allowed_patterns: value.allowed_patterns,
+        }
+    }
+}
+
+impl From<PathSegment> for super::bindings::golem::agent::common::PathSegment {
+    fn from(value: PathSegment) -> Self {
+        Self {
+            concat: value.concat.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::PathSegment> for PathSegment {
+    fn from(value: super::bindings::golem::agent::common::PathSegment) -> Self {
+        Self {
+            concat: value.concat.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<PathSegmentNode> for super::bindings::golem::agent::common::PathSegmentNode {
+    fn from(value: PathSegmentNode) -> Self {
+        match value {
+            PathSegmentNode::Literal(v) => Self::Literal(v.value),
+            PathSegmentNode::SystemVariable(v) => Self::SystemVariable(v.value.into()),
+            PathSegmentNode::PathVariable(v) => Self::PathVariable(v.into()),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::PathSegmentNode> for PathSegmentNode {
+    fn from(value: super::bindings::golem::agent::common::PathSegmentNode) -> Self {
+        match value {
+            super::bindings::golem::agent::common::PathSegmentNode::Literal(value) => {
+                Self::Literal(LiteralSegment { value })
+            }
+            super::bindings::golem::agent::common::PathSegmentNode::SystemVariable(value) => {
+                Self::SystemVariable(SystemVariableSegment {
+                    value: value.into(),
+                })
+            }
+            super::bindings::golem::agent::common::PathSegmentNode::PathVariable(v) => {
+                Self::PathVariable(v.into())
+            }
+        }
+    }
+}
+
+impl From<SystemVariable> for super::bindings::golem::agent::common::SystemVariable {
+    fn from(value: SystemVariable) -> Self {
+        match value {
+            SystemVariable::AgentType => Self::AgentType,
+            SystemVariable::AgentVersion => Self::AgentVersion,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::SystemVariable> for SystemVariable {
+    fn from(value: super::bindings::golem::agent::common::SystemVariable) -> Self {
+        match value {
+            super::bindings::golem::agent::common::SystemVariable::AgentType => Self::AgentType,
+            super::bindings::golem::agent::common::SystemVariable::AgentVersion => {
+                Self::AgentVersion
+            }
+        }
+    }
+}
+
+impl From<PathVariable> for super::bindings::golem::agent::common::PathVariable {
+    fn from(value: PathVariable) -> Self {
+        Self {
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::PathVariable> for PathVariable {
+    fn from(value: super::bindings::golem::agent::common::PathVariable) -> Self {
+        Self {
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<HeaderVariable> for super::bindings::golem::agent::common::HeaderVariable {
+    fn from(value: HeaderVariable) -> Self {
+        Self {
+            header_name: value.header_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::HeaderVariable> for HeaderVariable {
+    fn from(value: super::bindings::golem::agent::common::HeaderVariable) -> Self {
+        Self {
+            header_name: value.header_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<QueryVariable> for super::bindings::golem::agent::common::QueryVariable {
+    fn from(value: QueryVariable) -> Self {
+        Self {
+            query_param_name: value.query_param_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::QueryVariable> for QueryVariable {
+    fn from(value: super::bindings::golem::agent::common::QueryVariable) -> Self {
+        Self {
+            query_param_name: value.query_param_name,
+            variable_name: value.variable_name,
+        }
+    }
+}
+
+impl From<AgentHttpAuthDetails> for super::bindings::golem::agent::common::AuthDetails {
+    fn from(value: AgentHttpAuthDetails) -> Self {
+        Self {
+            required: value.required,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::AuthDetails> for AgentHttpAuthDetails {
+    fn from(value: super::bindings::golem::agent::common::AuthDetails) -> Self {
+        Self {
+            required: value.required,
+        }
+    }
+}
+
+impl From<AgentHttpAuthContext> for super::bindings::golem::agent::common::AuthContext {
+    fn from(value: AgentHttpAuthContext) -> Self {
+        Self {
+            sub: value.sub,
+            provider: value.provider,
+            email: value.email,
+            name: value.name,
+            email_verified: value.email_verified,
+            given_name: value.given_name,
+            family_name: value.family_name,
+            picture: value.picture,
+            preferred_username: value.preferred_username,
+            claims: value.claims,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthContext {
+    fn from(value: super::bindings::golem::agent::common::AuthContext) -> Self {
+        Self {
+            sub: value.sub,
+            provider: value.provider,
+            email: value.email,
+            name: value.name,
+            email_verified: value.email_verified,
+            given_name: value.given_name,
+            family_name: value.family_name,
+            picture: value.picture,
+            preferred_username: value.preferred_username,
+            claims: value.claims,
         }
     }
 }

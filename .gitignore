@@ -19,6 +19,8 @@ test-components/tinygo-wasi*/tinygo_wasi/
 golem-client/openapi/
 logs
 data
+sdks/**/node_modules/
+sdks/**/dist/
 .DS_Store
 
 # locally kept custom dev files

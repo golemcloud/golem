@@ -505,6 +505,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: AgentTypeName("agent-2".to_string()),
@@ -525,6 +526,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: AgentTypeName("agent-3".to_string()),
@@ -557,6 +559,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: AgentTypeName("agent-4".to_string()),
@@ -585,6 +588,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: AgentTypeName("agent-5".to_string()),
@@ -613,6 +617,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: AgentTypeName("agent-6".to_string()),
@@ -647,6 +652,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: AgentTypeName("agent-7".to_string()),
@@ -667,6 +673,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
             type_name: AgentTypeName("non-kebab-agent".to_string()),
@@ -705,6 +712,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             methods: vec![],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
     ];
 

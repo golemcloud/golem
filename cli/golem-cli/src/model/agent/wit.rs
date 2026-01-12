@@ -920,6 +920,7 @@ mod tests {
                             }),
                         }],
                     }),
+                    http_endpoint: Vec::new(),
                 },
                 AgentMethod {
                     name: "f2".to_string(),
@@ -941,10 +942,12 @@ mod tests {
                             }),
                         }],
                     }),
+                    http_endpoint: Vec::new(),
                 },
             ],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         }];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()

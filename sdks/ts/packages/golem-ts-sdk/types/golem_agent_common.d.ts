@@ -5,6 +5,86 @@ declare module 'golem:agent/common' {
   export type WitValue = golemRpc022Types.WitValue;
   export type Url = string;
   export type AgentMode = "durable" | "ephemeral";
+  export type CorsOptions = {
+    allowedPatterns: string[];
+  };
+  export type HttpMethod = 
+  {
+    tag: 'get'
+  } |
+  {
+    tag: 'put'
+  } |
+  {
+    tag: 'post'
+  } |
+  {
+    tag: 'delete'
+  } |
+  {
+    tag: 'custom'
+    val: string
+  };
+  export type SystemVariable = "agent-type" | "agent-version";
+  export type PathVariable = {
+    variableName: string;
+  };
+  export type PathSegmentNode = 
+  {
+    tag: 'literal'
+    val: string
+  } |
+  {
+    tag: 'system-variable'
+    val: SystemVariable
+  } |
+  {
+    tag: 'path-variable'
+    val: PathVariable
+  };
+  export type PathSegment = {
+    concat: PathSegmentNode[];
+  };
+  export type HeaderVariable = {
+    headerName: string;
+    variableName: string;
+  };
+  export type QueryVariable = {
+    queryParamName: string;
+    variableName: string;
+  };
+  export type AuthDetails = {
+    required: boolean;
+  };
+  export type HttpMountDetails = {
+    pathPrefix: PathSegment[];
+    headerVars: HeaderVariable[];
+    queryVars: QueryVariable[];
+    authDetails?: AuthDetails;
+    phantomAgent: boolean;
+    corsOptions: CorsOptions;
+    webhookSuffix: PathSegment[];
+  };
+  export type HttpEndpointDetails = {
+    httpMethod: HttpMethod;
+    pathSuffix: PathSegment[];
+    headerVars: HeaderVariable[];
+    queryVars: QueryVariable[];
+    authDetails?: AuthDetails;
+    corsOptions: CorsOptions;
+  };
+  export type AuthContext = {
+    sub: string;
+    provider: string;
+    email: string;
+    name: string;
+    emailVerified?: boolean;
+    givenName?: string;
+    familyName?: string;
+    picture?: string;
+    preferredUsername?: string;
+    claims: string;
+  };
   export type TextType = {
     languageCode: string;
   };
@@ -57,6 +137,7 @@ declare module 'golem:agent/common' {
   export type AgentMethod = {
     name: string;
     description: string;
+    httpEndpoint: HttpEndpointDetails[];
     promptHint?: string;
     inputSchema: DataSchema;
     outputSchema: DataSchema;
@@ -80,6 +161,7 @@ declare module 'golem:agent/common' {
     methods: AgentMethod[];
     dependencies: AgentDependency[];
     mode: AgentMode;
+    httpMount?: HttpMountDetails;
   };
   export type BinarySource = {
     data: Uint8Array;

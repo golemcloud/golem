@@ -13,7 +13,7 @@ required-features = []
 # common-lib = { path = "../../common-rust/common-lib" }
 
 golem-rust = { workspace = true }
-reqwest = { workspace = true }
+golem-wasi-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wit-bindgen-rt = { workspace = true }

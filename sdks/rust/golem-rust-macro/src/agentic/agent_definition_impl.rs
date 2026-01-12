@@ -305,6 +305,8 @@ fn get_agent_type_with_remote_client(
                     },
                     input_schema: #input_schema,
                     output_schema: #output_schema,
+                    // TODO
+                    http_endpoint: Vec::new(),
                 }
             })
         } else {
@@ -461,6 +463,8 @@ fn get_agent_type_with_remote_client(
                 dependencies: vec![],
                 constructor: #agent_constructor,
                 mode: #mode_value,
+                // TODO
+                http_mount: None,
             }
         },
         remote_client,
