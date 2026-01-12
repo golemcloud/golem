@@ -1896,14 +1896,14 @@ components:
         agentTypeName:
           type: string
         parameters:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/UntypedJsonDataValue'
         phantomId:
           type: string
           format: uuid
         methodName:
           type: string
         methodParameters:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/UntypedJsonDataValue'
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -1916,7 +1916,7 @@ components:
       title: AgentInvocationResult
       properties:
         result:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/UntypedJsonDataValue'
     AnalysedResourceMode:
       type: string
       enum:
@@ -2246,6 +2246,14 @@ components:
         mapping:
           Url: '#/components/schemas/BinaryReference_Url'
           Inline: '#/components/schemas/BinaryReference_BinarySource'
+    BinaryReferenceValue:
+      type: object
+      title: BinaryReferenceValue
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/BinaryReference'
     BinaryReference_BinarySource:
       allOf:
       - type: object
@@ -2320,104 +2328,12 @@ components:
       enum:
       - read-only
       - read-write
-    DataValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DataValue_ElementValues'
-      - $ref: '#/components/schemas/DataValue_NamedElementValues'
-      discriminator:
-        propertyName: type
-        mapping:
-          Tuple: '#/components/schemas/DataValue_ElementValues'
-          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
-    DataValue_ElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Tuple
-            example: Tuple
-      - $ref: '#/components/schemas/ElementValues'
-    DataValue_NamedElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Multimodal
-            example: Multimodal
-      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginResponse:
       type: object
       title: DeactivatePluginResponse
     DeleteWorkerResponse:
       type: object
       title: DeleteWorkerResponse
-    ElementValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ElementValue_ValueAndType'
-      - $ref: '#/components/schemas/ElementValue_TextReference'
-      - $ref: '#/components/schemas/ElementValue_BinaryReference'
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentModel: '#/components/schemas/ElementValue_ValueAndType'
-          UnstructuredText: '#/components/schemas/ElementValue_TextReference'
-          UnstructuredBinary: '#/components/schemas/ElementValue_BinaryReference'
-    ElementValue_BinaryReference:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredBinary
-            example: UnstructuredBinary
-      - $ref: '#/components/schemas/BinaryReference'
-    ElementValue_TextReference:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredText
-            example: UnstructuredText
-      - $ref: '#/components/schemas/TextReference'
-    ElementValue_ValueAndType:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentModel
-            example: ComponentModel
-      - $ref: '#/components/schemas/ValueAndType'
-    ElementValues:
-      type: object
-      title: ElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/ElementValue'
     Empty:
       type: object
       title: Empty
@@ -2607,6 +2523,13 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/ValueAndType'
+    JsonComponentModelValue:
+      type: object
+      title: JsonComponentModelValue
+      required:
+      - value
+      properties:
+        value: {}
     LogLevel:
       type: string
       description: Worker log levels including the special stdout and stderr channels
@@ -2649,27 +2572,6 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
-    NamedElementValue:
-      type: object
-      title: NamedElementValue
-      required:
-      - name
-      - value
-      properties:
-        name:
-          type: string
-        value:
-          $ref: '#/components/schemas/ElementValue'
-    NamedElementValues:
-      type: object
-      title: NamedElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/NamedElementValue'
     OplogCursor:
       type: object
       title: OplogCursor
@@ -3639,6 +3541,14 @@ components:
         mapping:
           Url: '#/components/schemas/TextReference_Url'
           Inline: '#/components/schemas/TextReference_TextSource'
+    TextReferenceValue:
+      type: object
+      title: TextReferenceValue
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/TextReference'
     TextReference_TextSource:
       allOf:
       - type: object
@@ -3842,6 +3752,119 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NameOptionTypePair'
+    UntypedJsonDataValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
+      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
+          Multimodal: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
+    UntypedJsonDataValue_UntypedJsonElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tuple
+            example: Tuple
+      - $ref: '#/components/schemas/UntypedJsonElementValues'
+    UntypedJsonDataValue_UntypedJsonNamedElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Multimodal
+            example: Multimodal
+      - $ref: '#/components/schemas/UntypedJsonNamedElementValues'
+    UntypedJsonElementValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
+      - $ref: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
+      - $ref: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
+          UnstructuredText: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
+          UnstructuredBinary: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
+    UntypedJsonElementValue_BinaryReferenceValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredBinary
+            example: UnstructuredBinary
+      - $ref: '#/components/schemas/BinaryReferenceValue'
+    UntypedJsonElementValue_JsonComponentModelValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentModel
+            example: ComponentModel
+      - $ref: '#/components/schemas/JsonComponentModelValue'
+    UntypedJsonElementValue_TextReferenceValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredText
+            example: UnstructuredText
+      - $ref: '#/components/schemas/TextReferenceValue'
+    UntypedJsonElementValues:
+      type: object
+      title: UntypedJsonElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/UntypedJsonElementValue'
+    UntypedJsonNamedElementValue:
+      type: object
+      title: UntypedJsonNamedElementValue
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/UntypedJsonElementValue'
+    UntypedJsonNamedElementValues:
+      type: object
+      title: UntypedJsonNamedElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/UntypedJsonNamedElementValue'
     UpdateRecord:
       type: object
       oneOf:
