@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod rust;
-mod typescript;
+pub mod rust;
+pub mod typescript;
 
 use camino::Utf8Path;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema};
 use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashSet, VecDeque};
 
-trait BridgeGenerator {
+#[allow(dead_code)]
+pub trait BridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self;
     fn generate(&self) -> anyhow::Result<()>;
 }

@@ -13,6 +13,8 @@
 // limitations under the License.
 
 mod javascript;
+
+#[allow(dead_code)]
 mod ts_writer;
 
 #[cfg(test)]
@@ -35,7 +37,7 @@ use indoc::formatdoc;
 use crate::config::LOCAL_WELL_KNOWN_TOKEN;
 use serde_json::json;
 
-struct TypeScriptBridgeGenerator {
+pub struct TypeScriptBridgeGenerator {
     target_path: Utf8PathBuf,
     agent_type: AgentType,
     testing: bool,
@@ -1699,51 +1701,6 @@ impl TypeScriptBridgeGenerator {
                     .collect::<Vec<_>>()
                     .join(" | ");
                 format!("({})[]", union_types)
-            }
-        }
-    }
-
-    fn write_result(writer: &mut TsFunctionWriter<'_>, schema: &DataSchema) -> anyhow::Result<()> {
-        match schema {
-            DataSchema::Tuple(params) => {
-                for param in &params.elements {
-                    match &param.schema {
-                        ElementSchema::ComponentModel(component_model) => {
-                            writer.result(&Self::type_reference(&component_model.element_type)?)
-                        }
-                        ElementSchema::UnstructuredText(descriptor) => {
-                            writer.result(&Self::unstructured_text_type(descriptor));
-                        }
-                        ElementSchema::UnstructuredBinary(descriptor) => {
-                            writer.result(&Self::unstructured_binary_type(descriptor));
-                        }
-                    }
-                }
-                Ok(())
-            }
-            DataSchema::Multimodal(multimodal) => {
-                let union_types = multimodal
-                    .elements
-                    .iter()
-                    .map(|element| {
-                        let type_str = match &element.schema {
-                            ElementSchema::ComponentModel(component_model) => {
-                                Self::type_reference(&component_model.element_type)
-                                    .unwrap_or("any".to_string())
-                            }
-                            ElementSchema::UnstructuredText(descriptor) => {
-                                Self::unstructured_text_type(descriptor)
-                            }
-                            ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(descriptor)
-                            }
-                        };
-                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                writer.result(&format!("({})[]", union_types));
-                Ok(())
             }
         }
     }

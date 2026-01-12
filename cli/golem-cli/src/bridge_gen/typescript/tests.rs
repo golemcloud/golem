@@ -41,6 +41,7 @@ struct GeneratedPackage {
     pub dir: TempDir,
 }
 
+#[allow(dead_code)]
 struct TestTypes {
     object_type: AnalysedType,
     union_type: AnalysedType,
@@ -1232,6 +1233,399 @@ fn bridge_tests_tuplecomplextype_output(
             )],
         }),
         json!(["hello", 100, { "a": "x", "b": 200, "c": true }]),
+    );
+}
+
+#[test]
+fn bridge_tests_tupletype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let bool_val: bool = false;
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunTupleType",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: json! {
+                        [
+                            "item".into_value_and_type().to_json_value().unwrap(),
+                            42i32.into_value_and_type().to_json_value().unwrap(),
+                            bool_val.into_value_and_type().to_json_value().unwrap(),
+                        ]
+                    },
+                },
+            )],
+        }),
+        json!(["item", 42, false]),
+    );
+}
+
+#[test]
+fn bridge_tests_listcomplextype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunListComplexType",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::List(vec![
+                            Value::Record(vec![
+                                Value::String("item1".to_string()),
+                                Value::S32(1),
+                                Value::Bool(true),
+                            ]),
+                            Value::Record(vec![
+                                Value::String("item2".to_string()),
+                                Value::S32(2),
+                                Value::Bool(false),
+                            ]),
+                        ]),
+                        types.list_complex_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!([{"a": "item1", "b": 1, "c": true}, {"a": "item2", "b": 2, "c": false}]),
+    );
+}
+
+#[test]
+fn bridge_tests_objecttype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunObjectType",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![
+                            Value::String("test".to_string()),
+                            Value::S32(123),
+                            Value::Bool(true),
+                        ]),
+                        types.object_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!({"a": "test", "b": 123, "c": true}),
+    );
+}
+
+#[test]
+fn bridge_tests_objectcomplextype_output(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunObjectComplexType",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![
+                            Value::String("foo".to_string()),
+                            Value::S32(42),
+                            Value::Bool(false),
+                            Value::Record(vec![
+                                Value::String("nested".to_string()),
+                                Value::S32(10),
+                                Value::Bool(true),
+                            ]),
+                            Value::Variant {
+                                case_idx: 0,
+                                case_value: Some(Box::new(Value::S32(99))),
+                            },
+                            Value::List(vec![
+                                Value::String("str1".to_string()),
+                                Value::String("str2".to_string()),
+                            ]),
+                            Value::List(vec![Value::Record(vec![
+                                Value::String("item1".to_string()),
+                                Value::S32(1),
+                                Value::Bool(true),
+                            ])]),
+                            Value::Tuple(vec![
+                                Value::String("t1".to_string()),
+                                Value::S32(100),
+                                Value::Bool(false),
+                            ]),
+                            Value::Tuple(vec![
+                                Value::String("t2".to_string()),
+                                Value::S32(200),
+                                Value::Record(vec![
+                                    Value::String("t_nested".to_string()),
+                                    Value::S32(20),
+                                    Value::Bool(true),
+                                ]),
+                            ]),
+                            Value::List(vec![Value::Tuple(vec![
+                                Value::String("k1".to_string()),
+                                Value::S32(1),
+                            ])]),
+                            Value::Record(vec![Value::S32(5)]),
+                        ]),
+                        types.object_complex_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!({
+            "a": "foo",
+            "b": 42,
+            "c": false,
+            "d": {"a": "nested", "b": 10, "c": true},
+            "e": {"tag": "case1", "val": 99},
+            "f": ["str1", "str2"],
+            "g": [{"a": "item1", "b": 1, "c": true}],
+            "h": ["t1", 100, false],
+            "i": ["t2", 200, {"a": "t_nested", "b": 20, "c": true}],
+            "j": [["k1", 1]],
+            "k": {"n": 5}
+        }),
+    );
+}
+
+#[test]
+fn bridge_tests_uniontype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunUnionType",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 2,
+                            case_value: Some(Box::new(Value::Bool(true))),
+                        },
+                        types.union_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!({"tag": "case3", "val": true}),
+    );
+}
+
+#[test]
+fn bridge_tests_unioncomplextype_output(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunUnionComplexType",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 4,
+                            case_value: Some(Box::new(Value::Variant {
+                                case_idx: 1,
+                                case_value: Some(Box::new(Value::String("hello".to_string()))),
+                            })),
+                        },
+                        types.union_complex_type.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!({"tag": "case5", "val": {"tag": "case2", "val": "hello"}}),
+    );
+}
+
+#[test]
+fn bridge_tests_taggedunion_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunTaggedUnion",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 4,
+                            case_value: Some(Box::new(Value::Record(vec![
+                                Value::String("x".to_string()),
+                                Value::S32(200),
+                                Value::Bool(true),
+                            ]))),
+                        },
+                        types.tagged_union.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!({"tag": "e", "val": {"a": "x", "b": 200, "c": true}}),
+    );
+}
+
+#[test]
+fn bridge_tests_unionwithliterals_output(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunUnionWithLiterals",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 0,
+                            case_value: None,
+                        },
+                        types.union_with_literals.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!({"tag": "lit1"}),
+    );
+}
+
+#[test]
+fn bridge_tests_unionwithonlyliterals_output(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunUnionWithOnlyLiterals",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Enum(1),
+                        types.union_with_only_literals.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!("bar"),
+    );
+}
+
+#[test]
+fn bridge_tests_number_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunNumber",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: 42i32.into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+        json!(42),
+    );
+}
+
+#[test]
+fn bridge_tests_string_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunString",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: "hello world"
+                        .to_string()
+                        .into_value_and_type()
+                        .to_json_value()
+                        .unwrap(),
+                },
+            )],
+        }),
+        json!("hello world"),
+    );
+}
+
+#[test]
+fn bridge_tests_boolean_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunBoolean",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: true.into_value_and_type().to_json_value().unwrap(),
+                },
+            )],
+        }),
+        json!(true),
+    );
+}
+
+#[test]
+fn bridge_tests_map_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunMap",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: vec![("key1", 10i32)]
+                        .into_iter()
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                        .into_value_and_type()
+                        .to_json_value()
+                        .unwrap(),
+                },
+            )],
+        }),
+        json!([["key1", 10]]),
     );
 }
 
