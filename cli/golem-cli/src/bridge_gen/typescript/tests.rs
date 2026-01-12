@@ -26,6 +26,7 @@ use golem_common::model::agent::{
 use golem_wasm::analysis::analysed_type::{
     bool, case, f64, field, list, option, r#enum, record, s32, str, tuple, unit_case, variant,
 };
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValueAndType, Value};
 use heck::ToUpperCamelCase;
@@ -35,10 +36,119 @@ use std::io::Write;
 use std::process::Stdio;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
-// TODO: replace the paths with temp dirs before merging
 
 struct GeneratedPackage {
     pub dir: TempDir,
+}
+
+struct TestTypes {
+    object_type: AnalysedType,
+    union_type: AnalysedType,
+    list_complex_type: AnalysedType,
+    tuple_type: AnalysedType,
+    tuple_complex_type: AnalysedType,
+    map_type: AnalysedType,
+    simple_interface_type: AnalysedType,
+    object_complex_type: AnalysedType,
+    union_complex_type: AnalysedType,
+    tagged_union: AnalysedType,
+    union_with_literals: AnalysedType,
+    union_with_only_literals: AnalysedType,
+    object_with_union_undefined: AnalysedType,
+}
+
+impl Default for TestTypes {
+    fn default() -> Self {
+        let object_type = record(vec![
+            field("a", str()),
+            field("b", s32()),
+            field("c", bool()),
+        ]);
+
+        let union_type = variant(vec![
+            case("case1", s32()),
+            case("case2", str()),
+            case("case3", bool()),
+            case("case4", object_type.clone()),
+        ]);
+
+        let list_complex_type = list(object_type.clone());
+
+        let tuple_type = tuple(vec![str(), s32(), bool()]);
+
+        let tuple_complex_type = tuple(vec![str(), s32(), object_type.clone()]);
+
+        let map_type = list(tuple(vec![str(), s32()]));
+
+        let simple_interface_type = record(vec![field("n", s32())]);
+
+        let object_complex_type = record(vec![
+            field("a", str()),
+            field("b", s32()),
+            field("c", bool()),
+            field("d", object_type.clone()),
+            field("e", union_type.clone()),
+            field("f", list(str())),
+            field("g", list(object_type.clone())),
+            field("h", tuple_type.clone()),
+            field("i", tuple_complex_type.clone()),
+            field("j", map_type.clone()),
+            field("k", simple_interface_type.clone()),
+        ]);
+
+        let union_complex_type = variant(vec![
+            case("case1", s32()),
+            case("case2", str()),
+            case("case3", bool()),
+            case("case4", object_complex_type.clone()),
+            case("case5", union_type.clone()),
+            case("case6", tuple_type.clone()),
+            case("case7", tuple_complex_type.clone()),
+            case("case8", simple_interface_type.clone()),
+            case("case9", list(str())),
+        ]);
+
+        let tagged_union = variant(vec![
+            case("a", str()),
+            case("b", s32()),
+            case("c", bool()),
+            case("d", union_type.clone()),
+            case("e", object_type.clone()),
+            case("f", list(str())),
+            case("g", tuple(vec![str(), s32(), bool()])),
+            case("h", simple_interface_type.clone()),
+            unit_case("i"),
+            unit_case("j"),
+        ]);
+
+        let union_with_literals = variant(vec![
+            unit_case("lit1"),
+            unit_case("lit2"),
+            unit_case("lit3"),
+            case("union-with-literals1", bool()),
+        ])
+        .named("UnionWithLiterals");
+
+        let union_with_only_literals = r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
+
+        let object_with_union_undefined = record(vec![field("a", option(str()))]);
+
+        TestTypes {
+            object_type,
+            union_type,
+            list_complex_type,
+            tuple_type,
+            tuple_complex_type,
+            map_type,
+            simple_interface_type,
+            object_complex_type,
+            union_complex_type,
+            tagged_union,
+            union_with_literals,
+            union_with_only_literals,
+            object_with_union_undefined,
+        }
+    }
 }
 
 #[test_dep(tagged_as = "single_agent_wrapper_types_1")]
@@ -176,79 +286,7 @@ fn playground4() {
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, target_dir);
 
-    let object_type = record(vec![
-        field("a", str()),
-        field("b", s32()),
-        field("c", bool()),
-    ]);
-
-    let union_type = variant(vec![
-        case("case1", s32()),
-        case("case2", str()),
-        case("case3", bool()),
-        case("case4", object_type.clone()),
-    ]);
-
-    let list_complex_type = list(object_type.clone());
-
-    let tuple_type = tuple(vec![str(), s32(), bool()]);
-
-    let tuple_complex_type = tuple(vec![str(), s32(), object_type.clone()]);
-
-    let map_type = list(tuple(vec![str(), s32()]));
-
-    let simple_interface_type = record(vec![field("n", s32())]);
-
-    let object_complex_type = record(vec![
-        field("a", str()),
-        field("b", s32()),
-        field("c", bool()),
-        field("d", object_type.clone()),
-        field("e", union_type.clone()),
-        field("f", list(str())),
-        field("g", list(object_type.clone())),
-        field("h", tuple_type.clone()),
-        field("i", tuple_complex_type.clone()),
-        field("j", map_type.clone()),
-        field("k", simple_interface_type.clone()),
-    ]);
-
-    let union_complex_type = variant(vec![
-        case("case1", s32()),
-        case("case2", str()),
-        case("case3", bool()),
-        case("case4", object_complex_type.clone()),
-        case("case5", union_type.clone()),
-        case("case6", tuple_type.clone()),
-        case("case7", tuple_complex_type.clone()),
-        case("case8", simple_interface_type.clone()),
-        case("case9", list(str())),
-    ]);
-
-    let tagged_union = variant(vec![
-        case("a", str()),
-        case("b", s32()),
-        case("c", bool()),
-        case("d", union_type.clone()),
-        case("e", object_type.clone()),
-        case("f", list(str())),
-        case("g", tuple(vec![str(), s32(), bool()])),
-        case("h", simple_interface_type.clone()),
-        unit_case("i"),
-        unit_case("j"),
-    ]);
-
-    let union_with_literals = variant(vec![
-        unit_case("lit1"),
-        unit_case("lit2"),
-        unit_case("lit3"),
-        case("union-with-literals1", bool()),
-    ])
-    .named("UnionWithLiterals");
-
-    let union_with_only_literals = r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
-
-    let object_with_union_undefined = record(vec![field("a", option(str()))]);
+    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -293,7 +331,7 @@ fn playground4() {
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        object_with_union_undefined.clone(),
+                        types.object_with_union_undefined.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -303,7 +341,7 @@ fn playground4() {
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        object_with_union_undefined.clone(),
+                        types.object_with_union_undefined.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -313,7 +351,7 @@ fn playground4() {
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        object_with_union_undefined.clone(),
+                        types.object_with_union_undefined.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -323,7 +361,7 @@ fn playground4() {
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        object_with_union_undefined.clone(),
+                        types.object_with_union_undefined.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -335,7 +373,7 @@ fn playground4() {
                         .unwrap(),
                 }),
                 UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(Value::Option(None), option(union_type.clone()))
+                    value: ValueAndType::new(Value::Option(None), option(types.union_type.clone()))
                         .to_json_value()
                         .unwrap(),
                 }),
@@ -460,7 +498,7 @@ fn playground4() {
                             Value::List(vec![]),
                             Value::Record(vec![Value::S32(1)]),
                         ]),
-                        object_complex_type.clone(),
+                        types.object_complex_type.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -481,7 +519,7 @@ fn playground4() {
                             case_idx: 2,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
-                        union_type.clone(),
+                        types.union_type.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -502,7 +540,7 @@ fn playground4() {
                             case_idx: 7,
                             case_value: Some(Box::new(Value::Record(vec![Value::S32(1)]))),
                         },
-                        union_complex_type.clone(),
+                        types.union_complex_type.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -584,7 +622,7 @@ fn playground4() {
                                 Value::Bool(true),
                             ]))),
                         },
-                        tagged_union.clone(),
+                        types.tagged_union.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -610,7 +648,7 @@ fn playground4() {
                                 Value::Bool(true),
                             ]),
                         ]),
-                        tuple_complex_type.clone(),
+                        types.tuple_complex_type.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -655,7 +693,7 @@ fn playground4() {
                                 Value::Bool(false),
                             ]),
                         ]),
-                        list_complex_type.clone(),
+                        types.list_complex_type.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -677,7 +715,7 @@ fn playground4() {
                             Value::S32(123),
                             Value::Bool(true),
                         ]),
-                        object_type.clone(),
+                        types.object_type.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -698,7 +736,7 @@ fn playground4() {
                             case_idx: 0,
                             case_value: None,
                         },
-                        union_with_literals.clone(),
+                        types.union_with_literals.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -719,7 +757,7 @@ fn playground4() {
                             case_idx: 3,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
-                        union_with_literals.clone(),
+                        types.union_with_literals.clone(),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -735,7 +773,7 @@ fn playground4() {
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
-                    value: ValueAndType::new(Value::Enum(1), union_with_only_literals.clone())
+                    value: ValueAndType::new(Value::Enum(1), types.union_with_only_literals.clone())
                         .to_json_value()
                         .unwrap(),
                 },
