@@ -305,7 +305,7 @@ pub struct ResolvedWitApplication {
     interface_package_to_component: HashMap<PackageName, ComponentName>,
     component_order: Vec<ComponentName>,
     non_agent_components: HashSet<ComponentName>,
-    agent_types: std::sync::RwLock<BTreeMap<ComponentName, ExtractedAgentTypes>>,
+    agent_types: tokio::sync::RwLock<BTreeMap<ComponentName, ExtractedAgentTypes>>,
     enable_wasmtime_fs_cache: bool,
 }
 
@@ -338,7 +338,7 @@ impl ResolvedWitApplication {
         resolved_app.validate_package_names(&mut validation);
         resolved_app.collect_component_deps(app, &mut validation);
         resolved_app.sort_components_by_source_deps(&mut validation);
-        resolved_app.extract_agent_types(&mut validation);
+        resolved_app.search_for_agent_types(&mut validation).await;
 
         validation.build(resolved_app)
     }
@@ -352,7 +352,7 @@ impl ResolvedWitApplication {
         app_component_name: &ComponentName,
         compiled_wasm_path: &Path,
     ) -> anyhow::Result<Vec<AgentType>> {
-        let mut all_agent_types = self.agent_types.write().unwrap();
+        let mut all_agent_types = self.agent_types.write().await;
 
         match all_agent_types.get(app_component_name).cloned() {
             None => Err(anyhow!(
@@ -838,21 +838,21 @@ impl ResolvedWitApplication {
         }
     }
 
-    fn extract_agent_types(&mut self, validation: &mut ValidationBuilder) {
+    async fn search_for_agent_types(&mut self, validation: &mut ValidationBuilder) {
         for (name, component) in &self.components {
             if let Some(resolved_wit_dir) = &component.resolved_wit_dir {
                 match resolved_wit_dir.is_agent() {
                     Ok(true) => {
                         log_action(
-                            "Extracting",
+                            "Marked",
                             format!(
-                                "agent types defined in {}",
+                                "{} for agent type extraction",
                                 name.as_str().log_color_highlight()
                             ),
                         );
                         self.agent_types
-                            .get_mut()
-                            .unwrap()
+                            .write()
+                            .await
                             .insert(name.clone(), ExtractedAgentTypes::ToBeExtracted);
                     }
                     Ok(false) => {
@@ -864,8 +864,8 @@ impl ResolvedWitApplication {
                             ),
                         );
                         self.agent_types
-                            .get_mut()
-                            .unwrap()
+                            .write()
+                            .await
                             .insert(name.clone(), ExtractedAgentTypes::NotAnAgent);
                         self.non_agent_components.insert(name.clone());
                     }

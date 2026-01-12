@@ -45,7 +45,7 @@ use tracing::{debug, enabled, Level};
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
-    ctx: &mut ApplicationContext,
+    ctx: &ApplicationContext,
     component_name: &ComponentName,
     command: &app_raw::BuildCommand,
 ) -> anyhow::Result<()> {
@@ -77,7 +77,7 @@ pub async fn execute_build_command(
 }
 
 async fn execute_agent_wrapper(
-    ctx: &mut ApplicationContext,
+    ctx: &ApplicationContext,
     component_name: &ComponentName,
     base_build_dir: &Path,
     command: &GenerateAgentWrapper,
@@ -86,73 +86,65 @@ async fn execute_agent_wrapper(
     let wrapper_wasm_path = base_build_dir.join(&command.generate_agent_wrapper);
     let compiled_wasm_path = base_build_dir.join(&command.based_on_compiled_wasm);
 
-    // NOTE: cannot use new_task_up_to_date_check yet, because of the mut app ctx
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        AgentWrapperCommandMarkerHash {
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(AgentWrapperCommandMarkerHash {
             build_dir: base_build_dir.as_std_path(),
             command,
-        },
-    )?;
+        })?
+        .with_sources(|| [&compiled_wasm_path])
+        .with_targets(|| [&wrapper_wasm_path])
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Generating",
+                    format!(
+                        "agent wrapper for {}",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
 
-    let skip_up_to_date_check =
-        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date();
+                let agent_types = ctx
+                    .wit
+                    .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
+                    .await?;
 
-    if is_up_to_date(
-        skip_up_to_date_check,
-        || [&compiled_wasm_path],
-        || [&wrapper_wasm_path],
-    ) {
-        log_skipping_up_to_date(format!(
-            "generating agent wrapper for {}",
-            component_name.as_str().log_color_highlight()
-        ));
-        return Ok(());
-    }
+                log_action(
+                    "Generating",
+                    format!(
+                        "agent WIT interface for {}",
+                        component_name.to_string().log_color_highlight()
+                    ),
+                );
 
-    log_action(
-        "Generating",
-        format!(
-            "agent wrapper for {}",
-            component_name.as_str().log_color_highlight()
-        ),
-    );
-    let _indent = LogIndent::new();
+                let wrapper_context = crate::model::agent::wit::generate_agent_wrapper_wit(
+                    component_name,
+                    &agent_types,
+                )?;
 
-    let agent_types = ctx
-        .wit
-        .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
-        .await;
+                log_action(
+                    "Generating",
+                    format!(
+                        "agent WIT interface implementation to {}",
+                        wrapper_wasm_path.to_string().log_color_highlight()
+                    ),
+                );
 
-    task_result_marker.result((|| {
-        let agent_types = agent_types?;
-
-        log_action(
-            "Generating",
-            format!(
-                "agent WIT interface for {}",
-                component_name.to_string().log_color_highlight()
-            ),
-        );
-
-        let wrapper_context =
-            crate::model::agent::wit::generate_agent_wrapper_wit(component_name, &agent_types)?;
-
-        log_action(
-            "Generating",
-            format!(
-                "agent WIT interface implementation to {}",
-                wrapper_wasm_path.to_string().log_color_highlight()
-            ),
-        );
-
-        with_hidden_output_unless_error(|| {
-            crate::model::agent::moonbit::generate_moonbit_wrapper(
-                wrapper_context,
-                wrapper_wasm_path.as_std_path(),
-            )
-        })
-    })())
+                with_hidden_output_unless_error(|| {
+                    crate::model::agent::moonbit::generate_moonbit_wrapper(
+                        wrapper_context,
+                        wrapper_wasm_path.as_std_path(),
+                    )
+                })
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "generating agent wrapper for {}",
+                    component_name.as_str().log_color_highlight()
+                ));
+            },
+        )
+        .await
 }
 
 async fn execute_compose_agent_wrapper(

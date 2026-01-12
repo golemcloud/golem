@@ -3,23 +3,30 @@ use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::context::ApplicationContext;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
+use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
 use crate::model::app::BridgeSdkTarget;
+use crate::model::text::fmt::log_error;
+use anyhow::bail;
 use camino::Utf8PathBuf;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_templates::model::GuestLanguage;
+use itertools::Itertools;
 
 pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     let mut targets = vec![];
 
     match &ctx.config.custom_bridge_sdk_target {
         Some(custom_target) => {
+            let should_filter_by_agent_type_name = !custom_target.agent_type_names.is_empty();
+            let mut agent_type_names = custom_target.agent_type_names.clone();
             for component_name in ctx.selected_component_names() {
                 if !ctx.wit.is_agent(component_name) {
                     continue;
                 }
 
-                let component = ctx.application.component(&component_name);
+                let component = ctx.application.component(component_name);
                 let final_linked_wasm = component.final_linked_wasm();
                 let target_language = custom_target
                     .target_language
@@ -32,13 +39,17 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                         .get_extracted_agent_types(component_name, &final_linked_wasm)
                         .await?;
 
-                    if !custom_target.agent_type_names.is_empty() {
+                    if should_filter_by_agent_type_name {
                         agent_types.retain(|agent_type| {
-                            custom_target
-                                .agent_type_names
-                                .contains(&agent_type.type_name)
+                            agent_type_names.contains(&agent_type.type_name)
+                                || agent_type_names.contains(&agent_type.type_name.to_wit_naming())
                         });
                     }
+
+                    agent_types.iter().for_each(|agent_type| {
+                        agent_type_names.remove(&agent_type.type_name);
+                        agent_type_names.remove(&agent_type.type_name.to_wit_naming());
+                    });
 
                     agent_types
                 };
@@ -51,6 +62,17 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                         output_dir: None,
                     });
                 }
+            }
+
+            if agent_type_names.len() != 0 {
+                log_error(format!(
+                    "The following agent type names were not found: {}",
+                    agent_type_names
+                        .iter()
+                        .map(|at| at.as_str().log_color_highlight().to_string())
+                        .join(", ")
+                ));
+                bail!(NonSuccessfulExit)
             }
 
             if custom_target.agent_type_names.len() == 1 {
@@ -137,9 +159,10 @@ async fn gen_bridge_sdk_target(
             },
             || {
                 log_skipping_up_to_date(format!(
-                    "generating {} bridge SDK for {}",
+                    "generating {} bridge SDK for {} to {}",
                     target.target_language.to_string().log_color_highlight(),
                     agent_type_name.as_str().log_color_highlight(),
+                    output_dir.log_color_highlight()
                 ));
             },
         )

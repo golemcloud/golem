@@ -15,9 +15,7 @@
 use crate::app::context::{to_anyhow, ApplicationContext};
 
 use crate::command::component::ComponentSubcommand;
-use crate::command::shared_args::{
-    OptionalComponentNames, ComponentTemplateName, DeployArgs,
-};
+use crate::command::shared_args::{ComponentTemplateName, DeployArgs, OptionalComponentNames};
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
@@ -420,10 +418,7 @@ impl ComponentCommandHandler {
         Ok(components)
     }
 
-    async fn cmd_diagnose(
-        &self,
-        component_names: OptionalComponentNames,
-    ) -> anyhow::Result<()> {
+    async fn cmd_diagnose(&self, component_names: OptionalComponentNames) -> anyhow::Result<()> {
         self.ctx
             .app_handler()
             .diagnose(
