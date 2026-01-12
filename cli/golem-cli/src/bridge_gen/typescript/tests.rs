@@ -33,38 +33,139 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Write;
 use std::process::Stdio;
-use test_r::test;
+use tempfile::TempDir;
+use test_r::{test, test_dep};
 // TODO: replace the paths with temp dirs before merging
 
-// Playground tests for manual inspection
-#[test]
-fn playground1() {
+struct GeneratedPackage {
+    pub dir: TempDir,
+}
+
+#[test_dep(tagged_as = "single_agent_wrapper_types_1")]
+fn ts_single_agent_wrapper_1() -> GeneratedPackage {
     let agent_type =
         super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen");
+    let dir = TempDir::new().unwrap();
 
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
 }
 
-#[test]
-fn playground2() {
+#[test_dep(tagged_as = "multi_agent_wrapper_2_types_1")]
+fn ts_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
     let agent_type =
         super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen2");
+    let dir = TempDir::new().unwrap();
 
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
+}
+
+#[test_dep(tagged_as = "multi_agent_wrapper_2_types_2")]
+fn ts_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
+    let agent_type =
+        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[1].clone();
+    let dir = TempDir::new().unwrap();
+
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
+}
+
+#[test_dep(tagged_as = "counter_agent")]
+fn ts_counter_agent() -> GeneratedPackage {
+    let agent_type = AgentType {
+        type_name: AgentTypeName("CounterAgent".to_string()),
+        description: "Constructs the agent CounterAgent".to_string(),
+        constructor: AgentConstructor {
+            name: Some("CounterAgent".to_string()),
+            description: "Constructs the agent CounterAgent".to_string(),
+            prompt_hint: Some("Enter the following parameters: name".to_string()),
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "name".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "increment".to_string(),
+            description: "Increases the count by one and returns the new value".to_string(),
+            prompt_hint: Some("Increase the count by one".to_string()),
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return-value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: f64(),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+    };
+    let dir = TempDir::new().unwrap();
+
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
+}
+
+#[test_dep(tagged_as = "code_first_snippets")]
+fn ts_ts_code_first_snippets() -> GeneratedPackage {
+    let agent_type =
+        super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
+    let dir = TempDir::new().unwrap();
+
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
 }
 
 #[test]
-fn playground3() {
-    let agent_type =
-        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[1].clone();
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/tsgen3");
+fn single_agent_wrapper_1_compiles(
+    #[tagged_as("single_agent_wrapper_types_1")] _pkg: &GeneratedPackage,
+) {
+    assert!(true)
+}
 
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
+#[test]
+fn multi_agent_wrapper_2_types_1_compiles(
+    #[tagged_as("multi_agent_wrapper_2_types_1")] _pkg: &GeneratedPackage,
+) {
+    assert!(true)
+}
+
+#[test]
+fn multi_agent_wrapper_2_types_2_compiles(
+    #[tagged_as("multi_agent_wrapper_2_types_2")] _pkg: &GeneratedPackage,
+) {
+    assert!(true)
+}
+
+#[test]
+fn counter_agent_compiles(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {
+    assert!(true)
+}
+
+#[test]
+fn code_first_snippets_compiles(#[tagged_as("code_first_snippets")] _pkg: &GeneratedPackage) {
+    assert!(true)
 }
 
 #[test]
@@ -895,47 +996,6 @@ fn playground4() {
         }),
         json!(["hello", 100, { "a": "x", "b": 200, "c": true }]),
     );
-}
-
-#[test]
-fn playground5() {
-    let agent_type = AgentType {
-        type_name: AgentTypeName("CounterAgent".to_string()),
-        description: "Constructs the agent CounterAgent".to_string(),
-        constructor: AgentConstructor {
-            name: Some("CounterAgent".to_string()),
-            description: "Constructs the agent CounterAgent".to_string(),
-            prompt_hint: Some("Enter the following parameters: name".to_string()),
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "name".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-        },
-        methods: vec![AgentMethod {
-            name: "increment".to_string(),
-            description: "Increases the count by one and returns the new value".to_string(),
-            prompt_hint: Some("Increase the count by one".to_string()),
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "return-value".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: f64(),
-                    }),
-                }],
-            }),
-        }],
-        dependencies: vec![],
-        mode: AgentMode::Durable,
-    };
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/counter-client");
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
