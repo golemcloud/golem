@@ -237,14 +237,8 @@ impl ApplicationService {
         name: &ApplicationName,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
-        tracing::warn!("get_in_account {name} enter, account-id = {}", account_id.0);
         auth.authorize_account_action(account_id, AccountAction::ViewApplications)
-            .map_err(|err| {
-                tracing::warn!("get_in_account {name} auth failed: {err:?}");
-                ApplicationError::ApplicationByNameNotFound(name.clone())
-            })?;
-
-        tracing::warn!("get_in_account {name} auth passed");
+            .map_err(|err| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
 
         let result: Application = self
             .application_repo
@@ -252,8 +246,6 @@ impl ApplicationService {
             .await?
             .ok_or(ApplicationError::ApplicationByNameNotFound(name.clone()))?
             .try_into()?;
-
-        tracing::warn!("get_in_account {name} result: {result:?}");
 
         Ok(result)
     }
