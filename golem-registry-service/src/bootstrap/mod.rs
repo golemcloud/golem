@@ -196,6 +196,7 @@ impl Services {
 
         let deployment_service = Arc::new(DeploymentService::new(
             environment_service.clone(),
+            application_service.clone(),
             repos.deployment_repo.clone(),
         ));
 

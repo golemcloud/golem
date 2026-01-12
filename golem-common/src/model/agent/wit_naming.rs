@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentType,
+    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentType, AgentTypeName,
     ComponentModelElementSchema, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
     ElementSchema, ElementValue, ElementValues, HeaderVariable, HttpEndpointDetails, HttpMethod,
     HttpMountDetails, LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue,
@@ -37,6 +37,12 @@ impl ToWitNaming for String {
         // NOTE: wrap and include kebab case only here, in case we have to handle more WIT specific
         //       special cases.
         heck::ToKebabCase::to_kebab_case(self.as_str())
+    }
+}
+
+impl ToWitNaming for AgentTypeName {
+    fn to_wit_naming(&self) -> Self {
+        Self(self.0.to_wit_naming())
     }
 }
 

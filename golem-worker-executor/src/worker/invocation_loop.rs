@@ -191,7 +191,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             agent_type = self.parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
         let prepare_result =
@@ -510,7 +510,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             agent_type = self.parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             %idempotency_key,
             function = full_function_name
@@ -798,7 +798,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             agent_type = self.parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
 
@@ -1029,7 +1029,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         if let Some(agent_id) = agent_id {
             invocation_span.set_attribute(
                 "agent_type".to_string(),
-                AttributeValue::String(agent_id.agent_type.clone()),
+                AttributeValue::String(agent_id.agent_type.to_string()),
             );
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),

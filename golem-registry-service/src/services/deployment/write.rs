@@ -521,7 +521,9 @@ impl DeploymentContext {
             for agent_type in component.metadata.agent_types() {
                 if !seen_wit_named_agent_types.insert(agent_type.type_name.to_wit_naming()) {
                     return Err(DeploymentWriteError::DeploymentValidationFailed(vec![
-                        DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()),
+                        DeployValidationError::AmbiguousAgentTypeName(
+                            agent_type.type_name.to_string(),
+                        ),
                     ]));
                 }
                 agent_types.push(RegisteredAgentType {

@@ -1,6 +1,6 @@
 use super::{
     AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentIdWithComponent, AgentMethod,
-    AgentMode, AgentPrincipal, AgentType, BinaryDescriptor, BinaryReference,
+    AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
     BinarySource, BinaryType, ComponentModelElementSchema, CorsOptions, CustomHttpMethod,
     DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, GolemUserPrincipal,
     HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
@@ -42,7 +42,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
     ) -> Result<Self, Self::Error> {
         Ok(AgentType {
             mode: proto.mode().into(),
-            type_name: proto.type_name,
+            type_name: AgentTypeName(proto.type_name),
             description: proto.description,
             constructor: proto
                 .constructor
@@ -67,7 +67,7 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
     fn from(value: AgentType) -> Self {
         golem_api_grpc::proto::golem::component::AgentType {
             mode: golem_api_grpc::proto::golem::component::AgentMode::from(value.mode) as i32,
-            type_name: value.type_name,
+            type_name: value.type_name.0,
             description: value.description,
             constructor: Some(value.constructor.into()),
             methods: value
@@ -1172,7 +1172,9 @@ impl From<Principal> for golem_api_grpc::proto::golem::component::Principal {
                 Principal::Oidc(v) => Value::Oidc(v.into()),
                 Principal::Agent(v) => Value::Agent(v.into()),
                 Principal::GolemUser(v) => Value::GolemUser(v.into()),
-                Principal::Anonymous(_) => Value::Anonymous(golem_api_grpc::proto::golem::common::Empty {}),
+                Principal::Anonymous(_) => {
+                    Value::Anonymous(golem_api_grpc::proto::golem::common::Empty {})
+                }
             }),
         }
     }

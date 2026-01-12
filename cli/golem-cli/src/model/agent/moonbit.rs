@@ -116,7 +116,7 @@ pub fn generate_moonbit_wrapper(
 
     for agent in &ctx.agent_types {
         let agent_stub = generate_agent_stub(&ctx, agent)?;
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         component.set_warning_control(
             &format!(
@@ -407,7 +407,7 @@ fn setup_dependencies(
     }
 
     for agent in agent_types {
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         depends_on_golem_agent_common(
             component,
@@ -1602,6 +1602,16 @@ mod tests {
     pub fn unit_result_type() {
         let component_name = "example:bug".try_into().unwrap();
         let agent_types = test::unit_result_type();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    pub fn ts_code_first_snippets() {
+        let component_name = "example:code-first-snippets".try_into().unwrap();
+        let agent_types = test::ts_code_first_snippets();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

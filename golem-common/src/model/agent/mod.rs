@@ -47,8 +47,10 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{
-    parse_value_and_type, print_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType,
+    parse_value_and_type, print_value_and_type, FromValue, IntoValue, IntoValueAndType, Value,
+    ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
 use poem_openapi::NewType;
@@ -157,13 +159,13 @@ pub struct AgentDependency {
     pub methods: Vec<AgentMethod>,
 }
 
-#[derive(Debug, Clone, BinaryCodec, IntoValue)]
+#[derive(Debug, Clone, BinaryCodec, IntoValue, FromValue)]
 pub enum AgentError {
     InvalidInput(String),
     InvalidMethod(String),
     InvalidType(String),
     InvalidAgentId(String),
-    CustomError(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
+    CustomError(ValueAndType),
 }
 
 impl Display for AgentError {
@@ -217,12 +219,30 @@ pub struct AgentMethod {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Deserialize, Serialize, NewType, BinaryCodec, IntoValue, FromValue,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize,
+    NewType,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
 )]
 #[repr(transparent)]
 #[desert(transparent)]
 #[desert(evolution())]
 pub struct AgentTypeName(pub String);
+
+impl Display for AgentTypeName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(
     Debug,
@@ -240,7 +260,7 @@ pub struct AgentTypeName(pub String);
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
-    pub type_name: String,
+    pub type_name: AgentTypeName,
     pub description: String,
     pub constructor: AgentConstructor,
     pub methods: Vec<AgentMethod>,
@@ -251,7 +271,7 @@ pub struct AgentType {
 
 impl AgentType {
     pub fn wrapper_type_name(&self) -> String {
-        self.type_name.to_wit_naming()
+        self.type_name.0.to_wit_naming()
     }
 }
 
@@ -427,6 +447,29 @@ impl DataSchema {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+pub enum UntypedDataValue {
+    Tuple(Vec<UntypedElementValue>),
+    Multimodal(Vec<UntypedNamedElementValue>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum UntypedJsonDataValue {
+    Tuple(UntypedJsonElementValues),
+    Multimodal(UntypedJsonNamedElementValues),
+}
+
+impl From<DataValue> for UntypedJsonDataValue {
+    fn from(value: DataValue) -> Self {
+        match value {
+            DataValue::Tuple(elements) => UntypedJsonDataValue::Tuple(elements.into()),
+            DataValue::Multimodal(elements) => UntypedJsonDataValue::Multimodal(elements.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -572,6 +615,25 @@ impl IntoValue for DataValue {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonElementValues {
+    pub elements: Vec<UntypedJsonElementValue>,
+}
+
+impl From<ElementValues> for UntypedJsonElementValues {
+    fn from(value: ElementValues) -> Self {
+        Self {
+            elements: value
+                .elements
+                .into_iter()
+                .map(UntypedJsonElementValue::from)
+                .collect(),
+        }
+    }
+}
+
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
 )]
@@ -593,6 +655,25 @@ impl Display for ElementValues {
                 .collect::<Vec<_>>()
                 .join(",")
         )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonNamedElementValues {
+    pub elements: Vec<UntypedJsonNamedElementValue>,
+}
+
+impl From<NamedElementValues> for UntypedJsonNamedElementValues {
+    fn from(value: NamedElementValues) -> Self {
+        Self {
+            elements: value
+                .elements
+                .into_iter()
+                .map(UntypedJsonNamedElementValue::from)
+                .collect(),
+        }
     }
 }
 
@@ -620,6 +701,29 @@ impl Display for NamedElementValues {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+pub struct UntypedNamedElementValue {
+    pub name: String,
+    pub value: UntypedElementValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonNamedElementValue {
+    pub name: String,
+    pub value: UntypedJsonElementValue,
+}
+
+impl From<NamedElementValue> for UntypedJsonNamedElementValue {
+    fn from(value: NamedElementValue) -> Self {
+        Self {
+            name: value.name,
+            value: value.value.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -643,6 +747,101 @@ impl IntoValue for NamedElementValue {
     fn get_type() -> AnalysedType {
         tuple(vec![str(), ElementValue::get_type()])
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct TextReferenceValue {
+    pub value: TextReference,
+}
+
+impl IntoValue for TextReferenceValue {
+    fn into_value(self) -> Value {
+        self.value.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        TextReference::get_type()
+    }
+}
+
+impl FromValue for TextReferenceValue {
+    fn from_value(value: Value) -> Result<Self, String> {
+        TextReference::from_value(value).map(|value| Self { value })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryReferenceValue {
+    pub value: BinaryReference,
+}
+
+impl IntoValue for BinaryReferenceValue {
+    fn into_value(self) -> Value {
+        self.value.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        BinaryReference::get_type()
+    }
+}
+
+impl FromValue for BinaryReferenceValue {
+    fn from_value(value: Value) -> Result<Self, String> {
+        BinaryReference::from_value(value).map(|value| Self { value })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+pub enum UntypedElementValue {
+    ComponentModel(Value),
+    UnstructuredText(TextReferenceValue),
+    UnstructuredBinary(BinaryReferenceValue),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum UntypedJsonElementValue {
+    ComponentModel(JsonComponentModelValue),
+    UnstructuredText(TextReferenceValue),
+    UnstructuredBinary(BinaryReferenceValue),
+}
+
+impl From<ElementValue> for UntypedJsonElementValue {
+    fn from(value: ElementValue) -> Self {
+        match value {
+            ElementValue::ComponentModel(value) => {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
+                    value: value
+                        .to_json_value()
+                        .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
+                })
+            }
+            ElementValue::UnstructuredText(text_reference) => {
+                UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
+                    value: text_reference,
+                })
+            }
+            ElementValue::UnstructuredBinary(binary_reference) => {
+                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: binary_reference,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct JsonComponentModelValue {
+    pub value: serde_json::Value,
 }
 
 #[derive(
@@ -985,7 +1184,7 @@ pub struct RegisteredAgentType {
 /// AgentId is convertible to and from string, and is used as _worker names_.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentId {
-    pub agent_type: String,
+    pub agent_type: AgentTypeName,
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,
     wrapper_agent_type: String,
@@ -993,8 +1192,8 @@ pub struct AgentId {
 }
 
 impl AgentId {
-    pub fn new(agent_type: String, parameters: DataValue, phantom_id: Option<Uuid>) -> Self {
-        let wrapper_agent_type = agent_type.to_wit_naming();
+    pub fn new(agent_type: AgentTypeName, parameters: DataValue, phantom_id: Option<Uuid>) -> Self {
+        let wrapper_agent_type = agent_type.to_wit_naming().0;
         let mut result = Self {
             agent_type,
             parameters,
@@ -1010,7 +1209,7 @@ impl AgentId {
         Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
     }
 
-    pub fn parse_agent_type_name(s: &str) -> Result<&str, String> {
+    pub fn parse_agent_type_name(s: &str) -> Result<AgentTypeName, String> {
         static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
         });
@@ -1019,7 +1218,7 @@ impl AgentId {
             format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
         })?;
 
-        Ok(captures.get(1).unwrap().as_str())
+        Ok(AgentTypeName(captures.get(1).unwrap().as_str().to_string()))
     }
 
     pub fn parse_and_resolve_type(
@@ -1044,12 +1243,13 @@ impl AgentId {
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
 
-        let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type_name)?;
+        let agent_type = resolver
+            .resolve_agent_type_by_wrapper_name(&AgentTypeName(agent_type_name.to_string()))?;
         let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
 
         let mut agent_id = AgentId {
             agent_type: agent_type.type_name.clone(),
-            wrapper_agent_type: agent_type.type_name.to_wit_naming(),
+            wrapper_agent_type: agent_type.type_name.to_wit_naming().0,
             parameters: value,
             phantom_id,
             as_string: "".to_string(),
@@ -1091,12 +1291,18 @@ impl Display for AgentId {
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String>;
+    fn resolve_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentType, String>;
 }
 
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
-    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentType, String> {
         let result = self
             .find_agent_type_by_wrapper_name(agent_type)?
             .to_wit_naming();
