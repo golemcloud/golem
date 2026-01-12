@@ -18,8 +18,8 @@ use golem_common::model::agent::{
     NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, case, chr, field, list, option, r#enum, record, result, s32, str, tuple, u8, unit_case,
-    unit_result, variant,
+    bool, case, chr, field, list, option, r#enum, record, result, s32, str, tuple, u32, u8,
+    unit_case, unit_result, variant,
 };
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
@@ -35,7 +35,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                     NamedElementSchema {
                         name: "a".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: s32(),
+                            element_type: u32(),
                         }),
                     },
                     NamedElementSchema {
@@ -72,13 +72,13 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                         NamedElementSchema {
                             name: "x".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: s32(),
+                                element_type: u32(),
                             }),
                         },
                         NamedElementSchema {
                             name: "y".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: s32(),
+                                element_type: u32(),
                             }),
                         },
                     ],
@@ -87,7 +87,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                     elements: vec![NamedElementSchema {
                         name: "return".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: s32(),
+                            element_type: u32(),
                         }),
                     }],
                 }),
@@ -106,7 +106,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
     let person = record(vec![
         field("first-name", str()),
         field("last-name", str()),
-        field("age", option(s32())),
+        field("age", option(u32())),
         field("eye-color", color.clone()),
     ])
     .named("person");
@@ -245,7 +245,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                     NamedElementSchema {
                         name: "export".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: s32(),
+                            element_type: u32(),
                         }),
                     },
                     NamedElementSchema {
@@ -283,7 +283,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                         .map(|keyword| NamedElementSchema {
                             name: keyword.to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: s32(),
+                                element_type: u32(),
                             }),
                         })
                         .collect(),
