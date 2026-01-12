@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    AgentHttpAuthDetails, AgentPrincipal, CorsOptions, CustomHttpMethod, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
     PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
 };
@@ -471,21 +471,18 @@ impl ToWitNaming for AgentHttpAuthDetails {
     }
 }
 
-impl ToWitNaming for AgentHttpAuthContext {
+impl ToWitNaming for AgentPrincipal {
     fn to_wit_naming(&self) -> Self {
         Self {
             sub: self.sub.to_wit_naming(),
-            provider: self.provider.to_wit_naming(),
+            issuer: self.issuer.to_wit_naming(),
             email: self.email.to_wit_naming(),
             name: self.name.to_wit_naming(),
             email_verified: self.email_verified,
             given_name: self.given_name.as_ref().map(ToWitNaming::to_wit_naming),
             family_name: self.family_name.as_ref().map(ToWitNaming::to_wit_naming),
             picture: self.picture.as_ref().map(ToWitNaming::to_wit_naming),
-            preferred_username: self
-                .preferred_username
-                .as_ref()
-                .map(ToWitNaming::to_wit_naming),
+            username: self.username.as_ref().map(ToWitNaming::to_wit_naming),
             claims: self.claims.to_wit_naming(),
         }
     }

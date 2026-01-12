@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    AgentHttpAuthDetails, AgentPrincipal, CorsOptions, CustomHttpMethod, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
     PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
 };
@@ -801,35 +801,35 @@ impl From<super::bindings::golem::agent::common::AuthDetails> for AgentHttpAuthD
     }
 }
 
-impl From<AgentHttpAuthContext> for super::bindings::golem::agent::common::AuthContext {
-    fn from(value: AgentHttpAuthContext) -> Self {
+impl From<AgentPrincipal> for super::bindings::golem::agent::common::Principal {
+    fn from(value: AgentPrincipal) -> Self {
         Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
             given_name: value.given_name,
             family_name: value.family_name,
             picture: value.picture,
-            preferred_username: value.preferred_username,
+            username: value.username,
             claims: value.claims,
         }
     }
 }
 
-impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthContext {
-    fn from(value: super::bindings::golem::agent::common::AuthContext) -> Self {
+impl From<super::bindings::golem::agent::common::Principal> for AgentPrincipal {
+    fn from(value: super::bindings::golem::agent::common::Principal) -> Self {
         Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
             given_name: value.given_name,
             family_name: value.family_name,
             picture: value.picture,
-            preferred_username: value.preferred_username,
+            username: value.username,
             claims: value.claims,
         }
     }

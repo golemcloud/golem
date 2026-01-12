@@ -1,5 +1,5 @@
 use super::{
-    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    AgentPrincipal, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PathSegmentNode, PathVariable,
     QueryVariable, SystemVariable, SystemVariableSegment,
 };
@@ -1118,7 +1118,7 @@ impl From<AgentHttpAuthDetails> for golem_api_grpc::proto::golem::component::Age
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthContext>
-    for AgentHttpAuthContext
+    for AgentPrincipal
 {
     type Error = String;
 
@@ -1140,8 +1140,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthContext>
     }
 }
 
-impl From<AgentHttpAuthContext> for golem_api_grpc::proto::golem::component::AgentHttpAuthContext {
-    fn from(value: AgentHttpAuthContext) -> Self {
+impl From<AgentPrincipal> for golem_api_grpc::proto::golem::component::AgentHttpAuthContext {
+    fn from(value: AgentPrincipal) -> Self {
         Self {
             sub: value.sub,
             provider: value.provider,

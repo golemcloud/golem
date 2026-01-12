@@ -1421,16 +1421,15 @@ pub struct AgentHttpAuthDetails {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 // Meaning of the various claims: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
-pub struct AgentHttpAuthContext {
+pub struct AgentPrincipal {
     pub sub: String,
-    pub provider: String,
-    pub email: String,
-    pub name: String,
+    pub issuer: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
     pub email_verified: Option<bool>,
     pub given_name: Option<String>,
     pub family_name: Option<String>,
-    // Url of the user's picture or avatar
     pub picture: Option<String>,
-    pub preferred_username: Option<String>,
+    pub username: Option<String>,
     pub claims: String,
 }
