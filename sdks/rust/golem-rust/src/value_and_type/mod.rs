@@ -50,8 +50,8 @@ pub mod uuid;
 use crate::PromiseId;
 use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
 use golem_wasm::{
-    AgentId, ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType, WitTypeNode,
-    WitValue, WitValueBuilderExtensions, AccountId,
+    AccountId, AgentId, ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType,
+    WitTypeNode, WitValue, WitValueBuilderExtensions,
 };
 pub use golem_wasm::{NodeBuilder, WitValueExtractor};
 use std::collections::Bound;
