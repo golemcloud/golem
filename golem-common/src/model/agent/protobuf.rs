@@ -1193,7 +1193,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::OidcPrincipal> for OidcPri
             given_name: value.given_name,
             family_name: value.family_name,
             picture: value.picture,
-            username: value.username,
+            preferred_username: value.preferred_username,
             claims: value.claims,
         })
     }
@@ -1210,7 +1210,7 @@ impl From<OidcPrincipal> for golem_api_grpc::proto::golem::component::OidcPrinci
             given_name: value.given_name,
             family_name: value.family_name,
             picture: value.picture,
-            username: value.username,
+            preferred_username: value.preferred_username,
             claims: value.claims,
         }
     }

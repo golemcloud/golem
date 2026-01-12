@@ -118,7 +118,7 @@ interface common {
     given-name:     option<string>,
     family-name:    option<string>,
     picture:        option<string>,
-    username:       option<string>,
+    preferred-username:       option<string>,
 
     claims: string,
   }

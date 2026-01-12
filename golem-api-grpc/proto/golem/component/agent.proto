@@ -243,7 +243,7 @@ message OidcPrincipal {
   optional string given_name = 6;
   optional string family_name = 7;
   optional string picture = 8;
-  optional string username = 9;
+  optional string preferred_username = 9;
 
   string claims = 10;
 }

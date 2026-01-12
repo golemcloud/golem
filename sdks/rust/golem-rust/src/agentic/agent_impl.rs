@@ -21,7 +21,7 @@ use crate::{
         with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
     },
     golem_agentic::exports::golem::agent::guest::{
-        AgentError, AgentType, AuthContext, DataValue, Guest,
+        AgentError, AgentType, DataValue, Guest, Principal,
     },
 };
 
@@ -31,7 +31,7 @@ impl Guest for Component {
     fn initialize(
         agent_type: String,
         input: DataValue,
-        _auth_ctx: Option<AuthContext>,
+        _principal: Principal,
     ) -> Result<(), AgentError> {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
@@ -66,7 +66,7 @@ impl Guest for Component {
     fn invoke(
         method_name: String,
         input: DataValue,
-        _auth_ctx: Option<AuthContext>,
+        _principal: Principal,
     ) -> Result<DataValue, AgentError> {
         with_agent_instance_async(|resolved_agent| async move {
             resolved_agent

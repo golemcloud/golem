@@ -47,11 +47,14 @@ pub mod serde_json;
 pub mod url;
 pub mod uuid;
 
+use crate::bindings::golem::api::host::AccountId;
+use crate::PromiseId;
 use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
 use golem_wasm::{
     AgentId, ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType, WitTypeNode,
     WitValue, WitValueBuilderExtensions,
 };
+pub use golem_wasm::{NodeBuilder, WitValueExtractor};
 use std::collections::Bound;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::Hash;
@@ -64,11 +67,8 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use type_builder::WitTypeBuilderExtensions;
-
-use crate::PromiseId;
-pub use golem_wasm::{NodeBuilder, WitValueExtractor};
 pub use type_builder::TypeNodeBuilder;
+use type_builder::WitTypeBuilderExtensions;
 
 /// Specific trait to convert a type into a pair of `WitValue` and `WitType`.
 pub trait IntoValue: Sized {
@@ -652,6 +652,33 @@ impl IntoValue for ComponentId {
 }
 
 impl FromValueAndType for ComponentId {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            uuid: <Uuid>::from_extractor(
+                &extractor
+                    .field(0usize)
+                    .ok_or_else(|| "Missing uuid field".to_string())?,
+            )?,
+        })
+    }
+}
+
+impl IntoValue for AccountId {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let builder = builder.record();
+        let builder = self.uuid.add_to_builder(builder.item());
+        builder.finish()
+    }
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        let builder = builder.record(Some("AccountId".to_string()), None);
+        let builder = <Uuid>::add_to_type_builder(builder.field("uuid"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for AccountId {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl WitValueExtractor<'a, 'b>,
     ) -> Result<Self, String> {

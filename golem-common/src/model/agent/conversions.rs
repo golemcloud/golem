@@ -870,7 +870,7 @@ impl From<OidcPrincipal> for super::bindings::golem::agent::common::OidcPrincipa
             given_name: value.given_name,
             family_name: value.family_name,
             picture: value.picture,
-            username: value.username,
+            preferred_username: value.preferred_username,
             claims: value.claims,
         }
     }
@@ -887,7 +887,7 @@ impl From<super::bindings::golem::agent::common::OidcPrincipal> for OidcPrincipa
             given_name: value.given_name,
             family_name: value.family_name,
             picture: value.picture,
-            username: value.username,
+            preferred_username: value.preferred_username,
             claims: value.claims,
         }
     }
