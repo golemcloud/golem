@@ -2374,40 +2374,32 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                     input_schema: DataSchema::Multimodal(NamedElementSchemas {
                         elements: vec![
                             NamedElementSchema {
-                                name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: str(),
-                                    },
-                                ),
+                                name: "text".to_string(),
+                                schema: ElementSchema::UnstructuredText(TextDescriptor {
+                                    restrictions: None,
+                                }),
                             },
                             NamedElementSchema {
-                                name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: str(),
-                                    },
-                                ),
+                                name: "binary".to_string(),
+                                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                                    restrictions: None,
+                                }),
                             },
                         ],
                     }),
                     output_schema: DataSchema::Multimodal(NamedElementSchemas {
                         elements: vec![
                             NamedElementSchema {
-                                name: "val".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: str(),
-                                    },
-                                ),
+                                name: "text".to_string(),
+                                schema: ElementSchema::UnstructuredText(TextDescriptor {
+                                    restrictions: None,
+                                }),
                             },
                             NamedElementSchema {
-                                name: "tag".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: str(),
-                                    },
-                                ),
+                                name: "binary".to_string(),
+                                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                                    restrictions: None,
+                                }),
                             },
                         ],
                     }),
@@ -2420,7 +2412,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                     input_schema: DataSchema::Multimodal(NamedElementSchemas {
                         elements: vec![
                             NamedElementSchema {
-                                name: "val".to_string(),
+                                name: "text".to_string(),
                                 schema: ElementSchema::ComponentModel(
                                     ComponentModelElementSchema {
                                         element_type: str(),
@@ -2428,10 +2420,10 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                                 ),
                             },
                             NamedElementSchema {
-                                name: "tag".to_string(),
+                                name: "image".to_string(),
                                 schema: ElementSchema::ComponentModel(
                                     ComponentModelElementSchema {
-                                        element_type: str(),
+                                        element_type: list(u8()),
                                     },
                                 ),
                             },
@@ -2440,7 +2432,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                     output_schema: DataSchema::Multimodal(NamedElementSchemas {
                         elements: vec![
                             NamedElementSchema {
-                                name: "val".to_string(),
+                                name: "text".to_string(),
                                 schema: ElementSchema::ComponentModel(
                                     ComponentModelElementSchema {
                                         element_type: str(),
@@ -2448,10 +2440,10 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                                 ),
                             },
                             NamedElementSchema {
-                                name: "tag".to_string(),
+                                name: "image".to_string(),
                                 schema: ElementSchema::ComponentModel(
                                     ComponentModelElementSchema {
-                                        element_type: str(),
+                                        element_type: list(u8()),
                                     },
                                 ),
                             },

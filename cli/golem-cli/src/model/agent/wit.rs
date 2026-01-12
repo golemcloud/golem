@@ -1488,28 +1488,28 @@ mod tests {
                   use golem:agent/common.{text-reference, binary-reference};
 
                   variant fun-multimodal-advanced-input {
-                    val(string),
-                    tag(string),
+                    text(string),
+                    image(list<u8>),
                   }
 
                   variant fun-multimodal-advanced-output {
-                    val(string),
-                    tag(string),
+                    text(string),
+                    image(list<u8>),
                   }
 
                   variant fun-multimodal-input {
-                    val(string),
-                    tag(string),
+                    text(text-reference),
+                    binary(binary-reference),
                   }
 
                   variant fun-multimodal-output {
-                    val(string),
-                    tag(string),
+                    text(text-reference),
+                    binary(binary-reference),
                   }
 
                   record object-type {
                     a: string,
-                    b: u32,
+                    b: s32,
                     c: bool,
                   }
 
@@ -1529,27 +1529,28 @@ mod tests {
                     a: option<string>,
                   }
 
+                  variant result-exact {
+                    ok(string),
+                    err(string),
+                  }
+
+                  variant result-like {
+                    okay(string),
+                    error(option<string>),
+                  }
+
                   record result-like-with-no-tag {
                     ok: option<string>,
                     err: option<string>,
                   }
 
-                  record simple-interface-type {
-                    n: u32,
+                  variant result-like-with-void {
+                    ok,
+                    err,
                   }
 
-                  record object-complex-type {
-                    a: string,
-                    b: u32,
-                    c: bool,
-                    d: object-type,
-                    e: string,
-                    f: list<string>,
-                    g: list<object-type>,
-                    h: string,
-                    i: string,
-                    j: string,
-                    k: simple-interface-type,
+                  record simple-interface-type {
+                    n: s32,
                   }
 
                   record struct-args {
@@ -1557,12 +1558,71 @@ mod tests {
                     y: string,
                     z: string,
                   }
+
+                  variant union-type {
+                    case1(s32),
+                    case2(string),
+                    case3(bool),
+                    case4(object-type),
+                  }
+
+                  record object-complex-type {
+                    a: string,
+                    b: s32,
+                    c: bool,
+                    d: object-type,
+                    e: union-type,
+                    f: list<string>,
+                    g: list<object-type>,
+                    h: tuple<string, s32, bool>,
+                    i: tuple<string, s32, object-type>,
+                    j: list<tuple<string, s32>>,
+                    k: simple-interface-type,
+                  }
+
+                  variant tagged-union {
+                    a(string),
+                    b(s32),
+                    c(bool),
+                    d(union-type),
+                    e(object-type),
+                    f(list<string>),
+                    g(tuple<string, s32, bool>),
+                    h(simple-interface-type),
+                    i,
+                    j,
+                  }
+
+                  variant union-complex-type {
+                    case1(s32),
+                    case2(string),
+                    case3(bool),
+                    case4(object-complex-type),
+                    case5(union-type),
+                    case6(tuple<string, s32, bool>),
+                    case7(tuple<string, s32, object-type>),
+                    case8(simple-interface-type),
+                    case9(list<string>),
+                  }
+
+                  variant union-with-literals {
+                    lit1,
+                    lit2,
+                    lit3,
+                    union-with-literals1(bool),
+                  }
+
+                  enum union-with-only-literals {
+                    foo,
+                    bar,
+                    baz,
+                  }
                 }
 
                 /// FooAgent class
                 interface foo-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-like-with-no-tag};
+                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for FooAgent
                   initialize: func(input: string);
@@ -1570,25 +1630,25 @@ mod tests {
                   get-definition: func() -> agent-type;
 
                   /// Takes all complex types
-                  fun-all: func(complex-type: object-complex-type, union-type: string, union-complex-type: string, number-type: u32, string-type: string, boolean-type: bool, map-type: string, tuple-complex-type: string, tuple-type: string, list-complex-type: list<object-type>, object-type: object-type, result-like: string, result-like-with-no-tag: result-like-with-no-tag, union-with-null: option<string>, object-with-union-with-undefined1: object-with-union-with-undefined1, object-with-union-with-undefined2: object-with-union-with-undefined2, object-with-union-with-undefined3: object-with-union-with-undefined3, object-with-union-with-undefined4: object-with-union-with-undefined4, optional-string-type: option<string>, optional-union-type: option<string>, tagged-union-type: string) -> string;
+                  fun-all: func(complex-type: object-complex-type, union-type: union-type, union-complex-type: union-complex-type, number-type: s32, string-type: string, boolean-type: bool, map-type: list<tuple<string, s32>>, tuple-complex-type: tuple<string, s32, object-type>, tuple-type: tuple<string, s32, bool>, list-complex-type: list<object-type>, object-type: object-type, result-like: result-like, result-like-with-no-tag: result-like-with-no-tag, union-with-null: option<string>, object-with-union-with-undefined1: object-with-union-with-undefined1, object-with-union-with-undefined2: object-with-union-with-undefined2, object-with-union-with-undefined3: object-with-union-with-undefined3, object-with-union-with-undefined4: object-with-union-with-undefined4, optional-string-type: option<string>, optional-union-type: option<union-type>, tagged-union-type: tagged-union) -> string;
 
                   /// Takes optional parameters
-                  fun-optional: func(param1: option<string>, param2: object-with-union-with-undefined1, param3: object-with-union-with-undefined2, param4: object-with-union-with-undefined3, param5: object-with-union-with-undefined4, param6: option<string>, param7: option<string>);
+                  fun-optional: func(param1: option<string>, param2: object-with-union-with-undefined1, param3: object-with-union-with-undefined2, param4: object-with-union-with-undefined3, param5: object-with-union-with-undefined4, param6: option<string>, param7: option<union-type>);
 
                   /// Takes optional parameters with question mark
-                  fun-optional-q-mark: func(param1: string, param2: option<u32>, param3: option<string>);
+                  fun-optional-q-mark: func(param1: string, param2: option<s32>, param3: option<string>);
 
                   /// Takes ObjectComplexType
                   fun-object-complex-type: func(text: object-complex-type) -> object-complex-type;
 
                   /// Takes UnionType
-                  fun-union-type: func(union-type: string) -> string;
+                  fun-union-type: func(union-type: union-type) -> union-type;
 
                   /// Takes UnionComplexType
-                  fun-union-complex-type: func(union-complex-type: string) -> string;
+                  fun-union-complex-type: func(union-complex-type: union-complex-type) -> union-complex-type;
 
                   /// Takes NumberType
-                  fun-number: func(number-type: u32) -> u32;
+                  fun-number: func(number-type: s32) -> s32;
 
                   /// Takes StringType
                   fun-string: func(string-type: string) -> string;
@@ -1597,16 +1657,16 @@ mod tests {
                   fun-boolean: func(boolean-type: bool) -> bool;
 
                   /// Takes MapType
-                  fun-map: func(map-type: string) -> string;
+                  fun-map: func(map-type: list<tuple<string, s32>>) -> list<tuple<string, s32>>;
 
                   /// Takes TaggedUnion
-                  fun-tagged-union: func(tagged-union-type: string) -> string;
+                  fun-tagged-union: func(tagged-union-type: tagged-union) -> tagged-union;
 
                   /// Takes TupleComplexType
-                  fun-tuple-complex-type: func(complex-type: string) -> string;
+                  fun-tuple-complex-type: func(complex-type: tuple<string, s32, object-type>) -> tuple<string, s32, object-type>;
 
                   /// Takes TupleType
-                  fun-tuple-type: func(tuple-type: string) -> string;
+                  fun-tuple-type: func(tuple-type: tuple<string, s32, bool>) -> tuple<string, s32, bool>;
 
                   /// Takes ListComplexType
                   fun-list-complex-type: func(list-complex-type: list<object-type>) -> list<object-type>;
@@ -1615,10 +1675,10 @@ mod tests {
                   fun-object-type: func(object-type: object-type) -> object-type;
 
                   /// Takes UnionWithLiterals
-                  fun-union-with-literals: func(union-with-literals: string) -> string;
+                  fun-union-with-literals: func(union-with-literals: union-with-literals) -> union-with-literals;
 
                   /// Takes UnionWithOnlyLiterals
-                  fun-union-with-only-literals: func(union-with-literals: string) -> string;
+                  fun-union-with-only-literals: func(union-with-literals: union-with-only-literals) -> union-with-only-literals;
 
                   /// Returns void
                   fun-void-return: func(text: string);
@@ -1645,13 +1705,13 @@ mod tests {
                   fun-either-optional: func(either-both-optional: result-like-with-no-tag) -> result-like-with-no-tag;
 
                   /// Takes ResultExact
-                  fun-result-exact: func(either: string) -> string;
+                  fun-result-exact: func(either: result-exact) -> result-exact;
 
                   /// Takes ResultLike
-                  fun-result-like: func(either-one-optional: string) -> string;
+                  fun-result-like: func(either-one-optional: result-like) -> result-like;
 
                   /// Takes ResultLikeWithVoid
-                  fun-result-like-with-void: func(result-like-with-void: string) -> string;
+                  fun-result-like-with-void: func(result-like-with-void: result-like-with-void) -> result-like-with-void;
 
                   /// Takes Result<void, string>
                   fun-builtin-result-vs: func(%result: string) -> string;
@@ -1672,33 +1732,33 @@ mod tests {
                 /// BarAgent class
                 interface bar-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-like-with-no-tag};
+                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for BarAgent
-                  initialize: func(optional-string-type: option<string>, optional-union-type: option<string>);
+                  initialize: func(optional-string-type: option<string>, optional-union-type: option<union-type>);
 
                   get-definition: func() -> agent-type;
 
                   /// Takes all complex types
-                  fun-all: func(complex-type: object-complex-type, union-type: string, union-complex-type: string, number-type: u32, string-type: string, boolean-type: bool, map-type: string, tuple-complex-type: string, tuple-type: string, list-complex-type: list<object-type>, object-type: object-type, result-like: string, result-like-with-no-tag: result-like-with-no-tag, union-with-null: option<string>, object-with-union-with-undefined1: object-with-union-with-undefined1, object-with-union-with-undefined2: object-with-union-with-undefined2, object-with-union-with-undefined3: object-with-union-with-undefined3, object-with-union-with-undefined4: object-with-union-with-undefined4, optional-string-type: option<string>, optional-union-type: option<string>, tagged-union-type: string) -> string;
+                  fun-all: func(complex-type: object-complex-type, union-type: union-type, union-complex-type: union-complex-type, number-type: s32, string-type: string, boolean-type: bool, map-type: list<tuple<string, s32>>, tuple-complex-type: tuple<string, s32, object-type>, tuple-type: tuple<string, s32, bool>, list-complex-type: list<object-type>, object-type: object-type, result-like: result-like, result-like-with-no-tag: result-like-with-no-tag, union-with-null: option<string>, object-with-union-with-undefined1: object-with-union-with-undefined1, object-with-union-with-undefined2: object-with-union-with-undefined2, object-with-union-with-undefined3: object-with-union-with-undefined3, object-with-union-with-undefined4: object-with-union-with-undefined4, optional-string-type: option<string>, optional-union-type: option<union-type>, tagged-union-type: tagged-union) -> string;
 
                   /// Takes optional parameters
-                  fun-optional: func(param1: option<string>, param2: object-with-union-with-undefined1, param3: object-with-union-with-undefined2, param4: object-with-union-with-undefined3, param5: object-with-union-with-undefined4, param6: option<string>, param7: option<string>);
+                  fun-optional: func(param1: option<string>, param2: object-with-union-with-undefined1, param3: object-with-union-with-undefined2, param4: object-with-union-with-undefined3, param5: object-with-union-with-undefined4, param6: option<string>, param7: option<union-type>);
 
                   /// Takes optional parameters with question mark
-                  fun-optional-q-mark: func(param1: string, param2: option<u32>, param3: option<string>);
+                  fun-optional-q-mark: func(param1: string, param2: option<s32>, param3: option<string>);
 
                   /// Takes ObjectComplexType
                   fun-object-complex-type: func(text: object-complex-type) -> object-complex-type;
 
                   /// Takes UnionType
-                  fun-union-type: func(union-type: string) -> string;
+                  fun-union-type: func(union-type: union-type) -> union-type;
 
                   /// Takes UnionComplexType
-                  fun-union-complex-type: func(union-complex-type: string) -> string;
+                  fun-union-complex-type: func(union-complex-type: union-complex-type) -> union-complex-type;
 
                   /// Takes NumberType
-                  fun-number: func(number-type: u32) -> u32;
+                  fun-number: func(number-type: s32) -> s32;
 
                   /// Takes StringType
                   fun-string: func(string-type: string) -> string;
@@ -1707,13 +1767,13 @@ mod tests {
                   fun-boolean: func(boolean-type: bool) -> bool;
 
                   /// Takes MapType
-                  fun-text: func(map-type: string) -> string;
+                  fun-text: func(map-type: list<tuple<string, s32>>) -> list<tuple<string, s32>>;
 
                   /// Takes TupleComplexType
-                  fun-tuple-complex-type: func(complex-type: string) -> string;
+                  fun-tuple-complex-type: func(complex-type: tuple<string, s32, object-type>) -> tuple<string, s32, object-type>;
 
                   /// Takes TupleType
-                  fun-tuple-type: func(tuple-type: string) -> string;
+                  fun-tuple-type: func(tuple-type: tuple<string, s32, bool>) -> tuple<string, s32, bool>;
 
                   /// Takes ListComplexType
                   fun-list-complex-type: func(list-complex-type: list<object-type>) -> list<object-type>;
@@ -1722,7 +1782,7 @@ mod tests {
                   fun-object-type: func(object-type: object-type) -> object-type;
 
                   /// Takes UnionWithLiterals
-                  fun-union-with-literals: func(union-with-literals: string) -> string;
+                  fun-union-with-literals: func(union-with-literals: union-with-literals) -> union-with-literals;
 
                   /// Returns void
                   fun-void-return: func(text: string);
@@ -1746,22 +1806,22 @@ mod tests {
                   fun-multimodal-advanced: func(input: list<fun-multimodal-advanced-input>) -> list<fun-multimodal-advanced-output>;
 
                   /// Takes UnionWithOnlyLiterals
-                  fun-union-with-only-literals: func(union-with-literals: string) -> string;
+                  fun-union-with-only-literals: func(union-with-literals: union-with-only-literals) -> union-with-only-literals;
 
                   /// Takes TaggedUnion
-                  fun-tagged-union: func(tagged-union-type: string) -> string;
+                  fun-tagged-union: func(tagged-union-type: tagged-union) -> tagged-union;
 
                   /// Takes ResultLikeWithNoTag
                   fun-result-no-tag: func(either-both-optional: result-like-with-no-tag) -> result-like-with-no-tag;
 
                   /// Takes ResultExact
-                  fun-result-exact: func(either: string) -> string;
+                  fun-result-exact: func(either: result-exact) -> result-exact;
 
                   /// Takes ResultLike
-                  fun-result-like: func(either-one-optional: string) -> string;
+                  fun-result-like: func(either-one-optional: result-like) -> result-like;
 
                   /// Takes ResultLikeWithVoid
-                  fun-result-like-with-void: func(result-like-with-void: string) -> string;
+                  fun-result-like-with-void: func(result-like-with-void: result-like-with-void) -> result-like-with-void;
 
                   /// Takes Result<void, string>
                   fun-builtin-result-vs: func(%result: string) -> string;
@@ -1782,7 +1842,7 @@ mod tests {
                 /// TestAgent class
                 interface test-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-like-with-no-tag};
+                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for TestAgent
                   initialize: func(name: string);
@@ -1802,7 +1862,7 @@ mod tests {
                 /// StringAgent class
                 interface string-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-like-with-no-tag};
+                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for StringAgent
                   initialize: func(name: string);
@@ -1816,7 +1876,7 @@ mod tests {
                 /// StructAgent class
                 interface struct-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-like-with-no-tag, struct-args};
+                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, struct-args, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for StructAgent
                   initialize: func(args: struct-args);
