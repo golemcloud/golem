@@ -223,9 +223,11 @@ fn ts_counter_agent() -> GeneratedPackage {
                     }),
                 }],
             }),
+            http_endpoint: vec![],
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     };
     let dir = TempDir::new().unwrap();
 

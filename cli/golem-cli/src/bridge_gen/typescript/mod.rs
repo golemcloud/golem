@@ -28,7 +28,7 @@ use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
-    AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema, TextDescriptor,
+    AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema, TextDescriptor,
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
@@ -43,6 +43,39 @@ pub struct TypeScriptBridgeGenerator {
     testing: bool,
 }
 
+impl BridgeGenerator for TypeScriptBridgeGenerator {
+    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
+        Self {
+            target_path: target_path.to_path_buf(),
+            agent_type,
+            testing,
+        }
+    }
+
+    fn generate(&self) -> anyhow::Result<()> {
+        let library_name = self.library_name();
+
+        let ts_path = self.target_path.join(format!("{library_name}.ts"));
+        let package_json_path = self.target_path.join("package.json");
+        let tsconfig_json_path = self.target_path.join("tsconfig.json");
+        let base_ts_path = self.target_path.join("base.ts");
+        let test_path = self.target_path.join("test.ts");
+
+        if !self.target_path.exists() {
+            std::fs::create_dir_all(&self.target_path)?;
+        }
+        self.generate_ts(&ts_path)?;
+        self.generate_package_json(&package_json_path)?;
+        self.generate_tsconfig_json(&tsconfig_json_path)?;
+        self.generate_base_ts(&base_ts_path)?;
+        if self.testing {
+            self.generate_test(&test_path)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl TypeScriptBridgeGenerator {
     pub fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
         Self {
@@ -52,7 +85,19 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
+    /// Generates the client library's package.json
     fn generate_package_json(&self, path: &Utf8Path) -> anyhow::Result<()> {
+        let scripts = if self.testing {
+            json!(
+              {
+                "build": "tsc",
+                "test": "npx tsx test.ts"
+            })
+        } else {
+            json!({
+                "build": "tsc",
+            })
+        };
         let package_json = json! {
             {
                 "name": self.library_name(),
@@ -61,10 +106,7 @@ impl TypeScriptBridgeGenerator {
                 "type": "module",
                 "main": format!("{}.js", self.library_name()),
                 "types": format!("{}.d.ts", self.library_name()),
-                "scripts": {
-                    "build": "tsc",
-                    "test": "npx tsx test.ts"
-                },
+                "scripts": scripts,
                 "dependencies": {
                     "uuid": "^13"
                 },
@@ -80,6 +122,7 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Generates the client library's tsconfig.json
     fn generate_tsconfig_json(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let mut include = vec![format!("{}.ts", self.library_name()), "base.ts".to_string()];
         if self.testing {
@@ -106,6 +149,8 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Writes the base.ts common helper file and embeds the well-known local server
+    /// token it it.
     fn generate_base_ts(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let base_ts_content_template = include_str!("../../../ts_bridge/base.ts");
         let base_ts_content = base_ts_content_template
@@ -116,21 +161,37 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Generates the test.ts module. This module exposes encoding/decoding functions via
+    /// stdin/out to be used from tests only. The test module is not usable by itself and
+    /// should never be part of the generated NPM package outside of Golem's internal tests.
     fn generate_test(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let mut writer = TsWriter::new();
 
+        self.generate_test_imports(&mut writer);
+        self.generate_test_type_definitions(&mut writer)?;
+        self.generate_test_read_stdin_helper(&mut writer);
+        self.generate_test_method_functions(&mut writer)?;
+        self.generate_test_functions_map(&mut writer);
+        self.generate_test_main_handler(&mut writer)?;
+        self.generate_test_entry_point(&mut writer);
+
+        writer.finish(path)
+    }
+
+    /// Writes the imports section of the test module.
+    fn generate_test_imports(&self, writer: &mut TsWriter) {
         writer.import_module("base", "./base");
+    }
 
-        // Repeating the types and their encode/decode pairs as we don't want to export them from the main library
-        let types = super::collect_all_wit_types(&self.agent_type);
-        for typ in types {
-            if let Some(ts_name) = self.generate_ts_wit_type_def(&mut writer, &typ)? {
-                self.generate_ts_wit_type_encode(&mut writer, &ts_name, &typ)?;
-                self.generate_ts_wit_type_decode(&mut writer, &ts_name, &typ)?;
-            }
-        }
+    /// Defines the test types and their corresponding encode/decode functions. These types and functions are
+    /// also generated into the main module, but there they are private. For testing, we duplicate
+    /// them in the test module.
+    fn generate_test_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+        self.generate_ts_type_definitions(writer)
+    }
 
-        // Helper function to read JSON from stdin
+    /// Write a helper function to the test module to read a JSON from stdin
+    fn generate_test_read_stdin_helper(&self, writer: &mut TsWriter) {
         let mut read_stdin = writer.begin_export_async_function("readStdin");
         read_stdin.result("any");
         read_stdin.write_line("let input = '';");
@@ -143,82 +204,119 @@ impl TypeScriptBridgeGenerator {
         drop(read_stdin);
 
         writer.write_line("");
+    }
 
+    /// Generate encode/decode test functions for each agent method's input and output schema
+    fn generate_test_method_functions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         // Generate test functions for each method using the same code generators as the main library
         for method_def in &self.agent_type.methods {
-            let method_name_pascal = method_def.name.to_upper_camel_case();
-
-            // encodeInput function
-            {
-                let mut encode_input = writer
-                    .begin_export_async_function(&format!("encode{}Input", method_name_pascal));
-                encode_input.result("void");
-                encode_input.write_line("const __json = await readStdin();");
-                if !method_def.input_schema.is_unit() {
-                    encode_input.write("const [");
-                    Self::write_parameter_name_list(&mut encode_input, &method_def.input_schema);
-                    encode_input.write_line("] = __json;");
-                }
-                encode_input.write_line("const __result: base.DataValue = ");
-                Self::write_encode_data_value(&mut encode_input, &method_def.input_schema)?;
-                encode_input.write_line("console.log(JSON.stringify(__result));");
-            }
-
+            self.generate_test_method_encode_input(writer, method_def)?;
             writer.write_line("");
-
-            // decodeInput function
-            {
-                let mut decode_input = writer
-                    .begin_export_async_function(&format!("decode{}Input", method_name_pascal));
-                decode_input.result("void");
-                decode_input.write_line("const __jsonResult = await readStdin();");
-                decode_input.write_line("const result = { result: __jsonResult };");
-                decode_input.write_line("const __decoded = (() => {");
-                decode_input.indent();
-                Self::write_decode_data_value(&mut decode_input, &method_def.input_schema)?;
-                decode_input.unindent();
-                decode_input.write_line("})();");
-                decode_input.write_line("console.log(JSON.stringify(__decoded));");
-            }
-
+            self.generate_test_method_decode_input(writer, method_def)?;
             writer.write_line("");
-
-            // encodeOutput function
-            {
-                let mut encode_output = writer
-                    .begin_export_async_function(&format!("encode{}Output", method_name_pascal));
-                encode_output.result("void");
-                encode_output.write_line("const __json = await readStdin();");
-                if !method_def.output_schema.is_unit() {
-                    encode_output.write("const [");
-                    Self::write_parameter_name_list(&mut encode_output, &method_def.output_schema);
-                    encode_output.write_line("] = __json;");
-                }
-                encode_output.write_line("const __result: base.DataValue =");
-                Self::write_encode_data_value(&mut encode_output, &method_def.output_schema)?;
-                encode_output.write_line("console.log(JSON.stringify(__result));");
-            }
-
+            self.generate_test_method_encode_output(writer, method_def)?;
             writer.write_line("");
-
-            // decodeOutput function
-            {
-                let mut decode_output = writer
-                    .begin_export_async_function(&format!("decode{}Output", method_name_pascal));
-                decode_output.result("void");
-                decode_output.write_line("const __jsonResult = await readStdin();");
-                decode_output.write_line("const result = { result: __jsonResult };");
-                decode_output.write_line("const __decoded = (() => {");
-                decode_output.indent();
-                Self::write_decode_data_value(&mut decode_output, &method_def.output_schema)?;
-                decode_output.unindent();
-                decode_output.write_line("})();");
-                decode_output.write_line("console.log(JSON.stringify(__decoded));");
-            }
-
+            self.generate_test_method_decode_output(writer, method_def)?;
             writer.write_line("");
         }
+        Ok(())
+    }
 
+    /// Generates a test function that simulates the encoding of an agent method's parameters. The
+    /// input coming from stdin is supposed to match the generated method's parameter signature, and
+    /// it encodes the values into a DataValue to be passed to the invocation API.
+    fn generate_test_method_encode_input(
+        &self,
+        writer: &mut TsWriter,
+        method_def: &AgentMethod,
+    ) -> anyhow::Result<()> {
+        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let mut encode_input =
+            writer.begin_export_async_function(&format!("encode{}Input", method_name_pascal));
+        encode_input.result("void");
+        encode_input.write_line("const __json = await readStdin();");
+        if !method_def.input_schema.is_unit() {
+            encode_input.write("const [");
+            Self::write_parameter_name_list(&mut encode_input, &method_def.input_schema);
+            encode_input.write_line("] = __json;");
+        }
+        encode_input.write_line("const __result: base.DataValue = ");
+        Self::write_encode_data_value(&mut encode_input, &method_def.input_schema)?;
+        encode_input.write_line("console.log(JSON.stringify(__result));");
+        Ok(())
+    }
+
+    /// Generates a test function that simulates the decoding of an agent method's parameters. The input
+    /// coming from the stdin is an (untyped) DataValue, and it decodes it into the method's parameter
+    /// signature.
+    fn generate_test_method_decode_input(
+        &self,
+        writer: &mut TsWriter,
+        method_def: &AgentMethod,
+    ) -> anyhow::Result<()> {
+        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let mut decode_input =
+            writer.begin_export_async_function(&format!("decode{}Input", method_name_pascal));
+        decode_input.result("void");
+        decode_input.write_line("const __jsonResult = await readStdin();");
+        decode_input.write_line("const result = { result: __jsonResult };");
+        decode_input.write_line("const __decoded = (() => {");
+        decode_input.indent();
+        Self::write_decode_data_value(&mut decode_input, &method_def.input_schema)?;
+        decode_input.unindent();
+        decode_input.write_line("})();");
+        decode_input.write_line("console.log(JSON.stringify(__decoded));");
+        Ok(())
+    }
+
+    /// Generates a test function that simulates the encoding of an agent method's return value. The
+    /// input coming from stdin is supposed to match the generated method's return signature, and it
+    /// encodes the values into a DataValue to be passed to the invocation API.
+    fn generate_test_method_encode_output(
+        &self,
+        writer: &mut TsWriter,
+        method_def: &AgentMethod,
+    ) -> anyhow::Result<()> {
+        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let mut encode_output =
+            writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
+        encode_output.result("void");
+        encode_output.write_line("const __json = await readStdin();");
+        if !method_def.output_schema.is_unit() {
+            encode_output.write("const [");
+            Self::write_parameter_name_list(&mut encode_output, &method_def.output_schema);
+            encode_output.write_line("] = __json;");
+        }
+        encode_output.write_line("const __result: base.DataValue =");
+        Self::write_encode_data_value(&mut encode_output, &method_def.output_schema)?;
+        encode_output.write_line("console.log(JSON.stringify(__result));");
+        Ok(())
+    }
+
+    /// Generates a test function that simulates the decoding of an agent method's return value. The
+    /// input coming from the stdin is an (untyped) DataValue, and it decodes it into the method's return signature.
+    fn generate_test_method_decode_output(
+        &self,
+        writer: &mut TsWriter,
+        method_def: &AgentMethod,
+    ) -> anyhow::Result<()> {
+        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let mut decode_output =
+            writer.begin_export_async_function(&format!("decode{}Output", method_name_pascal));
+        decode_output.result("void");
+        decode_output.write_line("const __jsonResult = await readStdin();");
+        decode_output.write_line("const result = { result: __jsonResult };");
+        decode_output.write_line("const __decoded = (() => {");
+        decode_output.indent();
+        Self::write_decode_data_value(&mut decode_output, &method_def.output_schema)?;
+        decode_output.unindent();
+        decode_output.write_line("})();");
+        decode_output.write_line("console.log(JSON.stringify(__decoded));");
+        Ok(())
+    }
+
+    /// Generates a map of encode/decode pairs keyed by the method name
+    fn generate_test_functions_map(&self, writer: &mut TsWriter) {
         // Create a map of available functions
         writer.write_line("const testFunctions: { [key: string]: () => Promise<void> | void } = {");
         writer.indent();
@@ -232,10 +330,25 @@ impl TypeScriptBridgeGenerator {
         writer.unindent();
         writer.write_line("};");
         writer.write_line("");
+    }
 
-        // CLI handler
+    /// Generates the main function for the test module
+    fn generate_test_main_handler(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         let mut main = writer.begin_export_async_function("main");
         main.result("void");
+
+        self.generate_test_main_arg_validation(&mut main)?;
+        self.generate_test_main_function_lookup(&mut main);
+        self.generate_test_main_function_call(&mut main);
+
+        Ok(())
+    }
+
+    /// Generates the command line argument validation part of the test module's main function
+    fn generate_test_main_arg_validation(
+        &self,
+        main: &mut TsFunctionWriter<'_>,
+    ) -> anyhow::Result<()> {
         main.write_line("const args = process.argv.slice(2);");
         main.write_line("if (args.length === 0) {");
         main.indent();
@@ -253,6 +366,12 @@ impl TypeScriptBridgeGenerator {
         main.write_line("process.exit(1);");
         main.unindent();
         main.write_line("}");
+
+        Ok(())
+    }
+
+    /// Lookup an encode/decode function based on the provided function name
+    fn generate_test_main_function_lookup(&self, main: &mut TsFunctionWriter<'_>) {
         main.write_line("const functionName = args[0];");
         main.write_line("const fn = testFunctions[functionName];");
         main.write_line("if (!fn) {");
@@ -264,6 +383,10 @@ impl TypeScriptBridgeGenerator {
         main.write_line("process.exit(1);");
         main.unindent();
         main.write_line("}");
+    }
+
+    /// Call the encode/decode function based on the provided function name
+    fn generate_test_main_function_call(&self, main: &mut TsFunctionWriter<'_>) {
         main.write_line("try {");
         main.indent();
         main.write_line("await fn();");
@@ -274,203 +397,310 @@ impl TypeScriptBridgeGenerator {
         main.write_line("process.exit(1);");
         main.unindent();
         main.write_line("}");
-        drop(main);
-
-        writer.write_line("");
-        writer.write_line("main();");
-
-        writer.finish(path)
     }
 
+    /// Entry point of the test module
+    fn generate_test_entry_point(&self, writer: &mut TsWriter) {
+        writer.write_line("");
+        writer.write_line("main();");
+    }
+
+    /// Generates the client module
     fn generate_ts(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let mut writer = TsWriter::new();
 
         let config_var = self.global_config_var_name();
 
-        writer.import_item("v4", "uuidv4", "uuid");
-        writer.import_module("base", "./base");
-
-        writer.declare_global(
-            &config_var,
-            "base.Configuration | undefined",
-            Some("undefined"),
-        );
-
-        let types = super::collect_all_wit_types(&self.agent_type);
-        for typ in types {
-            if let Some(ts_name) = self.generate_ts_wit_type_def(&mut writer, &typ)? {
-                self.generate_ts_wit_type_encode(&mut writer, &ts_name, &typ)?;
-                self.generate_ts_wit_type_decode(&mut writer, &ts_name, &typ)?;
-            }
-        }
-
-        writer.write_doc(&self.agent_type.description);
-        let class_name = self.agent_type.type_name.0.to_upper_camel_case();
-        writer.begin_export_class(&class_name);
-
-        writer.declare_field("parameters", "base.DataValue", None);
-        writer.declare_field("phantomId", "base.PhantomId | undefined", None);
-
-        {
-            let mut constructor = writer.begin_private_constructor();
-            constructor.param("parameters", "base.DataValue");
-            constructor.param("phantomId", "base.PhantomId | undefined");
-            constructor.write_line("this.parameters = parameters;");
-            constructor.write_line("this.phantomId = phantomId;");
-        }
-
-        if self.agent_type.mode == AgentMode::Durable {
-            writer.write_doc(&format!(
-                "Gets or creates an instance of this agent\n{}",
-                self.agent_type.constructor.description
-            ));
-            let mut get = writer.begin_static_method("get");
-            Self::write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
-            get.result(&class_name);
-
-            get.write_line("const parameters: base.DataValue = ");
-            Self::write_encode_data_value(&mut get, &self.agent_type.constructor.input_schema)?;
-            get.write_line("const phantomId = undefined;");
-            get.write_line(format!("return new {class_name}(parameters, phantomId);"));
-        }
-
-        {
-            writer.write_doc(&format!(
-                "Gets or creates a phantom instance of this agent with a specific phantom ID\n{}",
-                self.agent_type.constructor.description
-            ));
-            let mut get_phantom = writer.begin_static_method("getPhantom");
-            get_phantom.param("phantomId", "base.PhantomId");
-            Self::write_parameter_list(
-                &mut get_phantom,
-                &self.agent_type.constructor.input_schema,
-            )?;
-            get_phantom.result(&class_name);
-
-            get_phantom.write_line("const parameters: base.DataValue = ");
-            Self::write_encode_data_value(
-                &mut get_phantom,
-                &self.agent_type.constructor.input_schema,
-            )?;
-            get_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
-        }
-
-        {
-            writer.write_doc(&format!(
-                "Creates a new phantom instance of this agent\n{}",
-                self.agent_type.constructor.description
-            ));
-            let mut new_phantom = writer.begin_static_method("newPhantom");
-            Self::write_parameter_list(
-                &mut new_phantom,
-                &self.agent_type.constructor.input_schema,
-            )?;
-            new_phantom.result(&class_name);
-
-            new_phantom.write_line("const parameters: base.DataValue = ");
-            Self::write_encode_data_value(
-                &mut new_phantom,
-                &self.agent_type.constructor.input_schema,
-            )?;
-            new_phantom.write_line("const phantomId = uuidv4();");
-            new_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
-        }
-
-        {
-            let mut get_config = writer.begin_private_method("__getConfig");
-            get_config.result("base.Configuration");
-            get_config.write_line(format!("if (!{config_var}) {{"));
-            get_config.indent();
-            get_config.write_line(format!(
-                "  throw new Error(\"{} configuration is not set\");",
-                self.agent_type.type_name.0
-            ));
-            get_config.unindent();
-            get_config.write_line("}");
-            get_config.write_line(format!("return {};", config_var));
-        }
-
-        for method_def in &self.agent_type.methods {
-            // Build the getServerConfig function: () => this.__getConfig().server
-            let mut get_server_config = TsAnonymousFunctionWriter::new();
-            get_server_config.write_line("return this.__getConfig().server;");
-            let get_server_config_fn = get_server_config.build();
-
-            // Build the getMethodRequest function: () => { return { ... } }
-            let mut get_method_request = TsAnonymousFunctionWriter::new();
-            get_method_request.write_line("return {");
-            get_method_request.indent();
-            get_method_request.write_line("appName: this.__getConfig().application,");
-            get_method_request.write_line("envName: this.__getConfig().environment,");
-            get_method_request.write_line(format!(
-                "agentTypeName: \"{}\",",
-                self.agent_type.type_name.0
-            ));
-            get_method_request.write_line("parameters: this.parameters,");
-            get_method_request.write_line("phantomId: this.phantomId,");
-            get_method_request.write_line(format!("methodName: \"{}\",", method_def.name));
-            get_method_request.write_line("mode: \"await\",");
-            get_method_request.write_line("methodParameters: { type: \"Tuple\", elements: [] }");
-            get_method_request.unindent();
-            get_method_request.write_line("};");
-            let get_method_request_fn = get_method_request.build();
-
-            // Build the encodeArgs function: (args) => { ... }
-            let mut encode_args = TsAnonymousFunctionWriter::new();
-            encode_args.param(
-                "args",
-                &format!("[{}]", Self::schema_as_type_list(&method_def.input_schema)),
-            );
-            Self::destructure_args_tuple(&mut encode_args, "args", &method_def.input_schema)?;
-            encode_args.write_line("const methodParameters: base.DataValue = ");
-            Self::write_encode_data_value(&mut encode_args, &method_def.input_schema)?;
-            encode_args.write_line("return methodParameters;");
-            let encode_args_fn = encode_args.build();
-
-            // Build the decodeResult function: (result) => { ... }
-            let mut decode_result = TsAnonymousFunctionWriter::new();
-            decode_result.param("result", "base.AgentInvocationResult");
-            Self::write_decode_data_value(&mut decode_result, &method_def.output_schema)?;
-            let decode_result_fn = decode_result.build();
-
-            writer.write_doc(&method_def.description);
-            writer.declare_field(
-                &method_def.name,
-                &format!(
-                    "base.RemoteMethod<[{}], {}>",
-                    Self::schema_as_type_list(&method_def.input_schema),
-                    Self::schemas_as_result_type(&method_def.output_schema)
-                ),
-                Some(&formatdoc!(
-                    "
-                base.createRemoteMethod(
-                    {},
-                    {},
-                    {},
-                    {}
-                )
-                ",
-                    get_server_config_fn.trim(),
-                    get_method_request_fn.trim(),
-                    encode_args_fn.trim(),
-                    decode_result_fn.trim(),
-                )),
-            );
-        }
-
-        writer.end_export_class();
-
-        {
-            writer.write_doc("Sets the global configuration for this agent client");
-            let mut configure = writer.begin_export_function("configure");
-            configure.param("config", "base.Configuration");
-
-            configure.write_line(format!("{} = config;", config_var));
-        }
+        self.generate_ts_imports(&mut writer);
+        self.generate_ts_config_global(&mut writer, &config_var);
+        self.generate_ts_type_definitions(&mut writer)?;
+        self.generate_ts_class(&mut writer, &config_var)?;
+        self.generate_ts_configure_function(&mut writer, &config_var);
 
         writer.finish(path)
     }
 
+    /// Generates the import section of the client library
+    fn generate_ts_imports(&self, writer: &mut TsWriter) {
+        writer.import_item("v4", "uuidv4", "uuid");
+        writer.import_module("base", "./base");
+    }
+
+    /// Generates the global variables of the client library.
+    ///
+    /// Configuration is stored in a global variable, set by the exported `configure` function,
+    /// instead of being passed to the agent constructors. The primary reason for this is to
+    /// make the agent constructors look exactly like they do in agent-to-agent communication,
+    /// and to help the REPL use case by allowing pre-configuration of the client classes.
+    fn generate_ts_config_global(&self, writer: &mut TsWriter, config_var: &str) {
+        writer.declare_global(
+            config_var,
+            "base.Configuration | undefined",
+            Some("undefined"),
+        );
+    }
+
+    /// Generates a type definition and an encode/decode function pair for custom types used
+    /// by the agent.
+    fn generate_ts_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+        let types = super::collect_all_wit_types(&self.agent_type);
+        for typ in types {
+            if let Some(ts_name) = self.generate_ts_wit_type_def(writer, &typ)? {
+                self.generate_ts_wit_type_encode(writer, &ts_name, &typ)?;
+                self.generate_ts_wit_type_decode(writer, &ts_name, &typ)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Generates the agent client class
+    fn generate_ts_class(&self, writer: &mut TsWriter, config_var: &str) -> anyhow::Result<()> {
+        let class_name = self.agent_type.type_name.0.to_upper_camel_case();
+
+        writer.write_doc(&self.agent_type.description);
+        writer.begin_export_class(&class_name);
+
+        self.generate_ts_class_fields(writer);
+        self.generate_ts_class_constructor(writer);
+        self.generate_ts_constructor_methods(writer, &class_name)?;
+        self.generate_ts_config_getter(writer, config_var);
+        self.generate_ts_remote_methods(writer, &class_name)?;
+
+        writer.end_export_class();
+
+        Ok(())
+    }
+
+    /// Generates fields of the agent client class.
+    ///
+    /// We store the encoded parameters and phantom ID of the targeted agent.
+    fn generate_ts_class_fields(&self, writer: &mut TsWriter) {
+        writer.declare_field("parameters", "base.DataValue", None);
+        writer.declare_field("phantomId", "base.PhantomId | undefined", None);
+    }
+
+    /// Generates the private constructor of the agent class. The user-facing constructors
+    /// are static methods matching the agent-to-agent API (get, getPhantom, newPhantom)
+    fn generate_ts_class_constructor(&self, writer: &mut TsWriter) {
+        let mut constructor = writer.begin_private_constructor();
+        constructor.param("parameters", "base.DataValue");
+        constructor.param("phantomId", "base.PhantomId | undefined");
+        constructor.write_line("this.parameters = parameters;");
+        constructor.write_line("this.phantomId = phantomId;");
+    }
+
+    /// Generates the static methods for constructing agent clients. For durable agents we
+    /// generate `get`, and for any agent we also generate `getPhantom` and `newPhantom`.
+    fn generate_ts_constructor_methods(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+    ) -> anyhow::Result<()> {
+        if self.agent_type.mode == AgentMode::Durable {
+            self.generate_ts_constructor_get_method(writer, class_name)?;
+        }
+
+        self.generate_ts_constructor_get_phantom_method(writer, class_name)?;
+        self.generate_ts_constructor_new_phantom_method(writer, class_name)?;
+
+        Ok(())
+    }
+
+    /// Generates the `get` constructor method
+    fn generate_ts_constructor_get_method(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+    ) -> anyhow::Result<()> {
+        writer.write_doc(&format!(
+            "Gets or creates an instance of this agent\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut get = writer.begin_static_method("get");
+        Self::write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
+        get.result(class_name);
+
+        get.write_line("const parameters: base.DataValue = ");
+        Self::write_encode_data_value(&mut get, &self.agent_type.constructor.input_schema)?;
+        get.write_line("const phantomId = undefined;");
+        get.write_line(format!("return new {class_name}(parameters, phantomId);"));
+
+        Ok(())
+    }
+
+    /// Generates the `getPhantom` constructor method
+    fn generate_ts_constructor_get_phantom_method(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+    ) -> anyhow::Result<()> {
+        writer.write_doc(&format!(
+            "Gets or creates a phantom instance of this agent with a specific phantom ID\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut get_phantom = writer.begin_static_method("getPhantom");
+        get_phantom.param("phantomId", "base.PhantomId");
+        Self::write_parameter_list(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
+        get_phantom.result(class_name);
+
+        get_phantom.write_line("const parameters: base.DataValue = ");
+        Self::write_encode_data_value(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
+        get_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
+
+        Ok(())
+    }
+
+    /// Generates the `newPhantom` constructor method
+    fn generate_ts_constructor_new_phantom_method(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+    ) -> anyhow::Result<()> {
+        writer.write_doc(&format!(
+            "Creates a new phantom instance of this agent\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut new_phantom = writer.begin_static_method("newPhantom");
+        Self::write_parameter_list(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
+        new_phantom.result(class_name);
+
+        new_phantom.write_line("const parameters: base.DataValue = ");
+        Self::write_encode_data_value(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
+        new_phantom.write_line("const phantomId = uuidv4();");
+        new_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
+
+        Ok(())
+    }
+
+    /// Generates a private helper method for getting the global configuration and failing if it is missing
+    fn generate_ts_config_getter(&self, writer: &mut TsWriter, config_var: &str) {
+        let mut get_config = writer.begin_private_method("__getConfig");
+        get_config.result("base.Configuration");
+        get_config.write_line(format!("if (!{config_var}) {{"));
+        get_config.indent();
+        get_config.write_line(format!(
+            "  throw new Error(\"{} configuration is not set\");",
+            self.agent_type.type_name.0
+        ));
+        get_config.unindent();
+        get_config.write_line("}");
+        get_config.write_line(format!("return {};", config_var));
+    }
+
+    /// Generates the remote agent methods
+    fn generate_ts_remote_methods(
+        &self,
+        writer: &mut TsWriter,
+        _class_name: &str,
+    ) -> anyhow::Result<()> {
+        for method_def in &self.agent_type.methods {
+            self.generate_ts_remote_method(writer, method_def)?;
+        }
+        Ok(())
+    }
+
+    /// Generates a specific remote agent method. Agent methods are exposed the same was as agent-to-agent communication,
+    /// instead of a simple method, it is an object which is callable (in that case acting as an async 'invoke and await' call),
+    /// but also expose a `trigger` and a `schedule` method.
+    fn generate_ts_remote_method(
+        &self,
+        writer: &mut TsWriter,
+        method_def: &AgentMethod,
+    ) -> anyhow::Result<()> {
+        let get_server_config_fn = self.build_get_server_config_fn();
+        let get_method_request_fn = self.build_get_method_request_fn(method_def);
+        let encode_args_fn = self.build_encode_args_fn(method_def)?;
+        let decode_result_fn = self.build_decode_result_fn(method_def)?;
+
+        writer.write_doc(&method_def.description);
+        writer.declare_field(
+            &method_def.name,
+            &format!(
+                "base.RemoteMethod<[{}], {}>",
+                Self::schema_as_type_list(&method_def.input_schema),
+                Self::schemas_as_result_type(&method_def.output_schema)
+            ),
+            Some(&formatdoc!(
+                "
+            base.createRemoteMethod(
+                {},
+                {},
+                {},
+                {}
+            )
+            ",
+                get_server_config_fn.trim(),
+                get_method_request_fn.trim(),
+                encode_args_fn.trim(),
+                decode_result_fn.trim(),
+            )),
+        );
+
+        Ok(())
+    }
+
+    /// Builds the function that extracts the configured server for the remote mtehod implementation
+    fn build_get_server_config_fn(&self) -> String {
+        let mut get_server_config = TsAnonymousFunctionWriter::new();
+        get_server_config.write_line("return this.__getConfig().server;");
+        get_server_config.build()
+    }
+
+    /// Builds the function that constructs the base invocation request, with no method parameters set yet
+    fn build_get_method_request_fn(&self, method_def: &AgentMethod) -> String {
+        let mut get_method_request = TsAnonymousFunctionWriter::new();
+        get_method_request.write_line("return {");
+        get_method_request.indent();
+        get_method_request.write_line("appName: this.__getConfig().application,");
+        get_method_request.write_line("envName: this.__getConfig().environment,");
+        get_method_request.write_line(format!(
+            "agentTypeName: \"{}\",",
+            self.agent_type.type_name.0
+        ));
+        get_method_request.write_line("parameters: this.parameters,");
+        get_method_request.write_line("phantomId: this.phantomId,");
+        get_method_request.write_line(format!("methodName: \"{}\",", method_def.name));
+        get_method_request.write_line("mode: \"await\",");
+        get_method_request.write_line("methodParameters: { type: \"Tuple\", elements: [] }");
+        get_method_request.unindent();
+        get_method_request.write_line("};");
+        get_method_request.build()
+    }
+
+    /// Builds the function that takes the method's parameters and encodes them into a DataValue,
+    /// to be injected into the invocation request
+    fn build_encode_args_fn(&self, method_def: &AgentMethod) -> anyhow::Result<String> {
+        let mut encode_args = TsAnonymousFunctionWriter::new();
+        encode_args.param(
+            "args",
+            &format!("[{}]", Self::schema_as_type_list(&method_def.input_schema)),
+        );
+        Self::destructure_args_tuple(&mut encode_args, "args", &method_def.input_schema)?;
+        encode_args.write_line("const methodParameters: base.DataValue = ");
+        Self::write_encode_data_value(&mut encode_args, &method_def.input_schema)?;
+        encode_args.write_line("return methodParameters;");
+        Ok(encode_args.build())
+    }
+
+    /// Builds the function that takes the invocation API's result DataValue and decodes it to
+    /// the function's expected return type
+    fn build_decode_result_fn(&self, method_def: &AgentMethod) -> anyhow::Result<String> {
+        let mut decode_result = TsAnonymousFunctionWriter::new();
+        decode_result.param("result", "base.AgentInvocationResult");
+        Self::write_decode_data_value(&mut decode_result, &method_def.output_schema)?;
+        Ok(decode_result.build())
+    }
+
+    /// Generates the global function to set the client's configuration
+    fn generate_ts_configure_function(&self, writer: &mut TsWriter, config_var: &str) {
+        writer.write_doc("Sets the global configuration for this agent client");
+        let mut configure = writer.begin_export_function("configure");
+        configure.param("config", "base.Configuration");
+        configure.write_line(format!("{} = config;", config_var));
+    }
+
+    /// Generates an encode function that takes a TypeScript value and encodes it in the
+    /// JSON WitValue representation format expected by the invocation API
     fn generate_ts_wit_type_encode(
         &self,
         writer: &mut TsWriter,
@@ -492,6 +722,7 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Writes the body of the encode function (`generate_ts_wit_type_encode`)
     fn write_encode_body(
         writer: &mut TsFunctionWriter<'_>,
         value: &str,
@@ -531,6 +762,7 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Writes the encoding logic for records, variants, result and flag types
     fn write_encode_logic(
         writer: &mut TsFunctionWriter<'_>,
         value: &str,
@@ -630,6 +862,8 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Generates a decode function that takes a JSON WIT value representation and returns a TS
+    /// type corresponding to the WIT type.
     fn generate_ts_wit_type_decode(
         &self,
         writer: &mut TsWriter,
@@ -651,6 +885,7 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Writes the body of the decode function (`generate_ts_wit_type_decode`)
     fn write_decode_body(
         writer: &mut TsFunctionWriter<'_>,
         value: &str,
@@ -731,6 +966,7 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Writes the decoding logic for records, variants, result and flag types
     fn write_decode_logic(
         writer: &mut TsFunctionWriter<'_>,
         typ: &AnalysedType,
@@ -849,6 +1085,7 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
+    /// Writes an exported type definition
     fn generate_ts_wit_type_def(
         &self,
         writer: &mut TsWriter,
@@ -864,7 +1101,7 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
-    /// writes a return statement that decodes the JSON DataValue value in `result` to
+    /// Writes a return statement that decodes the JSON DataValue value in `result` to
     /// the expected TS representation
     fn write_decode_data_value<Result: FunctionWriter>(
         writer: &mut Result,
@@ -1074,6 +1311,7 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
+    /// Destructures the function arguments coming in `tuple` as a TypeScript tuple
     fn destructure_args_tuple<Target: FunctionWriter>(
         writer: &mut Target,
         tuple: &str,
@@ -1097,6 +1335,7 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
+    /// Encodes function parameters in a single untyped DataValue
     fn write_encode_data_value<Target: FunctionWriter>(
         writer: &mut Target,
         schema: &DataSchema,
@@ -1881,38 +2120,5 @@ impl TypeScriptBridgeGenerator {
             "{}Configuration",
             self.agent_type.type_name.0.to_lower_camel_case()
         )
-    }
-}
-
-impl BridgeGenerator for TypeScriptBridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
-        Self {
-            target_path: target_path.to_path_buf(),
-            agent_type,
-            testing,
-        }
-    }
-
-    fn generate(&self) -> anyhow::Result<()> {
-        let library_name = self.library_name();
-
-        let ts_path = self.target_path.join(format!("{library_name}.ts"));
-        let package_json_path = self.target_path.join("package.json");
-        let tsconfig_json_path = self.target_path.join("tsconfig.json");
-        let base_ts_path = self.target_path.join("base.ts");
-        let test_path = self.target_path.join("test.ts");
-
-        if !self.target_path.exists() {
-            std::fs::create_dir_all(&self.target_path)?;
-        }
-        self.generate_ts(&ts_path)?;
-        self.generate_package_json(&package_json_path)?;
-        self.generate_tsconfig_json(&tsconfig_json_path)?;
-        self.generate_base_ts(&base_ts_path)?;
-        if self.testing {
-            self.generate_test(&test_path)?;
-        }
-
-        Ok(())
     }
 }

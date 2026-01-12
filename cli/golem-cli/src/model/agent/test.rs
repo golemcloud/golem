@@ -915,6 +915,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funOptional".to_string(),
@@ -981,6 +982,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         ],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funOptionalQMark".to_string(),
@@ -1015,6 +1017,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         ],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funObjectComplexType".to_string(),
@@ -1036,6 +1039,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionType".to_string(),
@@ -1057,6 +1061,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionComplexType".to_string(),
@@ -1078,6 +1083,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funNumber".to_string(),
@@ -1099,6 +1105,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funString".to_string(),
@@ -1120,6 +1127,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBoolean".to_string(),
@@ -1141,6 +1149,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funMap".to_string(),
@@ -1162,6 +1171,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funTaggedUnion".to_string(),
@@ -1183,6 +1193,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funTupleComplexType".to_string(),
@@ -1204,6 +1215,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funTupleType".to_string(),
@@ -1225,6 +1237,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funListComplexType".to_string(),
@@ -1246,6 +1259,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funObjectType".to_string(),
@@ -1267,6 +1281,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionWithLiterals".to_string(),
@@ -1288,6 +1303,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionWithOnlyLiterals".to_string(),
@@ -1309,6 +1325,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funVoidReturn".to_string(),
@@ -1323,6 +1340,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funNullReturn".to_string(),
@@ -1337,6 +1355,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUndefinedReturn".to_string(),
@@ -1351,6 +1370,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnstructuredText".to_string(),
@@ -1372,6 +1392,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnstructuredBinary".to_string(),
@@ -1395,6 +1416,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funMultimodal".to_string(),
@@ -1432,6 +1454,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             },
                         ],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funMultimodalAdvanced".to_string(),
@@ -1477,6 +1500,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             },
                         ],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funEitherOptional".to_string(),
@@ -1498,6 +1522,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funResultExact".to_string(),
@@ -1519,6 +1544,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funResultLike".to_string(),
@@ -1540,6 +1566,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funResultLikeWithVoid".to_string(),
@@ -1561,6 +1588,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBuiltinResultVS".to_string(),
@@ -1582,6 +1610,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBuiltinResultSV".to_string(),
@@ -1603,6 +1632,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBuiltinResultSN".to_string(),
@@ -1624,6 +1654,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funNoReturn".to_string(),
@@ -1638,6 +1669,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funArrowSync".to_string(),
@@ -1659,10 +1691,12 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
             ],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         // BarAgent
         AgentType {
@@ -1874,6 +1908,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funOptional".to_string(),
@@ -1940,6 +1975,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         ],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funOptionalQMark".to_string(),
@@ -1974,6 +2010,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         ],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funObjectComplexType".to_string(),
@@ -1995,6 +2032,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionType".to_string(),
@@ -2016,6 +2054,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionComplexType".to_string(),
@@ -2037,6 +2076,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funNumber".to_string(),
@@ -2058,6 +2098,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funString".to_string(),
@@ -2079,6 +2120,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBoolean".to_string(),
@@ -2100,6 +2142,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funText".to_string(),
@@ -2121,6 +2164,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funTupleComplexType".to_string(),
@@ -2142,6 +2186,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funTupleType".to_string(),
@@ -2163,6 +2208,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funListComplexType".to_string(),
@@ -2184,6 +2230,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funObjectType".to_string(),
@@ -2205,6 +2252,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionWithLiterals".to_string(),
@@ -2226,6 +2274,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funVoidReturn".to_string(),
@@ -2240,6 +2289,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funNullReturn".to_string(),
@@ -2254,6 +2304,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUndefinedReturn".to_string(),
@@ -2268,6 +2319,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnstructuredText".to_string(),
@@ -2289,6 +2341,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnstructuredBinary".to_string(),
@@ -2312,6 +2365,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funMultimodal".to_string(),
@@ -2357,6 +2411,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             },
                         ],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funMultimodalAdvanced".to_string(),
@@ -2402,6 +2457,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             },
                         ],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funUnionWithOnlyLiterals".to_string(),
@@ -2423,6 +2479,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funTaggedUnion".to_string(),
@@ -2444,6 +2501,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funResultNoTag".to_string(),
@@ -2465,6 +2523,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funResultExact".to_string(),
@@ -2486,6 +2545,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funResultLike".to_string(),
@@ -2507,6 +2567,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funResultLikeWithVoid".to_string(),
@@ -2528,6 +2589,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBuiltinResultVS".to_string(),
@@ -2549,6 +2611,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBuiltinResultSV".to_string(),
@@ -2570,6 +2633,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funBuiltinResultSN".to_string(),
@@ -2591,6 +2655,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funNoReturn".to_string(),
@@ -2605,6 +2670,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "funArrowSync".to_string(),
@@ -2626,10 +2692,12 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             }),
                         }],
                     }),
+                    http_endpoint: vec![],
                 },
             ],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         // TestAgent from naming_extremes
         AgentType {
@@ -2655,6 +2723,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                     prompt_hint: None,
                     input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "testString".to_string(),
@@ -2662,6 +2731,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                     prompt_hint: None,
                     input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
                 AgentMethod {
                     name: "testStruct".to_string(),
@@ -2669,10 +2739,12 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                     prompt_hint: None,
                     input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    http_endpoint: vec![],
                 },
             ],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         // StringAgent from naming_extremes
         AgentType {
@@ -2697,9 +2769,11 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                 prompt_hint: None,
                 input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
                 output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                http_endpoint: vec![],
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         // StructAgent from naming_extremes
         AgentType {
@@ -2729,9 +2803,11 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                 prompt_hint: None,
                 input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
                 output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                http_endpoint: vec![],
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
     ]
 }
