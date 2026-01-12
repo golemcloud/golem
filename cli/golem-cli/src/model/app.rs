@@ -16,7 +16,6 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::app_raw;
-use crate::model::app_raw::Marker;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
@@ -236,7 +235,7 @@ pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
     pub agent_type: AgentType,
     pub target_language: GuestLanguage,
-    pub output_dir: Option<PathBuf>,
+    pub output_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -543,6 +542,7 @@ pub struct Application {
     http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
     http_api_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
+    bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
 impl Application {
@@ -629,15 +629,28 @@ impl Application {
         self.temp_dir().join("task-results")
     }
 
-    pub fn default_bridge_sdk_dir(
+    pub fn bridge_sdks(&self) -> &app_raw::BridgeSdks {
+        &self.bridge_sdks.value
+    }
+
+    pub fn bridge_sdk_dir(
         &self,
         agent_type_name: &AgentTypeName,
         language: GuestLanguage,
     ) -> PathBuf {
-        self.temp_dir()
-            .join("bridge-sdk")
-            .join(language.id())
-            .join(agent_type_name.to_wit_naming().as_str())
+        match self
+            .bridge_sdks
+            .value
+            .for_language(language)
+            .and_then(|sdk| sdk.output_dir.as_ref())
+        {
+            Some(output_dir) => self.bridge_sdks.source.join(output_dir),
+            None => self
+                .temp_dir()
+                .join("bridge-sdk")
+                .join(language.id())
+                .join(agent_type_name.to_wit_naming().as_str()),
+        }
     }
 
     pub fn rib_repl_history_file(&self) -> PathBuf {
@@ -730,7 +743,9 @@ impl PartitionedComponentPresets {
                     env_presets.insert(env_name.to_string(), properties.into());
                 }
                 None => {
-                    if properties.default == Some(Marker) || default_custom_preset.is_none() {
+                    if properties.default == Some(app_raw::Marker)
+                        || default_custom_preset.is_none()
+                    {
                         default_custom_preset = Some(preset_name.clone());
                     }
                     custom_presets.insert(preset_name, properties.into());
@@ -839,7 +854,7 @@ impl ComponentLayerId {
     }
 
     fn parent_ids_from_raw_template_references(
-        parent_ids: app_raw::TemplateReferences,
+        parent_ids: app_raw::LenientTokenList,
     ) -> Vec<ComponentLayerId> {
         parent_ids
             .into_vec()
@@ -1737,6 +1752,7 @@ mod app_builder {
             definition: HttpApiDefinitionName,
         },
         Environment(EnvironmentName),
+        Bridge,
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -1756,6 +1772,7 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::HttpApiDeployment { .. } => "HTTP API Deployment",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
+                UniqueSourceCheckedEntityKey::Bridge => "Bridge",
             }
         }
 
@@ -1809,6 +1826,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
                 }
+                UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
             }
         }
     }
@@ -1840,6 +1858,8 @@ mod app_builder {
         http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
         http_api_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
+
+        bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
@@ -1890,6 +1910,7 @@ mod app_builder {
                 clean: builder.clean,
                 http_api_definitions: builder.http_api_definitions,
                 http_api_deployments: builder.http_api_deployments,
+                bridge_sdks: builder.bridge_sdks,
             })
         }
 
@@ -2108,6 +2129,16 @@ mod app_builder {
                                     ))
                                 }
                             }
+                        }
+                    }
+
+                    if let Some(bridge) = app.application.bridge {
+                        if self
+                            .add_entity_source(UniqueSourceCheckedEntityKey::Bridge, app_source_dir)
+                        {
+                            // TODO: validate uniqueness of agent matchers
+                            self.bridge_sdks =
+                                WithSource::new(app_source_dir.to_path_buf(), bridge);
                         }
                     }
                 },
