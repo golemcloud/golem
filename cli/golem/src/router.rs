@@ -51,6 +51,7 @@ pub fn start_router(
 
     let app = Route::new()
         // Worker endpoints
+        .at("/v1/agents/invoke-agent", worker_service_api.clone())
         .at(
             "/v1/components/:component_id/workers",
             worker_service_api.clone(),

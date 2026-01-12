@@ -18,9 +18,9 @@ use super::{
     PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
 };
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentType, ComponentModelElementSchema,
-    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
-    NamedElementSchemas, NamedElementValue, NamedElementValues,
+    AgentConstructor, AgentDependency, AgentMethod, AgentType, AgentTypeName,
+    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
 };
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
@@ -39,6 +39,12 @@ impl ToWitNaming for String {
         // NOTE: wrap and include kebab case only here, in case we have to handle more WIT specific
         //       special cases.
         heck::ToKebabCase::to_kebab_case(self.as_str())
+    }
+}
+
+impl ToWitNaming for AgentTypeName {
+    fn to_wit_naming(&self) -> Self {
+        Self(self.0.to_wit_naming())
     }
 }
 

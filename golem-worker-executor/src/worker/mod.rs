@@ -1814,7 +1814,7 @@ impl WaitingWorker {
             agent_type = parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
         span.follows_from(Span::current());
@@ -1882,7 +1882,7 @@ impl RunningWorker {
             agent_type = parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
         let handle = tokio::task::spawn(

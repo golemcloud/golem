@@ -1,12 +1,12 @@
 use super::{
     AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PathSegmentNode, PathVariable,
-    QueryVariable, SystemVariable, SystemVariableSegment,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
+    PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
 };
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
-    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, LiteralSegment, NamedElementSchema,
+    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, AgentTypeName,
+    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
+    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
     NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
     RegisteredAgentTypeImplementer, TextDescriptor, TextReference, TextSource, TextType, Url,
 };
@@ -43,7 +43,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
     ) -> Result<Self, Self::Error> {
         Ok(AgentType {
             mode: proto.mode().into(),
-            type_name: proto.type_name,
+            type_name: AgentTypeName(proto.type_name),
             description: proto.description,
             constructor: proto
                 .constructor
@@ -68,7 +68,7 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
     fn from(value: AgentType) -> Self {
         golem_api_grpc::proto::golem::component::AgentType {
             mode: golem_api_grpc::proto::golem::component::AgentMode::from(value.mode) as i32,
-            type_name: value.type_name,
+            type_name: value.type_name.0,
             description: value.description,
             constructor: Some(value.constructor.into()),
             methods: value
