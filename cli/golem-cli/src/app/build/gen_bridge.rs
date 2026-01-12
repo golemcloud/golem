@@ -12,6 +12,7 @@ use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_templates::model::GuestLanguage;
+use heck::ToKebabCase;
 use itertools::Itertools;
 
 pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
@@ -75,18 +76,11 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                 bail!(NonSuccessfulExit)
             }
 
-            if custom_target.agent_type_names.len() == 1 {
-                targets
-                    .iter_mut()
-                    .for_each(|target| target.output_dir = custom_target.output_dir.clone());
-            } else {
-                targets.iter_mut().for_each(|target| {
-                    target.output_dir = custom_target
-                        .output_dir
-                        .as_ref()
-                        .map(|output_dir| output_dir.join(target.agent_type.wrapper_type_name()));
+            targets.iter_mut().for_each(|target| {
+                target.output_dir = custom_target.output_dir.as_ref().map(|output_dir| {
+                    output_dir.join(target.agent_type.type_name.as_str().to_kebab_case())
                 });
-            }
+            });
         }
         None => {
             // TODO: select targets based on component selection AND manifest

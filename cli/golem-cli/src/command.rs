@@ -619,13 +619,9 @@ pub enum GolemCliSubcommand {
         /// Optional filter for agent type names; can be defined multiple times
         #[clap(long)]
         agent_type_name: Vec<AgentTypeName>,
-        /// Optional output directory for the generated SDK:
-        /// - When not specified, will use separate temporary directories in the application's directory
-        ///   for each agent type's SDK
-        /// - When specified, then each SDK will be placed in a directory based on the agent type name
-        ///   inside the requested output directory, unless exactly one agent type was selected explicitly with
-        ///   the agent-type-name flag
-        #[clap(long, verbatim_doc_comment)]
+        /// Optional output directory for the generated SDK, when not specified, will use separate
+        /// temporary directories in the application's directory
+        #[clap(long)]
         output_dir: Option<PathBuf>,
     },
     /// Start Rib REPL for a selected component
