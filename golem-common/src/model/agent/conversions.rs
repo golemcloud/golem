@@ -17,7 +17,6 @@ use super::{
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
     PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
 };
-use crate::model::account::AccountId;
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentIdWithComponent, AgentMethod, AgentMode,
@@ -818,20 +817,6 @@ impl From<super::bindings::golem::agent::common::AuthDetails> for AgentHttpAuthD
         Self {
             required: value.required,
         }
-    }
-}
-
-impl From<AccountId> for super::bindings::golem::api::host::AccountId {
-    fn from(value: AccountId) -> Self {
-        Self {
-            uuid: value.0.into(),
-        }
-    }
-}
-
-impl From<super::bindings::golem::api::host::AccountId> for AccountId {
-    fn from(value: super::bindings::golem::api::host::AccountId) -> Self {
-        Self(value.uuid.into())
     }
 }
 

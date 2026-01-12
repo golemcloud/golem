@@ -1,8 +1,7 @@
 package golem:agent;
 
 interface common {
-  use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value, agent-id};
-  use golem:api/host@1.3.0.{account-id, oplog-index, agent-metadata};
+  use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value, agent-id, account-id};
 
   type url = string;
 

@@ -47,12 +47,11 @@ pub mod serde_json;
 pub mod url;
 pub mod uuid;
 
-use crate::bindings::golem::api::host::AccountId;
 use crate::PromiseId;
 use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
 use golem_wasm::{
     AgentId, ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType, WitTypeNode,
-    WitValue, WitValueBuilderExtensions,
+    WitValue, WitValueBuilderExtensions, AccountId,
 };
 pub use golem_wasm::{NodeBuilder, WitValueExtractor};
 use std::collections::Bound;

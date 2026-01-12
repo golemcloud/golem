@@ -1,13 +1,10 @@
 declare module 'golem:agent/common' {
-  import * as golemApi130Host from 'golem:api/host@1.3.0';
   import * as golemRpc022Types from 'golem:rpc/types@0.2.2';
   export type ValueAndType = golemRpc022Types.ValueAndType;
   export type WitType = golemRpc022Types.WitType;
   export type WitValue = golemRpc022Types.WitValue;
   export type AgentId = golemRpc022Types.AgentId;
-  export type AccountId = golemApi130Host.AccountId;
-  export type OplogIndex = golemApi130Host.OplogIndex;
-  export type AgentMetadata = golemApi130Host.AgentMetadata;
+  export type AccountId = golemRpc022Types.AccountId;
   export type Url = string;
   export type AgentMode = "durable" | "ephemeral";
   export type CorsOptions = {
@@ -87,7 +84,7 @@ declare module 'golem:agent/common' {
     givenName?: string;
     familyName?: string;
     picture?: string;
-    username?: string;
+    preferredUsername?: string;
     claims: string;
   };
   export type AgentPrincipal = {
