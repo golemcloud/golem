@@ -1324,11 +1324,11 @@ async fn http_client_interrupting_response_stream_async(
     drop(executor);
     http_server.abort();
 
-    check!(result == Ok(vec![Value::U64(100 * 1024)]));
+    assert_eq!(result, Ok(vec![Value::U64(100 * 1024)]));
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
-    check!(idempotency_keys.len() == 2);
-    check!(idempotency_keys[0] == idempotency_keys[1]);
+    assert_eq!(idempotency_keys.len(), 2);
+    assert_eq!(idempotency_keys[0], idempotency_keys[1]);
 
     Ok(())
 }

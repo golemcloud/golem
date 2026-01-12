@@ -1595,7 +1595,7 @@ async fn agent_promise_await(
 
     let promise_id = PromiseId {
         worker_id: worker.clone(),
-        oplog_idx: OplogIndex::from_u64(44),
+        oplog_idx: OplogIndex::from_u64(39),
     };
 
     user.complete_promise(&promise_id, b"hello".to_vec())

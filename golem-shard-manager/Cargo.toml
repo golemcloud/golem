@@ -33,7 +33,7 @@ itertools = { workspace = true }
 k8s-openapi = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 prometheus = { workspace = true }
-rustls = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

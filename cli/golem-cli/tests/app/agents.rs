@@ -952,6 +952,7 @@ async fn test_component_env_var_substitution() {
 }
 
 #[test]
+#[ignore = "disabled until code-first routes"]
 async fn test_http_api_merging() {
     let mut ctx = TestContext::new();
     let app_name = "http-api-merging";

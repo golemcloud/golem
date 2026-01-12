@@ -17,6 +17,7 @@ interface common {
     methods:      list<agent-method>,
     dependencies: list<agent-dependency>,
     mode:         agent-mode,
+    http-mount:   option<http-mount-details>,
   }
 
   record agent-dependency {
@@ -29,9 +30,89 @@ interface common {
   record agent-method {
     name:          string,
     description:   string,
+    http-endpoint: list<http-endpoint-details>,
     prompt-hint:   option<string>,
     input-schema:  data-schema,
     output-schema: data-schema,
+  }
+
+  record http-mount-details {
+    path-prefix:    list<path-segment>,
+    header-vars:    list<header-variable>,
+    query-vars:     list<query-variable>,
+    auth-details:   option<auth-details>,
+    phantom-agent:  bool,
+    cors-options:   cors-options,
+    webhook-suffix: list<path-segment>,
+  }
+
+  record cors-options {
+    allowed-patterns: list<string>,
+  }
+
+  record http-endpoint-details {
+    http-method: http-method,
+    path-suffix:  list<path-segment>,
+    header-vars:  list<header-variable>,
+    query-vars:   list<query-variable>,
+    auth-details: option<auth-details>,
+    cors-options: cors-options,
+  }
+
+  variant http-method {
+    get,
+    put,
+    post,
+    delete,
+    custom(string),
+  }
+
+  record path-segment {
+    concat: list<path-segment-node>,
+  }
+
+  variant path-segment-node {
+    literal(string),
+    system-variable(system-variable),
+    path-variable(path-variable),
+  }
+
+  enum system-variable {
+    agent-type,
+    agent-version
+  }
+
+  record path-variable {
+    variable-name: string,
+  }
+
+  record header-variable {
+    header-name: string,
+    variable-name: string,
+  }
+
+  record query-variable {
+    query-param-name: string,
+    variable-name: string,
+  }
+
+  record auth-details {
+    required: bool,
+  }
+
+  record auth-context {
+    sub:      string,
+    provider: string,
+    email:    string,
+    name:     string,
+
+    email-verified: option<bool>,
+    given-name:     option<string>,
+    family-name:    option<string>,
+    picture:        option<string>,
+    preferred-username: option<string>,
+
+    claims: string,
   }
 
   record agent-constructor {
