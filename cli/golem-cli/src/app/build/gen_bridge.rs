@@ -64,7 +64,7 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                 }
             }
 
-            if agent_type_names.len() != 0 {
+            if !agent_type_names.is_empty() {
                 log_error(format!(
                     "The following agent type names were not found: {}",
                     agent_type_names
