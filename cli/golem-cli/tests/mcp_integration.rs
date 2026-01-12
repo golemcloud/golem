@@ -77,7 +77,7 @@ async fn spawn_mcp_server() -> (McpServerHandle, u16) {
 
     let mut child = command.spawn().expect("Failed to spawn golem-cli mcp-server");
     
-    sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(200)).await;  // Reduced from 500ms
     
     if let Ok(Some(status)) = child.try_wait() {
         let output = child.wait_with_output().await.expect("Failed to wait for output");
@@ -88,7 +88,7 @@ async fn spawn_mcp_server() -> (McpServerHandle, u16) {
     }
 
     let server_url = format!("http://127.0.0.1:{}", port);
-    assert!(wait_for_server(&server_url, 50).await, "MCP Server did not start");
+    assert!(wait_for_server(&server_url, 20).await, "MCP Server did not start");  // Reduced from 50
 
     (McpServerHandle { child, port }, port)
 }
@@ -99,7 +99,7 @@ async fn wait_for_server(url: &str, max_attempts: u32) -> bool {
         if reqwest::get(url).await.is_ok() {
             return true;
         }
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(50)).await;  // Reduced from 100ms
     }
     false
 }
@@ -154,7 +154,7 @@ impl McpClient {
         let mut saw_data = false;
         
         loop {
-            match tokio::time::timeout(Duration::from_secs(5), self.stream.read(&mut temp)).await {
+            match tokio::time::timeout(Duration::from_secs(2), self.stream.read(&mut temp)).await {  // Reduced from 5s
                 Ok(Ok(n)) => {
                     if n == 0 {
                         break;
@@ -303,9 +303,9 @@ async fn test_mcp_initialize() {
 
 #[tokio::test]
 async fn test_mcp_list_tools() {
-    let (_server, _client) = spawn_server_and_client().await;
+    let (_server, mut client) = spawn_server_and_client().await;
     
-    let response = client.request("tools/list", json!({})).await;
+    let response: Result<serde_json::Value, String> = client.request("tools/list", json!({})).await;
     assert!(response.is_ok(), "List tools should succeed: {:?}", response);
     
     let response = response.unwrap();
@@ -329,14 +329,14 @@ async fn test_mcp_list_tools() {
 
 #[tokio::test]
 async fn test_mcp_call_list_agent_types() {
-    let (_server, _client) = spawn_server_and_client().await;
+    let (_server, mut client) = spawn_server_and_client().await;
     
     let params = json!({
         "name": "list_agent_types",
         "arguments": {}
     });
     
-    let response = client.request("tools/call", params).await;
+    let response: Result<serde_json::Value, String> = client.request("tools/call", params).await;
     assert!(response.is_ok(), "Tool call should succeed: {:?}", response);
     
     let response = response.unwrap();
@@ -376,14 +376,14 @@ async fn test_mcp_call_list_agent_types() {
 
 #[tokio::test]
 async fn test_mcp_call_list_components() {
-    let (_server, _client) = spawn_server_and_client().await;
+    let (_server, mut client) = spawn_server_and_client().await;
     
     let params = json!({
         "name": "list_components",
         "arguments": {}
     });
     
-    let response = client.request("tools/call", params).await;
+    let response: Result<serde_json::Value, String> = client.request("tools/call", params).await;
     assert!(response.is_ok(), "Tool call should succeed: {:?}", response);
     
     let response = response.unwrap();
@@ -420,14 +420,14 @@ async fn test_mcp_call_list_components() {
 
 #[tokio::test]
 async fn test_mcp_call_nonexistent_tool() {
-    let (_server, _client) = spawn_server_and_client().await;
+    let (_server, mut client) = spawn_server_and_client().await;
     
     let params = json!({
         "name": "nonexistent_tool",
         "arguments": {}
     });
     
-    let response = client.request("tools/call", params).await;
+    let response: Result<serde_json::Value, String> = client.request("tools/call", params).await;
     assert!(response.is_ok(), "Request should complete (but with error)");
     
     let response = response.unwrap();
@@ -440,9 +440,9 @@ async fn test_mcp_call_nonexistent_tool() {
 
 #[tokio::test]
 async fn test_mcp_tool_schemas() {
-    let (_server, _client) = spawn_server_and_client().await;
+    let (_server, mut client) = spawn_server_and_client().await;
     
-    let response = client.request("tools/list", json!({})).await;
+    let response: Result<serde_json::Value, String> = client.request("tools/list", json!({})).await;
     assert!(response.is_ok());
     
     let response = response.unwrap();
