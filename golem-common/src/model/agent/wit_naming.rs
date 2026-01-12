@@ -13,14 +13,12 @@
 // limitations under the License.
 
 use super::{
-    AgentHttpAuthDetails, AgentPrincipal, CorsOptions, CustomHttpMethod, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
-    PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
-};
-use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentType, ComponentModelElementSchema,
-    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
-    NamedElementSchemas, NamedElementValue, NamedElementValues,
+    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentType,
+    ComponentModelElementSchema, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, HeaderVariable, HttpEndpointDetails, HttpMethod,
+    HttpMountDetails, LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue,
+    NamedElementValues, PathSegment, PathSegmentNode, PathVariable, QueryVariable, SystemVariable,
+    SystemVariableSegment,
 };
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
@@ -467,23 +465,6 @@ impl ToWitNaming for AgentHttpAuthDetails {
     fn to_wit_naming(&self) -> Self {
         Self {
             required: self.required,
-        }
-    }
-}
-
-impl ToWitNaming for AgentPrincipal {
-    fn to_wit_naming(&self) -> Self {
-        Self {
-            sub: self.sub.to_wit_naming(),
-            issuer: self.issuer.to_wit_naming(),
-            email: self.email.to_wit_naming(),
-            name: self.name.to_wit_naming(),
-            email_verified: self.email_verified,
-            given_name: self.given_name.as_ref().map(ToWitNaming::to_wit_naming),
-            family_name: self.family_name.as_ref().map(ToWitNaming::to_wit_naming),
-            picture: self.picture.as_ref().map(ToWitNaming::to_wit_naming),
-            username: self.username.as_ref().map(ToWitNaming::to_wit_naming),
-            claims: self.claims.to_wit_naming(),
         }
     }
 }

@@ -1,14 +1,14 @@
 package golem:agent;
 
 interface guest {
-  use common.{agent-error, agent-type, data-value};
+  use common.{agent-error, agent-type, data-value, principal};
 
   /// Initializes the agent of a given type with the given constructor parameters.
   /// If called a second time, it fails.
-  initialize: func(agent-type: string, input: data-value) -> result<_, agent-error>;
+  initialize: func(agent-type: string, input: data-value, principal: principal) -> result<_, agent-error>;
 
   /// Invokes an agent. If create was not called before, it fails
-  invoke: func(method-name: string, input: data-value) -> result<data-value, agent-error>;
+  invoke: func(method-name: string, input: data-value, principal: principal) -> result<data-value, agent-error>;
 
   /// Gets the agent type. If create was not called before, it fails
   get-definition: func() -> agent-type;
