@@ -238,7 +238,7 @@ impl ApplicationService {
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
         auth.authorize_account_action(account_id, AccountAction::ViewApplications)
-            .map_err(|err| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
+            .map_err(|_err| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
 
         let result: Application = self
             .application_repo
