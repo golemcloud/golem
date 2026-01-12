@@ -3,6 +3,7 @@ use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::context::ApplicationContext;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
+use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
 use crate::model::app::BridgeSdkTarget;
 use camino::Utf8PathBuf;
@@ -47,9 +48,22 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                         component_name: component_name.clone(),
                         agent_type,
                         target_language,
-                        output_dir: custom_target.output_dir.clone(),
+                        output_dir: None,
                     });
                 }
+            }
+
+            if custom_target.agent_type_names.len() == 1 {
+                targets
+                    .iter_mut()
+                    .for_each(|target| target.output_dir = custom_target.output_dir.clone());
+            } else {
+                targets.iter_mut().for_each(|target| {
+                    target.output_dir = custom_target
+                        .output_dir
+                        .as_ref()
+                        .map(|output_dir| output_dir.join(target.agent_type.wrapper_type_name()));
+                });
             }
         }
         None => {
@@ -118,6 +132,7 @@ async fn gen_bridge_sdk_target(
                     )),
                 };
 
+                fs::remove(&output_dir)?;
                 generator.generate()
             },
             || {

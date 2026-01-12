@@ -597,6 +597,19 @@ impl Context {
         .await;
     }
 
+    pub async fn set_custom_bridge_generator_target(
+        &self,
+        custom_bridge_sdk_target: CustomBridgeSdkTarget,
+    ) {
+        self.set_app_ctx_init_config(
+            "custom_bridge_generator_target",
+            |ctx| &mut ctx.custom_bridge_sdk_target,
+            |ctx| &mut ctx.custom_bridge_sdk_target_was_set,
+            Some(custom_bridge_sdk_target),
+        )
+        .await;
+    }
+
     pub async fn task_result_marker_dir(&self) -> anyhow::Result<PathBuf> {
         let app_ctx = self.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
@@ -806,8 +819,8 @@ pub struct ApplicationContextState {
     skip_up_to_date_checks_was_set: bool,
     pub build_steps_filter: HashSet<AppBuildStep>,
     build_steps_filter_was_set: bool,
-    pub custom_gen_bridge_target: Option<CustomBridgeSdkTarget>,
-    custom_gen_bridge_target_was_set: bool,
+    pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
+    custom_bridge_sdk_target_was_set: bool,
 
     app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
@@ -822,8 +835,8 @@ impl ApplicationContextState {
             skip_up_to_date_checks_was_set: false,
             build_steps_filter: HashSet::new(),
             build_steps_filter_was_set: false,
-            custom_gen_bridge_target: None,
-            custom_gen_bridge_target_was_set: false,
+            custom_bridge_sdk_target: None,
+            custom_bridge_sdk_target_was_set: false,
             app_context: None,
         }
     }
@@ -850,7 +863,7 @@ impl ApplicationContextState {
             skip_up_to_date_checks: self.skip_up_to_date_checks,
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
-            custom_bridge_sdk_target: self.custom_gen_bridge_target.clone(),
+            custom_bridge_sdk_target: self.custom_bridge_sdk_target.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
             dev_mode: config.dev_mode,
             enable_wasmtime_fs_cache: config.enable_wasmtime_fs_cache,

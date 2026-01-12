@@ -314,7 +314,8 @@ impl AgentType {
                 .into_iter()
                 .map(AgentDependency::normalized)
                 .collect(),
-            mode: AgentMode::Durable,
+            mode: self.mode,
+            http_mount: self.http_mount,
         }
     }
 

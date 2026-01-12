@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::model::app::{ApplicationComponentSelectMode, CustomBridgeSdkTarget};
 use golem_common::model::agent::AgentTypeName;
-use golem_templates::model::{ComponentName, GuestLanguage};
+use golem_common::model::component::ComponentName;
+use golem_templates::model::GuestLanguage;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,14 +33,25 @@ impl BridgeCommandHandler {
     pub async fn cmd_generate_bridge(
         &self,
         language: Option<GuestLanguage>,
-        component_name: Vec<ComponentName>,
-        agent_type_name: Vec<AgentTypeName>,
+        component_names: Vec<ComponentName>,
+        agent_type_names: Vec<AgentTypeName>,
         output_dir: Option<PathBuf>,
     ) -> anyhow::Result<()> {
-        todo!()
-    }
+        self.ctx
+            .set_custom_bridge_generator_target(CustomBridgeSdkTarget {
+                agent_type_names: agent_type_names.into_iter().collect(),
+                target_language: language,
+                output_dir,
+            })
+            .await;
 
-    async fn generate_bridge(&self) {
-        todo!()
+        self.ctx
+            .app_handler()
+            .build(
+                component_names,
+                None,
+                &ApplicationComponentSelectMode::CurrentDir,
+            )
+            .await
     }
 }

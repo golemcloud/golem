@@ -241,7 +241,6 @@ pub struct BridgeSdkTarget {
 
 #[derive(Debug, Clone)]
 pub struct CustomBridgeSdkTarget {
-    pub component_names: Vec<ComponentName>,
     pub agent_type_names: HashSet<AgentTypeName>,
     pub target_language: Option<GuestLanguage>,
     pub output_dir: Option<PathBuf>,

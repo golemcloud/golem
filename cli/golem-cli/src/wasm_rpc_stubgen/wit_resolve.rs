@@ -7,7 +7,7 @@ use crate::model::app::Application;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use anyhow::{anyhow, bail, Context, Error};
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
 use indexmap::IndexMap;
 use indoc::formatdoc;
