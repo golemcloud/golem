@@ -36,7 +36,7 @@ mod builder;
 mod extractor;
 
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub mod json;
 
 /// The metadata module defines data structures for representing various metadata extracted from WASM binaries.
@@ -134,16 +134,14 @@ pub use golem_rpc_0_2_x::types::{
     WitType, WitTypeNode, WitValue,
 };
 
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<Uuid> for uuid::Uuid {
     fn from(value: Uuid) -> Self {
         uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<uuid::Uuid> for Uuid {
     fn from(uuid: uuid::Uuid) -> Self {
         let (high_bits, low_bits) = uuid.as_u64_pair();
@@ -489,19 +487,22 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<uuid::Uuid> for ComponentId {
     fn from(value: uuid::Uuid) -> Self {
         Self { uuid: value.into() }
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<ComponentId> for uuid::Uuid {
     fn from(value: ComponentId) -> Self {
         value.uuid.into()
     }
 }
 
-impl FromStr for ComponentId {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::str::FromStr for ComponentId {
     type Err = uuid::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -509,20 +510,23 @@ impl FromStr for ComponentId {
     }
 }
 
-impl Display for ComponentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::fmt::Display for ComponentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let uuid: uuid::Uuid = self.uuid.into();
         write!(f, "{uuid}")
     }
 }
 
-impl Display for AgentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.component_id, self.agent_id)
     }
 }
 
-impl FromStr for AgentId {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::str::FromStr for AgentId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -543,6 +547,7 @@ impl FromStr for AgentId {
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
 impl TryFrom<Uri> for AgentId {
     type Error = String;
 
@@ -555,6 +560,7 @@ impl TryFrom<Uri> for AgentId {
             let parts: Vec<&str> = remaining.split('/').collect();
             match parts.len() {
                 2 => {
+                    use std::str::FromStr;
                     let component_id = ComponentId::from_str(parts[0]).map_err(|err|
                         format!("Invalid URN: expected UUID for component_id: {err}")
                     )?;
@@ -572,6 +578,7 @@ impl TryFrom<Uri> for AgentId {
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
 #[cfg(test)]
 mod tests {
     use test_r::test;

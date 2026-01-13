@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::analysis::AnalysedType;
-use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
-use crate::{Value, ValueAndType, WitValue};
+use crate::{Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use std::str::FromStr;
 
@@ -358,6 +356,7 @@ impl FromValue for uuid::Uuid {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::WitValue {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -372,6 +371,7 @@ impl FromValue for crate::WitValue {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::WitNode {
     fn from_value(value: Value) -> Result<Self, String> {
         use crate::WitNode;
@@ -437,6 +437,7 @@ impl FromValue for crate::WitNode {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::Uri {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -449,6 +450,7 @@ impl FromValue for crate::Uri {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::WitTypeNode {
     fn from_value(value: Value) -> Result<Self, String> {
         use crate::WitTypeNode;
@@ -583,14 +585,15 @@ impl FromValue for crate::WitTypeNode {
     }
 }
 
-impl FromValue for NamedWitTypeNode {
+#[cfg(feature = "host")]
+impl FromValue for crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 3 => {
                 let name = Option::<String>::from_value(fields.remove(0))?;
                 let owner = Option::<String>::from_value(fields.remove(0))?;
                 let type_ = crate::WitTypeNode::from_value(fields.remove(0))?;
-                Ok(NamedWitTypeNode { name, owner, type_ })
+                Ok(crate::golem_rpc_0_2_x::types::NamedWitTypeNode { name, owner, type_ })
             }
             _ => Err(format!(
                 "Expected Record for NamedWitTypeNode, got {value:?}"
@@ -619,6 +622,7 @@ impl FromValue for std::time::Duration {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::ResourceMode {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -632,6 +636,7 @@ impl FromValue for crate::ResourceMode {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::RpcError {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -655,26 +660,29 @@ impl FromValue for crate::RpcError {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for Value {
     fn from_value(value: Value) -> Result<Self, String> {
-        let wit_value = WitValue::from_value(value)?;
+        let wit_value = crate::WitValue::from_value(value)?;
         Ok(wit_value.into())
     }
 }
 
-impl FromValue for AnalysedType {
+#[cfg(feature = "host")]
+impl FromValue for crate::analysis::AnalysedType {
     fn from_value(value: Value) -> Result<Self, String> {
         let wit_type: crate::WitType = crate::WitType::from_value(value)?;
         Ok(wit_type.into())
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for ValueAndType {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 2 => {
                 let value = Value::from_value(fields.remove(0))?;
-                let typ = AnalysedType::from_value(fields.remove(0))?;
+                let typ = crate::analysis::AnalysedType::from_value(fields.remove(0))?;
                 Ok(ValueAndType { value, typ })
             }
             _ => Err(format!(
@@ -770,11 +778,12 @@ impl FromValue for url::Url {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::WitType {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 1 => {
-                let nodes = Vec::<NamedWitTypeNode>::from_value(fields.remove(0))?;
+                let nodes = Vec::<crate::golem_rpc_0_2_x::types::NamedWitTypeNode>::from_value(fields.remove(0))?;
                 Ok(crate::WitType { nodes })
             }
             _ => Err(format!(

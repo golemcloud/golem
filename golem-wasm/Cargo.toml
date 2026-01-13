@@ -89,6 +89,8 @@ derive = ["dep:golem-wasm-derive"]
 
 stub = ["dep:wit-bindgen-rt", "dep:wstd", "dep:wasi"]
 
+client = ["derive", "dep:serde", "dep:serde_json", "dep:bigdecimal", "dep:bit-vec", "dep:url"]
+
 [package.metadata.component]
 package = "golem:rpc"
 
