@@ -49,7 +49,7 @@ pub async fn extract_and_cache_agent_types(
 
                 let agent_types = ctx
                     .wit
-                    .get_extracted_agent_types(component_name, &wasm)
+                    .get_extracted_agent_types(component_name, wasm)
                     .await?;
 
                 fs::write_str(
