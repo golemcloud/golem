@@ -645,7 +645,7 @@ pub enum GolemCliSubcommand {
     /// Deploy application
     Deploy {
         /// Only plan deployment, but apply no changes to the staging area or the environment
-        #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
+        #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
         plan: bool,
         /// Only plan and stage changes, but do not apply them to the environment; used for testing
         #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
@@ -654,10 +654,10 @@ pub enum GolemCliSubcommand {
         #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
         approve_staging_steps: bool,
         /// Revert to the specified version
-        #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
+        #[arg(long, conflicts_with_all = ["force_build", "revision", "stage", "approve_staging_steps"])]
         version: Option<String>,
         /// Revert to the specified revision
-        #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
+        #[arg(long, conflicts_with_all = ["force_build", "version", "stage", "approve_staging_steps"])]
         revision: Option<DeploymentRevision>,
         #[command(flatten)]
         force_build: ForceBuildArg,
