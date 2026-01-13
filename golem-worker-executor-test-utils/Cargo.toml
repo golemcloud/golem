@@ -14,10 +14,10 @@ harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true }
+golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 golem-test-framework = { workspace = true }
-golem-wasm = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 golem-worker-executor = { workspace = true }
 
 anyhow = { workspace = true }

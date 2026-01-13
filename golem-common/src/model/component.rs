@@ -36,10 +36,7 @@ use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
 use uuid::Uuid;
 
-newtype_uuid!(
-    ComponentId,
-    golem_api_grpc::proto::golem::component::ComponentId
-);
+pub use crate::base_model::component::ComponentId;
 
 declare_revision!(ComponentRevision);
 

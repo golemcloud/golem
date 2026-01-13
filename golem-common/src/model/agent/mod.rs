@@ -60,6 +60,8 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
+pub use crate::base_model::agent::*;
+
 #[derive(
     Debug,
     Copy,
@@ -215,32 +217,6 @@ pub struct AgentMethod {
     pub input_schema: DataSchema,
     pub output_schema: DataSchema,
     pub http_endpoint: Vec<HttpEndpointDetails>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Deserialize,
-    Serialize,
-    NewType,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-)]
-#[repr(transparent)]
-#[desert(transparent)]
-#[desert(evolution())]
-pub struct AgentTypeName(pub String);
-
-impl Display for AgentTypeName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
 }
 
 #[derive(
@@ -467,15 +443,6 @@ impl From<DataValue> for UntypedJsonDataValue {
             DataValue::Multimodal(elements) => UntypedJsonDataValue::Multimodal(elements.into()),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum DataValue {
-    Tuple(ElementValues),
-    Multimodal(NamedElementValues),
 }
 
 impl DataValue {
@@ -1176,18 +1143,6 @@ pub struct RegisteredAgentTypeImplementer {
 pub struct RegisteredAgentType {
     pub agent_type: AgentType,
     pub implemented_by: RegisteredAgentTypeImplementer,
-}
-
-/// Identifies a deployed, instantiated agent.
-///
-/// AgentId is convertible to and from string, and is used as _worker names_.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentId {
-    pub agent_type: AgentTypeName,
-    pub parameters: DataValue,
-    pub phantom_id: Option<Uuid>,
-    wrapper_agent_type: String,
-    as_string: String,
 }
 
 impl AgentId {

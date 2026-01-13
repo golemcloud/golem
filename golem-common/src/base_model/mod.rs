@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent;
+pub mod component;
+
 use crate::model::agent::{AgentId, AgentTypeResolver};
 use crate::model::component::ComponentId;
-use crate::model::component_metadata::ComponentMetadata;
-use desert_rust::BinaryCodec;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -30,13 +31,12 @@ use uuid::Uuid;
     PartialOrd,
     Ord,
     Hash,
-    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
-    poem_openapi::Object,
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ShardId {
     pub(crate) value: i64,
@@ -106,15 +106,13 @@ static WORKER_ID_MAX_LENGTH: usize = 512;
     Ord,
     PartialOrd,
     Hash,
-    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
-    poem_openapi::Object,
     IntoValue,
-    FromValue,
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerId {
     pub component_id: ComponentId,
@@ -157,9 +155,10 @@ impl WorkerId {
         Self::from_agent_id(component_id, &AgentId::parse(agent_id, resolver)?)
     }
 
+    #[cfg(feature = "full")]
     pub fn from_component_metadata_and_worker_id<S: AsRef<str>>(
         component_id: ComponentId,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &crate::model::component_metadata::ComponentMetadata,
         id: S,
     ) -> Result<WorkerId, String> {
         if component_metadata.is_agent() {
@@ -229,15 +228,14 @@ impl AsRef<WorkerId> for &WorkerId {
     Eq,
     PartialEq,
     Hash,
-    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
     IntoValue,
     FromValue,
-    poem_openapi::Object,
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PromiseId {
     pub worker_id: WorkerId,
@@ -265,15 +263,14 @@ impl Display for PromiseId {
     PartialOrd,
     Ord,
     Hash,
-    BinaryCodec,
     Default,
-    poem_openapi::NewType,
     serde::Serialize,
     serde::Deserialize,
     golem_wasm_derive::IntoValue,
     golem_wasm_derive::FromValue,
 )]
-#[desert(transparent)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::NewType))]
+#[cfg_attr(feature = "full", desert(transparent))]
 pub struct OplogIndex(pub(crate) u64);
 
 impl OplogIndex {
@@ -340,15 +337,14 @@ impl From<OplogIndex> for u64 {
     PartialOrd,
     Ord,
     Hash,
-    BinaryCodec,
     Default,
-    poem_openapi::NewType,
     serde::Serialize,
     serde::Deserialize,
     IntoValue,
     FromValue,
 )]
-#[desert(transparent)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::NewType))]
+#[cfg_attr(feature = "full", desert(transparent))]
 pub struct TransactionId(pub(crate) String);
 
 impl TransactionId {
@@ -379,6 +375,7 @@ impl From<String> for TransactionId {
     }
 }
 
+#[cfg(feature = "full")]
 mod sql {
     use crate::model::TransactionId;
     use sqlx::encode::IsNull;

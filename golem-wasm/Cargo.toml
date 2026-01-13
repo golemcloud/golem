@@ -60,6 +60,7 @@ protox = { workspace = true, optional = true }
 default = ["host", "derive"]
 
 host = [
+    "client",
     "dep:arbitrary",
     "dep:async-recursion",
     "dep:async-trait",

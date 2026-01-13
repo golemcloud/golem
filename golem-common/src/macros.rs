@@ -15,10 +15,11 @@
 #[macro_export]
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
-        #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq, desert_rust::BinaryCodec)]
+        #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
         #[derive(serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         #[serde(transparent)]
-        #[desert(transparent)]
+        #[cfg_attr(feature = "full", desert(transparent))]
         pub struct $name(pub uuid::Uuid);
 
         impl Default for $name {
@@ -55,6 +56,7 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "full")]
         impl poem_openapi::types::Type for $name {
             const IS_REQUIRED: bool = true;
             type RawValueType = Self;
@@ -81,12 +83,14 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "full")]
         impl poem_openapi::types::ParseFromParameter for $name {
             fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
                 Ok(Self(value.try_into()?))
             }
         }
 
+        #[cfg(feature = "full")]
         impl poem_openapi::types::ParseFromJSON for $name {
             fn parse_from_json(
                 value: Option<serde_json::Value>,
@@ -101,6 +105,7 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "full")]
          impl ::poem_openapi::types::ParseFromMultipartField for $name {
             async fn parse_from_multipart(
                 field: Option<::poem::web::Field>,
@@ -109,12 +114,14 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "full")]
         impl poem_openapi::types::ToJSON for $name {
             fn to_json(&self) -> Option<serde_json::Value> {
                 Some(serde_json::Value::String(self.0.to_string()))
             }
         }
 
+        #[cfg(feature = "full")]
         impl ::poem_openapi::types::ToHeader for $name {
             fn to_header(&self) -> Option<::http::HeaderValue> {
                 <::uuid::Uuid as ::poem_openapi::types::ToHeader>::to_header(&self.0)
@@ -174,6 +181,7 @@ macro_rules! newtype_uuid {
         }
 
         $(
+            #[cfg(feature = "full")]
             impl TryFrom<$proto_type> for $name {
                 type Error = String;
 
@@ -187,6 +195,7 @@ macro_rules! newtype_uuid {
                 }
             }
 
+            #[cfg(feature = "full")]
             impl From<$name> for $proto_type {
                 fn from(value: $name) -> Self {
                     $proto_type {
