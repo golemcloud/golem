@@ -53,7 +53,9 @@ pub use crate::base_model::*;
 use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
+use crate::base_model::agent::AgentId;
 use crate::model::account::AccountId;
+use crate::model::agent::AgentTypeResolver;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
@@ -79,6 +81,68 @@ use std::str::FromStr;
 use std::time::Duration;
 use url::Url;
 use uuid::{uuid, Uuid};
+
+impl WorkerId {
+    const WORKER_ID_MAX_LENGTH: usize = 512;
+
+    pub fn from_agent_id(
+        component_id: ComponentId,
+        agent_id: &AgentId,
+    ) -> Result<WorkerId, String> {
+        let agent_id = agent_id.to_string();
+        if agent_id.len() > Self::WORKER_ID_MAX_LENGTH {
+            return Err(format!(
+                "Agent id is too long: {}, max length: {}, agent id: {}",
+                agent_id.len(),
+                Self::WORKER_ID_MAX_LENGTH,
+                agent_id,
+            ));
+        }
+        Ok(Self {
+            component_id,
+            worker_name: agent_id,
+        })
+    }
+
+    pub fn from_agent_id_literal<S: AsRef<str>>(
+        component_id: ComponentId,
+        agent_id: S,
+        resolver: impl AgentTypeResolver,
+    ) -> Result<WorkerId, String> {
+        Self::from_agent_id(component_id, &AgentId::parse(agent_id, resolver)?)
+    }
+
+    pub fn from_component_metadata_and_worker_id<S: AsRef<str>>(
+        component_id: ComponentId,
+        component_metadata: &component_metadata::ComponentMetadata,
+        id: S,
+    ) -> Result<WorkerId, String> {
+        if component_metadata.is_agent() {
+            Self::from_agent_id_literal(component_id, id, component_metadata)
+        } else {
+            let id = id.as_ref();
+            if id.len() > Self::WORKER_ID_MAX_LENGTH {
+                return Err(format!(
+                    "Legacy worker id is too long: {}, max length: {}, worker id: {}",
+                    id.len(),
+                    Self::WORKER_ID_MAX_LENGTH,
+                    id,
+                ));
+            }
+            if id.contains('/') {
+                return Err(format!(
+                    "Legacy worker id cannot contain '/', worker id: {}",
+                    id,
+                ));
+            }
+
+            Ok(WorkerId {
+                component_id,
+                worker_name: id.to_string(),
+            })
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
 pub struct Page<
@@ -1658,12 +1722,6 @@ impl Display for WorkerEvent {
         }
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, BinaryCodec)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[derive(Default)]
-pub struct Empty {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UntypedJsonBody(pub serde_json::Value);

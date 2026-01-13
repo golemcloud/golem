@@ -23,7 +23,6 @@ use crate::model::plugin_registration::PluginRegistrationId;
 use crate::model::{diff, validate_lower_kebab_case_identifier};
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
-    newtype_uuid,
 };
 use derive_more::Display;
 use desert_rust::BinaryCodec;

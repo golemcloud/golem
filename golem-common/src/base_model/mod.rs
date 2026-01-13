@@ -15,25 +15,29 @@
 pub mod agent;
 pub mod component;
 
-use crate::model::component::ComponentId;
 use golem_wasm_derive::{FromValue, IntoValue};
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
+use crate::base_model::component::ComponentId;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct Empty {}
 
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
+    Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -95,8 +99,6 @@ impl golem_wasm::IntoValue for ShardId {
     }
 }
 
-static WORKER_ID_MAX_LENGTH: usize = 512;
-
 #[derive(
     Clone,
     Debug,
@@ -107,9 +109,11 @@ static WORKER_ID_MAX_LENGTH: usize = 512;
     Hash,
     serde::Serialize,
     serde::Deserialize,
-    IntoValue,
 )]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -125,65 +129,6 @@ impl WorkerId {
 
     pub fn to_worker_urn(&self) -> String {
         format!("urn:worker:{}/{}", self.component_id, self.worker_name)
-    }
-
-    pub fn from_agent_id(
-        component_id: ComponentId,
-        agent_id: &AgentId,
-    ) -> Result<WorkerId, String> {
-        let agent_id = agent_id.to_string();
-        if agent_id.len() > WORKER_ID_MAX_LENGTH {
-            return Err(format!(
-                "Agent id is too long: {}, max length: {}, agent id: {}",
-                agent_id.len(),
-                WORKER_ID_MAX_LENGTH,
-                agent_id,
-            ));
-        }
-        Ok(Self {
-            component_id,
-            worker_name: agent_id,
-        })
-    }
-
-    pub fn from_agent_id_literal<S: AsRef<str>>(
-        component_id: ComponentId,
-        agent_id: S,
-        resolver: impl AgentTypeResolver,
-    ) -> Result<WorkerId, String> {
-        Self::from_agent_id(component_id, &AgentId::parse(agent_id, resolver)?)
-    }
-
-    #[cfg(feature = "full")]
-    pub fn from_component_metadata_and_worker_id<S: AsRef<str>>(
-        component_id: ComponentId,
-        component_metadata: &crate::model::component_metadata::ComponentMetadata,
-        id: S,
-    ) -> Result<WorkerId, String> {
-        if component_metadata.is_agent() {
-            Self::from_agent_id_literal(component_id, id, component_metadata)
-        } else {
-            let id = id.as_ref();
-            if id.len() > WORKER_ID_MAX_LENGTH {
-                return Err(format!(
-                    "Legacy worker id is too long: {}, max length: {}, worker id: {}",
-                    id.len(),
-                    WORKER_ID_MAX_LENGTH,
-                    id,
-                ));
-            }
-            if id.contains('/') {
-                return Err(format!(
-                    "Legacy worker id cannot contain '/', worker id: {}",
-                    id,
-                ));
-            }
-
-            Ok(WorkerId {
-                component_id,
-                worker_name: id.to_string(),
-            })
-        }
     }
 }
 
@@ -221,18 +166,11 @@ impl AsRef<WorkerId> for &WorkerId {
     }
 }
 
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    IntoValue,
-    FromValue,
+#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue,)
 )]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -268,7 +206,10 @@ impl Display for PromiseId {
     golem_wasm_derive::IntoValue,
     golem_wasm_derive::FromValue,
 )]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+)]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct OplogIndex(pub(crate) u64);
 
@@ -342,7 +283,10 @@ impl From<OplogIndex> for u64 {
     IntoValue,
     FromValue,
 )]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+)]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct TransactionId(pub(crate) String);
 

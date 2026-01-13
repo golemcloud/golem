@@ -14,7 +14,6 @@
 
 use crate::model::Empty;
 use async_trait::async_trait;
-use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::ValueAndType;
 use golem_wasm_derive::{FromValue, IntoValue};
@@ -22,310 +21,171 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Enum,
-)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
 pub enum AgentMode {
     Durable = 0,
     Ephemeral = 1,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryType {
     pub mime_type: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentModelElementSchema {
     pub element_type: AnalysedType,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct TextDescriptor {
     pub restrictions: Option<Vec<TextType>>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct TextType {
     pub language_code: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct Url {
     pub value: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct TextSource {
     pub data: String,
     pub text_type: Option<TextType>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[desert(evolution())]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum TextReference {
     Url(Url),
     Inline(TextSource),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryDescriptor {
     pub restrictions: Option<Vec<BinaryType>>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct BinarySource {
     pub data: Vec<u8>,
     pub binary_type: BinaryType,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[desert(evolution())]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum BinaryReference {
     Url(Url),
     Inline(BinarySource),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
 )]
-#[oai(discriminator_name = "type", one_of = true)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[desert(evolution())]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum ElementSchema {
     ComponentModel(ComponentModelElementSchema),
     UnstructuredText(TextDescriptor),
     UnstructuredBinary(BinaryDescriptor),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementSchema {
     pub name: String,
     pub schema: ElementSchema,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementSchemas {
     pub elements: Vec<NamedElementSchema>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
 )]
-#[oai(discriminator_name = "type", one_of = true)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[desert(evolution())]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum DataSchema {
     Tuple(NamedElementSchemas),
     Multimodal(NamedElementSchemas),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConstructor {
     pub name: Option<String>,
@@ -334,20 +194,13 @@ pub struct AgentConstructor {
     pub input_schema: DataSchema,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethod {
     pub name: String,
@@ -358,20 +211,13 @@ pub struct AgentMethod {
     pub http_endpoint: Vec<HttpEndpointDetails>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDependency {
     pub type_name: String,
@@ -380,20 +226,13 @@ pub struct AgentDependency {
     pub methods: Vec<AgentMethod>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[desert(evolution(FieldAdded("http_mount", None)))]
-#[oai(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(evolution(FieldAdded("http_mount", None))))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
     pub type_name: AgentTypeName,
@@ -443,21 +282,19 @@ pub enum DataValue {
     Multimodal(NamedElementValues),
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ElementValues {
     pub elements: Vec<ElementValue>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementValues {
     pub elements: Vec<NamedElementValue>,
@@ -475,41 +312,33 @@ pub struct AgentId {
     pub(crate) as_string: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementValue {
     pub name: String,
     pub value: ElementValue,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[desert(evolution())]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum ElementValue {
-    ComponentModel(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
+    ComponentModel(
+        #[cfg_attr(feature = "full", wit_field(convert = golem_wasm::WitValue))] ValueAndType,
+    ),
     UnstructuredText(TextReference),
     UnstructuredBinary(BinaryReference),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct HttpMountDetails {
     pub path_prefix: Vec<PathSegment>,
@@ -521,20 +350,10 @@ pub struct HttpMountDetails {
     pub webhook_suffix: Vec<PathSegment>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct HttpEndpointDetails {
     pub http_method: HttpMethod,
@@ -545,20 +364,10 @@ pub struct HttpEndpointDetails {
     pub cors_options: CorsOptions,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[desert(evolution())]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum HttpMethod {
     #[unit_case]
@@ -572,139 +381,67 @@ pub enum HttpMethod {
     Custom(CustomHttpMethod),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct CustomHttpMethod {
     pub value: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct CorsOptions {
     pub allowed_patterns: Vec<String>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PathSegment {
     pub concat: Vec<PathSegmentNode>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[desert(evolution())]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum PathSegmentNode {
     Literal(LiteralSegment),
     SystemVariable(SystemVariableSegment),
     PathVariable(PathVariable),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct LiteralSegment {
     pub value: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct SystemVariableSegment {
     pub value: SystemVariable,
 }
 
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Enum,
-)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 pub enum SystemVariable {
     AgentType,
     AgentVersion,
@@ -720,98 +457,48 @@ impl Display for SystemVariable {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PathVariable {
     pub variable_name: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct HeaderVariable {
     pub header_name: String,
     pub variable_name: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct QueryVariable {
     pub query_param_name: String,
     pub variable_name: String,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentHttpAuthDetails {
     pub required: bool,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 // Meaning of the various claims: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
 pub struct AgentHttpAuthContext {
