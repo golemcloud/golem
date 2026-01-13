@@ -1268,6 +1268,15 @@ impl<'a> Component<'a> {
         )
     }
 
+    /// File for caching agent types
+    pub fn extracted_agent_types_cache(&self) -> PathBuf {
+        self.temp_dir.join("extracted-agent-types").join(format!(
+            "{}-{}.json",
+            self.component_name.as_str(),
+            blake3::hash(self.final_linked_wasm().display().to_string().as_bytes()).to_hex()
+        ))
+    }
+
     pub fn env(&self) -> &BTreeMap<String, String> {
         &self.properties().env
     }

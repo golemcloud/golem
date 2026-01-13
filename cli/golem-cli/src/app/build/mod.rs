@@ -35,6 +35,7 @@ pub mod add_metadata;
 pub mod clean;
 pub mod command;
 pub mod componentize;
+pub mod extract_agent_type;
 pub mod gen_bridge;
 pub mod gen_rpc;
 pub mod link;
@@ -243,11 +244,11 @@ where
         }
     }
 
-    pub fn run_or_skip<Run: FnOnce() -> anyhow::Result<()>, Skip: FnOnce()>(
-        self,
-        run: Run,
-        skip: Skip,
-    ) -> anyhow::Result<()> {
+    pub fn run_or_skip<Run, Skip>(self, run: Run, skip: Skip) -> anyhow::Result<()>
+    where
+        Run: FnOnce() -> anyhow::Result<()>,
+        Skip: FnOnce(),
+    {
         if is_up_to_date(self.skip_check, self.sources, self.targets) {
             skip();
             Ok(())
@@ -259,11 +260,11 @@ where
         }
     }
 
-    pub async fn run_async_or_skip<Run: AsyncFnOnce() -> anyhow::Result<()>, Skip: FnOnce()>(
-        self,
-        run: Run,
-        skip: Skip,
-    ) -> anyhow::Result<()> {
+    pub async fn run_async_or_skip<Run, Skip>(self, run: Run, skip: Skip) -> anyhow::Result<()>
+    where
+        Run: AsyncFnOnce() -> anyhow::Result<()>,
+        Skip: FnOnce(),
+    {
         if is_up_to_date(self.skip_check, self.sources, self.targets) {
             skip();
             Ok(())
@@ -271,6 +272,26 @@ where
             match self.task_result_marker {
                 Some(marker) => marker.result(run().await),
                 None => run().await,
+            }
+        }
+    }
+
+    pub async fn run_async_or_skip_returning<Run, Skip, Result>(
+        self,
+        run: Run,
+        skip: Skip,
+    ) -> anyhow::Result<Option<Result>>
+    where
+        Run: AsyncFnOnce() -> anyhow::Result<Result>,
+        Skip: FnOnce(),
+    {
+        if is_up_to_date(self.skip_check, self.sources, self.targets) {
+            skip();
+            Ok(None)
+        } else {
+            match self.task_result_marker {
+                Some(marker) => Ok(Some(marker.result(run().await)?)),
+                None => Ok(Some(run().await?)),
             }
         }
     }

@@ -1,3 +1,4 @@
+use crate::app::build::extract_agent_type::extract_and_cache_agent_types;
 use crate::app::build::new_task_up_to_date_check;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::context::ApplicationContext;
@@ -30,17 +31,14 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                 }
 
                 let component = ctx.application.component(component_name);
-                let final_linked_wasm = component.final_linked_wasm();
                 let target_language = custom_target
                     .target_language
                     .or_else(|| component.guess_language())
                     .unwrap_or(GuestLanguage::TypeScript);
 
                 let agent_types = {
-                    let mut agent_types = ctx
-                        .wit
-                        .get_extracted_agent_types(component_name, &final_linked_wasm)
-                        .await?;
+                    let mut agent_types =
+                        extract_and_cache_agent_types(ctx, component_name).await?;
 
                     if should_filter_by_agent_type_name {
                         agent_types.retain(|agent_type| {
@@ -111,13 +109,9 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                     }
 
                     let is_matching_component = matchers.remove(component_name.as_str());
-                    let component = ctx.application.component(component_name);
-                    let final_linked_wasm = component.final_linked_wasm();
 
-                    let mut agent_types = ctx
-                        .wit
-                        .get_extracted_agent_types(component_name, &final_linked_wasm)
-                        .await?;
+                    let mut agent_types =
+                        extract_and_cache_agent_types(ctx, component_name).await?;
 
                     if !is_matching_all && !is_matching_component {
                         agent_types

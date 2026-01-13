@@ -48,7 +48,7 @@ pub trait TaskResultMarkerHashSource {
     /// Specifying the id is optional, as some tasks are their own identity, like external commands.
     /// In those cases we can skip calculating values and hashes twice.
     ///
-    /// The main difference between id and hash is that it should not include
+    /// The main difference between id and source is that it should not include
     /// generic "task properties", only ids for the task. E.g.: the hash_input for rpc linking
     /// should contain all the main and dependency component names and types, while the id should
     /// only contain the main component name which the dependencies are linked into.
@@ -366,6 +366,24 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
             "{}-{}-{}",
             self.component_name, self.agent_type_name, self.language
         )))
+    }
+}
+
+pub struct ExtractAgentTypeMarkerHash<'a> {
+    pub component_name: &'a ComponentName,
+}
+
+impl TaskResultMarkerHashSource for ExtractAgentTypeMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "ExtractAgentTypeMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(self.component_name.to_string()))
     }
 }
 

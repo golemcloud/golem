@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::extract_agent_type::extract_and_cache_agent_types;
 use crate::app::build::task_result_marker::{
     AgentWrapperCommandMarkerHash, ComposeAgentWrapperCommandMarkerHash,
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
@@ -104,10 +105,7 @@ async fn execute_agent_wrapper(
                 );
                 let _indent = LogIndent::new();
 
-                let agent_types = ctx
-                    .wit
-                    .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
-                    .await?;
+                let agent_types = extract_and_cache_agent_types(ctx, component_name).await?;
 
                 log_action(
                     "Generating",
