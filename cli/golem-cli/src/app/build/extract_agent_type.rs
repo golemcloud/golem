@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::new_task_up_to_date_check;
+use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::build::task_result_marker::ExtractAgentTypeMarkerHash;
 use crate::app::context::ApplicationContext;
 use crate::fs;

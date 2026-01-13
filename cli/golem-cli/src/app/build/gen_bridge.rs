@@ -1,5 +1,5 @@
 use crate::app::build::extract_agent_type::extract_and_cache_agent_types;
-use crate::app::build::new_task_up_to_date_check;
+use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::context::ApplicationContext;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;

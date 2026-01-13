@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::{ComponentGeneratorMarkerHash, TaskResultMarker};
-use crate::app::build::{delete_path_logged, env_var_flag, is_up_to_date};
+use crate::app::build::{delete_path_logged, env_var_flag};
 use crate::app::context::ApplicationContext;
 use crate::fs;
 use crate::fs::PathExtra;
@@ -30,6 +30,7 @@ use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use crate::app::build::up_to_date_check::is_up_to_date;
 
 // TODO: this step is not selected_component_names aware yet, for that we have to build / filter
 //         - based on wit deps and / or
