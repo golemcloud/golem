@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "$id": "https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json",
+  "$id": "https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json",
   "title": "Golem Application Manifest",
   "description": "Golem Application Manifest.",
   "type": "object",
@@ -207,6 +207,20 @@
               }
             }
           }
+        }
+      }
+    },
+    "bridge": {
+      "description": "Bridge SDK generator configuration",
+      "type": "object",
+      "properties": {
+        "ts": {
+          "description": "TypeScript SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
+        "rust": {
+          "description": "Rust SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
         }
       }
     }
@@ -803,6 +817,33 @@
         "upsert",
         "replace",
         "remove"
+      ]
+    },
+    "bridgeSdkLanguageTargets": {
+      "description": "Bridge SDK language targets",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "description": "List of agent type names, component names or \"*\" for including all agents",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "outputDir": {
+          "description": "Custom output directory for the generated SDK",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agents"
       ]
     }
   }
