@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
@@ -669,11 +670,11 @@ impl ThroughputBenchmark {
 
         let http_api_deployment_creation = HttpApiDeploymentCreation {
             domain: domain.clone(),
-            api_definitions: vec![HttpApiDefinitionName("test-api".to_string())],
+            agent_types: [AgentTypeName("benchmark-agent".to_string())].into(),
         };
 
         client
-            .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
+            .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
             .await
             .expect("Failed to create http api deployment");
 

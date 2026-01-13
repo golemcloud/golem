@@ -136,7 +136,7 @@ impl HttpApiDeploymentService {
 
         let id = HttpApiDeploymentId::new();
         let record =
-            HttpApiDeploymentRevisionRecord::creation(id, data.api_definitions, auth.account_id());
+            HttpApiDeploymentRevisionRecord::creation(id, data.agent_types, auth.account_id());
 
         let stored_http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
@@ -200,8 +200,8 @@ impl HttpApiDeploymentService {
         };
 
         http_api_deployment.revision = http_api_deployment.revision.next()?;
-        if let Some(api_definitions) = update.api_definitions {
-            http_api_deployment.api_definitions = api_definitions;
+        if let Some(api_definitions) = update.agent_types {
+            http_api_deployment.agent_types = api_definitions;
         };
 
         let record = HttpApiDeploymentRevisionRecord::from_model(

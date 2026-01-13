@@ -18,6 +18,7 @@ use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
 use golem_client::api::RegistryServiceClient;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
@@ -156,11 +157,11 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        api_definitions: vec![HttpApiDefinitionName("test-api".to_string())],
+        agent_types: [AgentTypeName("placeholder-agent".to_string())].into(),
     };
 
     client
-        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     user.deploy_environment(&env.id).await?;
