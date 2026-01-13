@@ -13,18 +13,19 @@
 // limitations under the License.
 
 use super::{
-    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    AgentHttpAuthDetails, AgentPrincipal, CorsOptions, CustomHttpMethod, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
     PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
 };
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
-    AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
+    AgentConstructor, AgentDependency, AgentError, AgentIdWithComponent, AgentMethod, AgentMode,
+    AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
     ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
-    UntypedElementValue, UntypedJsonDataValue, UntypedJsonElementValue, Url,
+    GolemUserPrincipal, NamedElementSchema, NamedElementSchemas, NamedElementValue,
+    NamedElementValues, OidcPrincipal, Principal, RegisteredAgentType, TextDescriptor,
+    TextReference, TextSource, TextType, UntypedDataValue, UntypedElementValue,
+    UntypedJsonDataValue, UntypedJsonElementValue, Url,
 };
 use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
@@ -705,6 +706,24 @@ impl From<RegisteredAgentType> for host::RegisteredAgentType {
     }
 }
 
+impl From<AgentIdWithComponent> for super::bindings::golem::rpc::types::AgentId {
+    fn from(value: AgentIdWithComponent) -> Self {
+        Self {
+            component_id: value.component_id.into(),
+            agent_id: value.agent_id,
+        }
+    }
+}
+
+impl From<super::bindings::golem::rpc::types::AgentId> for AgentIdWithComponent {
+    fn from(value: super::bindings::golem::rpc::types::AgentId) -> Self {
+        Self {
+            component_id: value.component_id.into(),
+            agent_id: value.agent_id,
+        }
+    }
+}
+
 impl From<HttpMountDetails> for super::bindings::golem::agent::common::HttpMountDetails {
     fn from(value: HttpMountDetails) -> Self {
         Self {
@@ -933,11 +952,35 @@ impl From<super::bindings::golem::agent::common::AuthDetails> for AgentHttpAuthD
     }
 }
 
-impl From<AgentHttpAuthContext> for super::bindings::golem::agent::common::AuthContext {
-    fn from(value: AgentHttpAuthContext) -> Self {
+impl From<Principal> for super::bindings::golem::agent::common::Principal {
+    fn from(value: Principal) -> Self {
+        match value {
+            Principal::Oidc(inner) => Self::Oidc(inner.into()),
+            Principal::Agent(inner) => Self::Agent(inner.into()),
+            Principal::GolemUser(inner) => Self::GolemUser(inner.into()),
+            Principal::Anonymous(_) => Self::Anonymous,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::Principal> for Principal {
+    fn from(value: super::bindings::golem::agent::common::Principal) -> Self {
+        use super::bindings::golem::agent::common::Principal as Value;
+
+        match value {
+            Value::Oidc(inner) => Self::Oidc(inner.into()),
+            Value::Agent(inner) => Self::Agent(inner.into()),
+            Value::GolemUser(inner) => Self::GolemUser(inner.into()),
+            Value::Anonymous => Self::Anonymous(Empty {}),
+        }
+    }
+}
+
+impl From<OidcPrincipal> for super::bindings::golem::agent::common::OidcPrincipal {
+    fn from(value: OidcPrincipal) -> Self {
         Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
@@ -950,11 +993,11 @@ impl From<AgentHttpAuthContext> for super::bindings::golem::agent::common::AuthC
     }
 }
 
-impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthContext {
-    fn from(value: super::bindings::golem::agent::common::AuthContext) -> Self {
+impl From<super::bindings::golem::agent::common::OidcPrincipal> for OidcPrincipal {
+    fn from(value: super::bindings::golem::agent::common::OidcPrincipal) -> Self {
         Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
@@ -963,6 +1006,38 @@ impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthC
             picture: value.picture,
             preferred_username: value.preferred_username,
             claims: value.claims,
+        }
+    }
+}
+
+impl From<AgentPrincipal> for super::bindings::golem::agent::common::AgentPrincipal {
+    fn from(value: AgentPrincipal) -> Self {
+        Self {
+            agent_id: value.agent_id.into(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::AgentPrincipal> for AgentPrincipal {
+    fn from(value: super::bindings::golem::agent::common::AgentPrincipal) -> Self {
+        Self {
+            agent_id: value.agent_id.into(),
+        }
+    }
+}
+
+impl From<GolemUserPrincipal> for super::bindings::golem::agent::common::GolemUserPrincipal {
+    fn from(value: GolemUserPrincipal) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::GolemUserPrincipal> for GolemUserPrincipal {
+    fn from(value: super::bindings::golem::agent::common::GolemUserPrincipal) -> Self {
+        Self {
+            account_id: value.account_id.into(),
         }
     }
 }

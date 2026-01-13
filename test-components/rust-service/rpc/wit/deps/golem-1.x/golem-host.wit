@@ -20,11 +20,6 @@ interface host {
     /// Represents a Golem component's version
     type component-revision = u64;
 
-    /// Represents a Golem Cloud account
-    record account-id {
-        uuid: uuid
-    }
-
     /// Represents a Golem environment
     record environment-id {
       uuid: uuid,
