@@ -12,15 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account;
 pub mod agent;
+pub mod application;
+pub mod auth;
+pub mod base64;
 pub mod component;
+pub mod component_metadata;
+pub mod diff;
+pub mod environment;
+pub mod environment_plugin_grant;
+pub mod login;
+pub mod plan;
+pub mod plugin_registration;
 
+use crate::base_model::component::ComponentId;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
-use crate::base_model::component::ComponentId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(
@@ -100,15 +111,7 @@ impl golem_wasm::IntoValue for ShardId {
 }
 
 #[derive(
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, serde::Serialize, serde::Deserialize,
 )]
 #[cfg_attr(
     feature = "full",
@@ -316,6 +319,49 @@ impl From<String> for TransactionId {
     fn from(value: String) -> Self {
         TransactionId(value)
     }
+}
+
+pub fn validate_lower_kebab_case_identifier(
+    field_name: &str,
+    identifier: &str,
+) -> Result<(), String> {
+    if identifier.is_empty() {
+        return Err(format!("{} cannot be empty", field_name));
+    }
+
+    let first = identifier.chars().next().unwrap();
+    if !first.is_ascii_lowercase() {
+        return Err(format!(
+            "{} must start with a lowercase ASCII letter (a-z), but got '{}'",
+            field_name, first
+        ));
+    }
+
+    if !identifier
+        .chars()
+        .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+    {
+        return Err(format!(
+            "{} may contain only lowercase ASCII letters (a-z), digits (0-9), and hyphens (-)",
+            field_name
+        ));
+    }
+
+    if identifier.starts_with('-') || identifier.ends_with('-') {
+        return Err(format!(
+            "{} must not start or end with a hyphen",
+            field_name
+        ));
+    }
+
+    if identifier.contains("--") {
+        return Err(format!(
+            "{} must not contain consecutive hyphens",
+            field_name
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "full")]

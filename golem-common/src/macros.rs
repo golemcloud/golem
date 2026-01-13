@@ -222,8 +222,8 @@ macro_rules! declare_revision {
             ::serde::Serialize,
             ::golem_wasm_derive::IntoValue,
             ::derive_more::Display,
-            poem_openapi::NewType,
         )]
+        #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
         #[repr(transparent)]
         pub struct $name(u64);
 
@@ -335,6 +335,7 @@ macro_rules! declare_revision {
             }
         }
 
+        #[cfg(feature = "full")]
         impl ::desert_rust::BinarySerializer for $name {
             fn serialize<Output: ::desert_rust::BinaryOutput>(
                 &self,
@@ -344,6 +345,7 @@ macro_rules! declare_revision {
             }
         }
 
+        #[cfg(feature = "full")]
         impl ::desert_rust::BinaryDeserializer for $name {
             fn deserialize<'a, 'b>(
                 context: &'a mut ::desert_rust::DeserializationContext<'b>,
@@ -359,8 +361,8 @@ macro_rules! declare_revision {
 macro_rules! declare_structs {
     ($($i:item)*) => { $(
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-        #[derive(poem_openapi::Object)]
-        #[oai(rename_all = "camelCase")]
+        #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+        #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
         #[serde(rename_all = "camelCase")]
         $i
     )* }
@@ -370,8 +372,8 @@ macro_rules! declare_structs {
 macro_rules! declare_unions {
     ($($i:item)*) => { $(
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-        #[derive(poem_openapi::Union)]
-        #[oai(discriminator_name = "type", one_of = true)]
+        #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+        #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
         #[serde(tag = "type")]
         $i
     )* }
@@ -381,8 +383,8 @@ macro_rules! declare_unions {
 macro_rules! declare_enums {
     ($($i:item)*) => { $(
         #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-        #[derive(poem_openapi::Enum)]
-        #[oai(rename_all = "kebab-case")]
+        #[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+        #[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
         #[serde(rename_all = "kebab-case")]
         $i
     )* }
@@ -392,7 +394,7 @@ macro_rules! declare_enums {
 macro_rules! declare_transparent_newtypes {
     ($($i:item)*) => { $(
     #[derive(Debug, Clone, PartialEq, ::serde::Deserialize, ::serde::Serialize)]
-    #[derive(::poem_openapi::NewType)]
+    #[cfg_attr(feature = "full", derive(::poem_openapi::NewType))]
     #[repr(transparent)]
         $i
     )* }

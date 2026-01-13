@@ -12,4 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use crate::base_model::login::*;
+use crate::newtype_uuid;
+
+newtype_uuid!(
+    EnvironmentId,
+    golem_api_grpc::proto::golem::common::EnvironmentId
+);
+

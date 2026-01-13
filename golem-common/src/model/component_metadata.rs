@@ -32,6 +32,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
+pub use crate::base_model::component_metadata::*;
+
 #[derive(Clone, Default, BinaryCodec)]
 #[desert(evolution())]
 pub struct ComponentMetadata {
@@ -701,44 +703,6 @@ pub struct InvokableFunction {
     pub name: ParsedFunctionName,
     pub analysed_export: AnalysedFunction,
     pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum DynamicLinkedInstance {
-    WasmRpc(DynamicLinkedWasmRpc),
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct DynamicLinkedWasmRpc {
-    /// Maps resource names within the dynamic linked interface to target information
-    pub targets: HashMap<String, WasmRpcTarget>,
-}
-
-impl DynamicLinkedWasmRpc {
-    pub fn target(&self, stub_resource: &str) -> Result<WasmRpcTarget, String> {
-        self.targets.get(stub_resource).cloned().ok_or_else(|| {
-            format!("Resource '{stub_resource}' not found in dynamic linked interface")
-        })
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WasmRpcTarget {
-    pub interface_name: String,
-    pub component_name: String,
 }
 
 impl WasmRpcTarget {

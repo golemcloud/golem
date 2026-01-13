@@ -13,137 +13,26 @@
 // limitations under the License.
 
 use crate::model::account::AccountId;
-use crate::model::agent::AgentType;
 use crate::model::application::ApplicationId;
 use crate::model::component_metadata::ComponentMetadata;
-use crate::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
+use crate::model::component_metadata::dynamic_linking_to_diffable;
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::plugin_registration::PluginRegistrationId;
-use crate::model::{diff, validate_lower_kebab_case_identifier};
+use crate::model::diff;
 use crate::{
-    declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
+    declare_enums, declare_structs, declare_unions,
 };
-use derive_more::Display;
 use desert_rust::BinaryCodec;
-use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
-use typed_path::Utf8UnixPathBuf;
 use uuid::Uuid;
 
-pub use crate::base_model::component::ComponentId;
-
-declare_revision!(ComponentRevision);
-
-declare_transparent_newtypes! {
-    #[derive(Display, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
-    #[desert(transparent)]
-    pub struct ComponentName(pub String);
-
-    /// Key that can be used to identify a component file.
-    /// All files with the same content will have the same key.
-    #[derive(Copy, Display, Eq, Hash)]
-    pub struct ComponentFileContentHash(pub diff::Hash);
-
-    /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-    /// There can only be a single plugin with a given priority installed to a component.
-    #[derive(Copy, PartialOrd, Eq, Hash, Ord, derive_more::Display, BinaryCodec, IntoValue, FromValue)]
-    #[desert(transparent)]
-    pub struct PluginPriority(pub i32);
-}
-
-impl TryFrom<&str> for ComponentName {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        value.to_string().try_into()
-    }
-}
-
-impl TryFrom<String> for ComponentName {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.is_empty() {
-            return Err("Component name cannot be empty".to_string());
-        }
-
-        if value.contains('@') {
-            return Err("Component name cannot contain version suffix (@version)".to_string());
-        }
-
-        let parts: Vec<&str> = value.split(':').collect();
-        if parts.len() != 2 {
-            return Err("Component name must follow the format 'namespace:name'".to_string());
-        }
-
-        validate_lower_kebab_case_identifier("Namespace", parts[0])?;
-        validate_lower_kebab_case_identifier("Name", parts[1])?;
-
-        Ok(ComponentName(value))
-    }
-}
-
-impl FromStr for ComponentName {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s)
-    }
-}
-
-impl ComponentName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<str> for ComponentName {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
+pub use crate::base_model::component::*;
 
 declare_structs! {
-    pub struct ComponentCreation {
-        pub component_name: ComponentName,
-        #[serde(default)]
-        #[oai(default)]
-        pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
-        #[serde(default)]
-        #[oai(default)]
-        pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        #[serde(default)]
-        #[oai(default)]
-        pub env: BTreeMap<String, String>,
-        #[serde(default)]
-        #[oai(default)]
-        pub agent_types: Vec<AgentType>,
-        #[serde(default)]
-        #[oai(default)]
-        pub plugins: Vec<PluginInstallation>,
-    }
-
-    pub struct ComponentUpdate {
-        pub current_revision: ComponentRevision,
-        #[serde(default)]
-        #[oai(default)]
-        pub removed_files: Vec<ComponentFilePath>,
-        #[serde(default)]
-        #[oai(default)]
-        pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
-        pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-        pub env: Option<BTreeMap<String, String>>,
-        pub agent_types: Option<Vec<AgentType>>,
-        #[serde(default)]
-        #[oai(default)]
-        pub plugin_updates: Vec<PluginInstallationAction>,
-    }
-
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
@@ -163,12 +52,6 @@ declare_structs! {
         pub wasm_hash: crate::model::diff::Hash,
     }
 
-    #[derive(Default)]
-    pub struct ComponentFileOptions {
-        /// Path of the file in the uploaded archive
-        pub permissions: ComponentFilePermissions,
-    }
-
     pub struct InstalledPlugin {
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         pub priority: PluginPriority,
@@ -181,25 +64,6 @@ declare_structs! {
         // oplog processor only
         pub oplog_processor_component_id: Option<ComponentId>,
         pub oplog_processor_component_revision: Option<ComponentRevision>,
-    }
-
-    pub struct PluginInstallation {
-        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
-        /// Plugins will be applied in order of increasing priority
-        pub priority: PluginPriority,
-        pub parameters: BTreeMap<String, String>,
-    }
-
-    pub struct PluginInstallationUpdate {
-        /// EnvironmentPluginGrantId to identify the plugin to update
-        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
-        pub new_priority: Option<PluginPriority>,
-        pub new_parameters: Option<BTreeMap<String, String>>,
-    }
-
-    pub struct PluginUninstallation {
-        /// EnvironmentPluginGrantId to identify the plugin to update
-        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
     }
 
     pub struct InitialComponentFile {
@@ -262,117 +126,6 @@ impl ComponentDto {
 impl InitialComponentFile {
     pub fn is_read_only(&self) -> bool {
         self.permissions == ComponentFilePermissions::ReadOnly
-    }
-}
-
-declare_enums! {
-    #[derive(Default)]
-    pub enum ComponentFilePermissions {
-        #[default]
-        ReadOnly,
-        ReadWrite,
-    }
-}
-
-impl ComponentFilePermissions {
-    pub fn as_compact_str(&self) -> &'static str {
-        match self {
-            ComponentFilePermissions::ReadOnly => "ro",
-            ComponentFilePermissions::ReadWrite => "rw",
-        }
-    }
-    pub fn from_compact_str(s: &str) -> Result<Self, String> {
-        match s {
-            "ro" => Ok(ComponentFilePermissions::ReadOnly),
-            "rw" => Ok(ComponentFilePermissions::ReadWrite),
-            _ => Err(format!("Unknown permissions: {s}")),
-        }
-    }
-}
-
-declare_unions! {
-    pub enum PluginInstallationAction {
-        Install(PluginInstallation),
-        Uninstall(PluginUninstallation),
-        Update(PluginInstallationUpdate),
-    }
-
-}
-
-/// Path inside a component filesystem. Must be
-/// - absolute (start with '/')
-/// - not contain ".." components
-/// - not contain "." components
-/// - use '/' as a separator
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, derive_more::Display)]
-pub struct ComponentFilePath(Utf8UnixPathBuf);
-
-impl ComponentFilePath {
-    pub fn from_abs_str(s: &str) -> Result<Self, String> {
-        let buf: Utf8UnixPathBuf = s.into();
-        if !buf.is_absolute() {
-            return Err("Path must be absolute".to_string());
-        }
-
-        Ok(ComponentFilePath(buf.normalize()))
-    }
-
-    pub fn from_rel_str(s: &str) -> Result<Self, String> {
-        Self::from_abs_str(&format!("/{s}"))
-    }
-
-    pub fn from_either_str(s: &str) -> Result<Self, String> {
-        if s.starts_with('/') {
-            Self::from_abs_str(s)
-        } else {
-            Self::from_rel_str(s)
-        }
-    }
-
-    pub fn as_path(&self) -> &Utf8UnixPathBuf {
-        &self.0
-    }
-
-    pub fn as_abs_str(&self) -> &str {
-        self.0.as_str()
-    }
-
-    pub fn to_abs_string(&self) -> String {
-        self.0.to_string()
-    }
-
-    pub fn to_rel_string(&self) -> String {
-        self.0.strip_prefix("/").unwrap().to_string()
-    }
-
-    pub fn extend(&mut self, path: &str) -> Result<(), String> {
-        self.0.push_checked(path).map_err(|e| e.to_string())
-    }
-}
-
-impl Serialize for ComponentFilePath {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        String::serialize(&self.to_string(), serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ComponentFilePath {
-    fn deserialize<D>(deserializer: D) -> Result<ComponentFilePath, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let str = String::deserialize(deserializer)?;
-        Self::from_abs_str(&str).map_err(serde::de::Error::custom)
-    }
-}
-
-impl FromStr for ComponentFilePath {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_either_str(s)
     }
 }
 

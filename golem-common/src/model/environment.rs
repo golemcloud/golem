@@ -24,10 +24,7 @@ use derive_more::Display;
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
-newtype_uuid!(
-    EnvironmentId,
-    golem_api_grpc::proto::golem::common::EnvironmentId
-);
+pub use crate::base_model::environment::*;
 
 declare_revision!(EnvironmentRevision);
 

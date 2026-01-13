@@ -24,8 +24,6 @@ full = [
     "dep:golem-api-grpc",
     "dep:golem-rib",
     "dep:applying",
-    "dep:base64",
-    "dep:blake3",
     "dep:combine",
     "dep:console-subscriber",
     "dep:desert_rust",
@@ -60,7 +58,6 @@ full = [
     "dep:tracing-opentelemetry",
     "dep:tracing-subscriber",
     "dep:tracing-serde",
-    "dep:typed-path",
     "dep:wasmtime",
     "dep:wasmtime-wasi",
     "dep:wasmtime-wasi-http",
@@ -78,10 +75,10 @@ golem-wasm-derive = { workspace = true }
 anyhow = { workspace = true }
 applying = { workspace = true, optional = true }
 async-trait = { workspace = true }
-base64 = { workspace = true, optional = true }
+base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
-blake3 = { workspace = true, optional = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 combine = { workspace = true, optional = true }
@@ -128,7 +125,7 @@ tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-serde = { workspace = true, optional = true }
-typed-path = { workspace = true, optional = true }
+typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
