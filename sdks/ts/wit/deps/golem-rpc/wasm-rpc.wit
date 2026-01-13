@@ -17,6 +17,11 @@ interface types {
     uuid: uuid,
   }
 
+  /// Represents a Golem account
+  record account-id {
+      uuid: uuid
+  }
+
   /// UUID
   record uuid {
     high-bits: u64,

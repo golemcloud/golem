@@ -50,9 +50,6 @@ wasmtime::component::bindgen!({
     },
 });
 
-use golem_common::model::account::AccountId;
-use uuid::Uuid;
-
 pub type InputStream = wasmtime_wasi::DynInputStream;
 pub type OutputStream = wasmtime_wasi::DynOutputStream;
 
@@ -62,25 +59,3 @@ pub type Pollable = golem_wasm::wasi::io::poll::Pollable;
 pub use self::golem::api1_3_0 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;
-
-impl From<AccountId> for golem_api_1_x::host::AccountId {
-    fn from(value: AccountId) -> Self {
-        let (high_bits, low_bits) = value.0.as_u64_pair();
-
-        Self {
-            uuid: golem_wasm::Uuid {
-                high_bits,
-                low_bits,
-            },
-        }
-    }
-}
-
-impl From<golem_api_1_x::host::AccountId> for AccountId {
-    fn from(value: golem_api_1_x::host::AccountId) -> Self {
-        let high_bits = value.uuid.high_bits;
-        let low_bits = value.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
-    }
-}

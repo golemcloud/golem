@@ -41,6 +41,7 @@ use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::component_metadata::ComponentMetadata;
+use crate::model::AccountId;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
@@ -1324,6 +1325,26 @@ impl AgentTypeResolver for &ComponentMetadata {
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+pub struct AgentIdWithComponent {
+    pub component_id: ComponentId,
+    pub agent_id: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct HttpMountDetails {
     pub path_prefix: Vec<PathSegment>,
     pub header_vars: Vec<HeaderVariable>,
@@ -1621,22 +1642,88 @@ pub struct AgentHttpAuthDetails {
     BinaryCodec,
     IntoValue,
     FromValue,
+    poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+#[desert(evolution())]
+pub enum Principal {
+    Oidc(OidcPrincipal),
+    Agent(AgentPrincipal),
+    GolemUser(GolemUserPrincipal),
+    #[unit_case]
+    Anonymous(Empty),
+}
+
+impl Principal {
+    pub fn anonymous() -> Self {
+        Self::Anonymous(Empty {})
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 // Meaning of the various claims: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
-pub struct AgentHttpAuthContext {
+pub struct OidcPrincipal {
     pub sub: String,
-    pub provider: String,
-    pub email: String,
-    pub name: String,
+    pub issuer: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
     pub email_verified: Option<bool>,
     pub given_name: Option<String>,
     pub family_name: Option<String>,
-    // Url of the user's picture or avatar
     pub picture: Option<String>,
     pub preferred_username: Option<String>,
     pub claims: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPrincipal {
+    pub agent_id: AgentIdWithComponent,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct GolemUserPrincipal {
+    pub account_id: AccountId,
 }
