@@ -885,7 +885,7 @@ impl ComponentCommandHandler {
         let linked_wasm_path = component.final_linked_wasm();
         let agent_types = {
             if app_ctx.wit.is_agent(component_name) {
-                extract_and_cache_agent_types(app_ctx, component_name).await?
+                extract_and_cache_agent_types(app_ctx, component_name, None).await?
             } else {
                 vec![]
             }

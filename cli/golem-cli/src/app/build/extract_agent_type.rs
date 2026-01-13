@@ -20,18 +20,21 @@ use crate::log::{log_action, log_skipping_up_to_date, LogColorize};
 use anyhow::Context;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
+use std::path::Path;
 
 pub async fn extract_and_cache_agent_types(
     ctx: &ApplicationContext,
     component_name: &ComponentName,
+    wasm_override: Option<&Path>,
 ) -> anyhow::Result<Vec<AgentType>> {
     let component = ctx.application.component(component_name);
-    let final_linked_wasm = component.final_linked_wasm();
+    let wasm = component.final_linked_wasm();
+    let wasm = wasm_override.unwrap_or(&wasm);
     let extracted_agent_types_cache = component.extracted_agent_types_cache();
 
     let agent_types = new_task_up_to_date_check(ctx)
         .with_task_result_marker(ExtractAgentTypeMarkerHash { component_name })?
-        .with_sources(|| vec![&final_linked_wasm])
+        .with_sources(|| vec![&wasm])
         .with_targets(|| vec![&extracted_agent_types_cache])
         .run_async_or_skip_returning(
             || async {
@@ -40,13 +43,13 @@ pub async fn extract_and_cache_agent_types(
                     format!(
                         "{} agent types from {}",
                         component_name.as_str().log_color_highlight(),
-                        final_linked_wasm.log_color_highlight()
+                        wasm.log_color_highlight()
                     ),
                 );
 
                 let agent_types = ctx
                     .wit
-                    .get_extracted_agent_types(component_name, &final_linked_wasm)
+                    .get_extracted_agent_types(component_name, &wasm)
                     .await?;
 
                 fs::write_str(
@@ -61,7 +64,7 @@ pub async fn extract_and_cache_agent_types(
                 log_skipping_up_to_date(format!(
                     "extracting {} agent types from {}, using cached result",
                     component_name.as_str().log_color_highlight(),
-                    final_linked_wasm.log_color_highlight()
+                    wasm.log_color_highlight()
                 ));
             },
         )

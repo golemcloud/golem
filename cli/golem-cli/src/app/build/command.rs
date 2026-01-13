@@ -105,7 +105,12 @@ async fn execute_agent_wrapper(
                 );
                 let _indent = LogIndent::new();
 
-                let agent_types = extract_and_cache_agent_types(ctx, component_name).await?;
+                let agent_types = extract_and_cache_agent_types(
+                    ctx,
+                    component_name,
+                    Some(compiled_wasm_path.as_std_path()),
+                )
+                .await?;
 
                 log_action(
                     "Generating",

@@ -38,7 +38,7 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
 
                 let agent_types = {
                     let mut agent_types =
-                        extract_and_cache_agent_types(ctx, component_name).await?;
+                        extract_and_cache_agent_types(ctx, component_name, None).await?;
 
                     if should_filter_by_agent_type_name {
                         agent_types.retain(|agent_type| {
@@ -111,7 +111,7 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                     let is_matching_component = matchers.remove(component_name.as_str());
 
                     let mut agent_types =
-                        extract_and_cache_agent_types(ctx, component_name).await?;
+                        extract_and_cache_agent_types(ctx, component_name, None).await?;
 
                     if !is_matching_all && !is_matching_component {
                         agent_types
