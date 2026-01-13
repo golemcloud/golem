@@ -15,7 +15,6 @@
 pub mod agent;
 pub mod component;
 
-use crate::model::agent::{AgentId, AgentTypeResolver};
 use crate::model::component::ComponentId;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
