@@ -1398,11 +1398,21 @@ pub enum HttpMethod {
     #[unit_case]
     Get(Empty),
     #[unit_case]
-    Put(Empty),
+    Head(Empty),
     #[unit_case]
     Post(Empty),
     #[unit_case]
+    Put(Empty),
+    #[unit_case]
     Delete(Empty),
+    #[unit_case]
+    Connect(Empty),
+    #[unit_case]
+    Options(Empty),
+    #[unit_case]
+    Trace(Empty),
+    #[unit_case]
+    Patch(Empty),
     Custom(CustomHttpMethod),
 }
 
@@ -1424,6 +1434,23 @@ pub enum HttpMethod {
 #[wit_transparent]
 pub struct CustomHttpMethod {
     pub value: String,
+}
+
+impl From<HttpMethod> for http::Method {
+    fn from(value: HttpMethod) -> Self {
+        match value {
+            HttpMethod::Get(_) => Self::GET,
+            HttpMethod::Head(_) => Self::HEAD,
+            HttpMethod::Post(_) => Self::POST,
+            HttpMethod::Put(_) => Self::PUT,
+            HttpMethod::Delete(_) => Self::DELETE,
+            HttpMethod::Connect(_) => Self::CONNECT,
+            HttpMethod::Options(_) => Self::OPTIONS,
+            HttpMethod::Trace(_) => Self::TRACE,
+            HttpMethod::Patch(_) => Self::PATCH,
+            HttpMethod::Custom(_) => unimplemented!()
+        }
+    }
 }
 
 #[derive(

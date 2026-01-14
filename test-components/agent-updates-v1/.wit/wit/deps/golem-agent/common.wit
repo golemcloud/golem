@@ -61,9 +61,14 @@ interface common {
 
   variant http-method {
     get,
-    put,
+    head,
     post,
+    put,
     delete,
+    connect,
+    options,
+    trace,
+    patch,
     custom(string),
   }
 

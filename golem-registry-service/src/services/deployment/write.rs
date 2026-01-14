@@ -46,17 +46,17 @@ use rib::RibCompilationError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-// macro_rules! ok_or_continue {
-//     ($expr:expr, $errors:ident) => {{
-//         match ($expr) {
-//             Ok(v) => v,
-//             Err(e) => {
-//                 $errors.push(e);
-//                 continue;
-//             }
-//         }
-//     }};
-// }
+macro_rules! ok_or_continue {
+    ($expr:expr, $errors:ident) => {{
+        match ($expr) {
+            Ok(v) => v,
+            Err(e) => {
+                $errors.push(e);
+                continue;
+            }
+        }
+    }};
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentWriteError {
@@ -546,6 +546,81 @@ impl DeploymentContext {
         };
 
         Ok(())
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn compiled_http_api_routes(
+        &self,
+        registered_agent_types: &HashMap<AgentTypeName, RegisteredAgentType>
+    ) -> Result<
+        (
+            HashSet<(Domain, HttpApiDefinitionId)>,
+            Vec<CompiledRouteWithContext>,
+        ),
+        DeploymentWriteError,
+    > {
+        let mut domain_http_api_definitions = HashSet::new();
+        let mut compiled_routes = Vec::new();
+        let mut errors = Vec::new();
+
+        for deployment in self.http_api_deployments.values() {
+            for agent_type in &deployment.agent_types {
+                let registered_agent_type = ok_or_continue!(
+                    registered_agent_types.get(agent_type).ok_or(
+                        DeployValidationError::HttpApiDeploymentMissingAgentType {
+                            http_api_deployment_domain: deployment.domain.clone(),
+                            missing_agent_type: agent_type.clone(),
+                        }
+                    ),
+                    errors
+                );
+
+                if !definition.routes.is_empty() {
+                    domain_http_api_definitions.insert((deployment.domain.clone(), definition.id));
+                };
+
+                for route in &definition.routes {
+                    let path_pattern = ok_or_continue!(
+                        AllPathPatterns::parse(&route.path).map_err(|_| {
+                            DeployValidationError::HttpApiDefinitionInvalidPathPattern(
+                                route.path.clone(),
+                            )
+                        }),
+                        errors
+                    );
+
+                    let binding = ok_or_continue!(
+                        self.compile_gateway_binding(
+                            definition.id,
+                            &definition.name,
+                            &definition.version,
+                            route.method,
+                            &route.path,
+                            &route.binding
+                        ),
+                        errors
+                    );
+
+                    let compiled_route = CompiledRouteWithContext {
+                        http_api_definition_id: definition.id,
+                        security_scheme: route.security.clone(),
+                        route: CompiledRouteWithoutSecurity {
+                            method: route.method,
+                            path: path_pattern,
+                            binding,
+                        },
+                    };
+
+                    compiled_routes.push(compiled_route);
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+        };
+
+        Ok((domain_http_api_definitions, compiled_routes))
     }
 
     // #[allow(clippy::type_complexity)]

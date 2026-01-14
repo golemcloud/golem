@@ -14,10 +14,10 @@
 
 pub mod agents;
 pub mod common;
-mod custom_http_request;
+// mod custom_http_request;
 mod worker;
 
-use self::custom_http_request::CustomHttpRequestApi;
+// use self::custom_http_request::CustomHttpRequestApi;
 use crate::api::agents::AgentsApi;
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
@@ -45,6 +45,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     )
 }
 
-pub fn custom_http_request_api(services: &Services) -> CustomHttpRequestApi {
-    CustomHttpRequestApi::new(services.gateway_http_input_executor.clone())
-}
+// pub fn custom_http_request_api(services: &Services) -> CustomHttpRequestApi {
+//     CustomHttpRequestApi::new(services.gateway_http_input_executor.clone())
+// }

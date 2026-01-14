@@ -8,6 +8,7 @@ import "golem/rib/rib_output.proto";
 import "golem/rib/rib_byte_code.proto";
 import "golem/rib/worker_functions_in_rib.proto";
 import "golem/component/component_id.proto";
+import "golem/component/agent.proto";
 import "golem/common/empty.proto";
 import "golem/common/uuid.proto";
 import "golem/common/account_id.proto";
@@ -18,114 +19,35 @@ message SecuritySchemeId {
   golem.common.UUID value = 1;
 }
 
-message HttpApiDefinitionId {
-  golem.common.UUID value = 1;
-}
-
 message CompiledRoutes {
   golem.common.AccountId account_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   uint64 deployment_revision = 3;
   repeated SecuritySchemeDetails security_schemes = 4;
-  repeated CompiledHttpRoute compiled_routes = 5;
+  repeated CompiledRoute compiled_routes = 5;
 }
 
-message CompiledHttpRoute {
-  HttpApiDefinitionId http_api_definition_id = 1;
-   HttpMethod method = 2;
-   string path = 3;
-   CompiledGatewayBinding binding = 4;
-   optional SecuritySchemeId security_scheme_id = 5;
+message CompiledRoute {
+   golem.component.HttpMethod method = 1;
+   string path = 2;
+   RouteBehaviour behaviour = 3;
+   optional SecuritySchemeId security_scheme_id = 4;
+   golem.component.CorsOptions cors_options = 5;
 }
 
-enum HttpMethod {
-  HTTP_METHOD_UNSPECIFIED = 0;
-  HTTP_METHOD_GET = 1;
-  HTTP_METHOD_CONNECT = 2;
-  HTTP_METHOD_POST = 3;
-  HTTP_METHOD_DELETE = 4;
-  HTTP_METHOD_PUT = 5;
-  HTTP_METHOD_PATCH = 6;
-  HTTP_METHOD_OPTIONS = 7;
-  HTTP_METHOD_TRACE = 8;
-  HTTP_METHOD_HEAD = 9;
-}
-
-message CompiledGatewayBinding {
-  oneof binding {
-    CompiledWorkerBinding worker_binding = 1;
-    CompiledHttpHandlerBinding http_handler_binding = 2;
-    CompiledFileServerBinding file_server_binding = 3;
-    CompiledHttpCorsBinding http_cors_binding = 4;
-    CompiledSwaggerUiBinding swagger_ui_binding = 5;
+message RouteBehaviour {
+  oneof behavior {
+    CallAgent call_agent = 1;
+    golem.common.Empty serve_swagger_ui = 2;
+    golem.common.Empty handle_webhook_callback = 3;
   }
 }
 
-message CompiledWorkerBinding {
-  golem.component.ComponentId component_id = 1;
-  uint64 component_revision = 2;
-  string component_name = 3;
-  optional IdempotencyKeyCompiled idempotency_key = 4;
-  optional InvocationContextCompiled invocation_context = 5;
-  ResponseMappingCompiled response_mapping = 6;
-}
-
-message CompiledHttpHandlerBinding {
-  golem.component.ComponentId component_id = 1;
-  uint64 component_revision = 2;
-  string component_name = 3;
-  WorkerNameCompiled worker_name_compiled = 4;
-  optional IdempotencyKeyCompiled idempotency_key_compiled = 5;
-  optional InvocationContextCompiled invocation_context_compiled = 6;
-}
-
-message CompiledFileServerBinding {
-  golem.component.ComponentId component_id = 1;
-  uint64 component_revision = 2;
-  string component_name = 3;
-  WorkerNameCompiled worker_name_compiled = 4;
-  ResponseMappingCompiled response_compiled = 5;
-}
-
-message CompiledHttpCorsBinding {
-  HttpCors http_cors = 1;
-}
-
-message CompiledSwaggerUiBinding {
-  HttpApiDefinitionId http_api_definition_id = 1;
-  string http_api_definition_name = 2;
-  string http_api_definition_version = 3;
-}
-
-message WorkerNameCompiled {
-  golem.rib.RibByteCode compiled_expr = 1;
-  golem.rib.RibInputType rib_input = 2;
-}
-
-message IdempotencyKeyCompiled {
-  golem.rib.RibByteCode compiled_expr = 1;
-  golem.rib.RibInputType rib_input = 2;
-}
-
-message InvocationContextCompiled {
-  golem.rib.RibByteCode compiled_expr = 1;
-  golem.rib.RibInputType rib_input = 2;
-}
-
-message ResponseMappingCompiled {
-  golem.rib.RibByteCode compiled_expr = 1;
-  golem.rib.RibInputType rib_input = 2;
-  optional golem.rib.WorkerFunctionsInRib worker_functions = 3;
-  optional golem.rib.RibOutputType rib_output = 4;
-}
-
-message HttpCors {
-  optional string allow_origin = 1;
-  optional string allow_methods = 2;
-  optional string allow_headers = 3;
-  optional string expose_headers = 4;
-  optional uint64 max_age = 5;
-  optional bool allow_credentials = 6;
+message CallAgent {
+  string agent_type = 1;
+  string method_name = 2;
+  golem.component.DataSchema input_schema = 3;
+  golem.component.DataSchema output_schema = 4;
 }
 
 message SecuritySchemeDetails {

@@ -27,8 +27,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 newtype_uuid!(
-    HttpApiDefinitionId,
-    golem_api_grpc::proto::golem::apidefinition::HttpApiDefinitionId
+    HttpApiDefinitionId
 );
 
 declare_revision!(HttpApiDefinitionRevision);
@@ -346,48 +345,6 @@ impl GatewayBinding {
                 invocation_context: None,
                 response: None,
             },
-        }
-    }
-}
-
-mod protobuf {
-    use super::RouteMethod;
-
-    impl TryFrom<golem_api_grpc::proto::golem::apidefinition::HttpMethod> for RouteMethod {
-        type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::apidefinition::HttpMethod,
-        ) -> Result<Self, Self::Error> {
-            use golem_api_grpc::proto::golem::apidefinition::HttpMethod as GrpcHttpMethod;
-
-            match value {
-                GrpcHttpMethod::Get => Ok(Self::Get),
-                GrpcHttpMethod::Connect => Ok(Self::Connect),
-                GrpcHttpMethod::Post => Ok(Self::Post),
-                GrpcHttpMethod::Delete => Ok(Self::Delete),
-                GrpcHttpMethod::Put => Ok(Self::Put),
-                GrpcHttpMethod::Patch => Ok(Self::Patch),
-                GrpcHttpMethod::Options => Ok(Self::Options),
-                GrpcHttpMethod::Trace => Ok(Self::Trace),
-                GrpcHttpMethod::Head => Ok(Self::Head),
-                GrpcHttpMethod::Unspecified => Err("unkown http method".to_string()),
-            }
-        }
-    }
-
-    impl From<RouteMethod> for golem_api_grpc::proto::golem::apidefinition::HttpMethod {
-        fn from(value: RouteMethod) -> Self {
-            match value {
-                RouteMethod::Get => Self::Get,
-                RouteMethod::Connect => Self::Connect,
-                RouteMethod::Post => Self::Post,
-                RouteMethod::Delete => Self::Delete,
-                RouteMethod::Put => Self::Put,
-                RouteMethod::Patch => Self::Patch,
-                RouteMethod::Options => Self::Options,
-                RouteMethod::Trace => Self::Trace,
-                RouteMethod::Head => Self::Head,
-            }
         }
     }
 }

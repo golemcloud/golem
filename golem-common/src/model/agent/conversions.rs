@@ -782,9 +782,14 @@ impl From<HttpMethod> for super::bindings::golem::agent::common::HttpMethod {
     fn from(value: HttpMethod) -> Self {
         match value {
             HttpMethod::Get(_) => Self::Get,
-            HttpMethod::Put(_) => Self::Put,
+            HttpMethod::Head(_) => Self::Head,
             HttpMethod::Post(_) => Self::Post,
+            HttpMethod::Put(_) => Self::Put,
             HttpMethod::Delete(_) => Self::Delete,
+            HttpMethod::Connect(_) => Self::Connect,
+            HttpMethod::Options(_) => Self::Options,
+            HttpMethod::Trace(_) => Self::Trace,
+            HttpMethod::Patch(_) => Self::Patch,
             HttpMethod::Custom(c) => Self::Custom(c.value),
         }
     }
@@ -794,9 +799,14 @@ impl From<super::bindings::golem::agent::common::HttpMethod> for HttpMethod {
     fn from(value: super::bindings::golem::agent::common::HttpMethod) -> Self {
         match value {
             super::bindings::golem::agent::common::HttpMethod::Get => Self::Get(Empty {}),
-            super::bindings::golem::agent::common::HttpMethod::Put => Self::Put(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Head => Self::Head(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Post => Self::Post(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Put => Self::Put(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Delete => Self::Delete(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Connect => Self::Connect(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Options => Self::Options(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Trace=> Self::Trace(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Patch => Self::Patch(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Custom(value) => {
                 Self::Custom(CustomHttpMethod { value })
             }

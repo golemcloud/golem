@@ -15,6 +15,7 @@ use golem_api_grpc::proto::golem::component::element_schema;
 use golem_api_grpc::proto::golem::component::{
     binary_reference, data_value, element_value, text_reference,
 };
+use fred::bytes_utils::string::StrInner;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
     fn from(value: golem_api_grpc::proto::golem::component::AgentMode) -> Self {
@@ -836,50 +837,51 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
         value: golem_api_grpc::proto::golem::component::HttpMethod,
     ) -> Result<Self, Self::Error> {
         use golem_api_grpc::proto::golem::component::http_method::Value;
+        use golem_api_grpc::proto::golem::component::StandardHttpMethod;
 
         match value
             .value
             .ok_or_else(|| "Missing oneof: value".to_string())?
         {
-            Value::Get(_) => Ok(HttpMethod::Get(Empty {})),
-            Value::Put(_) => Ok(HttpMethod::Put(Empty {})),
-            Value::Post(_) => Ok(HttpMethod::Post(Empty {})),
-            Value::Delete(_) => Ok(HttpMethod::Delete(Empty {})),
-            Value::Custom(c) => Ok(HttpMethod::Custom(c.try_into()?)),
+            Value::Standard(inner) => {
+                let typed = golem_api_grpc::proto::golem::component::StandardHttpMethod::try_from(inner).unwrap_or_default();
+                match typed {
+                    StandardHttpMethod::Get => Ok(Self::Get(Empty {})),
+                    StandardHttpMethod::Head => Ok(Self::Head(Empty {})),
+                    StandardHttpMethod::Post => Ok(Self::Post(Empty {})),
+                    StandardHttpMethod::Put => Ok(Self::Put(Empty {})),
+                    StandardHttpMethod::Delete => Ok(Self::Delete(Empty {})),
+                    StandardHttpMethod::Connect => Ok(Self::Connect(Empty {})),
+                    StandardHttpMethod::Options => Ok(Self::Options(Empty {})),
+                    StandardHttpMethod::Trace => Ok(Self::Trace(Empty {})),
+                    StandardHttpMethod::Patch => Ok(Self::Patch(Empty {})),
+                    StandardHttpMethod::Unspecified => Err("Unknown http method variant".to_string()),
+                }
+            },
+            Value::Custom(c) => Ok(HttpMethod::Custom(CustomHttpMethod { value: c })),
         }
     }
 }
 
 impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
     fn from(value: HttpMethod) -> Self {
-        use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
         use golem_api_grpc::proto::golem::component::http_method::Value;
+        use golem_api_grpc::proto::golem::component::StandardHttpMethod;
 
         Self {
             value: Some(match value {
-                HttpMethod::Get(_) => Value::Get(ProtoEmpty {}),
-                HttpMethod::Put(_) => Value::Put(ProtoEmpty {}),
-                HttpMethod::Post(_) => Value::Post(ProtoEmpty {}),
-                HttpMethod::Delete(_) => Value::Delete(ProtoEmpty {}),
-                HttpMethod::Custom(c) => Value::Custom(c.into()),
+                HttpMethod::Get(_) => Value::Standard(StandardHttpMethod::Get.into()),
+                HttpMethod::Head(_) => Value::Standard(StandardHttpMethod::Head.into()),
+                HttpMethod::Post(_) => Value::Standard(StandardHttpMethod::Post.into()),
+                HttpMethod::Put(_) => Value::Standard(StandardHttpMethod::Put.into()),
+                HttpMethod::Delete(_) => Value::Standard(StandardHttpMethod::Delete.into()),
+                HttpMethod::Connect(_) => Value::Standard(StandardHttpMethod::Connect.into()),
+                HttpMethod::Options(_) => Value::Standard(StandardHttpMethod::Options.into()),
+                HttpMethod::Trace(_) => Value::Standard(StandardHttpMethod::Trace.into()),
+                HttpMethod::Patch(_) => Value::Standard(StandardHttpMethod::Patch.into()),
+                HttpMethod::Custom(c) => Value::Custom(c.value),
             }),
         }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::CustomHttpMethod> for CustomHttpMethod {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::CustomHttpMethod,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self { value: value.value })
-    }
-}
-
-impl From<CustomHttpMethod> for golem_api_grpc::proto::golem::component::CustomHttpMethod {
-    fn from(value: CustomHttpMethod) -> Self {
-        Self { value: value.value }
     }
 }
 

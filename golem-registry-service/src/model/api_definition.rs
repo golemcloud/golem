@@ -20,7 +20,7 @@ use golem_common::model::http_api_definition::{
     HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, RouteMethod,
 };
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
-use golem_service_base::custom_api::GatewayBindingCompiled;
+use golem_service_base::custom_api::RouteBehaviour;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ use std::collections::HashMap;
 pub struct CompiledRouteWithoutSecurity {
     pub method: RouteMethod,
     pub path: AllPathPatterns,
-    pub binding: GatewayBindingCompiled,
+    pub binding: RouteBehaviour,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,26 +57,26 @@ pub struct MaybeDisabledCompiledRoute {
     pub security_scheme: Option<SecuritySchemeId>,
     pub method: RouteMethod,
     pub path: AllPathPatterns,
-    pub binding: GatewayBindingCompiled,
+    pub binding: RouteBehaviour,
 }
 
-impl golem_service_base::custom_api::openapi::HttpApiRoute for MaybeDisabledCompiledRoute {
-    fn security_scheme_missing(&self) -> bool {
-        self.security_scheme_missing
-    }
-    fn security_scheme(&self) -> Option<SecuritySchemeId> {
-        self.security_scheme
-    }
-    fn method(&self) -> &RouteMethod {
-        &self.method
-    }
-    fn path(&self) -> &AllPathPatterns {
-        &self.path
-    }
-    fn binding(&self) -> &GatewayBindingCompiled {
-        &self.binding
-    }
-}
+// impl golem_service_base::custom_api::openapi::HttpApiRoute for MaybeDisabledCompiledRoute {
+//     fn security_scheme_missing(&self) -> bool {
+//         self.security_scheme_missing
+//     }
+//     fn security_scheme(&self) -> Option<SecuritySchemeId> {
+//         self.security_scheme
+//     }
+//     fn method(&self) -> &RouteMethod {
+//         &self.method
+//     }
+//     fn path(&self) -> &AllPathPatterns {
+//         &self.path
+//     }
+//     fn binding(&self) -> &RouteBehaviour {
+//         &self.binding
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub struct CompiledRoutesForHttpApiDefinition {

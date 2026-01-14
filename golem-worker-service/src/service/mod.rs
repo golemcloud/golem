@@ -22,22 +22,22 @@ use self::component::RemoteComponentService;
 use self::limit::{LimitService, RemoteLimitService};
 use self::worker::WorkerService;
 use crate::config::{GatewaySessionStorageConfig, WorkerServiceConfig};
-use crate::gateway_execution::api_definition_lookup::{
-    HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
-};
-use crate::gateway_execution::auth_call_back_binding_handler::{
-    AuthCallBackBindingHandler, DefaultAuthCallBackBindingHandler,
-};
-use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
-use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInputExecutor;
-use crate::gateway_execution::gateway_session_store::{
-    GatewaySessionStore, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
-    SqliteGatewaySessionExpiration,
-};
-use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
-use crate::gateway_execution::route_resolver::RouteResolver;
-use crate::gateway_execution::GatewayWorkerRequestExecutor;
-use crate::gateway_security::DefaultIdentityProvider;
+// use crate::gateway_execution::api_definition_lookup::{
+//     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
+// };
+// use crate::gateway_execution::auth_call_back_binding_handler::{
+//     AuthCallBackBindingHandler, DefaultAuthCallBackBindingHandler,
+// };
+// use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
+// use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInputExecutor;
+// use crate::gateway_execution::gateway_session_store::{
+//     GatewaySessionStore, RedisGatewaySession, RedisGatewaySessionExpiration, SqliteGatewaySession,
+//     SqliteGatewaySessionExpiration,
+// };
+// use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
+// use crate::gateway_execution::route_resolver::RouteResolver;
+// use crate::gateway_execution::GatewayWorkerRequestExecutor;
+// use crate::gateway_security::DefaultIdentityProvider;
 use crate::service::component::ComponentService;
 use crate::service::worker::{AgentsService, WorkerClient, WorkerExecutorWorkerClient};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -58,7 +58,7 @@ pub struct Services {
     pub limit_service: Arc<dyn LimitService>,
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
-    pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
+    // pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
     pub agents_service: Arc<AgentsService>,
 }
 
@@ -72,31 +72,31 @@ impl Services {
             &config.auth_service,
         ));
 
-        let gateway_session_store: Arc<dyn GatewaySessionStore> =
-            match &config.gateway_session_storage {
-                GatewaySessionStorageConfig::Redis(redis_config) => {
-                    let redis = RedisPool::configured(redis_config)
-                        .await
-                        .map_err(|e| e.to_string())?;
+        // let gateway_session_store: Arc<dyn GatewaySessionStore> =
+        //     match &config.gateway_session_storage {
+        //         GatewaySessionStorageConfig::Redis(redis_config) => {
+        //             let redis = RedisPool::configured(redis_config)
+        //                 .await
+        //                 .map_err(|e| e.to_string())?;
 
-                    let gateway_session_with_redis =
-                        RedisGatewaySession::new(redis, RedisGatewaySessionExpiration::default());
+        //             let gateway_session_with_redis =
+        //                 RedisGatewaySession::new(redis, RedisGatewaySessionExpiration::default());
 
-                    Arc::new(gateway_session_with_redis)
-                }
+        //             Arc::new(gateway_session_with_redis)
+        //         }
 
-                GatewaySessionStorageConfig::Sqlite(sqlite_config) => {
-                    let pool = SqlitePool::configured(sqlite_config)
-                        .await
-                        .map_err(|e| e.to_string())?;
+        //         GatewaySessionStorageConfig::Sqlite(sqlite_config) => {
+        //             let pool = SqlitePool::configured(sqlite_config)
+        //                 .await
+        //                 .map_err(|e| e.to_string())?;
 
-                    let gateway_session_with_sqlite =
-                        SqliteGatewaySession::new(pool, SqliteGatewaySessionExpiration::default())
-                            .await?;
+        //             let gateway_session_with_sqlite =
+        //                 SqliteGatewaySession::new(pool, SqliteGatewaySessionExpiration::default())
+        //                     .await?;
 
-                    Arc::new(gateway_session_with_sqlite)
-                }
-            };
+        //             Arc::new(gateway_session_with_sqlite)
+        //         }
+        //     };
 
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => Arc::new(
@@ -133,7 +133,7 @@ impl Services {
             &config.component_service,
         ));
 
-        let identity_provider = Arc::new(DefaultIdentityProvider);
+        // let identity_provider = Arc::new(DefaultIdentityProvider);
 
         let limit_service: Arc<dyn LimitService> =
             Arc::new(RemoteLimitService::new(registry_service_client.clone()));
@@ -165,46 +165,46 @@ impl Services {
             worker_client.clone(),
         ));
 
-        let gateway_worker_request_executor: Arc<GatewayWorkerRequestExecutor> = Arc::new(
-            GatewayWorkerRequestExecutor::new(worker_service.clone(), component_service.clone()),
-        );
+        // let gateway_worker_request_executor: Arc<GatewayWorkerRequestExecutor> = Arc::new(
+        //     GatewayWorkerRequestExecutor::new(worker_service.clone(), component_service.clone()),
+        // );
 
-        let file_server_binding_handler: Arc<FileServerBindingHandler> =
-            Arc::new(FileServerBindingHandler::new(
-                component_service.clone(),
-                initial_component_files_service.clone(),
-                worker_service.clone(),
-            ));
+        // let file_server_binding_handler: Arc<FileServerBindingHandler> =
+        //     Arc::new(FileServerBindingHandler::new(
+        //         component_service.clone(),
+        //         initial_component_files_service.clone(),
+        //         worker_service.clone(),
+        //     ));
 
-        let auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler> =
-            Arc::new(DefaultAuthCallBackBindingHandler::new(
-                gateway_session_store.clone(),
-                identity_provider.clone(),
-            ));
+        // let auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler> =
+        //     Arc::new(DefaultAuthCallBackBindingHandler::new(
+        //         gateway_session_store.clone(),
+        //         identity_provider.clone(),
+        //     ));
 
-        let http_handler_binding_handler: Arc<HttpHandlerBindingHandler> = Arc::new(
-            HttpHandlerBindingHandler::new(gateway_worker_request_executor.clone()),
-        );
+        // let http_handler_binding_handler: Arc<HttpHandlerBindingHandler> = Arc::new(
+        //     HttpHandlerBindingHandler::new(gateway_worker_request_executor.clone()),
+        // );
 
-        let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
-            RegistryServiceApiDefinitionsLookup::new(registry_service_client.clone()),
-        );
+        // let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
+        //     RegistryServiceApiDefinitionsLookup::new(registry_service_client.clone()),
+        // );
 
-        let route_resolver = Arc::new(RouteResolver::new(
-            &config.route_resolver,
-            api_definition_lookup_service.clone(),
-        ));
+        // let route_resolver = Arc::new(RouteResolver::new(
+        //     &config.route_resolver,
+        //     api_definition_lookup_service.clone(),
+        // ));
 
-        let gateway_http_input_executor: Arc<GatewayHttpInputExecutor> =
-            Arc::new(GatewayHttpInputExecutor::new(
-                route_resolver.clone(),
-                gateway_worker_request_executor.clone(),
-                file_server_binding_handler.clone(),
-                auth_call_back_binding_handler.clone(),
-                http_handler_binding_handler.clone(),
-                gateway_session_store.clone(),
-                identity_provider.clone(),
-            ));
+        // let gateway_http_input_executor: Arc<GatewayHttpInputExecutor> =
+        //     Arc::new(GatewayHttpInputExecutor::new(
+        //         route_resolver.clone(),
+        //         gateway_worker_request_executor.clone(),
+        //         file_server_binding_handler.clone(),
+        //         auth_call_back_binding_handler.clone(),
+        //         http_handler_binding_handler.clone(),
+        //         gateway_session_store.clone(),
+        //         identity_provider.clone(),
+        //     ));
 
         let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new(
             registry_service_client.clone(),
@@ -217,7 +217,7 @@ impl Services {
             limit_service,
             component_service,
             worker_service,
-            gateway_http_input_executor,
+            // gateway_http_input_executor,
             agents_service,
         })
     }

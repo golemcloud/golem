@@ -25,7 +25,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
+// use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
 use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
@@ -75,32 +75,32 @@ impl DeployedRoutesService {
         }
     }
 
-    pub async fn get_openapi_spec_for_http_api_definition(
-        &self,
-        environment_id: EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        http_api_definition_name: &HttpApiDefinitionName,
-        auth: &AuthCtx,
-    ) -> Result<HttpApiDefinitionOpenApiSpec, DeployedRoutesError> {
-        let compiled_routes = self
-            .get_compiled_routes_for_http_api_definition(
-                environment_id,
-                deployment_revision,
-                http_api_definition_name,
-                auth,
-            )
-            .await?;
-        let openapi_spec = HttpApiDefinitionOpenApiSpec::from_routes(
-            &compiled_routes.http_api_definition_name,
-            &compiled_routes.http_api_definition_version,
-            &compiled_routes.routes,
-            &compiled_routes.security_schemes,
-        )
-        .await
-        .map_err(|e| anyhow!("Failed building openapi spec: {e}"))?;
+    // pub async fn get_openapi_spec_for_http_api_definition(
+    //     &self,
+    //     environment_id: EnvironmentId,
+    //     deployment_revision: DeploymentRevision,
+    //     http_api_definition_name: &HttpApiDefinitionName,
+    //     auth: &AuthCtx,
+    // ) -> Result<HttpApiDefinitionOpenApiSpec, DeployedRoutesError> {
+    //     let compiled_routes = self
+    //         .get_compiled_routes_for_http_api_definition(
+    //             environment_id,
+    //             deployment_revision,
+    //             http_api_definition_name,
+    //             auth,
+    //         )
+    //         .await?;
+    //     let openapi_spec = HttpApiDefinitionOpenApiSpec::from_routes(
+    //         &compiled_routes.http_api_definition_name,
+    //         &compiled_routes.http_api_definition_version,
+    //         &compiled_routes.routes,
+    //         &compiled_routes.security_schemes,
+    //     )
+    //     .await
+    //     .map_err(|e| anyhow!("Failed building openapi spec: {e}"))?;
 
-        Ok(openapi_spec)
-    }
+    //     Ok(openapi_spec)
+    // }
 
     pub async fn get_compiled_routes_for_http_api_definition(
         &self,
