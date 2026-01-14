@@ -1,9 +1,12 @@
 use crate::app::{cmd, flag, replace_string_in_file, TestContext};
 use crate::Tracing;
-use assert2::assert;
 use assert2::let_assert;
+use assert2::{assert, check};
+use golem_templates::model::GuestLanguage;
 use heck::ToKebabCase;
+use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, tag, test};
+use golem_cli::fs;
 
 inherit_test_dep!(Tracing);
 
@@ -58,154 +61,24 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         assert!(outputs.success());
     }
 
-    // NOTE: renaming conflicting agent names
-    // Prefix all agents with Rust/Ts to avoid conflicts between language implementations
-    for (path, from, to) in [
-        // Rust agents: prefix with Rust
-        (
-            "components-rust/app-rust/src/lib.rs",
-            "CounterAgent",
-            "RustCounterAgent",
-        ),
-        (
-            "components-rust/app-rust/golem.yaml",
-            "counter-agent",
-            "rust-counter-agent",
-        ),
-        (
-            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-            "ApprovalWorkflow",
-            "RustApprovalWorkflow",
-        ),
-        (
-            "components-rust/app-rust-human-in-the-loop/golem.yaml",
-            "approval-workflow",
-            "rust-approval-workflow",
-        ),
-        (
-            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-            "HumanAgent",
-            "RustHumanAgent",
-        ),
-        (
-            "components-rust/app-rust-human-in-the-loop/golem.yaml",
-            "human-agent",
-            "rust-human-agent",
-        ),
-        (
-            "components-rust/app-rust-json/src/lib.rs",
-            "Tasks",
-            "RustTasks",
-        ),
-        (
-            "components-rust/app-rust-json/golem.yaml",
-            "tasks(name)",
-            "rust-tasks(name)",
-        ),
-        (
-            "components-rust/app-rust-llm-session/src/lib.rs",
-            "ChatAgent",
-            "RustChatAgent",
-        ),
-        (
-            "components-rust/app-rust-llm-session/golem.yaml",
-            "chat-agent",
-            "rust-chat-agent",
-        ),
-        (
-            "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
-            "ResearchAgent",
-            "RustResearchAgent",
-        ),
-        (
-            "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
-            "research-agent",
-            "rust-research-agent",
-        ),
-        (
-            "components-rust/app-rust-snapshotting/src/lib.rs",
-            "CounterAgent",
-            "RustCounterAgentSnapshotting",
-        ),
-        (
-            "components-rust/app-rust-snapshotting/golem.yaml",
-            "counter-agent",
-            "rust-counter-agent-snapshotting",
-        ),
-        // TypeScript agents: prefix with Ts
-        (
-            "components-ts/app-ts/src/main.ts",
-            "CounterAgent",
-            "TsCounterAgent",
-        ),
-        (
-            "components-ts/app-ts/golem.yaml",
-            "counter-agent",
-            "ts-counter-agent",
-        ),
-        (
-            "components-ts/app-ts-human-in-the-loop/src/main.ts",
-            "ApprovalWorkflow",
-            "TsApprovalWorkflow",
-        ),
-        (
-            "components-ts/app-ts-human-in-the-loop/golem.yaml",
-            "approval-workflow",
-            "ts-approval-workflow",
-        ),
-        (
-            "components-ts/app-ts-human-in-the-loop/src/main.ts",
-            "HumanAgent",
-            "TsHumanAgent",
-        ),
-        (
-            "components-ts/app-ts-human-in-the-loop/golem.yaml",
-            "human-agent",
-            "ts-human-agent",
-        ),
-        (
-            "components-ts/app-ts-json/src/main.ts",
-            "TaskAgent",
-            "TsTaskAgent",
-        ),
-        (
-            "components-ts/app-ts-json/golem.yaml",
-            "task-agent",
-            "ts-task-agent",
-        ),
-        (
-            "components-ts/app-ts-llm-session/src/main.ts",
-            "ChatAgent",
-            "TsChatAgent",
-        ),
-        (
-            "components-ts/app-ts-llm-session/golem.yaml",
-            "chat-agent",
-            "ts-chat-agent",
-        ),
-        (
-            "components-ts/app-ts-snapshotting/src/main.ts",
-            "CounterAgent",
-            "TsCounterAgentSnapshotting",
-        ),
-        (
-            "components-ts/app-ts-snapshotting/golem.yaml",
-            "counter-agent",
-            "ts-counter-agent-snapshotting",
-        ),
-        (
-            "components-ts/app-ts-websearch-summary-example/src/main.ts",
-            "ResearchAgent",
-            "TsResearchAgent",
-        ),
-        (
-            "components-ts/app-ts-websearch-summary-example/golem.yaml",
-            "research-agent",
-            "ts-research-agent",
-        ),
-    ] {
-        replace_string_in_file(ctx.cwd_path_join(path), from, to).unwrap()
+    let agent_metas = agent_metas();
+
+    // NOTE: renaming conflicting agent names, prefix all agents with Rust/Ts
+    //       to avoid conflicts between language implementations
+    for agent_meta in &agent_metas {
+        replace_string_in_file(
+            ctx.cwd_path_join(agent_meta.src_path),
+            agent_meta.agent_template_name,
+            agent_meta.agent_test_name,
+        )
+        .unwrap();
+        for (path, from, to) in &agent_meta.extra_replaces {
+            replace_string_in_file(ctx.cwd_path_join(path), from, to).unwrap()
+        }
     }
+
+    // TODO:
+    fs::remove(ctx.cwd_path_join("components-rust")).unwrap();
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
@@ -214,4 +87,195 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
+
+    // Checking bridge SDKs for all agents and languages, one by one
+    for agent_meta in &agent_metas {
+        for language in GuestLanguage::iter() {
+            let output = ctx
+                .cli([
+                    cmd::GENERATE_BRIDGE,
+                    flag::LANGUAGE,
+                    &language.id(),
+                    flag::AGENT_TYPE_NAME,
+                    agent_meta.agent_test_name,
+                ])
+                .await;
+            check!(
+                output.success(),
+                "{} - {}",
+                agent_meta.agent_test_name,
+                language
+            );
+        }
+    }
+}
+
+fn agent_metas() -> Vec<AgentMeta> {
+    vec![
+        // Rust agents: prefix with Rust
+        AgentMeta::new(
+            "components-rust/app-rust/src/lib.rs",
+            "CounterAgent",
+            "RustCounterAgent",
+            vec![(
+                "components-rust/app-rust/golem.yaml",
+                "counter-agent",
+                "rust-counter-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+            "ApprovalWorkflow",
+            "RustApprovalWorkflow",
+            vec![(
+                "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                "approval-workflow",
+                "rust-approval-workflow",
+            )],
+        ),
+        AgentMeta::new(
+            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+            "HumanAgent",
+            "RustHumanAgent",
+            vec![(
+                "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                "human-agent",
+                "rust-human-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-rust/app-rust-json/src/lib.rs",
+            "Tasks",
+            "RustTasks",
+            vec![(
+                "components-rust/app-rust-json/golem.yaml",
+                "tasks(name)",
+                "rust-tasks(name)",
+            )],
+        ),
+        AgentMeta::new(
+            "components-rust/app-rust-llm-session/src/lib.rs",
+            "ChatAgent",
+            "RustChatAgent",
+            vec![(
+                "components-rust/app-rust-llm-session/golem.yaml",
+                "chat-agent",
+                "rust-chat-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+            "ResearchAgent",
+            "RustResearchAgent",
+            vec![(
+                "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
+                "research-agent",
+                "rust-research-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-rust/app-rust-snapshotting/src/lib.rs",
+            "CounterAgent",
+            "RustCounterAgentSnapshotting",
+            vec![(
+                "components-rust/app-rust-snapshotting/golem.yaml",
+                "counter-agent",
+                "rust-counter-agent-snapshotting",
+            )],
+        ),
+        // TypeScript agents: prefix with Ts
+        AgentMeta::new(
+            "components-ts/app-ts/src/main.ts",
+            "CounterAgent",
+            "TsCounterAgent",
+            vec![(
+                "components-ts/app-ts/golem.yaml",
+                "counter-agent",
+                "ts-counter-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-ts/app-ts-human-in-the-loop/src/main.ts",
+            "ApprovalWorkflow",
+            "TsApprovalWorkflow",
+            vec![(
+                "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                "approval-workflow",
+                "ts-approval-workflow",
+            )],
+        ),
+        AgentMeta::new(
+            "components-ts/app-ts-human-in-the-loop/src/main.ts",
+            "HumanAgent",
+            "TsHumanAgent",
+            vec![(
+                "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                "human-agent",
+                "ts-human-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-ts/app-ts-json/src/main.ts",
+            "TaskAgent",
+            "TsTaskAgent",
+            vec![(
+                "components-ts/app-ts-json/golem.yaml",
+                "task-agent",
+                "ts-task-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-ts/app-ts-llm-session/src/main.ts",
+            "ChatAgent",
+            "TsChatAgent",
+            vec![(
+                "components-ts/app-ts-llm-session/golem.yaml",
+                "chat-agent",
+                "ts-chat-agent",
+            )],
+        ),
+        AgentMeta::new(
+            "components-ts/app-ts-snapshotting/src/main.ts",
+            "CounterAgent",
+            "TsCounterAgentSnapshotting",
+            vec![(
+                "components-ts/app-ts-snapshotting/golem.yaml",
+                "counter-agent",
+                "ts-counter-agent-snapshotting",
+            )],
+        ),
+        AgentMeta::new(
+            "components-ts/app-ts-websearch-summary-example/src/main.ts",
+            "ResearchAgent",
+            "TsResearchAgent",
+            vec![(
+                "components-ts/app-ts-websearch-summary-example/golem.yaml",
+                "research-agent",
+                "ts-research-agent",
+            )],
+        ),
+    ]
+}
+
+struct AgentMeta {
+    src_path: &'static str,
+    agent_template_name: &'static str,
+    agent_test_name: &'static str,
+    extra_replaces: Vec<(&'static str, &'static str, &'static str)>,
+}
+
+impl AgentMeta {
+    pub fn new(
+        src_path: &'static str,
+        agent_template_name: &'static str,
+        agent_test_name: &'static str,
+        extra_replaces: Vec<(&'static str, &'static str, &'static str)>,
+    ) -> Self {
+        Self {
+            src_path,
+            agent_template_name,
+            agent_test_name,
+            extra_replaces,
+        }
+    }
 }
