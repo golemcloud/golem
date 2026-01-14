@@ -16,27 +16,30 @@ mod oplog_macro;
 pub(crate) mod public_types;
 
 use crate::base_model::account::AccountId;
-use crate::base_model::component::{ComponentRevision, PluginPriority};
+use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::worker::WasiConfigVars;
 use crate::base_model::{IdempotencyKey, OplogIndex, Timestamp, TransactionId, WorkerId};
 use crate::oplog_entry;
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::ValueAndType;
 pub use public_types::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 /// Imports only used by the raw oplog entries - not generated unless the 'full' feature is enabled.
 #[cfg(feature = "full")]
 mod raw_imports {
+    pub use crate::base_model::component::PluginPriority;
     pub use crate::model::invocation_context::AttributeValue;
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::{RetryConfig, WorkerInvocation};
     pub use golem_wasm::wasmtime::ResourceTypeId;
+    pub use golem_wasm::Value;
+    pub use std::collections::{HashMap, HashSet};
 }
 
 #[cfg(feature = "full")]

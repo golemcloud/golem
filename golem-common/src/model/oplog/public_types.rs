@@ -82,13 +82,3 @@ impl poem_openapi::types::ParseFromParameter for OplogCursor {
         })
     }
 }
-
-impl Display for OplogCursor {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}-{}",
-            self.next_oplog_index, self.current_component_version
-        )
-    }
-}

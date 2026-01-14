@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod matcher;
-mod oplog_macro;
 pub mod payload;
 mod protobuf;
 mod public_types;

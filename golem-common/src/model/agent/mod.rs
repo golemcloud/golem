@@ -172,20 +172,6 @@ impl DataSchema {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub enum UntypedDataValue {
-    Tuple(Vec<UntypedElementValue>),
-    Multimodal(Vec<UntypedNamedElementValue>),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-pub enum UntypedJsonDataValue {
-    Tuple(UntypedJsonElementValues),
-    Multimodal(UntypedJsonNamedElementValues),
-}
-
 impl From<DataValue> for UntypedJsonDataValue {
     fn from(value: DataValue) -> Self {
         match value {
@@ -331,13 +317,6 @@ impl IntoValue for DataValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonElementValues {
-    pub elements: Vec<UntypedJsonElementValue>,
-}
-
 impl From<ElementValues> for UntypedJsonElementValues {
     fn from(value: ElementValues) -> Self {
         Self {
@@ -362,13 +341,6 @@ impl Display for ElementValues {
                 .join(",")
         )
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonNamedElementValues {
-    pub elements: Vec<UntypedJsonNamedElementValue>,
 }
 
 impl From<NamedElementValues> for UntypedJsonNamedElementValues {
@@ -397,20 +369,6 @@ impl Display for NamedElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub struct UntypedNamedElementValue {
-    pub name: String,
-    pub value: UntypedElementValue,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonNamedElementValue {
-    pub name: String,
-    pub value: UntypedJsonElementValue,
-}
-
 impl From<NamedElementValue> for UntypedJsonNamedElementValue {
     fn from(value: NamedElementValue) -> Self {
         Self {
@@ -436,14 +394,6 @@ impl IntoValue for NamedElementValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct TextReferenceValue {
-    pub value: TextReference,
-}
-
 impl IntoValue for TextReferenceValue {
     fn into_value(self) -> Value {
         self.value.into_value()
@@ -460,14 +410,6 @@ impl FromValue for TextReferenceValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct BinaryReferenceValue {
-    pub value: BinaryReference,
-}
-
 impl IntoValue for BinaryReferenceValue {
     fn into_value(self) -> Value {
         self.value.into_value()
@@ -482,22 +424,6 @@ impl FromValue for BinaryReferenceValue {
     fn from_value(value: Value) -> Result<Self, String> {
         BinaryReference::from_value(value).map(|value| Self { value })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub enum UntypedElementValue {
-    ComponentModel(Value),
-    UnstructuredText(TextReferenceValue),
-    UnstructuredBinary(BinaryReferenceValue),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-pub enum UntypedJsonElementValue {
-    ComponentModel(JsonComponentModelValue),
-    UnstructuredText(TextReferenceValue),
-    UnstructuredBinary(BinaryReferenceValue),
 }
 
 impl From<ElementValue> for UntypedJsonElementValue {
@@ -522,13 +448,6 @@ impl From<ElementValue> for UntypedJsonElementValue {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct JsonComponentModelValue {
-    pub value: serde_json::Value,
 }
 
 impl ElementValue {

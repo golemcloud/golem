@@ -34,25 +34,39 @@ pub mod oplog;
 pub mod plan;
 pub mod plugin_registration;
 pub mod regions;
+pub mod reports;
 pub mod security_scheme;
 pub mod worker;
+pub mod worker_filter;
+
+pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
+use crate::declare_structs;
+use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
 use uuid::{uuid, Uuid};
-use golem_wasm::{FromValue, IntoValue, Value};
-use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
-use golem_wasm::analysis::AnalysedType;
+
+declare_structs! {
+    pub struct VersionInfo {
+        pub version: String,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UntypedJsonBody(pub serde_json::Value);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Timestamp(pub(crate) iso8601_timestamp::Timestamp);
-
 
 impl Display for Timestamp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -97,7 +111,6 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
         }
     }
 }
-
 
 impl From<u64> for Timestamp {
     fn from(value: u64) -> Self {
@@ -472,7 +485,6 @@ pub fn validate_lower_kebab_case_identifier(
     Ok(())
 }
 
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq, IntoValue, FromValue)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
@@ -564,6 +576,177 @@ impl FromStr for IdempotencyKey {
         Ok(IdempotencyKey {
             value: s.to_string(),
         })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerResourceDescription {
+    pub created_at: Timestamp,
+    pub resource_owner: String,
+    pub resource_name: String,
+}
+
+/// Represents last known status of a worker
+///
+/// This is always recorded together with the current oplog index, and it can only be used
+/// as a source of truth if there are no newer oplog entries since the record.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum WorkerStatus {
+    /// The worker is running an invoked function
+    Running,
+    /// The worker is ready to run an invoked function
+    Idle,
+    /// An invocation is active but waiting for something (sleeping, waiting for a promise)
+    Suspended,
+    /// The last invocation was interrupted but will be resumed
+    Interrupted,
+    /// The last invocation failed and a retry was scheduled
+    Retrying,
+    /// The last invocation failed and the worker can no longer be used
+    Failed,
+    /// The worker exited after a successful invocation and can no longer be invoked
+    Exited,
+}
+
+impl PartialOrd for WorkerStatus {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for WorkerStatus {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let v1: i32 = self.clone().into();
+        let v2: i32 = other.clone().into();
+        v1.cmp(&v2)
+    }
+}
+
+impl FromStr for WorkerStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "running" => Ok(WorkerStatus::Running),
+            "idle" => Ok(WorkerStatus::Idle),
+            "suspended" => Ok(WorkerStatus::Suspended),
+            "interrupted" => Ok(WorkerStatus::Interrupted),
+            "retrying" => Ok(WorkerStatus::Retrying),
+            "failed" => Ok(WorkerStatus::Failed),
+            "exited" => Ok(WorkerStatus::Exited),
+            _ => Err(format!("Unknown worker status: {s}")),
+        }
+    }
+}
+
+impl Display for WorkerStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerStatus::Running => write!(f, "Running"),
+            WorkerStatus::Idle => write!(f, "Idle"),
+            WorkerStatus::Suspended => write!(f, "Suspended"),
+            WorkerStatus::Interrupted => write!(f, "Interrupted"),
+            WorkerStatus::Retrying => write!(f, "Retrying"),
+            WorkerStatus::Failed => write!(f, "Failed"),
+            WorkerStatus::Exited => write!(f, "Exited"),
+        }
+    }
+}
+
+impl TryFrom<i32> for WorkerStatus {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(WorkerStatus::Running),
+            1 => Ok(WorkerStatus::Idle),
+            2 => Ok(WorkerStatus::Suspended),
+            3 => Ok(WorkerStatus::Interrupted),
+            4 => Ok(WorkerStatus::Retrying),
+            5 => Ok(WorkerStatus::Failed),
+            6 => Ok(WorkerStatus::Exited),
+            _ => Err(format!("Unknown worker status: {value}")),
+        }
+    }
+}
+
+impl From<WorkerStatus> for i32 {
+    fn from(value: WorkerStatus) -> Self {
+        match value {
+            WorkerStatus::Running => 0,
+            WorkerStatus::Idle => 1,
+            WorkerStatus::Suspended => 2,
+            WorkerStatus::Interrupted => 3,
+            WorkerStatus::Retrying => 4,
+            WorkerStatus::Failed => 5,
+            WorkerStatus::Exited => 6,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+pub struct ScanCursor {
+    pub cursor: u64,
+    pub layer: usize,
+}
+
+impl ScanCursor {
+    pub fn is_active_layer_finished(&self) -> bool {
+        self.cursor == 0
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.cursor == 0 && self.layer == 0
+    }
+
+    pub fn into_option(self) -> Option<Self> {
+        if self.is_finished() {
+            None
+        } else {
+            Some(self)
+        }
+    }
+}
+
+impl Display for ScanCursor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.layer, self.cursor)
+    }
+}
+
+impl FromStr for ScanCursor {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts = s.split('/').collect::<Vec<&str>>();
+        if parts.len() == 2 {
+            Ok(ScanCursor {
+                layer: parts[0]
+                    .parse()
+                    .map_err(|e| format!("Invalid layer part: {e}"))?,
+                cursor: parts[1]
+                    .parse()
+                    .map_err(|e| format!("Invalid cursor part: {e}"))?,
+            })
+        } else {
+            Err("Invalid cursor, must have 'layer/cursor' format".to_string())
+        }
     }
 }
 

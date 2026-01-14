@@ -21,6 +21,7 @@ use crate::declare_structs;
 use golem_wasm::ValueAndType;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
@@ -31,6 +32,16 @@ use std::time::Duration;
 pub struct OplogCursor {
     pub next_oplog_index: u64,
     pub current_component_version: u64,
+}
+
+impl Display for OplogCursor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}-{}",
+            self.next_oplog_index, self.current_component_version
+        )
+    }
 }
 
 declare_structs! {
@@ -202,8 +213,8 @@ pub struct PublicRetryConfig {
     pub max_jitter_factor: Option<f64>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionParameters {
@@ -224,8 +235,8 @@ pub struct ManualUpdateParameters {
     pub target_revision: ComponentRevision,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicWorkerInvocation {
@@ -287,22 +298,9 @@ impl Display for WorkerResourceId {
     }
 }
 
-
 /// Worker log levels including the special stdout and stderr channels
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Enum)
-)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(u8)]
 pub enum LogLevel {
     #[cfg_attr(feature = "full", desert(transparent))]
@@ -323,22 +321,10 @@ pub enum LogLevel {
     Critical,
 }
 
-
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialOrd,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
+    Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize, IntoValue, FromValue,
 )]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Enum)
-)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 pub enum PersistenceLevel {
     PersistNothing,
     PersistRemoteSideEffects,

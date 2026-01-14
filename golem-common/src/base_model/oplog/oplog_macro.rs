@@ -74,8 +74,8 @@ macro_rules! oplog_entry {
             $(ident_mash::mash! {
                 params_name = $case + Params =>
 
-                #[derive(Clone, Debug, serde::Serialize, PartialEq, serde::Deserialize, golem_wasm::derive::IntoValue)]
-                #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+                #[derive(Clone, Debug, serde::Serialize, PartialEq, serde::Deserialize)]
+                #[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm::derive::IntoValue))]
                 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
                 #[serde(rename_all = "camelCase")]
                 pub struct $params_name {
@@ -85,8 +85,8 @@ macro_rules! oplog_entry {
             })*
         }
 
-        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, golem_wasm::derive::IntoValue)]
-        #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "full", derive(poem_openapi::Union, golem_wasm::derive::IntoValue))]
         #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
         #[serde(tag = "type")]
         pub enum PublicOplogEntry {

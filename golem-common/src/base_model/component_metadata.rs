@@ -81,6 +81,7 @@ pub struct LinearMemory {
 }
 
 impl LinearMemory {
+    #[allow(dead_code)]
     pub(crate) const PAGE_SIZE: u64 = 65536;
 }
 

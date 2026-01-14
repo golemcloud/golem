@@ -12,26 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::model::Empty;
 use async_trait::async_trait;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::ValueAndType;
+use golem_wasm::{Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
-use crate::base_model::component::{ComponentId, ComponentRevision};
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryReferenceValue {
+    pub value: BinaryReference,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct TextReferenceValue {
+    pub value: TextReference,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct JsonComponentModelValue {
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -40,16 +67,11 @@ pub struct RegisteredAgentTypeImplementer {
     pub component_revision: ComponentRevision,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue,)
 )]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +89,10 @@ pub enum AgentMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -88,7 +113,10 @@ pub struct ComponentModelElementSchema {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +125,10 @@ pub struct TextDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -106,7 +137,10 @@ pub struct TextType {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
@@ -116,7 +150,10 @@ pub struct Url {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -126,7 +163,10 @@ pub struct TextSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -136,7 +176,10 @@ pub enum TextReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -145,7 +188,10 @@ pub struct BinaryDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -155,7 +201,10 @@ pub struct BinarySource {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -319,8 +368,77 @@ pub enum DataValue {
     Multimodal(NamedElementValues),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+pub enum UntypedDataValue {
+    Tuple(Vec<UntypedElementValue>),
+    Multimodal(Vec<UntypedNamedElementValue>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+pub struct UntypedNamedElementValue {
+    pub name: String,
+    pub value: UntypedElementValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+pub enum UntypedElementValue {
+    ComponentModel(Value),
+    UnstructuredText(TextReferenceValue),
+    UnstructuredBinary(BinaryReferenceValue),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonNamedElementValue {
+    pub name: String,
+    pub value: UntypedJsonElementValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonElementValues {
+    pub elements: Vec<UntypedJsonElementValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct UntypedJsonNamedElementValues {
+    pub elements: Vec<UntypedJsonNamedElementValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum UntypedJsonDataValue {
+    Tuple(UntypedJsonElementValues),
+    Multimodal(UntypedJsonNamedElementValues),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum UntypedJsonElementValue {
+    ComponentModel(JsonComponentModelValue),
+    UnstructuredText(TextReferenceValue),
+    UnstructuredBinary(BinaryReferenceValue),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -329,7 +447,10 @@ pub struct ElementValues {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -350,7 +471,10 @@ pub struct AgentId {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -360,7 +484,10 @@ pub struct NamedElementValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue)
+)]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -373,7 +500,10 @@ pub enum ElementValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -388,7 +518,10 @@ pub struct HttpMountDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -402,7 +535,10 @@ pub struct HttpEndpointDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -419,7 +555,10 @@ pub enum HttpMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
@@ -429,7 +568,10 @@ pub struct CustomHttpMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -438,7 +580,10 @@ pub struct CorsOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -447,7 +592,10 @@ pub struct PathSegment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Union))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -458,7 +606,10 @@ pub enum PathSegmentNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
@@ -468,7 +619,10 @@ pub struct LiteralSegment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
@@ -495,7 +649,10 @@ impl Display for SystemVariable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -504,7 +661,10 @@ pub struct PathVariable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -514,7 +674,10 @@ pub struct HeaderVariable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -524,7 +687,10 @@ pub struct QueryVariable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -533,7 +699,10 @@ pub struct AgentHttpAuthDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
