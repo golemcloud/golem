@@ -18,7 +18,7 @@ use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
@@ -644,7 +644,12 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<RegisteredAgentType>> {
         let agent_type = self
             .deployment_service
-            .get_deployment_agent_type(environment_id, deployment_id, &agent_type_name, &auth)
+            .get_deployment_agent_type(
+                environment_id,
+                deployment_id,
+                &AgentTypeName(agent_type_name),
+                &auth,
+            )
             .await?;
         Ok(Json(agent_type))
     }

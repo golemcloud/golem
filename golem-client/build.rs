@@ -62,6 +62,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "RegisteredAgentTypeImplementer",
                 "golem_common::model::agent::RegisteredAgentTypeImplementer",
             ),
+            (
+                "JsonComponentModelValue",
+                "golem_common::model::agent::JsonComponentModelValue",
+            ),
             // application
             (
                 "Application",

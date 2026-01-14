@@ -116,7 +116,7 @@ pub fn generate_moonbit_wrapper(
 
     for agent in &ctx.agent_types {
         let agent_stub = generate_agent_stub(&ctx, agent)?;
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         component.set_warning_control(
             &format!(
@@ -407,7 +407,7 @@ fn setup_dependencies(
     }
 
     for agent in agent_types {
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         depends_on_golem_agent_common(
             component,
@@ -541,9 +541,10 @@ fn generate_agent_stub(
         "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", msg); panic(); }}"
     )?;
     writeln!(result, "    }}")?;
+    // Fixme: thread the correct value through once we have new invocation api
     writeln!(
         result,
-        "  match @guest.initialize(\"{original_agent_name}\", encoded_params, None) {{"
+        "  match @guest.initialize(\"{original_agent_name}\", encoded_params, @common.Principal::Anonymous) {{"
     )?;
     writeln!(result, "    Ok(result) => result")?;
     writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", error.to_string()); panic(); }}")?;
@@ -578,9 +579,10 @@ fn generate_agent_stub(
         )?;
         writeln!(result, "    }}")?;
 
+        // Fixme: thread the correct value through once we have new invocation api
         writeln!(
             result,
-            "  let result = match @guest.invoke(\"{original_method_name}\", input, None) {{"
+            "  let result = match @guest.invoke(\"{original_method_name}\", input, @common.Principal::Anonymous) {{"
         )?;
         writeln!(result, "    Ok(result) => result")?;
         writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", error.to_string()); panic(); }}")?;
@@ -1600,6 +1602,16 @@ mod tests {
     pub fn unit_result_type() {
         let component_name = "example:bug".try_into().unwrap();
         let agent_types = test::unit_result_type();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    pub fn ts_code_first_snippets() {
+        let component_name = "example:code-first-snippets".try_into().unwrap();
+        let agent_types = test::ts_code_first_snippets();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

@@ -1,7 +1,7 @@
 package golem:agent;
 
 interface common {
-  use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value};
+  use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value, agent-id, account-id};
 
   type url = string;
 
@@ -100,19 +100,34 @@ interface common {
     required: bool,
   }
 
-  record auth-context {
-    sub:      string,
-    provider: string,
-    email:    string,
-    name:     string,
+  variant principal {
+    oidc(oidc-principal),
+    agent(agent-principal),
+    golem-user(golem-user-principal),
+    anonymous
+  }
 
+  record oidc-principal {
+    sub:      string,
+    issuer: string,
+
+    email:    option<string>,
+    name:     option<string>,
     email-verified: option<bool>,
     given-name:     option<string>,
     family-name:    option<string>,
     picture:        option<string>,
-    preferred-username: option<string>,
+    preferred-username:       option<string>,
 
     claims: string,
+  }
+
+  record agent-principal {
+    agent-id: agent-id,
+  }
+
+  record golem-user-principal {
+    account-id: account-id
   }
 
   record agent-constructor {

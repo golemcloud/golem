@@ -29,12 +29,12 @@ declare module 'agent-guest' {
      * If called a second time, it fails.
      * @throws AgentError
      */
-    export function initialize(agentType: string, input: DataValue, auth: AuthContext | undefined): Promise<void>;
+    export function initialize(agentType: string, input: DataValue, principal: Principal): Promise<void>;
     /**
      * Invokes an agent. If create was not called before, it fails
      * @throws AgentError
      */
-    export function invoke(methodName: string, input: DataValue, auth: AuthContext | undefined): Promise<DataValue>;
+    export function invoke(methodName: string, input: DataValue, principal: Principal): Promise<DataValue>;
     /**
      * Gets the agent type. If create was not called before, it fails
      */
@@ -47,7 +47,7 @@ declare module 'agent-guest' {
     export type AgentError = golemAgentCommon.AgentError;
     export type AgentType = golemAgentCommon.AgentType;
     export type DataValue = golemAgentCommon.DataValue;
-    export type AuthContext = golemAgentCommon.AuthContext;
+    export type Principal = golemAgentCommon.Principal;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
 }

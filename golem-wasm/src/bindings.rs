@@ -69,6 +69,20 @@ pub mod golem {
                         .finish()
                 }
             }
+            /// Represents a Golem account
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct AccountId {
+                pub uuid: Uuid,
+            }
+            impl ::core::fmt::Debug for AccountId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("AccountId").field("uuid", &self.uuid).finish()
+                }
+            }
             /// The index type used in `wit-value` and `wit-type` to identify nodes
             pub type NodeIndex = i32;
             /// Represents a WIT resource in an instance
@@ -3519,57 +3533,58 @@ mod _rt {
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2456] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x99\x12\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2482] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb3\x12\x01A\x02\x01\
 A\x08\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01\
 @\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/\
 wall-clock@0.2.3\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04sel\
 f\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\
 \0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\
 \0\x04poll\x01\x06\x03\0\x12wasi:io/poll@0.2.3\x05\x01\x02\x03\0\0\x08datetime\x02\
-\x03\0\x01\x08pollable\x01BU\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
+\x03\0\x01\x08pollable\x01BW\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
 \x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\
 \0\x04uuid\x03\0\x04\x01r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\
-\x0ccomponent-id\x07\x08agent-ids\x04\0\x08agent-id\x03\0\x08\x01z\x04\0\x0anode\
--index\x03\0\x0a\x01w\x04\0\x0bresource-id\x03\0\x0c\x01m\x02\x05owned\x08borrow\
-ed\x04\0\x0dresource-mode\x03\0\x0e\x01o\x02s\x0b\x01p\x10\x01k\x0b\x01o\x02s\x12\
-\x01p\x13\x01ps\x01p\x0b\x01o\x02\x12\x12\x01o\x02\x0d\x0f\x01q\x16\x0brecord-ty\
-pe\x01\x11\0\x0cvariant-type\x01\x14\0\x09enum-type\x01\x15\0\x0aflags-type\x01\x15\
-\0\x0atuple-type\x01\x16\0\x09list-type\x01\x0b\0\x0boption-type\x01\x0b\0\x0bre\
-sult-type\x01\x17\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\
-\x0dprim-u64-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\
-\0\x0dprim-s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-t\
-ype\0\0\x0eprim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\x18\0\x04\
-\0\x0dwit-type-node\x03\0\x19\x01ks\x01r\x03\x04name\x1b\x05owner\x1b\x04type\x1a\
-\x04\0\x13named-wit-type-node\x03\0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x08\
-wit-type\x03\0\x1f\x01r\x01\x05values\x04\0\x03uri\x03\0!\x01o\x02y\x12\x01p\x7f\
-\x01j\x01\x12\x01\x12\x01o\x02\"w\x01q\x16\x0crecord-value\x01\x16\0\x0dvariant-\
-value\x01#\0\x0aenum-value\x01y\0\x0bflags-value\x01$\0\x0btuple-value\x01\x16\0\
-\x0alist-value\x01\x16\0\x0coption-value\x01\x12\0\x0cresult-value\x01%\0\x07pri\
-m-u8\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01\
-~\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01\
-v\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-st\
-ring\x01s\0\x06handle\x01&\0\x04\0\x08wit-node\x03\0'\x01p(\x01r\x01\x05nodes)\x04\
-\0\x09wit-value\x03\0*\x01r\x02\x05value+\x03typ\x20\x04\0\x0evalue-and-type\x03\
-\0,\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\x15re\
-mote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0.\x04\0\x08wasm-rpc\x03\x01\x04\
-\0\x14future-invoke-result\x03\x01\x04\0\x12cancellation-token\x03\x01\x01i0\x01\
-@\x01\x08agent-id\x09\03\x04\0\x15[constructor]wasm-rpc\x014\x01h0\x01p+\x01j\x01\
-+\x01/\x01@\x03\x04self5\x0dfunction-names\x0ffunction-params6\07\x04\0![method]\
-wasm-rpc.invoke-and-await\x018\x01j\0\x01/\x01@\x03\x04self5\x0dfunction-names\x0f\
-function-params6\09\x04\0\x17[method]wasm-rpc.invoke\x01:\x01i1\x01@\x03\x04self\
-5\x0dfunction-names\x0ffunction-params6\0;\x04\0'[method]wasm-rpc.async-invoke-a\
-nd-await\x01<\x01@\x04\x04self5\x0escheduled-time\x01\x0dfunction-names\x0ffunct\
-ion-params6\x01\0\x04\0$[method]wasm-rpc.schedule-invocation\x01=\x01i2\x01@\x04\
-\x04self5\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params6\0>\x04\0/[\
-method]wasm-rpc.schedule-cancelable-invocation\x01?\x01h1\x01i\x03\x01@\x01\x04s\
-elf\xc0\0\0\xc1\0\x04\0&[method]future-invoke-result.subscribe\x01B\x01k7\x01@\x01\
-\x04self\xc0\0\0\xc3\0\x04\0\x20[method]future-invoke-result.get\x01D\x01h2\x01@\
-\x01\x04self\xc5\0\x01\0\x04\0![method]cancellation-token.cancel\x01F\x01j\x01\x05\
-\x01s\x01@\x01\x04uuids\0\xc7\0\x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\
-\x04\0\x0euuid-to-string\x01I\x03\0\x15golem:rpc/types@0.2.2\x05\x04\x04\0\x12go\
-lem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08wasm-rpc\x03\0\0\0G\x09producers\x01\x0c\
-processed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+\x0ccomponent-id\x07\x08agent-ids\x04\0\x08agent-id\x03\0\x08\x01r\x01\x04uuid\x05\
+\x04\0\x0aaccount-id\x03\0\x0a\x01z\x04\0\x0anode-index\x03\0\x0c\x01w\x04\0\x0b\
+resource-id\x03\0\x0e\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\
+\x10\x01o\x02s\x0d\x01p\x12\x01k\x0d\x01o\x02s\x14\x01p\x15\x01ps\x01p\x0d\x01o\x02\
+\x14\x14\x01o\x02\x0f\x11\x01q\x16\x0brecord-type\x01\x13\0\x0cvariant-type\x01\x16\
+\0\x09enum-type\x01\x17\0\x0aflags-type\x01\x17\0\x0atuple-type\x01\x18\0\x09lis\
+t-type\x01\x0d\0\x0boption-type\x01\x0d\0\x0bresult-type\x01\x19\0\x0cprim-u8-ty\
+pe\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8\
+-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim\
+-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
+prim-string-type\0\0\x0bhandle-type\x01\x1a\0\x04\0\x0dwit-type-node\x03\0\x1b\x01\
+ks\x01r\x03\x04name\x1d\x05owner\x1d\x04type\x1c\x04\0\x13named-wit-type-node\x03\
+\0\x1e\x01p\x1f\x01r\x01\x05nodes\x20\x04\0\x08wit-type\x03\0!\x01r\x01\x05value\
+s\x04\0\x03uri\x03\0#\x01o\x02y\x14\x01p\x7f\x01j\x01\x14\x01\x14\x01o\x02$w\x01\
+q\x16\x0crecord-value\x01\x18\0\x0dvariant-value\x01%\0\x0aenum-value\x01y\0\x0b\
+flags-value\x01&\0\x0btuple-value\x01\x18\0\x0alist-value\x01\x18\0\x0coption-va\
+lue\x01\x14\0\x0cresult-value\x01'\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08pri\
+m-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\
+\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim\
+-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01(\0\x04\0\
+\x08wit-node\x03\0)\x01p*\x01r\x01\x05nodes+\x04\0\x09wit-value\x03\0,\x01r\x02\x05\
+value-\x03typ\"\x04\0\x0evalue-and-type\x03\0.\x01q\x04\x0eprotocol-error\x01s\0\
+\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09r\
+pc-error\x03\00\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x04\
+\0\x12cancellation-token\x03\x01\x01i2\x01@\x01\x08agent-id\x09\05\x04\0\x15[con\
+structor]wasm-rpc\x016\x01h2\x01p-\x01j\x01-\x011\x01@\x03\x04self7\x0dfunction-\
+names\x0ffunction-params8\09\x04\0![method]wasm-rpc.invoke-and-await\x01:\x01j\0\
+\x011\x01@\x03\x04self7\x0dfunction-names\x0ffunction-params8\0;\x04\0\x17[metho\
+d]wasm-rpc.invoke\x01<\x01i3\x01@\x03\x04self7\x0dfunction-names\x0ffunction-par\
+ams8\0=\x04\0'[method]wasm-rpc.async-invoke-and-await\x01>\x01@\x04\x04self7\x0e\
+scheduled-time\x01\x0dfunction-names\x0ffunction-params8\x01\0\x04\0$[method]was\
+m-rpc.schedule-invocation\x01?\x01i4\x01@\x04\x04self7\x0escheduled-time\x01\x0d\
+function-names\x0ffunction-params8\0\xc0\0\x04\0/[method]wasm-rpc.schedule-cance\
+lable-invocation\x01A\x01h3\x01i\x03\x01@\x01\x04self\xc2\0\0\xc3\0\x04\0&[metho\
+d]future-invoke-result.subscribe\x01D\x01k9\x01@\x01\x04self\xc2\0\0\xc5\0\x04\0\
+\x20[method]future-invoke-result.get\x01F\x01h4\x01@\x01\x04self\xc7\0\x01\0\x04\
+\0![method]cancellation-token.cancel\x01H\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc9\
+\0\x04\0\x0aparse-uuid\x01J\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01K\
+\x03\0\x15golem:rpc/types@0.2.2\x05\x04\x04\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\
+\x01\0\x08wasm-rpc\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-compon\
+ent\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

@@ -22,13 +22,16 @@ pub use self::write::{DeploymentWriteError, DeploymentWriteService};
 use super::http_api_definition::HttpApiDefinitionError;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
+use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
     DeploymentPlan, DeploymentRevision, DeploymentSummary, DeploymentVersion,
 };
-use golem_common::model::environment::Environment;
+use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -69,21 +72,25 @@ error_forwarding!(
     DeployRepoError,
     RepoError,
     EnvironmentError,
+    ApplicationError,
     HttpApiDefinitionError,
 );
 
 pub struct DeploymentService {
     environment_service: Arc<EnvironmentService>,
+    application_service: Arc<ApplicationService>,
     deployment_repo: Arc<dyn DeploymentRepo>,
 }
 
 impl DeploymentService {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
+        application_service: Arc<ApplicationService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
     ) -> Self {
         Self {
             environment_service,
+            application_service,
             deployment_repo,
         }
     }
@@ -235,14 +242,14 @@ impl DeploymentService {
     pub async fn get_deployed_agent_type(
         &self,
         environment_id: EnvironmentId,
-        agent_type_name: &str,
+        agent_type_name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let agent_type = self
             .deployment_repo
-            .get_deployed_agent_type(environment_id.0, agent_type_name)
+            .get_deployed_agent_type(environment_id.0, &agent_type_name.0)
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
-                agent_type_name.to_string(),
+                agent_type_name.0.clone(),
             ))?
             .try_into()?;
 
@@ -269,7 +276,7 @@ impl DeploymentService {
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
-        agent_type_name: &str,
+        agent_type_name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let agent_type = self
             .deployment_repo
@@ -277,11 +284,11 @@ impl DeploymentService {
                 &environment_id.0,
                 &component_id.0,
                 component_revision.into(),
-                agent_type_name,
+                &agent_type_name.0,
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
-                agent_type_name.to_string(),
+                agent_type_name.0.clone(),
             ))?
             .try_into()?;
 
@@ -313,7 +320,7 @@ impl DeploymentService {
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
-        agent_type_name: &str,
+        agent_type_name: &AgentTypeName,
         auth: &AuthCtx,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let (_, environment) = self
@@ -331,11 +338,11 @@ impl DeploymentService {
             .get_deployment_agent_type(
                 environment_id.0,
                 deployment_revision.into(),
-                agent_type_name,
+                &agent_type_name.0,
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
-                agent_type_name.to_string(),
+                agent_type_name.0.clone(),
             ))?
             .try_into()?;
 
@@ -367,5 +374,27 @@ impl DeploymentService {
             .collect::<Result<_, _>>()?;
 
         Ok(agent_types)
+    }
+
+    pub async fn get_latest_deployed_agent_type_by_names(
+        &self,
+        account_id: AccountId,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        auth: &AuthCtx,
+    ) -> Result<RegisteredAgentType, DeploymentError> {
+        let application = self
+            .application_service
+            .get_in_account(account_id, app_name, auth)
+            .await?;
+
+        let environment = self
+            .environment_service
+            .get_in_application(application.id, environment_name, auth)
+            .await?;
+
+        self.get_deployed_agent_type(environment.id, agent_type_name)
+            .await
     }
 }

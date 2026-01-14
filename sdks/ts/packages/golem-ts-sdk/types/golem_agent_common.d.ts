@@ -3,6 +3,8 @@ declare module 'golem:agent/common' {
   export type ValueAndType = golemRpc022Types.ValueAndType;
   export type WitType = golemRpc022Types.WitType;
   export type WitValue = golemRpc022Types.WitValue;
+  export type AgentId = golemRpc022Types.AgentId;
+  export type AccountId = golemRpc022Types.AccountId;
   export type Url = string;
   export type AgentMode = "durable" | "ephemeral";
   export type CorsOptions = {
@@ -73,17 +75,39 @@ declare module 'golem:agent/common' {
     authDetails?: AuthDetails;
     corsOptions: CorsOptions;
   };
-  export type AuthContext = {
+  export type OidcPrincipal = {
     sub: string;
-    provider: string;
-    email: string;
-    name: string;
+    issuer: string;
+    email?: string;
+    name?: string;
     emailVerified?: boolean;
     givenName?: string;
     familyName?: string;
     picture?: string;
     preferredUsername?: string;
     claims: string;
+  };
+  export type AgentPrincipal = {
+    agentId: AgentId;
+  };
+  export type GolemUserPrincipal = {
+    accountId: AccountId;
+  };
+  export type Principal = 
+  {
+    tag: 'oidc'
+    val: OidcPrincipal
+  } |
+  {
+    tag: 'agent'
+    val: AgentPrincipal
+  } |
+  {
+    tag: 'golem-user'
+    val: GolemUserPrincipal
+  } |
+  {
+    tag: 'anonymous'
   };
   export type TextType = {
     languageCode: string;

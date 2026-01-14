@@ -20,6 +20,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentFilePath, ComponentId};
 use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +49,8 @@ pub enum WorkerServiceError {
     FileNotFound(ComponentFilePath),
     #[error("Bad file type: {0}")]
     BadFileType(ComponentFilePath),
+    #[error(transparent)]
+    RegistryServiceError(#[from] RegistryServiceError),
 }
 
 impl SafeDisplay for WorkerServiceError {
@@ -65,6 +68,7 @@ impl SafeDisplay for WorkerServiceError {
             Self::BadFileType(_) => self.to_string(),
             Self::LimitError(inner) => inner.to_safe_string(),
             Self::AuthError(inner) => inner.to_safe_string(),
+            Self::RegistryServiceError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -89,6 +93,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
             | WorkerServiceError::AccountIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_)
             | WorkerServiceError::FileNotFound(_)
+            | WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(_))
             | WorkerServiceError::Component(ComponentServiceError::ComponentNotFound)
             | WorkerServiceError::GolemError(WorkerExecutorError::WorkerNotFound { .. }) => {
                 Self::NotFound(ErrorBody {
@@ -96,19 +101,23 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
                 })
             }
 
-            WorkerServiceError::BadFileType(_) | WorkerServiceError::TypeChecker(_) => {
+            WorkerServiceError::BadFileType(_)
+            | WorkerServiceError::TypeChecker(_)
+            | WorkerServiceError::RegistryServiceError(RegistryServiceError::BadRequest(_)) => {
                 Self::BadRequest(ErrorsBody {
                     errors: vec![error.to_safe_string()],
                 })
             }
 
-            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_)) => {
+            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_))
+            | WorkerServiceError::RegistryServiceError(RegistryServiceError::LimitExceeded(_)) => {
                 Self::LimitExceeded(ErrorBody {
                     error: error.to_safe_string(),
                 })
             }
 
             WorkerServiceError::Internal(_)
+            | WorkerServiceError::RegistryServiceError(_)
             | WorkerServiceError::InternalCallError(_)
             | WorkerServiceError::LimitError(_)
             | WorkerServiceError::AuthError(_)
