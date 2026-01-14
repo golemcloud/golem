@@ -45,7 +45,7 @@ pub async fn compose(source_wasm: &Path, plugs: Vec<Plug>, dest_wasm: &Path) -> 
     Ok(())
 }
 
-// Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/crates/wac-graph/src/plug.rs#L23
+// Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/crates/wac-graph/src/plug.rs#L23,
 // but:
 //   - instead of returning NoPlugError, it logs skipped instantiations
 //   - pre-checks multi plugs for the same export to prevent ArgumentAlreadyPassed errors, and

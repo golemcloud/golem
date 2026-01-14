@@ -6,7 +6,6 @@ use golem_templates::model::GuestLanguage;
 use heck::ToKebabCase;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, tag, test};
-use golem_cli::fs;
 
 inherit_test_dep!(Tracing);
 
@@ -77,9 +76,6 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         }
     }
 
-    // TODO:
-    fs::remove(ctx.cwd_path_join("components-rust")).unwrap();
-
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
 
@@ -89,8 +85,9 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
     assert!(outputs.success());
 
     // Checking bridge SDKs for all agents and languages, one by one
-    for agent_meta in &agent_metas {
-        for language in GuestLanguage::iter() {
+    let mut failed_bridge_sdks = vec![];
+    for language in GuestLanguage::iter() {
+        for agent_meta in &agent_metas {
             let output = ctx
                 .cli([
                     cmd::GENERATE_BRIDGE,
@@ -100,14 +97,21 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
                     agent_meta.agent_test_name,
                 ])
                 .await;
-            check!(
-                output.success(),
-                "{} - {}",
-                agent_meta.agent_test_name,
-                language
-            );
+            if !output.success() {
+                failed_bridge_sdks.push((
+                    agent_meta.agent_test_name.to_string(),
+                    language.id(),
+                    output.stderr,
+                ));
+            }
         }
     }
+
+    assert!(
+        failed_bridge_sdks.is_empty(),
+        "Failed SDKs:\n{:#?}",
+        failed_bridge_sdks
+    );
 }
 
 fn agent_metas() -> Vec<AgentMeta> {
