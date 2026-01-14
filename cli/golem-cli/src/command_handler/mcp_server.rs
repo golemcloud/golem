@@ -34,16 +34,41 @@ impl McpServerCommandHandler for McpServerCommandHandlerDefault {
     }
 }
 
-use rmcp::transport::streamable_http_server::{session::local::LocalSessionManager, StreamableHttpService};
-use axum::Router;
-use axum::routing::get;
-
 impl McpServerCommandHandlerDefault {
     async fn run(&self, args: McpServerStartArgs) -> Result<()> {
-        let addr = format!("{}:{}", args.host, args.port);
-        logln(format!("Starting MCP server on {}", addr));
-
         let service = McpServerImpl::new(self.ctx.clone());
+
+        match args.transport.as_str() {
+            "stdio" => {
+                logln("Starting MCP server in stdio mode");
+                self.run_stdio(service).await
+            }
+            "http" | _ => {
+                // Default mode: HTTP/SSE (Streamable HTTP)
+                let addr = format!("{}:{}", args.host, args.port);
+                logln(format!("Starting MCP server in HTTP/SSE mode on {}", addr));
+                self.run_http(service, addr).await
+            }
+        }
+    }
+
+    async fn run_stdio(&self, service: McpServerImpl) -> Result<()> {
+        use rmcp::service::ServiceExt;
+        use rmcp::transport::io;
+        
+        let stdio_transport = io::stdio();
+        let running_service = service.serve(stdio_transport).await?;
+        
+        // Wait for the service to finish
+        running_service.waiting().await?;
+        
+        Ok(())
+    }
+
+    async fn run_http(&self, service: McpServerImpl, addr: String) -> Result<()> {
+        use rmcp::transport::streamable_http_server::{session::local::LocalSessionManager, StreamableHttpService};
+        use axum::Router;
+        use axum::routing::get;
 
         let mcp_service = StreamableHttpService::new(
             move || Ok(service.clone()),

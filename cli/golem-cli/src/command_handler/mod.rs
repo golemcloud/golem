@@ -233,6 +233,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             let args = McpServerStartArgs {
                 host: "127.0.0.1".to_string(),
                 port: command.global_flags.serve_port,
+                transport: "http".to_string(),
             };
             return self.ctx.mcp_server_handler().handle(McpServerSubcommand::Start(args)).await;
         }

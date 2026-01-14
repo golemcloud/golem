@@ -22,11 +22,15 @@ pub enum McpServerSubcommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct McpServerStartArgs {
-    /// Host address to bind to
+    /// Host address to bind to (HTTP mode only)
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 
-    /// Port to bind to
+    /// Port to bind to (HTTP mode only)
     #[arg(long, default_value_t = 3000)]
     pub port: u16,
+
+    /// Transport mode: "http" (SSE/HTTP, default) or "stdio"
+    #[arg(long, default_value = "http", value_parser = ["http", "stdio"])]
+    pub transport: String,
 }

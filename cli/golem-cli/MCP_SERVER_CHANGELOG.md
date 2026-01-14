@@ -20,10 +20,12 @@
 - Proper error handling with MCP-compliant error codes
 
 ### Configuration
-- `--host` flag to specify bind address (default: 127.0.0.1)
-- `--port` flag to specify port (default: 3000)
-- MCP endpoint available at `/mcp`
-- Health check endpoint at `/`
+- `--host` flag to specify bind address (HTTP/SSE mode only, default: 127.0.0.1)
+- `--port` flag to specify port (HTTP/SSE mode only, default: 3000)
+- `--transport` flag to specify transport mode: `http` (HTTP/SSE, default) or `stdio`
+- MCP endpoint available at `/mcp` (HTTP/SSE mode)
+- Health check endpoint at `/` (HTTP/SSE mode)
+- Default transport mode is HTTP/SSE (Streamable HTTP) when no `--transport` flag is provided
 
 ### Dependencies Added
 - `rmcp` - Rust MCP SDK

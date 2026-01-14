@@ -8,16 +8,39 @@ The Golem CLI includes an MCP (Model Context Protocol) Server that exposes CLI c
 
 ### Starting the MCP Server
 
+#### HTTP/SSE Mode (default)
+
+By default, the server runs in HTTP/SSE (Streamable HTTP) mode:
+
+```bash
+golem-cli mcp-server start
+```
+
+Or explicitly:
+
 ```bash
 golem-cli mcp-server start --host 127.0.0.1 --port 3000
 ```
 
-The server will start and listen for MCP client connections at `http://127.0.0.1:3000/mcp`.
+The server will start and listen for MCP client connections at `http://127.0.0.1:3000/mcp` using Server-Sent Events (SSE) for streaming responses.
+
+#### Stdio Mode (for Claude Desktop)
+
+To use stdio transport (for Claude Desktop and other stdio-based clients):
+
+```bash
+golem-cli mcp-server start --transport stdio
+```
+
+The server will communicate via stdin/stdout, compatible with Claude Desktop and other stdio-based MCP clients.
 
 ### Command Options
 
-- `--host` - Host address to bind to (default: `127.0.0.1`)
-- `--port` - Port to bind to (default: `3000`)
+- `--host` - Host address to bind to (HTTP/SSE mode only, default: `127.0.0.1`)
+- `--port` - Port to bind to (HTTP/SSE mode only, default: `3000`)
+- `--transport` - Transport mode: `http` (HTTP/SSE, default) or `stdio`
+
+**Note:** If `--transport` is not specified, the server defaults to HTTP/SSE mode.
 
 ### Health Check
 
@@ -132,9 +155,9 @@ curl -X POST http://127.0.0.1:3000/mcp \
 
 ## Integration with AI Agents
 
-### Claude Code
+### Claude Code / Cursor (HTTP/SSE mode - default)
 
-Configure Claude Code to use the Golem CLI MCP server by adding it to your MCP configuration:
+Configure Claude Code or Cursor to use the Golem CLI MCP server by adding it to your MCP configuration:
 
 ```json
 {
@@ -146,7 +169,19 @@ Configure Claude Code to use the Golem CLI MCP server by adding it to your MCP c
 }
 ```
 
-Once configured, Claude Code can:
+Start the server (defaults to HTTP/SSE mode):
+```bash
+golem-cli mcp-server start
+```
+
+Or explicitly:
+```bash
+golem-cli mcp-server start --host 127.0.0.1 --port 3000
+```
+
+The server uses Server-Sent Events (SSE) for streaming responses over HTTP.
+
+Once configured, clients can:
 - List available agent types
 - List components
 - Execute other Golem CLI commands exposed as tools
