@@ -22,7 +22,7 @@ use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, ComponentOptionalComponentName, DeployArgs, ForceBuildArg,
+    BuildArgs, DeployArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
@@ -40,8 +40,9 @@ use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_templates::model::GuestLanguage;
 use lenient_bool::LenientBool;
@@ -603,14 +604,30 @@ pub enum GolemCliSubcommand {
     /// Build all or selected components in the application
     Build {
         #[command(flatten)]
-        component_name: AppOptionalComponentNames,
+        component_name: OptionalComponentNames,
         #[command(flatten)]
         build: BuildArgs,
+    },
+    /// Generate bridge SDK(s) for the selected agent(s)
+    GenerateBridge {
+        /// Selects the target language for the generated bridge SDK, defaults to the agent's language
+        #[clap(long)]
+        language: Option<GuestLanguage>,
+        /// Optional filter for component names; can be defined multiple times
+        #[clap(long)]
+        component_name: Vec<ComponentName>,
+        /// Optional filter for agent type names; can be defined multiple times
+        #[clap(long)]
+        agent_type_name: Vec<AgentTypeName>,
+        /// Optional output directory for the generated SDK, when not specified, will use separate
+        /// temporary directories in the application's directory
+        #[clap(long)]
+        output_dir: Option<PathBuf>,
     },
     /// Start Rib REPL for a selected component
     Repl {
         #[command(flatten)]
-        component_name: ComponentOptionalComponentName,
+        component_name: OptionalComponentName,
         /// Optional component revision to use, defaults to latest deployed component revision
         revision: Option<ComponentRevision>,
         #[command(flatten)]
@@ -628,7 +645,7 @@ pub enum GolemCliSubcommand {
     /// Deploy application
     Deploy {
         /// Only plan deployment, but apply no changes to the staging area or the environment
-        #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
+        #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
         plan: bool,
         /// Only plan and stage changes, but do not apply them to the environment; used for testing
         #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
@@ -637,10 +654,10 @@ pub enum GolemCliSubcommand {
         #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
         approve_staging_steps: bool,
         /// Revert to the specified version
-        #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
+        #[arg(long, conflicts_with_all = ["force_build", "revision", "stage", "approve_staging_steps"])]
         version: Option<String>,
         /// Revert to the specified revision
-        #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
+        #[arg(long, conflicts_with_all = ["force_build", "version", "stage", "approve_staging_steps"])]
         revision: Option<DeploymentRevision>,
         #[command(flatten)]
         force_build: ForceBuildArg,
@@ -650,12 +667,12 @@ pub enum GolemCliSubcommand {
     /// Clean all components in the application or by selection
     Clean {
         #[command(flatten)]
-        component_name: AppOptionalComponentNames,
+        component_name: OptionalComponentNames,
     },
     /// Try to automatically update all existing agents of the application to the latest version
     UpdateAgents {
         #[command(flatten)]
-        component_name: AppOptionalComponentNames,
+        component_name: OptionalComponentNames,
         /// Update mode - auto or manual, defaults to "auto"
         #[arg(long, short, default_value = "auto")]
         update_mode: AgentUpdateMode,
@@ -666,12 +683,12 @@ pub enum GolemCliSubcommand {
     /// Redeploy all agents of the application using the latest version
     RedeployAgents {
         #[command(flatten)]
-        component_name: AppOptionalComponentNames,
+        component_name: OptionalComponentNames,
     },
     /// Diagnose possible tooling problems
     Diagnose {
         #[command(flatten)]
-        component_name: AppOptionalComponentNames,
+        component_name: OptionalComponentNames,
     },
     /// List all the deployed agent types
     ListAgentTypes {},
@@ -749,49 +766,18 @@ pub mod shared_args {
     pub type WorkerFunctionName = String;
 
     #[derive(Debug, Args)]
-    pub struct ComponentMandatoryComponentName {
+    pub struct OptionalComponentName {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Optional component name, if not specified component is selected based on the current directory.
-        /// Accepted formats:
-        ///   - <COMPONENT>
-        ///   - <PROJECT>/<COMPONENT>
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>
-        #[arg(verbatim_doc_comment)]
-        pub component_name: ComponentName,
-    }
-
-    #[derive(Debug, Args)]
-    pub struct ComponentOptionalComponentName {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Optional component name, if not specified component is selected based on the current directory.
-        /// Accepted formats:
-        ///   - <COMPONENT>
-        ///   - <PROJECT>/<COMPONENT>
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>
+        /// Optional component name, if not specified, component is selected based on the current directory.
         #[arg(verbatim_doc_comment)]
         pub component_name: Option<ComponentName>,
     }
 
     #[derive(Debug, Args)]
-    pub struct ComponentOptionalComponentNames {
+    pub struct OptionalComponentNames {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Optional component names, if not specified components are selected based on the current directory
-        /// Accepted formats:
-        ///   - <COMPONENT>
-        ///   - <PROJECT>/<COMPONENT>
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>
+        /// Optional component names, if not specified, components are selected based on the current directory.
         #[arg(verbatim_doc_comment)]
-        pub component_name: Vec<ComponentName>,
-    }
-
-    #[derive(Debug, Args)]
-    pub struct AppOptionalComponentNames {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Optional component names, if not specified all components are selected.
-        /// Accepted formats:
-        ///   - <COMPONENT>
-        ///   - <PROJECT>/<COMPONENT>
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>
         pub component_name: Vec<ComponentName>,
     }
 
@@ -917,7 +903,7 @@ pub mod environment {
 
 pub mod component {
     use crate::command::shared_args::{
-        ComponentOptionalComponentName, ComponentOptionalComponentNames, ComponentTemplateName,
+        ComponentTemplateName, OptionalComponentName, OptionalComponentNames,
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
@@ -942,14 +928,14 @@ pub mod component {
         /// Get the latest or selected revision of deployed component metadata
         Get {
             #[command(flatten)]
-            component_name: ComponentOptionalComponentName,
+            component_name: OptionalComponentName,
             /// Optional component revision to get
             revision: Option<ComponentRevision>,
         },
         /// Try to automatically update all existing agents of the selected component to the latest version
         UpdateAgents {
             #[command(flatten)]
-            component_name: ComponentOptionalComponentName,
+            component_name: OptionalComponentName,
             /// Agent update mode - auto or manual, defaults to "auto"
             #[arg(long, short, default_value_t = AgentUpdateMode::Automatic)]
             update_mode: AgentUpdateMode,
@@ -960,23 +946,23 @@ pub mod component {
         /// Redeploy all agents of the selected component using the latest version
         RedeployAgents {
             #[command(flatten)]
-            component_name: ComponentOptionalComponentName,
+            component_name: OptionalComponentName,
         },
         /// Diagnose possible tooling problems
         Diagnose {
             #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
+            component_name: OptionalComponentNames,
         },
         /// Show component manifest properties with source trace
         ManifestTrace {
             #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
+            component_name: OptionalComponentNames,
         },
     }
 
     pub mod plugin {
         use crate::command::parse_key_val;
-        use crate::command::shared_args::ComponentOptionalComponentName;
+        use crate::command::shared_args::OptionalComponentName;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
@@ -984,7 +970,7 @@ pub mod component {
             /// Install a plugin for selected component
             Install {
                 #[command(flatten)]
-                component_name: ComponentOptionalComponentName,
+                component_name: OptionalComponentName,
                 /// The plugin to install
                 #[arg(long)]
                 plugin_name: String,
@@ -1001,7 +987,7 @@ pub mod component {
             /// Get the installed plugins of the component
             Get {
                 #[command(flatten)]
-                component_name: ComponentOptionalComponentName,
+                component_name: OptionalComponentName,
                 /// The revision of the component
                 revision: Option<u64>,
             },
@@ -1009,7 +995,7 @@ pub mod component {
             Update {
                 /// The component to update the plugin for
                 #[command(flatten)]
-                component_name: ComponentOptionalComponentName,
+                component_name: OptionalComponentName,
                 /// Priority of the plugin to update
                 #[arg(long)]
                 plugin_to_update: i32,
@@ -1024,7 +1010,7 @@ pub mod component {
             Uninstall {
                 /// The component to uninstall the plugin from
                 #[command(flatten)]
-                component_name: ComponentOptionalComponentName,
+                component_name: OptionalComponentName,
                 /// Priority of the plugin to update
                 #[arg(long)]
                 plugin_to_update: i32,

@@ -2020,7 +2020,7 @@ impl WorkerCommandHandler {
                     logln("");
                     log_error(format!(
                         "Incompatible agent type ({}) and method ({})",
-                        agent_id.agent_type.log_color_error_highlight(),
+                        agent_id.agent_type.as_str().log_color_error_highlight(),
                         function_name.log_color_error_highlight()
                     ));
                     logln("");

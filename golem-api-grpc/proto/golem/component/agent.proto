@@ -3,6 +3,8 @@ syntax = "proto3";
 import "golem/common/empty.proto";
 import "wasm/rpc/type.proto";
 import "wasm/rpc/value_and_type.proto";
+import "golem/common/account_id.proto";
+import "golem/component/component_id.proto";
 
 package golem.component;
 
@@ -221,15 +223,40 @@ message AgentHttpAuthDetails {
   bool required = 1;
 }
 
-message AgentHttpAuthContext {
+message Principal {
+  oneof value {
+    OidcPrincipal oidc = 1;
+    AgentPrincipal agent = 2;
+    GolemUserPrincipal golem_user = 3;
+    golem.common.Empty anonymous = 4;
+  }
+}
+
+message OidcPrincipal {
   string sub = 1;
-  string provider = 2;
-  string email = 3;
-  string name = 4;
+  string issuer = 2;
+
+  optional string email = 3;
+  optional string name = 4;
   optional bool email_verified = 5;
+
   optional string given_name = 6;
   optional string family_name = 7;
   optional string picture = 8;
   optional string preferred_username = 9;
+
   string claims = 10;
+}
+
+message AgentPrincipal {
+  AgentIdWithComponent agent_id = 1;
+}
+
+message GolemUserPrincipal {
+  golem.common.AccountId account_id = 1;
+}
+
+message AgentIdWithComponent {
+  string agent_id = 1;
+  ComponentId component_id = 2;
 }

@@ -81,6 +81,12 @@ declare module 'golem:rpc/types@0.2.2' {
     agentId: string;
   };
   /**
+   * Represents a Golem account
+   */
+  export type AccountId = {
+    uuid: Uuid;
+  };
+  /**
    * The index type used in `wit-value` and `wit-type` to identify nodes
    */
   export type NodeIndex = number;

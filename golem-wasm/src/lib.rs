@@ -92,8 +92,8 @@ pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use golem_rpc_0_2_x::types::{
-    AgentId, ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, Uuid,
-    WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
+    AccountId, AgentId, ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri,
+    Uuid, WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(not(feature = "host"))]
@@ -130,8 +130,8 @@ pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host")]
 pub use golem_rpc_0_2_x::types::{
-    AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode,
-    WitType, WitTypeNode, WitValue,
+    AccountId, AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri,
+    Uuid, WitNode, WitType, WitTypeNode, WitValue,
 };
 
 use std::fmt;
@@ -486,6 +486,33 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let arbitrary_value = u.arbitrary::<Value>()?;
         Ok(arbitrary_value.into())
+    }
+}
+
+impl From<uuid::Uuid> for AccountId {
+    fn from(value: uuid::Uuid) -> Self {
+        Self { uuid: value.into() }
+    }
+}
+
+impl From<AccountId> for uuid::Uuid {
+    fn from(value: AccountId) -> Self {
+        value.uuid.into()
+    }
+}
+
+impl FromStr for AccountId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(uuid::Uuid::parse_str(s)?.into())
+    }
+}
+
+impl Display for AccountId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let uuid: uuid::Uuid = self.uuid.into();
+        write!(f, "{uuid}")
     }
 }
 

@@ -333,7 +333,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             let agent_type_name =
                 AgentId::parse_agent_type_name(worker_name).map_err(|err| anyhow!(err))?;
             let agent_type = component_metadata
-                .find_agent_type_by_wrapper_name(agent_type_name)
+                .find_agent_type_by_wrapper_name(&agent_type_name)
                 .map_err(|err| anyhow!(err))?
                 .ok_or_else(|| anyhow!("Agent type not found"))?;
 

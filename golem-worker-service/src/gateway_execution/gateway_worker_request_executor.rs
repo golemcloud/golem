@@ -17,7 +17,7 @@ use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentId, AgentMode, AgentTypeName};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, WorkerId};
@@ -90,7 +90,7 @@ impl GatewayWorkerRequestExecutor {
                 .map_err(|err| WorkerRequestExecutorError(format!("Invalid agent ID: {err}")))?;
             let agent_type = component
                 .metadata
-                .find_agent_type_by_wrapper_name(agent_type_name)
+                .find_agent_type_by_wrapper_name(&AgentTypeName(agent_type_name.to_string()))
                 .map_err(|err| {
                     WorkerRequestExecutorError(format!("Failed to extract agent type: {err}"))
                 })?

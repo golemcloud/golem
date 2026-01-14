@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::{ComponentGeneratorMarkerHash, TaskResultMarker};
-use crate::app::build::{delete_path_logged, env_var_flag, is_up_to_date};
+use crate::app::build::up_to_date_check::is_up_to_date;
+use crate::app::build::{delete_path_logged, env_var_flag};
 use crate::app::context::ApplicationContext;
 use crate::fs;
 use crate::fs::PathExtra;
