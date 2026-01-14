@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 import {
   HeaderVariable,
   HttpMountDetails,
@@ -5,8 +19,7 @@ import {
 } from 'golem:agent/common';
 import { AgentDecoratorOptions } from '../options';
 import { parsePath } from './path';
-import { parseQuery } from './query';
-import { validateIdentifier } from './identifier';
+import { rejectEmpty } from './validation';
 
 export type HeaderVariables = Record<string, string>;
 
@@ -15,15 +28,16 @@ export function getHttpMountDetails(
 ): HttpMountDetails | undefined {
   if (!agentDecoratorOptions?.mount) return undefined;
 
-  const [path, query] = splitPathAndQuery(agentDecoratorOptions.mount);
+  if (agentDecoratorOptions.mount.includes('?')) {
+    throw new Error(`HTTP 'mount' must not contain query parameters`);
+  }
 
-  const pathPrefix = parsePath(path);
-  const queryVars = query ? parseQuery(query) : [];
+  const pathPrefix = parsePath(agentDecoratorOptions.mount);
   const headerVars = parseHeaderVars(agentDecoratorOptions.headers);
 
   return {
     pathPrefix,
-    queryVars,
+    queryVars: [],
     headerVars,
     authDetails: agentDecoratorOptions.auth
       ? { required: true }
@@ -36,15 +50,13 @@ export function getHttpMountDetails(
   };
 }
 
-function splitPathAndQuery(mount: string): [string, string | undefined] {
-  const idx = mount.indexOf('?');
-  return idx === -1
-    ? [mount, undefined]
-    : [mount.slice(0, idx), mount.slice(idx + 1)];
-}
-
 function parseWebhook(webhook?: string): PathSegment[] {
   if (!webhook) return [];
+
+  if (webhook.includes('?')) {
+    throw new Error(`Http '${webhook}' option cannot contain query parameters`);
+  }
+
   return parsePath(webhook);
 }
 
@@ -52,7 +64,7 @@ function parseHeaderVars(headers?: HeaderVariables): HeaderVariable[] {
   if (!headers) return [];
 
   return Object.entries(headers).map(([headerName, variableName]) => {
-    validateIdentifier(variableName);
+    rejectEmpty(variableName);
 
     return {
       headerName,

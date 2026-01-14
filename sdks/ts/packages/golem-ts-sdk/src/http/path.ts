@@ -1,5 +1,19 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 import { PathSegment, PathSegmentNode } from 'golem:agent/common';
-import { validateIdentifier } from './identifier';
+import { rejectEmpty } from './validation';
 
 export function parsePath(path: string): PathSegment[] {
   if (!path.startsWith('/')) {
@@ -16,17 +30,20 @@ function parseSegment(segment: string): PathSegment {
     throw new Error(`Empty path segment ("//") is not allowed`);
   }
 
+  const trimmedSegment = segment.trim();
+
   const nodes: PathSegmentNode[] = [];
 
   let i = 0;
-  while (i < segment.length) {
-    if (segment[i] === '{') {
-      const end = segment.indexOf('}', i);
+  while (i < trimmedSegment.length) {
+    if (trimmedSegment[i] === '{') {
+      const end = trimmedSegment.indexOf('}', i);
       if (end === -1) {
         throw new Error(`Unclosed "{" in path segment "${segment}"`);
       }
 
-      const name = segment.slice(i + 1, end);
+      const name = trimmedSegment.slice(i + 1, end);
+
       if (!name) {
         throw new Error(`Empty path variable "{}" is not allowed`);
       }
@@ -37,7 +54,7 @@ function parseSegment(segment: string): PathSegment {
           val: name,
         });
       } else {
-        validateIdentifier(name);
+        rejectEmpty(name);
         nodes.push({
           tag: 'path-variable',
           val: { variableName: name },
@@ -49,12 +66,12 @@ function parseSegment(segment: string): PathSegment {
     }
 
     let start = i;
-    while (i < segment.length && segment[i] !== '{') {
+    while (i < trimmedSegment.length && trimmedSegment[i] !== '{') {
       i++;
     }
 
-    const literal = segment.slice(start, i);
-    validateLiteral(literal);
+    const literal = trimmedSegment.slice(start, i);
+    rejectEmpty(literal);
 
     nodes.push({
       tag: 'literal',
@@ -63,10 +80,4 @@ function parseSegment(segment: string): PathSegment {
   }
 
   return { concat: nodes };
-}
-
-function validateLiteral(segment: string) {
-  if (segment.includes('{') || segment.includes('}')) {
-    throw new Error(`Invalid literal path segment "${segment}"`);
-  }
 }
