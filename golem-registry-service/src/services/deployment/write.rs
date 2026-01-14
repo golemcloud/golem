@@ -43,7 +43,7 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use indoc::formatdoc;
 use rib::RibCompilationError;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 // macro_rules! ok_or_continue {
@@ -117,11 +117,11 @@ error_forwarding!(
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
     #[error(
-        "Http api definition {missing_http_api_definition} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
+        "Agent type {missing_agent_type} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
     )]
-    HttpApiDeploymentMissingHttpApiDefinition {
+    HttpApiDeploymentMissingAgentType {
         http_api_deployment_domain: Domain,
-        missing_http_api_definition: HttpApiDefinitionName,
+        missing_agent_type: AgentTypeName,
     },
     #[error("Invalid path pattern: {0}")]
     HttpApiDefinitionInvalidPathPattern(String),
@@ -308,10 +308,10 @@ impl DeploymentWriteService {
             }
         }
 
-        // Fixme: code-first routes
-        // deployment_context.validate_http_api_deployments()?;
-
         let registered_agent_types = deployment_context.extract_registered_agent_types()?;
+
+        deployment_context.validate_http_api_deployments(&registered_agent_types)?;
+
 
         // Fixme: code-first routes
         // let (domain_http_api_definitions, compiled_http_api_routes, deployment_context) = {
@@ -342,7 +342,7 @@ impl DeploymentWriteService {
                 .collect(),
             HashSet::new(),
             Vec::new(),
-            registered_agent_types,
+            registered_agent_types.into_values().into_iter().collect(),
         );
 
         let deployment: CurrentDeployment = self
@@ -501,51 +501,52 @@ impl DeploymentContext {
 
     fn extract_registered_agent_types(
         &self,
-    ) -> Result<Vec<RegisteredAgentType>, DeploymentWriteError> {
-        let mut seen_wit_named_agent_types = HashSet::new();
-        let mut agent_types = Vec::new();
+    ) -> Result<HashMap<AgentTypeName, RegisteredAgentType>, DeploymentWriteError> {
+        let mut agent_types = HashMap::new();
 
         for component in self.components.values() {
             for agent_type in component.metadata.agent_types() {
-                if !seen_wit_named_agent_types.insert(agent_type.type_name.to_wit_naming()) {
-                    return Err(DeploymentWriteError::DeploymentValidationFailed(vec![
-                        DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()),
-                    ]));
-                }
-                agent_types.push(RegisteredAgentType {
+                let agent_type_name = agent_type.type_name.to_wit_naming();
+                let registered_agent_type = RegisteredAgentType {
                     agent_type: agent_type.clone(),
                     implemented_by: RegisteredAgentTypeImplementer {
                         component_id: component.id,
                         component_revision: component.revision,
                     },
-                });
+                };
+
+                if !agent_types.insert(agent_type_name, registered_agent_type).is_some() {
+                    return Err(DeploymentWriteError::DeploymentValidationFailed(vec![
+                        DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()),
+                    ]));
+                };
             }
         }
         Ok(agent_types)
     }
 
-    // fn validate_http_api_deployments(&self) -> Result<(), DeploymentWriteError> {
-    //     let mut errors = Vec::new();
+    fn validate_http_api_deployments(&self, registered_agent_types: &HashMap<AgentTypeName, RegisteredAgentType>) -> Result<(), DeploymentWriteError> {
+        let mut errors = Vec::new();
 
-    //     for deployment in self.http_api_deployments.values() {
-    //         for definition_name in &deployment.api_definitions {
-    //             if !self.http_api_definitions.contains_key(definition_name) {
-    //                 errors.push(
-    //                     DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
-    //                         http_api_deployment_domain: deployment.domain.clone(),
-    //                         missing_http_api_definition: definition_name.clone(),
-    //                     },
-    //                 );
-    //             }
-    //         }
-    //     }
+        for deployment in self.http_api_deployments.values() {
+            for agent_type in &deployment.agent_types {
+                if !registered_agent_types.contains_key(agent_type) {
+                    errors.push(
+                        DeployValidationError::HttpApiDeploymentMissingAgentType {
+                            http_api_deployment_domain: deployment.domain.clone(),
+                            missing_agent_type: agent_type.clone(),
+                        },
+                    );
+                }
+            }
+        }
 
-    //     if !errors.is_empty() {
-    //         return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
-    //     };
+        if !errors.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+        };
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
 
     // #[allow(clippy::type_complexity)]
     // fn compiled_http_api_routes(
