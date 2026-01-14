@@ -18,7 +18,7 @@ use super::{CompiledRoute, CompiledRoutes};
 use super::{
     RouteBehaviour,
 };
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::http_api_definition::{HttpApiDefinitionName, HttpApiDefinitionVersion};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
@@ -161,6 +161,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::RouteBehaviour> for Ro
 
         match value.behavior.ok_or("RouteBehaviour.behavior missing")? {
             Behavior::CallAgent(agent) => Ok(RouteBehaviour::CallAgent {
+                component_id: agent.component_id.ok_or("Missing field: component_id")?.try_into()?,
+                component_revision: agent.component_revision.try_into()?,
                 agent_type: AgentTypeName(agent.agent_type),
                 method_name: agent.method_name,
                 input_schema: agent.input_schema.ok_or("Missing field: input_schema")?.try_into()?,
@@ -177,9 +179,11 @@ impl From<RouteBehaviour> for Option<golem_api_grpc::proto::golem::apidefinition
         use golem_api_grpc::proto::golem::apidefinition::route_behaviour::Behavior;
 
         Some(match value {
-            RouteBehaviour::CallAgent { agent_type, method_name, input_schema, output_schema } => {
+            RouteBehaviour::CallAgent { component_id, component_revision, agent_type, method_name, input_schema, output_schema } => {
                 golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
                     behavior: Some(Behavior::CallAgent(golem_api_grpc::proto::golem::apidefinition::CallAgent {
+                        component_id: Some(component_id.into()),
+                        component_revision: component_revision.get(),
                         agent_type: agent_type.0,
                         method_name,
                         input_schema: Some(input_schema.into()),

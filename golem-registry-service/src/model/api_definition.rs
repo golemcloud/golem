@@ -24,18 +24,31 @@ use golem_service_base::custom_api::RouteBehaviour;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use std::collections::HashMap;
+use golem_common::model::agent::{CorsOptions, HeaderVariable, HttpMethod, PathSegment, PathSegmentNode, QueryVariable};
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct CompiledRouteWithDynamicReferences {
+    pub method: HttpMethod,
+    pub path: Vec<PathSegmentNode>,
+    pub header_vars: Vec<HeaderVariable>,
+    pub query_vars: Vec<QueryVariable>,
+    pub behaviour: RouteBehaviour,
+    pub security_scheme: Option<SecuritySchemeName>,
+    pub cors: CorsOptions
+}
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct CompiledRouteWithoutSecurity {
-    pub method: RouteMethod,
+    pub method: HttpMethod,
     pub path: AllPathPatterns,
-    pub binding: RouteBehaviour,
+    pub behaviour: RouteBehaviour,
+    pub cors: CorsOptions
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRouteWithContext {
-    pub http_api_definition_id: HttpApiDefinitionId,
     pub security_scheme: Option<SecuritySchemeName>,
     pub route: CompiledRouteWithoutSecurity,
 }
@@ -55,7 +68,7 @@ pub struct CompiledRouteWithSecuritySchemeDetails {
 pub struct MaybeDisabledCompiledRoute {
     pub security_scheme_missing: bool,
     pub security_scheme: Option<SecuritySchemeId>,
-    pub method: RouteMethod,
+    pub method: HttpMethod,
     pub path: AllPathPatterns,
     pub binding: RouteBehaviour,
 }

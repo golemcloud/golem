@@ -22,7 +22,7 @@ use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploy
 use futures::TryFutureExt;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
-    AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    AgentMethod, AgentType, AgentTypeName, CorsOptions, HttpMountDetails, RegisteredAgentType, RegisteredAgentTypeImplementer
 };
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
@@ -45,6 +45,8 @@ use indoc::formatdoc;
 use rib::RibCompilationError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use crate::model::api_definition::{CompiledRouteWithContext, CompiledRouteWithDynamicReferences, CompiledRouteWithoutSecurity};
+use golem_service_base::custom_api::{CompiledRoute, RouteBehaviour};
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{
@@ -553,13 +555,9 @@ impl DeploymentContext {
         &self,
         registered_agent_types: &HashMap<AgentTypeName, RegisteredAgentType>
     ) -> Result<
-        (
-            HashSet<(Domain, HttpApiDefinitionId)>,
-            Vec<CompiledRouteWithContext>,
-        ),
+        Vec<CompiledRouteWithDynamicReferences>,
         DeploymentWriteError,
     > {
-        let mut domain_http_api_definitions = HashSet::new();
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
 
@@ -575,44 +573,10 @@ impl DeploymentContext {
                     errors
                 );
 
-                if !definition.routes.is_empty() {
-                    domain_http_api_definitions.insert((deployment.domain.clone(), definition.id));
+                if let Some(http_mount) = &registered_agent_type.agent_type.http_mount {
+                    let mut compiled_agent_routes = ok_or_continue!(self.compile_agent_methods_http_routes(&registered_agent_type.agent_type, &registered_agent_type.implemented_by, &http_mount, &registered_agent_type.agent_type.methods), errors);
+                    compiled_routes.append(&mut compiled_agent_routes);
                 };
-
-                for route in &definition.routes {
-                    let path_pattern = ok_or_continue!(
-                        AllPathPatterns::parse(&route.path).map_err(|_| {
-                            DeployValidationError::HttpApiDefinitionInvalidPathPattern(
-                                route.path.clone(),
-                            )
-                        }),
-                        errors
-                    );
-
-                    let binding = ok_or_continue!(
-                        self.compile_gateway_binding(
-                            definition.id,
-                            &definition.name,
-                            &definition.version,
-                            route.method,
-                            &route.path,
-                            &route.binding
-                        ),
-                        errors
-                    );
-
-                    let compiled_route = CompiledRouteWithContext {
-                        http_api_definition_id: definition.id,
-                        security_scheme: route.security.clone(),
-                        route: CompiledRouteWithoutSecurity {
-                            method: route.method,
-                            path: path_pattern,
-                            binding,
-                        },
-                    };
-
-                    compiled_routes.push(compiled_route);
-                }
             }
         }
 
@@ -620,7 +584,55 @@ impl DeploymentContext {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         };
 
-        Ok((domain_http_api_definitions, compiled_routes))
+        Ok(compiled_routes)
+    }
+
+    fn compile_agent_methods_http_routes(
+        &self,
+        agent: &AgentType,
+        implementer: &RegisteredAgentTypeImplementer,
+        http_mount: &HttpMountDetails,
+        methods: &Vec<AgentMethod>
+    ) -> Result<Vec<CompiledRouteWithDynamicReferences>, DeployValidationError> {
+        let mut result = Vec::new();
+
+        for method in methods {
+            for http_endpoint in method.http_endpoint {
+                let cors = if !http_endpoint.cors_options.allowed_patterns.is_empty() {
+                    http_endpoint.cors_options.clone()
+                } else {
+                    http_mount.cors_options.clone()
+                };
+
+                let mut header_vars = http_mount.header_vars.clone();
+                header_vars.extend(http_endpoint.header_vars);
+
+                let mut query_vars = http_mount.query_vars.clone();
+                query_vars.extend(http_endpoint.query_vars);
+
+                let compiled = CompiledRouteWithDynamicReferences {
+                    method: http_endpoint.http_method.clone(),
+                    path: http_mount.path_prefix.clone().into_iter().flat_map(|p| p.concat).chain(http_endpoint.path_suffix.clone().into_iter().flat_map(|p| p.concat)).collect(),
+                    header_vars,
+                    query_vars,
+                    behaviour: RouteBehaviour::CallAgent {
+                        component_id: implementer.component_id.clone(),
+                        component_revision: implementer.component_revision.clone(),
+                        agent_type: agent.type_name.clone(),
+                        method_name: method.name.clone(),
+                        input_schema: method.input_schema.clone(),
+                        output_schema: method.output_schema.clone()
+                    },
+                    // TODO:
+                    security_scheme: None,
+                    cors
+                };
+
+                result.push(compiled);
+            }
+        }
+
+        Ok(result)
     }
 
     // #[allow(clippy::type_complexity)]

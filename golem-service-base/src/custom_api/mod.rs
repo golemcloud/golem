@@ -60,6 +60,8 @@ pub struct CompiledRoute {
 #[desert(evolution())]
 pub enum RouteBehaviour {
     CallAgent {
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         agent_type: AgentTypeName,
         method_name: String,
         input_schema: DataSchema,

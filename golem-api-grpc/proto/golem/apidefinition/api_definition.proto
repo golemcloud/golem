@@ -44,10 +44,12 @@ message RouteBehaviour {
 }
 
 message CallAgent {
-  string agent_type = 1;
-  string method_name = 2;
-  golem.component.DataSchema input_schema = 3;
-  golem.component.DataSchema output_schema = 4;
+  golem.component.ComponentId component_id = 1;
+  uint64 component_revision = 2;
+  string agent_type = 3;
+  string method_name = 4;
+  golem.component.DataSchema input_schema = 5;
+  golem.component.DataSchema output_schema = 6;
 }
 
 message SecuritySchemeDetails {
