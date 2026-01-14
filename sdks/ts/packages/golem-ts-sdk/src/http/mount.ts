@@ -32,7 +32,7 @@ export function getHttpMountDetails(
     corsOptions: {
       allowedPatterns: agentDecoratorOptions.cors ?? [],
     },
-    webhookSuffix: parseWebhook(agentDecoratorOptions.webhook),
+    webhookSuffix: parseWebhook(agentDecoratorOptions.webhookSuffix),
   };
 }
 

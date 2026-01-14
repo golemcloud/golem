@@ -495,6 +495,38 @@ class EphemeralAgent extends BaseAgent {
   }
 }
 
+@agent({
+  mount: '/chats/{agentId}',
+})
+class SimpleHttpAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({
+  mount: '/chats/{agentId}',
+  cors: ['https://app.acme.com', 'https://staging.acme.com'],
+  auth: true,
+  headers: { 'X-Foo': 'FooValue', 'X-Bar': 'BarValue' },
+  webhookSuffix: '/{agentId}/events',
+})
+class ComplexHttpAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
 // If this class is decorated with agent, it will fail
 // This is kept here to ensure that any internal user class is not part of metadata generation.
 // See package.json for metadata generation command.

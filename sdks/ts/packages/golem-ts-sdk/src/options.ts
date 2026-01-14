@@ -9,5 +9,5 @@ export type AgentDecoratorOptions = {
   cors?: AllowedPattern[];
   auth?: boolean;
   headers?: Record<string, string>;
-  webhook?: string;
+  webhookSuffix?: string;
 };
