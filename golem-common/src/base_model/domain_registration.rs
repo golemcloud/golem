@@ -12,4 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use crate::base_model::regions::*;
+use derive_more::Display;
+use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use crate::base_model::environment::EnvironmentId;
+
+newtype_uuid!(DomainRegistrationId);
+
+declare_transparent_newtypes! {
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    pub struct Domain(pub String);
+}
+
+declare_structs! {
+    pub struct DomainRegistrationCreation {
+        pub domain: Domain
+    }
+
+    pub struct DomainRegistration {
+        pub id: DomainRegistrationId,
+        pub environment_id: EnvironmentId,
+        pub domain: Domain
+    }
+}

@@ -12,66 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::account::AccountId;
-use crate::model::application::ApplicationId;
-use crate::model::component_metadata::ComponentMetadata;
 use crate::model::component_metadata::dynamic_linking_to_diffable;
-use crate::model::environment::EnvironmentId;
-use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::plugin_registration::PluginRegistrationId;
 use crate::model::diff;
-use crate::{
-    declare_enums, declare_structs, declare_unions,
-};
-use desert_rust::BinaryCodec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;
-
-declare_structs! {
-    pub struct ComponentDto {
-        pub id: ComponentId,
-        pub revision: ComponentRevision,
-        pub environment_id: EnvironmentId,
-        pub component_name: ComponentName,
-        pub hash: diff::Hash,
-        pub application_id: ApplicationId,
-        pub account_id: AccountId,
-        pub component_size: u64,
-        pub metadata: ComponentMetadata,
-        pub created_at: chrono::DateTime<chrono::Utc>,
-        pub files: Vec<InitialComponentFile>,
-        pub original_files: Vec<InitialComponentFile>,
-        pub installed_plugins: Vec<InstalledPlugin>,
-        pub env: BTreeMap<String, String>,
-        pub original_env: BTreeMap<String, String>,
-        pub wasm_hash: crate::model::diff::Hash,
-    }
-
-    pub struct InstalledPlugin {
-        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
-        pub priority: PluginPriority,
-        pub parameters: BTreeMap<String, String>,
-
-        pub plugin_registration_id: PluginRegistrationId,
-        pub plugin_name: String,
-        pub plugin_version: String,
-
-        // oplog processor only
-        pub oplog_processor_component_id: Option<ComponentId>,
-        pub oplog_processor_component_revision: Option<ComponentRevision>,
-    }
-
-    pub struct InitialComponentFile {
-        pub content_hash: ComponentFileContentHash,
-        pub path: ComponentFilePath,
-        pub permissions: ComponentFilePermissions,
-    }
-}
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {

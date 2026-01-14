@@ -22,10 +22,12 @@ use super::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use crate::model::OplogIndex;
 use crate::{declare_enums, declare_structs, declare_unions};
 use desert_rust::BinaryCodec;
-use golem_wasm::{FromValue, IntoValue, Value};
+use golem_wasm::{FromValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+
+pub use crate::base_model::worker::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,59 +38,6 @@ pub struct WorkerCreationRequest {
     pub env: HashMap<String, String>,
     #[oai(default)]
     pub config_vars: WasiConfigVars,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[derive(poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-pub struct WasiConfigVarsEntry {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, poem_openapi::NewType,
-)]
-#[oai(from_multipart = false, from_parameter = false, to_header = false)]
-pub struct WasiConfigVars(pub Vec<WasiConfigVarsEntry>);
-
-impl Default for WasiConfigVars {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl WasiConfigVars {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-}
-
-impl From<WasiConfigVars> for BTreeMap<String, String> {
-    fn from(value: WasiConfigVars) -> Self {
-        value.0.into_iter().map(|e| (e.key, e.value)).collect()
-    }
-}
-
-impl From<BTreeMap<String, String>> for WasiConfigVars {
-    fn from(value: BTreeMap<String, String>) -> Self {
-        Self(
-            value
-                .into_iter()
-                .map(|(key, value)| WasiConfigVarsEntry { key, value })
-                .collect(),
-        )
-    }
-}
-
-impl IntoValue for WasiConfigVars {
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        BTreeMap::<String, String>::get_type()
-    }
-    fn into_value(self) -> golem_wasm::Value {
-        BTreeMap::from(self).into_value()
-    }
 }
 
 declare_enums! {

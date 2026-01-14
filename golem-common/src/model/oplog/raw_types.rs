@@ -15,7 +15,6 @@
 use crate::base_model::OplogIndex;
 use crate::model::component::ComponentRevision;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
-use crate::model::oplog::public_oplog_entry::{BinaryCodec, Deserialize, Serialize};
 use crate::model::oplog::OplogPayload;
 use crate::model::Timestamp;
 use golem_wasm_derive::{FromValue, IntoValue};
@@ -24,6 +23,8 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use desert_rust::BinaryCodec;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub struct OplogIndexRange {
@@ -138,72 +139,6 @@ impl Display for PayloadId {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialOrd,
-    Ord,
-    PartialEq,
-    Eq,
-    Hash,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::NewType,
-)]
-#[desert(transparent)]
-pub struct WorkerResourceId(pub u64);
-
-impl WorkerResourceId {
-    pub const INITIAL: WorkerResourceId = WorkerResourceId(0);
-
-    pub fn next(&self) -> WorkerResourceId {
-        WorkerResourceId(self.0 + 1)
-    }
-}
-
-impl Display for WorkerResourceId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Worker log levels including the special stdout and stderr channels
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialEq,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Enum,
-)]
-#[repr(u8)]
-pub enum LogLevel {
-    #[desert(transparent)]
-    Stdout,
-    #[desert(transparent)]
-    Stderr,
-    #[desert(transparent)]
-    Trace,
-    #[desert(transparent)]
-    Debug,
-    #[desert(transparent)]
-    Info,
-    #[desert(transparent)]
-    Warn,
-    #[desert(transparent)]
-    Error,
-    #[desert(transparent)]
-    Critical,
-}
-
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum SpanData {
@@ -254,25 +189,6 @@ impl SpanData {
         }
         result_spans
     }
-}
-
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialOrd,
-    PartialEq,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Enum,
-)]
-pub enum PersistenceLevel {
-    PersistNothing,
-    PersistRemoteSideEffects,
-    Smart,
 }
 
 /// Describes a pending update

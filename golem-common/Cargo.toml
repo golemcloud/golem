@@ -30,9 +30,6 @@ full = [
     "dep:figment",
     "dep:fred",
     "dep:heck",
-    "dep:humantime-serde",
-    "dep:ident-mash",
-    "dep:iso8601-timestamp",
     "dep:itertools",
     "dep:lazy_static",
     "dep:mac_address",
@@ -46,7 +43,6 @@ full = [
     "dep:poem-openapi",
     "dep:prometheus",
     "dep:prost-types",
-    "dep:range-set-blaze",
     "dep:regex",
     "dep:scc",
     "dep:serde_yaml",
@@ -89,9 +85,9 @@ figment = { workspace = true, optional = true }
 fred = { workspace = true, optional = true }
 heck = { workspace = true, optional = true }
 http = { workspace = true }
-humantime-serde = { workspace = true, optional = true }
-ident-mash = { workspace = true, optional = true }
-iso8601-timestamp = { workspace = true, optional = true }
+humantime-serde = { workspace = true }
+ident-mash = { workspace = true }
+iso8601-timestamp = { workspace = true }
 itertools = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
 mac_address = { workspace = true, optional = true }
@@ -106,7 +102,7 @@ poem-openapi = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }
 rand = { workspace = true }
-range-set-blaze = { workspace = true, optional = true }
+range-set-blaze = { workspace = true }
 regex = { workspace = true, optional = true }
 scc = { workspace = true, optional = true }
 serde = { workspace = true }

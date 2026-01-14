@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::base64::Base64;
 use super::component::ComponentRevision;
 use super::ComponentId;
 use crate::model::diff;
-use crate::{declare_structs, declare_transparent_newtypes};
+use crate::declare_transparent_newtypes;
 
 pub use crate::base_model::plugin_registration::*;
 

@@ -225,7 +225,7 @@ macro_rules! declare_revision {
         )]
         #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
         #[repr(transparent)]
-        pub struct $name(u64);
+        pub struct $name(pub(crate) u64);
 
         impl $name {
             pub const INITIAL: Self = Self(0);

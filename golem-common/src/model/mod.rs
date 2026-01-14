@@ -64,8 +64,7 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
-use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{u32, u64};
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
@@ -80,7 +79,7 @@ use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
 use url::Url;
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
 
 impl WorkerId {
     const WORKER_ID_MAX_LENGTH: usize = 512;
@@ -168,10 +167,6 @@ pub trait PoemMultipartTypeRequirements: poem_openapi::types::ParseFromMultipart
 
 impl<T: poem_openapi::types::ParseFromMultipartField> PoemMultipartTypeRequirements for T {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[repr(transparent)]
-pub struct Timestamp(iso8601_timestamp::Timestamp);
-
 impl Timestamp {
     pub fn now_utc() -> Timestamp {
         Timestamp(iso8601_timestamp::Timestamp::now_utc())
@@ -185,50 +180,6 @@ impl Timestamp {
 
     pub fn rounded(self) -> Self {
         Self::from(self.to_millis())
-    }
-}
-
-impl Display for Timestamp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl FromStr for Timestamp {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match iso8601_timestamp::Timestamp::parse(s) {
-            Some(ts) => Ok(Self(ts)),
-            None => Err("Invalid timestamp".to_string()),
-        }
-    }
-}
-
-impl serde::Serialize for Timestamp {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Timestamp {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if deserializer.is_human_readable() {
-            iso8601_timestamp::Timestamp::deserialize(deserializer).map(Self)
-        } else {
-            // For non-human-readable formats we assume it was an i64 representing milliseconds from epoch
-            let timestamp = <i64 as Deserialize>::deserialize(deserializer)?;
-            Ok(Timestamp(
-                iso8601_timestamp::Timestamp::UNIX_EPOCH
-                    .add(Duration::from_millis(timestamp as u64)),
-            ))
-        }
     }
 }
 
@@ -253,48 +204,6 @@ impl BinaryDeserializer for Timestamp {
         Ok(Timestamp(
             iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp)),
         ))
-    }
-}
-
-impl From<u64> for Timestamp {
-    fn from(value: u64) -> Self {
-        Timestamp(iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(value)))
-    }
-}
-
-impl IntoValue for Timestamp {
-    fn into_value(self) -> Value {
-        let d = self
-            .0
-            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
-        Value::Record(vec![
-            Value::U64(d.whole_seconds() as u64),
-            Value::U32(d.subsec_nanoseconds() as u32),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-    }
-}
-
-impl FromValue for Timestamp {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Record(fields) if fields.len() == 2 => {
-                let mut iter = fields.into_iter();
-                let seconds = u64::from_value(iter.next().unwrap())?;
-                let nanos = u32::from_value(iter.next().unwrap())?;
-                Ok(Self(
-                    iso8601_timestamp::Timestamp::UNIX_EPOCH
-                        .add(Duration::from_secs(seconds))
-                        .add(Duration::from_nanos(nanos as u64)),
-                ))
-            }
-            other => Err(format!(
-                "Expected a record with two fields for Timestamp, got {other:?}"
-            )),
-        }
     }
 }
 
@@ -540,99 +449,6 @@ impl Display for ShardAssignment {
             "{{ number_of_shards: {}, shard_ids: {} }}",
             self.number_of_shards, shard_ids
         )
-    }
-}
-
-#[derive(Clone, Debug, BinaryCodec, Eq, Hash, PartialEq, IntoValue, FromValue)]
-#[desert(transparent)]
-#[wit_transparent]
-pub struct IdempotencyKey {
-    pub value: String,
-}
-
-impl IdempotencyKey {
-    const ROOT_NS: Uuid = uuid!("9C19B15A-C83D-46F7-9BC3-EAD7923733F4");
-
-    pub fn new(value: String) -> Self {
-        Self { value }
-    }
-
-    pub fn from_uuid(value: Uuid) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-
-    pub fn fresh() -> Self {
-        Self::from_uuid(Uuid::new_v4())
-    }
-
-    /// Generates a deterministic new idempotency key using a base idempotency key and an oplog index.
-    ///
-    /// The base idempotency key determines the "namespace" of the generated key UUIDv5. If
-    /// the base idempotency key is already an UUID, it is directly used as the namespace of the v5 algorithm,
-    /// while the name part is derived from the given oplog index.
-    ///
-    /// If the base idempotency key is not an UUID (as it can be an arbitrary user-provided string), then first
-    /// we generate a UUIDv5 in the ROOT_NS namespace and use that as unique namespace for generating
-    /// the new idempotency key.
-    pub fn derived(base: &IdempotencyKey, oplog_index: OplogIndex) -> Self {
-        let namespace = if let Ok(base_uuid) = Uuid::parse_str(&base.value) {
-            base_uuid
-        } else {
-            Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
-        };
-        let name = format!("oplog-index-{oplog_index}");
-        Self::from_uuid(Uuid::new_v5(&namespace, name.as_bytes()))
-    }
-}
-
-impl Serialize for IdempotencyKey {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        Serialize::serialize(&self.value, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for IdempotencyKey {
-    fn deserialize<D>(deserializer: D) -> Result<IdempotencyKey, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = <String as Deserialize>::deserialize(deserializer)?;
-        Ok(IdempotencyKey { value })
-    }
-}
-
-impl Display for IdempotencyKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value)
-    }
-}
-
-impl From<&str> for IdempotencyKey {
-    fn from(s: &str) -> Self {
-        IdempotencyKey {
-            value: s.to_string(),
-        }
-    }
-}
-
-impl From<String> for IdempotencyKey {
-    fn from(s: String) -> Self {
-        IdempotencyKey { value: s }
-    }
-}
-
-impl FromStr for IdempotencyKey {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(IdempotencyKey {
-            value: s.to_string(),
-        })
     }
 }
 
@@ -1873,4 +1689,3 @@ impl Display for RdbmsPoolKey {
         write!(f, "{}", self.masked_address())
     }
 }
-

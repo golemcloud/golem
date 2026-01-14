@@ -14,14 +14,10 @@
 
 use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
 use crate::model::diff::Diffable;
-use blake3::HexError;
-use serde::de::Visitor;
-use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt::{self, Display};
-use std::str::FromStr;
+use std::fmt::Display;
 use std::sync::OnceLock;
-
+use serde::ser::SerializeStruct;
 pub use crate::base_model::diff::hash::*;
 
 pub trait Hashable {

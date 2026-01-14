@@ -20,9 +20,13 @@ use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
 use golem_wasm_derive::{FromValue, IntoValue};
 use crate::base_model::agent::AgentType;
-use crate::base_model::component_metadata::DynamicLinkedInstance;
+use crate::base_model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use crate::base_model::{diff, validate_lower_kebab_case_identifier};
+use crate::base_model::account::AccountId;
+use crate::base_model::application::ApplicationId;
+use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::plugin_registration::PluginRegistrationId;
 
 newtype_uuid!(
     ComponentId,
@@ -103,7 +107,26 @@ impl AsRef<str> for ComponentName {
 }
 
 declare_structs! {
-        pub struct ComponentCreation {
+    pub struct ComponentDto {
+        pub id: ComponentId,
+        pub revision: ComponentRevision,
+        pub environment_id: EnvironmentId,
+        pub component_name: ComponentName,
+        pub hash: diff::Hash,
+        pub application_id: ApplicationId,
+        pub account_id: AccountId,
+        pub component_size: u64,
+        pub metadata: ComponentMetadata,
+        pub created_at: chrono::DateTime<chrono::Utc>,
+        pub files: Vec<InitialComponentFile>,
+        pub original_files: Vec<InitialComponentFile>,
+        pub installed_plugins: Vec<InstalledPlugin>,
+        pub env: BTreeMap<String, String>,
+        pub original_env: BTreeMap<String, String>,
+        pub wasm_hash: diff::Hash,
+    }
+
+    pub struct ComponentCreation {
         pub component_name: ComponentName,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -162,6 +185,26 @@ declare_structs! {
         /// EnvironmentPluginGrantId to identify the plugin to update
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
     }
+
+    pub struct InstalledPlugin {
+        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
+        pub priority: PluginPriority,
+        pub parameters: BTreeMap<String, String>,
+
+        pub plugin_registration_id: PluginRegistrationId,
+        pub plugin_name: String,
+        pub plugin_version: String,
+
+        // oplog processor only
+        pub oplog_processor_component_id: Option<ComponentId>,
+        pub oplog_processor_component_revision: Option<ComponentRevision>,
+    }
+
+    pub struct InitialComponentFile {
+        pub content_hash: ComponentFileContentHash,
+        pub path: ComponentFilePath,
+        pub permissions: ComponentFilePermissions,
+    }
 }
 
 declare_unions! {
@@ -202,7 +245,7 @@ impl ComponentFilePermissions {
 /// - not contain ".." components
 /// - not contain "." components
 /// - use '/' as a separator
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, derive_more::Display)]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Display)]
 pub struct ComponentFilePath(Utf8UnixPathBuf);
 
 impl ComponentFilePath {

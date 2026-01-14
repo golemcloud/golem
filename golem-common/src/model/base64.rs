@@ -14,12 +14,9 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use desert_rust::BinaryCodec;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::ToJSON;
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromParameter, ParseResult, Type};
-use serde::de::Error;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::borrow::Cow;
 

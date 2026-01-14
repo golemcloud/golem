@@ -12,32 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::account::AccountId;
-use super::auth::EnvironmentRole;
-use super::environment::EnvironmentId;
-use crate::{declare_revision, declare_structs, newtype_uuid};
-use std::collections::BTreeSet;
-
-newtype_uuid!(EnvironmentShareId);
-
-declare_revision!(EnvironmentShareRevision);
-
-declare_structs! {
-    pub struct EnvironmentShare {
-        pub id: EnvironmentShareId,
-        pub revision: EnvironmentShareRevision,
-        pub environment_id: EnvironmentId,
-        pub grantee_account_id: AccountId,
-        pub roles: BTreeSet<EnvironmentRole>
-    }
-
-    pub struct EnvironmentShareCreation {
-        pub grantee_account_id: AccountId,
-        pub roles: BTreeSet<EnvironmentRole>
-    }
-
-    pub struct EnvironmentShareUpdate {
-        pub current_revision: EnvironmentShareRevision,
-        pub roles: BTreeSet<EnvironmentRole>
-    }
-}
+pub use crate::base_model::environment_share::*;
