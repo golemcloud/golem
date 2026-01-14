@@ -314,7 +314,6 @@ fn dynamic_import(
                         ))
                     })
                 },
-
             )?;
         }
 

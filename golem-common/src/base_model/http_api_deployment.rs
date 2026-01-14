@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::DateTime;
-use crate::{declare_revision, declare_structs, newtype_uuid};
 use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::http_api_definition::HttpApiDefinitionName;
+use crate::{declare_revision, declare_structs, newtype_uuid};
+use chrono::DateTime;
 
 newtype_uuid!(HttpApiDeploymentId);
 

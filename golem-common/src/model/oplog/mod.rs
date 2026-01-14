@@ -21,15 +21,15 @@ pub(crate) mod raw_types;
 #[cfg(test)]
 mod tests;
 
-pub use crate::base_model::oplog::{public_oplog_entry, OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex};
+pub use crate::base_model::oplog::{
+    public_oplog_entry, OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex,
+};
 pub use crate::base_model::OplogIndex;
 pub use payload::*;
 pub use public_types::*;
 pub use raw_types::*;
 
 use crate::model::component::ComponentRevision;
-use desert_rust::BinaryCodec;
-use serde::{Deserialize, Serialize};
 
 impl OplogEntry {
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {

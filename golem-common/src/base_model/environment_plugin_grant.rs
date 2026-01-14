@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{declare_structs, newtype_uuid};
 use crate::base_model::account::AccountSummary;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
+use crate::{declare_structs, newtype_uuid};
 
 newtype_uuid!(
     EnvironmentPluginGrantId,

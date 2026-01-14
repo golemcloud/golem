@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeSet;
-use crate::{declare_revision, declare_structs, newtype_uuid};
 use crate::base_model::account::AccountId;
 use crate::base_model::auth::EnvironmentRole;
 use crate::base_model::environment::EnvironmentId;
+use crate::{declare_revision, declare_structs, newtype_uuid};
+use std::collections::BTreeSet;
 
 newtype_uuid!(EnvironmentShareId);
 

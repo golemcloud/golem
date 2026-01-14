@@ -19,11 +19,9 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     Evolution, SerializationContext,
 };
-use golem_wasm::FromValue;
 use golem_wasm_derive::{FromValue, IntoValue};
 use lazy_static::lazy_static;
 use nonempty_collections::NEVec;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::{Arc, RwLock};

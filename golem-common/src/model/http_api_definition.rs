@@ -13,11 +13,8 @@
 // limitations under the License.
 
 use super::component::ComponentName;
-use crate::model::Empty;
 use crate::model::diff;
-use desert_rust::BinaryCodec;
-use std::fmt::Display;
-use std::str::FromStr;
+use crate::model::Empty;
 
 pub use crate::base_model::http_api_definition::*;
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use crate::base_model::auth::*;
 use base64::Engine;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult, ToJSON, Type};
@@ -19,7 +20,6 @@ use rand::rngs::OsRng;
 use rand::TryRngCore;
 use std::borrow::Cow;
 use std::str::FromStr;
-pub use crate::base_model::auth::*;
 
 impl Default for TokenSecret {
     fn default() -> Self {

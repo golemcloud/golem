@@ -12,21 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions, newtype_uuid};
+use crate::base_model::account::AccountId;
+use crate::base_model::agent::AgentType;
+use crate::base_model::application::ApplicationId;
+use crate::base_model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
+use crate::base_model::environment::EnvironmentId;
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::plugin_registration::PluginRegistrationId;
+use crate::base_model::{diff, validate_lower_kebab_case_identifier};
+use crate::{
+    declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
+    newtype_uuid,
+};
 use derive_more::Display;
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
-use golem_wasm_derive::{FromValue, IntoValue};
-use crate::base_model::agent::AgentType;
-use crate::base_model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
-use crate::base_model::{diff, validate_lower_kebab_case_identifier};
-use crate::base_model::account::AccountId;
-use crate::base_model::application::ApplicationId;
-use crate::base_model::environment::EnvironmentId;
-use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::base_model::plugin_registration::PluginRegistrationId;
 
 newtype_uuid!(
     ComponentId,

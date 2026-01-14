@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use derive_more::Display;
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 use crate::base_model::environment::EnvironmentId;
+use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 
 newtype_uuid!(DomainRegistrationId);
 

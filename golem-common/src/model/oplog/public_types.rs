@@ -16,8 +16,6 @@ pub use crate::base_model::oplog::OplogCursor;
 use crate::model::invocation_context::AttributeValue;
 use crate::model::oplog::DurableFunctionType;
 use crate::model::{Empty, RetryConfig};
-use std::fmt;
-use std::fmt::{Display, Formatter};
 
 pub use crate::base_model::oplog::public_types::*;
 

@@ -14,8 +14,8 @@
 
 use super::component::ComponentRevision;
 use super::ComponentId;
-use crate::model::diff;
 use crate::declare_transparent_newtypes;
+use crate::model::diff;
 
 pub use crate::base_model::plugin_registration::*;
 

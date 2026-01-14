@@ -59,7 +59,6 @@ use uuid::Uuid;
 
 pub use crate::base_model::agent::*;
 
-
 impl TryFrom<i32> for AgentMode {
     type Error = String;
 

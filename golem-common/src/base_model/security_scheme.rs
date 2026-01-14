@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str::FromStr;
-use derive_more::Display;
-use crate::{declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::validate_lower_kebab_case_identifier;
+use crate::{
+    declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid,
+};
+use derive_more::Display;
+use std::str::FromStr;
 
 newtype_uuid!(
     SecuritySchemeId,

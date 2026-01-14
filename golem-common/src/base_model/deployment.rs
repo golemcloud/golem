@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use derive_more::Display;
-use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use crate::base_model::component::{ComponentId, ComponentName, ComponentRevision};
 use crate::base_model::diff::Hash;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::http_api_definition::{HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionRevision};
+use crate::base_model::http_api_definition::{
+    HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionRevision,
+};
 use crate::base_model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
+use derive_more::Display;
 
 declare_revision!(DeploymentRevision);
 

@@ -12,21 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::account::AccountId;
-use super::component::ComponentFilePermissions;
-use super::component::{ComponentRevision, PluginPriority};
-use super::environment::EnvironmentId;
-use super::oplog::WorkerResourceId;
-use super::regions::OplogRegion;
-use super::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
-use crate::model::OplogIndex;
-use crate::{declare_enums, declare_structs, declare_unions};
-use desert_rust::BinaryCodec;
-use golem_wasm::{FromValue, Value};
-use golem_wasm_derive::{FromValue, IntoValue};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::{Display, Formatter};
-
 pub use crate::base_model::worker::*;
 
 mod protobuf {

@@ -143,9 +143,7 @@ impl<'de> Deserialize<'de> for SpanId {
     where
         D: Deserializer<'de>,
     {
-        Self::from_string(<String as Deserialize>::deserialize(
-            deserializer,
-        )?)
-        .map_err(Error::custom)
+        Self::from_string(<String as Deserialize>::deserialize(deserializer)?)
+            .map_err(Error::custom)
     }
 }

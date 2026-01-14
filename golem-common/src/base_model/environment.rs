@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeSet;
-use std::str::FromStr;
-use derive_more::Display;
-use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use crate::base_model::account::{AccountId, AccountSummary};
 use crate::base_model::application::{ApplicationId, ApplicationSummary};
 use crate::base_model::auth::EnvironmentRole;
-use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision, DeploymentVersion};
+use crate::base_model::deployment::{
+    CurrentDeploymentRevision, DeploymentRevision, DeploymentVersion,
+};
 use crate::base_model::diff::Hash;
 use crate::base_model::validate_lower_kebab_case_identifier;
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
+use std::collections::BTreeSet;
+use std::str::FromStr;
 
 newtype_uuid!(
     EnvironmentId,
     golem_api_grpc::proto::golem::common::EnvironmentId
 );
-
 
 declare_revision!(EnvironmentRevision);
 

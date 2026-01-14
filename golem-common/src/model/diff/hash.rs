@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use crate::base_model::diff::hash::*;
 use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
 use crate::model::diff::Diffable;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt::Display;
-use std::sync::OnceLock;
 use serde::ser::SerializeStruct;
-pub use crate::base_model::diff::hash::*;
+use serde::{Serialize, Serializer};
+use std::sync::OnceLock;
 
 pub trait Hashable {
     fn hash(&self) -> Hash;

@@ -14,17 +14,12 @@
 
 use crate::bridge_gen::rust::RustBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
-use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
-    ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-    NamedElementSchemas,
-};
-use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
-use std::path::PathBuf;
+use camino::Utf8Path;
+use golem_common::model::agent::AgentType;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
+#[allow(dead_code)]
 struct GeneratedPackage {
     pub dir: TempDir,
 }

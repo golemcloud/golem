@@ -21,8 +21,6 @@ pub mod base64;
 pub mod certificate;
 pub mod component;
 pub mod component_constraint;
-#[allow(unused_assignments)]
-// NOTE: from rust 1.92, a `value assigned to `cache` is never read` warning is emitted, most likely from the derived BinaryCodec. To be fixed in desert
 pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
@@ -48,7 +46,6 @@ pub mod security_scheme;
 pub mod trim_date;
 pub mod worker;
 
-pub use crate::base_model::worker_filter::*;
 pub use crate::base_model::*;
 
 use self::component::ComponentId;
@@ -65,17 +62,15 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_wasm::analysis::analysed_type::{u32, u64};
-use golem_wasm::{FromValue, IntoValue, Value};
+use golem_wasm::Value;
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
 use rand::prelude::IteratorRandom;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Add;
-use std::str::FromStr;
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;

@@ -27,7 +27,10 @@ use anyhow::anyhow;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use desert_rust::{BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext, SerializationContext};
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
+    DeserializationContext, SerializationContext,
+};
 use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, NodeIndex, Value, ValueAndType};

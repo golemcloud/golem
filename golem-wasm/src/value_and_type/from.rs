@@ -783,7 +783,9 @@ impl FromValue for crate::WitType {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 1 => {
-                let nodes = Vec::<crate::golem_rpc_0_2_x::types::NamedWitTypeNode>::from_value(fields.remove(0))?;
+                let nodes = Vec::<crate::golem_rpc_0_2_x::types::NamedWitTypeNode>::from_value(
+                    fields.remove(0),
+                )?;
                 Ok(crate::WitType { nodes })
             }
             _ => Err(format!(

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::plan::PlanId;
 use crate::base_model::auth::AccountRole;
+use crate::base_model::plan::PlanId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
 use uuid::uuid;

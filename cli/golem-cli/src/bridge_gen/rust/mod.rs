@@ -19,7 +19,7 @@ use golem_common::model::agent::AgentType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use toml_edit::{array, value, Array, DocumentMut, Item, Table};
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 #[cfg(test)]
 mod tests;
@@ -111,9 +111,21 @@ impl RustBridgeGenerator {
         doc["dependencies"]["uuid"] = dep("1.18.1", &[""]);
 
         // TODO: these patches should not be necessary
-        doc["patch"]["crates-io"]["wasmtime"] = git_dep("https://github.com/golemcloud/wasmtime.git", "golem-wasmtime-v33.0.0", &[]);
-        doc["patch"]["crates-io"]["wasmtime-wasi"] = git_dep("https://github.com/golemcloud/wasmtime.git", "golem-wasmtime-v33.0.0", &[]);
-        doc["patch"]["crates-io"]["wasmtime-wasi-http"] = git_dep("https://github.com/golemcloud/wasmtime.git", "golem-wasmtime-v33.0.0", &[]);
+        doc["patch"]["crates-io"]["wasmtime"] = git_dep(
+            "https://github.com/golemcloud/wasmtime.git",
+            "golem-wasmtime-v33.0.0",
+            &[],
+        );
+        doc["patch"]["crates-io"]["wasmtime-wasi"] = git_dep(
+            "https://github.com/golemcloud/wasmtime.git",
+            "golem-wasmtime-v33.0.0",
+            &[],
+        );
+        doc["patch"]["crates-io"]["wasmtime-wasi-http"] = git_dep(
+            "https://github.com/golemcloud/wasmtime.git",
+            "golem-wasmtime-v33.0.0",
+            &[],
+        );
 
         std::fs::write(path, doc.to_string())
             .map_err(|e| anyhow!("Failed to write Cargo.toml file: {e}"))?;

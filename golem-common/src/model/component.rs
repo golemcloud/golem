@@ -14,9 +14,6 @@
 
 use crate::model::component_metadata::dynamic_linking_to_diffable;
 use crate::model::diff;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt::Debug;
-use std::str::FromStr;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;

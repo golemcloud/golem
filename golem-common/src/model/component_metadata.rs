@@ -25,7 +25,6 @@ use golem_wasm::analysis::{
 };
 use golem_wasm::metadata::Producers as WasmAstProducers;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
-use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
@@ -508,7 +507,6 @@ impl ComponentMetadataInnerData {
         }
     }
 }
-
 
 #[derive(Default)]
 pub(crate) struct ComponentMetadataInnerCache {

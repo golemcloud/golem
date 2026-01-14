@@ -35,7 +35,10 @@ use crate::model::worker::RevertWorkerTarget;
 use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId, WorkerId};
 use crate::oplog_payload;
 use crate::serialization::serialize;
-use desert_rust::{BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext, SerializationContext};
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
+    DeserializationContext, SerializationContext,
+};
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};

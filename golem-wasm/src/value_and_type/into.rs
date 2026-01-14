@@ -968,11 +968,12 @@ impl WitTypeBuilder {
             *idx
         } else {
             let idx = self.nodes.len();
-            self.nodes.push(crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
-                name: None,
-                owner: None,
-                type_: crate::WitTypeNode::PrimBoolType,
-            }); // placeholder, to be replaced
+            self.nodes
+                .push(crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
+                    name: None,
+                    owner: None,
+                    type_: crate::WitTypeNode::PrimBoolType,
+                }); // placeholder, to be replaced
             let name = typ.name().map(|n| n.to_string());
             let owner = typ.owner().map(|o| o.to_string());
             let node: crate::WitTypeNode = match typ {
@@ -1030,7 +1031,9 @@ impl WitTypeBuilder {
                     handle.resource_id.0,
                     match handle.mode {
                         crate::analysis::AnalysedResourceMode::Owned => crate::ResourceMode::Owned,
-                        crate::analysis::AnalysedResourceMode::Borrowed => crate::ResourceMode::Borrowed,
+                        crate::analysis::AnalysedResourceMode::Borrowed => {
+                            crate::ResourceMode::Borrowed
+                        }
                     },
                 )),
             };

@@ -88,6 +88,7 @@ impl LinearMemory {
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[allow(dead_code)]
 pub struct ComponentMetadata {
     pub(crate) data: Arc<ComponentMetadataInnerData>,
     #[cfg(feature = "full")]

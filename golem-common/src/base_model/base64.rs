@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{Deref, DerefMut};
-use base64::Engine;
 
 /// Represents a binary data encoded with base64.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
