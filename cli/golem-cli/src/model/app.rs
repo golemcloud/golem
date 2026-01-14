@@ -2009,14 +2009,14 @@ mod app_builder {
 
                     if !app.application.includes.is_empty()
                         && self
-                            .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
+                        .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
                     {
                         self.include = app.application.includes;
                     }
 
                     if !app.application.wit_deps.is_empty()
                         && self
-                            .add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source)
+                        .add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source)
                     {
                         self.wit_deps =
                             WithSource::new(app_source_dir.to_path_buf(), app.application.wit_deps);
@@ -2145,13 +2145,51 @@ mod app_builder {
                         if self
                             .add_entity_source(UniqueSourceCheckedEntityKey::Bridge, app_source_dir)
                         {
-                            // TODO: validate uniqueness of agent matchers
                             self.bridge_sdks =
                                 WithSource::new(app_source_dir.to_path_buf(), bridge);
+
+                            for (target_language, sdk_targets) in
+                                self.bridge_sdks.value.for_all_used_languages()
+                            {
+                                let sdk_targets = sdk_targets
+                                    .agents
+                                    .clone()
+                                    .into_vec();
+                                let non_unique_targets = sdk_targets.iter()
+                                    .counts()
+                                    .into_iter()
+                                    .filter(|(_, count)| *count > 1)
+                                    .collect::<Vec<_>>();
+
+                                validation.with_context(
+                                    vec![("bridge SDK language", target_language.to_string())],
+                                    |validation| {
+                                        if !non_unique_targets.is_empty() {
+                                            validation.add_error(format!(
+                                                "Duplicated bridge SDK agent targets: {}",
+                                                non_unique_targets
+                                                    .iter()
+                                                    .map(|(target, _)| target
+                                                        .log_color_error_highlight())
+                                                    .join(", ")
+                                            ));
+                                        }
+
+                                        if sdk_targets.len() > 1 && sdk_targets.iter().any(|t| t == "*") {
+                                            validation.add_warn(format!(
+                                                "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
+                                                sdk_targets
+                                                    .iter()
+                                                    .map(|target| target.log_color_highlight())
+                                                    .join(", ")
+                                            ));
+                                        }
+                                    },
+                                );
+                            }
                         }
                     }
-                },
-            );
+                });
         }
 
         fn add_raw_app_environments_only(
@@ -2425,38 +2463,38 @@ mod app_builder {
 
                     if invalid_source || invalid_target || invalid_target_source {
                         validation.with_context(
-                            vec![("source", component.source.to_string_lossy().to_string())],
-                            |validation| {
-                                if invalid_source {
-                                    validation.add_error(format!(
-                                        "{} {} - {} references unknown component: {}\n\n{}",
-                                        target.dep_type.describe(),
-                                        component_name.as_str().log_color_highlight(),
-                                        target.source.to_string().log_color_highlight(),
-                                        component_name.as_str().log_color_error_highlight(),
-                                        self.available_components(component_name.as_str())
-                                    ))
-                                }
-                                if invalid_target {
-                                    validation.add_error(format!(
-                                        "{} {} - {} references unknown target component: {}\n\n{}",
-                                        target.dep_type.describe(),
-                                        component_name.as_str().log_color_highlight(),
-                                        target.source.to_string().log_color_highlight(),
-                                        target.source.to_string().log_color_error_highlight(),
-                                        self.available_components(&target.source.to_string())
-                                    ))
-                                }
-                                if invalid_target_source {
-                                    validation.add_error(format!(
-                                        "{} {} - {}: this dependency type only supports local component targets\n",
-                                        target.dep_type.describe(),
-                                        component_name.as_str().log_color_highlight(),
-                                        target.source.to_string().log_color_highlight(),
-                                    ))
-                                }
-                            },
-                        );
+                        vec![("source", component.source.to_string_lossy().to_string())],
+                        |validation| {
+                            if invalid_source {
+                                validation.add_error(format!(
+                                    "{} {} - {} references unknown component: {}\n\n{}",
+                                    target.dep_type.describe(),
+                                    component_name.as_str().log_color_highlight(),
+                                    target.source.to_string().log_color_highlight(),
+                                    component_name.as_str().log_color_error_highlight(),
+                                    self.available_components(component_name.as_str())
+                                ))
+                            }
+                            if invalid_target {
+                                validation.add_error(format!(
+                                    "{} {} - {} references unknown target component: {}\n\n{}",
+                                    target.dep_type.describe(),
+                                    component_name.as_str().log_color_highlight(),
+                                    target.source.to_string().log_color_highlight(),
+                                    target.source.to_string().log_color_error_highlight(),
+                                    self.available_components(&target.source.to_string())
+                                ))
+                            }
+                            if invalid_target_source {
+                                validation.add_error(format!(
+                                    "{} {} - {}: this dependency type only supports local component targets\n",
+                                    target.dep_type.describe(),
+                                    component_name.as_str().log_color_highlight(),
+                                    target.source.to_string().log_color_highlight(),
+                                ))
+                            }
+                        },
+                    );
                     }
                 }
             }
@@ -2519,206 +2557,206 @@ mod app_builder {
                 let mut converted_routes = Vec::with_capacity(api_definition.value.routes.len());
 
                 validation.with_context(
-                    vec![
-                        (
-                            "source",
-                            api_definition.source.to_string_lossy().to_string(),
-                        ),
-                        ("HTTP API definition", name.0.to_string()),
-                    ],
-                    |validation| {
-                        let def = &api_definition.value;
-                        check_not_empty(validation, "version", &def.version);
+                vec![
+                    (
+                        "source",
+                        api_definition.source.to_string_lossy().to_string(),
+                    ),
+                    ("HTTP API definition", name.0.to_string()),
+                ],
+                |validation| {
+                    let def = &api_definition.value;
+                    check_not_empty(validation, "version", &def.version);
 
-                        for route in &def.routes {
-                            validation.with_context(
-                                vec![
-                                    ("method", route.method.to_string().clone()),
-                                    ("path", route.path.clone()),
-                                ],
-                                |validation| {
-                                    check_not_empty(validation, "path", &route.path);
+                    for route in &def.routes {
+                        validation.with_context(
+                            vec![
+                                ("method", route.method.to_string().clone()),
+                                ("path", route.path.clone()),
+                            ],
+                            |validation| {
+                                check_not_empty(validation, "path", &route.path);
 
-                                    let binding_type = route.binding.type_.unwrap_or_default();
-                                    let binding_type_as_string = serde_json::to_string(&binding_type).unwrap();
+                                let binding_type = route.binding.type_.unwrap_or_default();
+                                let binding_type_as_string = serde_json::to_string(&binding_type).unwrap();
 
-                                    let check_not_allowed = |validation: &mut ValidationBuilder, property_name: &str,
-                                                             value: &Option<String>| {
-                                        if value.is_some() {
-                                            validation.add_error(
-                                                format!(
-                                                    "Property {} is not allowed with binding type {}",
-                                                    property_name.log_color_highlight(),
-                                                    binding_type_as_string.log_color_highlight(),
-                                                )
-                                            );
-                                        }
-                                    };
+                                let check_not_allowed = |validation: &mut ValidationBuilder, property_name: &str,
+                                                         value: &Option<String>| {
+                                    if value.is_some() {
+                                        validation.add_error(
+                                            format!(
+                                                "Property {} is not allowed with binding type {}",
+                                                property_name.log_color_highlight(),
+                                                binding_type_as_string.log_color_highlight(),
+                                            )
+                                        );
+                                    }
+                                };
 
-                                    let check_component_name = |validation: &mut ValidationBuilder|
-                                        {
-                                            match route.binding.component_name.as_deref() {
-                                                Some(name) => {
-                                                    if !self.raw_component_names.contains(name) {
-                                                        validation.add_error(
-                                                            format!(
-                                                                "Property {} contains unknown component name: {}\n\n{}",
-                                                                "componentName".log_color_highlight(),
-                                                                name.log_color_error_highlight(),
-                                                                self.available_components(name)
-                                                            )
-                                                        )
-                                                    }
-                                                }
-                                                None => {
+                                let check_component_name = |validation: &mut ValidationBuilder|
+                                    {
+                                        match route.binding.component_name.as_deref() {
+                                            Some(name) => {
+                                                if !self.raw_component_names.contains(name) {
                                                     validation.add_error(
                                                         format!(
-                                                            "Property {} is required for binding type {}",
+                                                            "Property {} contains unknown component name: {}\n\n{}",
                                                             "componentName".log_color_highlight(),
-                                                            binding_type_as_string.log_color_highlight(),
+                                                            name.log_color_error_highlight(),
+                                                            self.available_components(name)
                                                         )
-                                                    );
-                                                }
-                                            }
-                                        };
-
-                                    let check_rib = |validation: &mut ValidationBuilder, property_name: &str, rib_script: &Option<String>, required: bool| {
-                                        match rib_script.as_ref().map(|s| s.as_str()) {
-                                            Some(rib) => {
-                                                check_not_empty(validation, property_name, rib);
-                                                if let Some(err) = rib::from_string(rib).err() {
-                                                    validation.add_error(
-                                                        format!(
-                                                            "Failed to parse property {} as Rib:\n{}\n{}\n{}",
-                                                            property_name.log_color_highlight(),
-                                                            err.to_string().lines().map(|l| format!("  {l}")).join("\n").log_color_warn(),
-                                                            "Rib source:".log_color_highlight(),
-                                                            format_rib_source_for_error(rib, &err),
-                                                        )
-                                                    );
+                                                    )
                                                 }
                                             }
                                             None => {
-                                                if required {
-                                                    validation.add_error(
-                                                        format!(
-                                                            "Property {} is required for binding type {}",
-                                                            property_name.log_color_highlight(),
-                                                            binding_type_as_string.log_color_highlight(),
-                                                        )
-                                                    );
-                                                }
+                                                validation.add_error(
+                                                    format!(
+                                                        "Property {} is required for binding type {}",
+                                                        "componentName".log_color_highlight(),
+                                                        binding_type_as_string.log_color_highlight(),
+                                                    )
+                                                );
                                             }
                                         }
                                     };
 
-                                    let binding = match route.binding.type_.unwrap_or_default() {
-                                        app_raw::HttpApiDefinitionBindingType::Default => {
-                                            check_component_name(validation);
-                                            check_not_allowed(validation, "agent", &route.binding.agent);
-                                            check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
-                                            check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
-                                            check_rib(validation, "response", &route.binding.response, true);
-
-                                            match (&route.binding.component_name, &route.binding.response) {
-                                                (Some(component_name), Some(response)) => {
-                                                    Some(GatewayBinding::Worker(WorkerGatewayBinding {
-                                                        component_name: ComponentName(component_name.clone()),
-                                                        idempotency_key: route.binding.idempotency_key.clone(),
-                                                        invocation_context: route.binding.invocation_context.clone(),
-                                                        response: response.clone(),
-                                                    }))
-                                                }
-                                                _ => None
+                                let check_rib = |validation: &mut ValidationBuilder, property_name: &str, rib_script: &Option<String>, required: bool| {
+                                    match rib_script.as_ref().map(|s| s.as_str()) {
+                                        Some(rib) => {
+                                            check_not_empty(validation, property_name, rib);
+                                            if let Some(err) = rib::from_string(rib).err() {
+                                                validation.add_error(
+                                                    format!(
+                                                        "Failed to parse property {} as Rib:\n{}\n{}\n{}",
+                                                        property_name.log_color_highlight(),
+                                                        err.to_string().lines().map(|l| format!("  {l}")).join("\n").log_color_warn(),
+                                                        "Rib source:".log_color_highlight(),
+                                                        format_rib_source_for_error(rib, &err),
+                                                    )
+                                                );
                                             }
                                         }
-                                        app_raw::HttpApiDefinitionBindingType::CorsPreflight => {
-                                            check_not_allowed(validation, "agent", &route.binding.agent);
-                                            check_not_allowed(validation, "componentName", &route.binding.component_name);
-                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
-                                            check_rib(validation, "response", &route.binding.response, false);
-
-                                            Some(GatewayBinding::CorsPreflight(CorsPreflightBinding {
-                                                response: route.binding.response.clone(),
-                                            }))
-                                        }
-                                        app_raw::HttpApiDefinitionBindingType::FileServer => {
-                                            check_component_name(validation);
-                                            check_rib(validation, "agent", &route.binding.agent, true);
-                                            check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
-                                            check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
-                                            check_rib(validation, "response", &route.binding.response, true);
-
-                                            match (&route.binding.component_name, &route.binding.agent, &route.binding.response) {
-                                                (Some(component_name), Some(agent), Some(response)) => {
-                                                    Some(GatewayBinding::FileServer(FileServerBinding {
-                                                        component_name: ComponentName(component_name.clone()),
-                                                        worker_name: agent.clone(),
-                                                        response: response.clone(),
-                                                    }))
-                                                }
-                                                _ => None
+                                        None => {
+                                            if required {
+                                                validation.add_error(
+                                                    format!(
+                                                        "Property {} is required for binding type {}",
+                                                        property_name.log_color_highlight(),
+                                                        binding_type_as_string.log_color_highlight(),
+                                                    )
+                                                );
                                             }
-                                        }
-                                        app_raw::HttpApiDefinitionBindingType::HttpHandler => {
-                                            check_component_name(validation);
-                                            check_rib(validation, "agent", &route.binding.agent, true);
-                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
-                                            check_not_allowed(validation, "response", &route.binding.response);
-
-                                            match (&route.binding.component_name, &route.binding.agent, &route.binding.response) {
-                                                (Some(component_name), Some(agent), Some(response)) =>
-                                                    Some(GatewayBinding::HttpHandler(HttpHandlerBinding {
-                                                        component_name: ComponentName(component_name.clone()),
-                                                        worker_name: agent.clone(),
-                                                        idempotency_key: route.binding.idempotency_key.clone(),
-                                                        invocation_context: route.binding.invocation_context.clone(),
-                                                        response: response.clone(),
-                                                    })),
-                                                _ => None
-                                            }
-                                        }
-                                        app_raw::HttpApiDefinitionBindingType::SwaggerUi => {
-                                            check_not_allowed(validation, "agent", &route.binding.agent);
-                                            check_not_allowed(validation, "componentName", &route.binding.component_name);
-                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
-                                            check_not_allowed(validation, "response", &route.binding.response);
-                                            Some(GatewayBinding::SwaggerUi(Empty {}))
-                                        }
-                                    };
-
-                                    let method = match RouteMethod::from_str(&route.method) {
-                                        Ok(method) => Some(method),
-                                        Err(err) => {
-                                            validation.add_error(
-                                                format!("Invalid route method {} for path {}: {}", route.method.log_color_error_highlight(), route.path.log_color_highlight(), err));
-                                            None
-                                        }
-                                    };
-
-                                    match (method, binding) {
-                                        (Some(method), Some(binding)) => {
-                                            converted_routes.push(
-                                                HttpApiRoute {
-                                                    method,
-                                                    path: route.path.clone(),
-                                                    binding,
-                                                    security: route.security.as_ref().map(|sec| SecuritySchemeName(sec.clone())),
-                                                }
-                                            )
-                                        }
-                                        _ => {
-                                            // NOP
                                         }
                                     }
-                                },
-                            );
-                        }
-                    },
-                );
+                                };
+
+                                let binding = match route.binding.type_.unwrap_or_default() {
+                                    app_raw::HttpApiDefinitionBindingType::Default => {
+                                        check_component_name(validation);
+                                        check_not_allowed(validation, "agent", &route.binding.agent);
+                                        check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
+                                        check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
+                                        check_rib(validation, "response", &route.binding.response, true);
+
+                                        match (&route.binding.component_name, &route.binding.response) {
+                                            (Some(component_name), Some(response)) => {
+                                                Some(GatewayBinding::Worker(WorkerGatewayBinding {
+                                                    component_name: ComponentName(component_name.clone()),
+                                                    idempotency_key: route.binding.idempotency_key.clone(),
+                                                    invocation_context: route.binding.invocation_context.clone(),
+                                                    response: response.clone(),
+                                                }))
+                                            }
+                                            _ => None
+                                        }
+                                    }
+                                    app_raw::HttpApiDefinitionBindingType::CorsPreflight => {
+                                        check_not_allowed(validation, "agent", &route.binding.agent);
+                                        check_not_allowed(validation, "componentName", &route.binding.component_name);
+                                        check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                        check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
+                                        check_rib(validation, "response", &route.binding.response, false);
+
+                                        Some(GatewayBinding::CorsPreflight(CorsPreflightBinding {
+                                            response: route.binding.response.clone(),
+                                        }))
+                                    }
+                                    app_raw::HttpApiDefinitionBindingType::FileServer => {
+                                        check_component_name(validation);
+                                        check_rib(validation, "agent", &route.binding.agent, true);
+                                        check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
+                                        check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
+                                        check_rib(validation, "response", &route.binding.response, true);
+
+                                        match (&route.binding.component_name, &route.binding.agent, &route.binding.response) {
+                                            (Some(component_name), Some(agent), Some(response)) => {
+                                                Some(GatewayBinding::FileServer(FileServerBinding {
+                                                    component_name: ComponentName(component_name.clone()),
+                                                    worker_name: agent.clone(),
+                                                    response: response.clone(),
+                                                }))
+                                            }
+                                            _ => None
+                                        }
+                                    }
+                                    app_raw::HttpApiDefinitionBindingType::HttpHandler => {
+                                        check_component_name(validation);
+                                        check_rib(validation, "agent", &route.binding.agent, true);
+                                        check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                        check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
+                                        check_not_allowed(validation, "response", &route.binding.response);
+
+                                        match (&route.binding.component_name, &route.binding.agent, &route.binding.response) {
+                                            (Some(component_name), Some(agent), Some(response)) =>
+                                                Some(GatewayBinding::HttpHandler(HttpHandlerBinding {
+                                                    component_name: ComponentName(component_name.clone()),
+                                                    worker_name: agent.clone(),
+                                                    idempotency_key: route.binding.idempotency_key.clone(),
+                                                    invocation_context: route.binding.invocation_context.clone(),
+                                                    response: response.clone(),
+                                                })),
+                                            _ => None
+                                        }
+                                    }
+                                    app_raw::HttpApiDefinitionBindingType::SwaggerUi => {
+                                        check_not_allowed(validation, "agent", &route.binding.agent);
+                                        check_not_allowed(validation, "componentName", &route.binding.component_name);
+                                        check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                        check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
+                                        check_not_allowed(validation, "response", &route.binding.response);
+                                        Some(GatewayBinding::SwaggerUi(Empty {}))
+                                    }
+                                };
+
+                                let method = match RouteMethod::from_str(&route.method) {
+                                    Ok(method) => Some(method),
+                                    Err(err) => {
+                                        validation.add_error(
+                                            format!("Invalid route method {} for path {}: {}", route.method.log_color_error_highlight(), route.path.log_color_highlight(), err));
+                                        None
+                                    }
+                                };
+
+                                match (method, binding) {
+                                    (Some(method), Some(binding)) => {
+                                        converted_routes.push(
+                                            HttpApiRoute {
+                                                method,
+                                                path: route.path.clone(),
+                                                binding,
+                                                security: route.security.as_ref().map(|sec| SecuritySchemeName(sec.clone())),
+                                            }
+                                        )
+                                    }
+                                    _ => {
+                                        // NOP
+                                    }
+                                }
+                            },
+                        );
+                    }
+                },
+            );
 
                 self.http_api_definitions.insert(
                     name.clone(),
@@ -2751,42 +2789,42 @@ mod app_builder {
                 }
 
                 validation.with_context(
-                    vec![("profile", environment.0.clone())],
-                    |validation| {
-                        for (site, api_definitions_with_source) in api_deployments {
-                            for api_definitions in api_definitions_with_source {
-                                validation.with_context(
-                                    vec![
-                                        (
-                                            "source",
-                                            api_definitions.source.to_string_lossy().to_string(),
-                                        ),
-                                        ("HTTP API deployment site", site.to_string()),
-                                    ],
-                                    |validation| {
-                                        for name in &api_definitions.value {
-                                            if name.0.is_empty() {
-                                                validation.add_error(
-                                                    format!(
-                                                        "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
-                                                        name.as_str().log_color_error_highlight(),
-                                                    ),
-                                                );
-                                            } else if !self.http_api_definitions.contains_key(name) {
-                                                validation.add_error(
-                                                    format!(
-                                                        "Unknown HTTP API definition name: {}\n\n{}",
-                                                        name.as_str().log_color_error_highlight(),
-                                                        self.available_http_api_definitions(name.as_str())
-                                                    ),
-                                                )
-                                            }
+                vec![("profile", environment.0.clone())],
+                |validation| {
+                    for (site, api_definitions_with_source) in api_deployments {
+                        for api_definitions in api_definitions_with_source {
+                            validation.with_context(
+                                vec![
+                                    (
+                                        "source",
+                                        api_definitions.source.to_string_lossy().to_string(),
+                                    ),
+                                    ("HTTP API deployment site", site.to_string()),
+                                ],
+                                |validation| {
+                                    for name in &api_definitions.value {
+                                        if name.0.is_empty() {
+                                            validation.add_error(
+                                                format!(
+                                                    "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
+                                                    name.as_str().log_color_error_highlight(),
+                                                ),
+                                            );
+                                        } else if !self.http_api_definitions.contains_key(name) {
+                                            validation.add_error(
+                                                format!(
+                                                    "Unknown HTTP API definition name: {}\n\n{}",
+                                                    name.as_str().log_color_error_highlight(),
+                                                    self.available_http_api_definitions(name.as_str())
+                                                ),
+                                            )
                                         }
-                                    },
-                                );
-                            }
+                                    }
+                                },
+                            );
                         }
-                    });
+                    }
+                });
             }
         }
 

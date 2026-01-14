@@ -28,11 +28,12 @@ use golem_templates::model::GuestLanguage;
 use golem_templates::APP_MANIFEST_JSON_SCHEMA;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use strum::IntoEnumIterator;
 use url::Url;
 
 static JSON_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
@@ -621,22 +622,25 @@ pub struct BridgeSdks {
 }
 
 impl BridgeSdks {
-    pub fn is_empty(&self) -> bool {
-        fn lang_is_empty(lang: &Option<BridgeSdkLanguageTargets>) -> bool {
-            match lang {
-                Some(lang) => lang.agents.is_empty(),
-                None => true,
-            }
-        }
-
-        lang_is_empty(&self.ts) && lang_is_empty(&self.rust)
-    }
-
     pub fn for_language(&self, language: GuestLanguage) -> Option<&BridgeSdkLanguageTargets> {
         match language {
             GuestLanguage::Rust => self.rust.as_ref(),
             GuestLanguage::TypeScript => self.ts.as_ref(),
         }
+    }
+
+    pub fn for_all_languages(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, Option<&BridgeSdkLanguageTargets>)> {
+        GuestLanguage::iter().map(|lang| (lang, self.for_language(lang)))
+    }
+
+    pub fn for_all_used_languages(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
+        self.for_all_languages().filter_map(|(lang, targets)| {
+            targets.and_then(|targets| (!targets.agents.is_empty()).then_some((lang, targets)))
+        })
     }
 }
 
@@ -699,6 +703,14 @@ impl LenientTokenList {
             Self::None => vec![],
             Self::String(s) => Self::parse(&s).collect(),
             Self::List(l) => l,
+        }
+    }
+
+    pub fn into_set(self) -> BTreeSet<String> {
+        match self {
+            Self::None => BTreeSet::new(),
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l.into_iter().collect(),
         }
     }
 

@@ -15,8 +15,6 @@ use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_templates::model::GuestLanguage;
 use heck::ToKebabCase;
 use itertools::Itertools;
-use std::collections::BTreeSet;
-use strum::IntoEnumIterator;
 
 pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     let mut targets = vec![];
@@ -84,18 +82,10 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
             }
         }
         None => {
-            for target_language in GuestLanguage::iter() {
-                let Some(lang_sdks) = ctx.application.bridge_sdks().for_language(target_language)
-                else {
-                    continue;
-                };
-
-                let mut matchers = lang_sdks
-                    .agents
-                    .clone()
-                    .into_vec()
-                    .into_iter()
-                    .collect::<BTreeSet<_>>();
+            for (target_language, sdks_targets) in
+                ctx.application.bridge_sdks().for_all_used_languages()
+            {
+                let mut matchers = sdks_targets.agents.clone().into_set();
 
                 if matchers.is_empty() {
                     continue;
