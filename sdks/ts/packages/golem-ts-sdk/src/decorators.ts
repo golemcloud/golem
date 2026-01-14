@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {AgentType, DataValue, AgentMode} from 'golem:agent/common';
+import { AgentType, DataValue, AgentMode } from 'golem:agent/common';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -39,7 +39,8 @@ import {
   ParameterDetail,
 } from './internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from './host/hostapi';
-import {AllowedPattern, getHttpMountDetails, HeaderVariables, HttpMount, HttpMountOptions} from "./http/types";
+import { AgentDecoratorOptions } from './options';
+import { getHttpMountDetails } from './http/mount';
 
 /**
  *
@@ -152,15 +153,6 @@ import {AllowedPattern, getHttpMountDetails, HeaderVariables, HttpMount, HttpMou
  *
  * The first parameter is the phantom ID. If undefined, a new phantom ID will be generated.
  */
-interface AgentDecoratorOptions {
-  name?: string;
-  mode?: AgentMode;
-  mount?: HttpMount;
-  cors?: AllowedPattern[]
-  auth?: boolean;
-  headers?: HeaderVariables
-}
-
 export function agent(options?: AgentDecoratorOptions) {
   return function <T extends new (...args: any[]) => any>(ctor: T) {
     if (!Object.prototype.isPrototypeOf.call(BaseAgent, ctor)) {
@@ -215,12 +207,7 @@ export function agent(options?: AgentDecoratorOptions) {
       options?.name || agentClassName.value,
     );
 
-    const httpOptions = getHttpMountDetails(
-        options?.mount,
-        options?.cors,
-        options?.headers,
-        options?.auth
-    )
+    const httpMount = getHttpMountDetails(options);
 
     if (AgentInitiatorRegistry.exists(agentTypeName.value)) {
       throw new Error(
@@ -254,6 +241,7 @@ export function agent(options?: AgentDecoratorOptions) {
       methods,
       dependencies: [],
       mode: options?.mode ?? 'durable',
+      httpMount,
     };
 
     AgentTypeRegistry.register(agentClassName, agentType);

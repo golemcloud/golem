@@ -14,12 +14,7 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import {
-  AgentError,
-  AgentType,
-  Principal,
-  DataValue,
-} from 'golem:agent/common';
+import { AgentType, Principal, DataValue } from 'golem:agent/common';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
@@ -29,6 +24,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { prompt, description, agent } from './decorators';
+
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
 export * from './newTypes/textInput';
@@ -38,6 +34,8 @@ export * from './newTypes/multimodalAdvanced';
 export { Client } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
+
+export * from './options';
 
 export * from './host/hostapi';
 export * from './host/guard';
