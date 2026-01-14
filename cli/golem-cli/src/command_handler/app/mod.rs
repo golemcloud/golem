@@ -1611,10 +1611,17 @@ impl AppCommandHandler {
 
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
+
         let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let all_selected =
+            app_ctx.selected_component_names().len() == app_ctx.application.component_count();
 
         let clean_mode = {
-            if any_component_requested {
+            if all_selected {
+                CleanMode::All
+            } else if any_component_requested {
                 CleanMode::SelectedComponentsOnly
             } else {
                 match &default_component_select_mode {
@@ -1627,7 +1634,7 @@ impl AppCommandHandler {
             }
         };
 
-        app_ctx.some_or_err()?.clean(clean_mode)
+        app_ctx.clean(clean_mode)
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {

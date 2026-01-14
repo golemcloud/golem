@@ -577,6 +577,10 @@ impl Application {
         &self.all_sources
     }
 
+    pub fn component_count(&self) -> usize {
+        self.components.len()
+    }
+
     pub fn component_names(&self) -> impl Iterator<Item = &ComponentName> {
         self.components.keys()
     }
