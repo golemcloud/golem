@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentMode } from 'golem:agent/common';
+import {AgentType, DataValue, AgentMode} from 'golem:agent/common';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -39,6 +39,7 @@ import {
   ParameterDetail,
 } from './internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from './host/hostapi';
+import {AllowedPattern, getHttpMountDetails, HeaderVariables, HttpMount, HttpMountOptions} from "./http/types";
 
 /**
  *
@@ -154,6 +155,10 @@ import { getRawSelfAgentId } from './host/hostapi';
 interface AgentDecoratorOptions {
   name?: string;
   mode?: AgentMode;
+  mount?: HttpMount;
+  cors?: AllowedPattern[]
+  auth?: boolean;
+  headers?: HeaderVariables
 }
 
 export function agent(options?: AgentDecoratorOptions) {
@@ -209,6 +214,13 @@ export function agent(options?: AgentDecoratorOptions) {
     const agentTypeName = new AgentClassName(
       options?.name || agentClassName.value,
     );
+
+    const httpOptions = getHttpMountDetails(
+        options?.mount,
+        options?.cors,
+        options?.headers,
+        options?.auth
+    )
 
     if (AgentInitiatorRegistry.exists(agentTypeName.value)) {
       throw new Error(
