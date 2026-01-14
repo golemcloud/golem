@@ -19,7 +19,7 @@ use crate::model::app::DependencyType;
 use golem_common::model::component::ComponentName;
 use std::collections::BTreeSet;
 
-pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
+pub async fn componentize(ctx: &ApplicationContext) -> anyhow::Result<()> {
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
