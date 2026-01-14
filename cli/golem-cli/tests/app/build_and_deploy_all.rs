@@ -97,7 +97,7 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
                 .cli([
                     cmd::GENERATE_BRIDGE,
                     flag::LANGUAGE,
-                    &language.id(),
+                    language.id(),
                     flag::AGENT_TYPE_NAME,
                     agent_meta.agent_test_name,
                 ])

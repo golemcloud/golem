@@ -158,7 +158,7 @@ impl AppCommandHandler {
             let common_templates = languages
                 .iter()
                 .map(|language| {
-                    self.get_template(&language.id(), self.ctx.dev_mode())
+                    self.get_template(language.id(), self.ctx.dev_mode())
                         .map(|(common, _component)| common)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
