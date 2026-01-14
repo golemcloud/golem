@@ -19,6 +19,8 @@ import {
   BarAgentClassName,
   FooAgentClassName,
   EphemeralAgentClassName,
+  SimpleHttpAgentClassName,
+  ComplexHttpAgentClassName,
 } from './testUtils';
 import {
   AgentType,
@@ -38,18 +40,18 @@ import { AgentClassName, AgentId } from '../src';
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
-  const complexAgent: AgentType = Option.getOrThrowWith(
+  const barAgent: AgentType = Option.getOrThrowWith(
     AgentTypeRegistry.get(BarAgentClassName),
     () => new Error('BarAgent not found in AgentTypeRegistry'),
   );
 
-  const barAgentConstructor = complexAgent.constructor;
+  const barAgentConstructor = barAgent.constructor;
 
   if (!barAgentConstructor) {
     throw new Error('BarAgent constructor not found');
   }
 
-  const barAgentMethod = complexAgent.methods.find(
+  const barAgentMethod = barAgent.methods.find(
     (method) => method.name === 'fun0',
   );
 
@@ -128,7 +130,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle Multimodal in method params', () => {
-    const multimodalAgentMethod = complexAgent.methods.find(
+    const multimodalAgentMethod = barAgent.methods.find(
       (method) => method.name === 'fun23',
     );
 
@@ -172,7 +174,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle MultimodalBasic in method params', () => {
-    const multimodalAgentMethod = complexAgent.methods.find(
+    const multimodalAgentMethod = barAgent.methods.find(
       (method) => method.name === 'fun24',
     );
 
@@ -759,9 +761,9 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     // Ensures no functions or constructors are skipped
-    expect(complexAgent.methods.length).toEqual(25);
-    expect(complexAgent.constructor.inputSchema.val.length).toEqual(6);
-    expect(complexAgent.typeName).toEqual('my-complex-agent');
+    expect(barAgent.methods.length).toEqual(25);
+    expect(barAgent.constructor.inputSchema.val.length).toEqual(6);
+    expect(barAgent.typeName).toEqual('my-complex-agent');
     expect(simpleAgent.methods.length).toEqual(44);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
@@ -779,7 +781,7 @@ describe('Agent decorator should register the agent class and its methods into A
       'save-snapshot',
     ];
 
-    [complexAgent, simpleAgent].forEach((agent) => {
+    [barAgent, simpleAgent].forEach((agent) => {
       forbidden.forEach((name) => {
         expect(agent.methods.find((m) => m.name === name)).toBeUndefined();
       });
@@ -845,6 +847,96 @@ describe('Annotated FooAgent class', () => {
     );
     expect(await client.phantomId()).toBeUndefined();
     expect(await client.getAgentType()).toEqual(agentType);
+  });
+});
+
+describe('Http Agent class', () => {
+  it('should register HTTP mount details with only mount', () => {
+    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(SimpleHttpAgentClassName),
+      () => new Error('SimpleHttpAgent not found in AgentTypeRegistry'),
+    );
+
+    expect(simpleHttpAgent.httpMount).toBeDefined();
+    expect(simpleHttpAgent.httpMount?.pathPrefix).toEqual([
+      {
+        concat: [
+          {
+            tag: 'literal',
+            val: 'chats',
+          },
+        ],
+      },
+      {
+        concat: [
+          {
+            tag: 'system-variable',
+            val: 'agent-type',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('should register HTTP mount details with all details', () => {
+    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(ComplexHttpAgentClassName),
+      () => new Error('ComplexHttpAgent not found in AgentTypeRegistry'),
+    );
+
+    const expectedPathPrefix = [
+      {
+        concat: [
+          {
+            tag: 'literal',
+            val: 'chats',
+          },
+        ],
+      },
+      {
+        concat: [
+          {
+            tag: 'system-variable',
+            val: 'agent-type',
+          },
+        ],
+      },
+    ];
+
+    const expectedWebhookSuffix = [
+      {
+        concat: [
+          {
+            tag: 'system-variable',
+            val: 'agent-type',
+          },
+        ],
+      },
+      {
+        concat: [
+          {
+            tag: 'literal',
+            val: 'events',
+          },
+        ],
+      },
+    ];
+
+    expect(simpleHttpAgent.httpMount).toBeDefined();
+    expect(simpleHttpAgent.httpMount).toEqual({
+      pathPrefix: expectedPathPrefix,
+      queryVars: [],
+      headerVars: [
+        { headerName: 'X-Foo', variableName: 'FooValue' },
+        { headerName: 'X-Bar', variableName: 'BarValue' },
+      ],
+      authDetails: { required: true },
+      phantomAgent: false,
+      corsOptions: {
+        allowedPatterns: ['https://app.acme.com', 'https://staging.acme.com'],
+      },
+      webhookSuffix: expectedWebhookSuffix,
+    });
   });
 });
 

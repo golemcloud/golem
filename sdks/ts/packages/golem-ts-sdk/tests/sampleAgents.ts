@@ -496,7 +496,7 @@ class EphemeralAgent extends BaseAgent {
 }
 
 @agent({
-  mount: '/chats/{agentId}',
+  mount: '/chats/{agent-type}',
 })
 class SimpleHttpAgent extends BaseAgent {
   constructor(readonly input: string) {
@@ -510,11 +510,11 @@ class SimpleHttpAgent extends BaseAgent {
 }
 
 @agent({
-  mount: '/chats/{agentId}',
+  mount: '/chats/{agent-type}',
   cors: ['https://app.acme.com', 'https://staging.acme.com'],
   auth: true,
   headers: { 'X-Foo': 'FooValue', 'X-Bar': 'BarValue' },
-  webhookSuffix: '/{agentId}/events',
+  webhookSuffix: '/{agent-type}/events',
 })
 class ComplexHttpAgent extends BaseAgent {
   constructor(readonly input: string) {

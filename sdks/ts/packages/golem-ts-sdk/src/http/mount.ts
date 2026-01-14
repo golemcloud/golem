@@ -6,9 +6,7 @@ import {
 } from 'golem:agent/common';
 import { AgentDecoratorOptions } from '../options';
 
-export type AllowedPattern = string;
 export type HeaderVariables = Record<string, string>;
-export type HttpMount = string;
 
 export function getHttpMountDetails(
   agentDecoratorOptions?: AgentDecoratorOptions,
@@ -48,7 +46,6 @@ function parsePath(path: string): PathSegment[] {
       throw new Error(`Empty path segment ("//") is not allowed`);
     }
 
-    // variable segment
     if (segment.startsWith('{') && segment.endsWith('}')) {
       const name = segment.slice(1, -1);
 
@@ -79,7 +76,6 @@ function parsePath(path: string): PathSegment[] {
       };
     }
 
-    // literal segment
     validateLiteral(segment);
 
     return {
