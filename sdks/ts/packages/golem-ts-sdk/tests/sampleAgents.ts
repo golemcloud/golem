@@ -534,6 +534,12 @@ class ComplexHttpAgent extends BaseAgent {
   async greetCustom(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  @endpoint({ get: '/greet?lx={location}&nm={name}', cors: ['*'], auth: true })
+  async greetCustom2(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
 }
 
 // If this class is decorated with agent, it will fail

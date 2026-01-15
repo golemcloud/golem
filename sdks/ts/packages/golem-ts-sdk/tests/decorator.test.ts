@@ -1014,6 +1014,78 @@ describe('Http Agent class', () => {
       webhookSuffix: expectedWebhookSuffix,
     });
   });
+
+  it('should register complex HTTP endpoint details with endpoint details', () => {
+    const simpleHttpAgent = AgentMethodRegistry.get(
+      ComplexHttpAgentClassName.value,
+    )?.get('greetCustom2');
+
+    if (!simpleHttpAgent) {
+      throw new Error(
+        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
+      );
+    }
+
+    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
+    expect(simpleHttpAgent.httpEndpoint).toEqual([
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: true },
+        queryVars: [
+          {
+            queryParamName: 'lx',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'nm',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: ['*'],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            concat: [
+              {
+                tag: 'literal',
+                val: 'greet',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: false },
+        queryVars: [
+          {
+            queryParamName: 'l',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'n',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            concat: [
+              {
+                tag: 'literal',
+                val: 'greet',
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('Annotated SingletonAgent class', () => {
