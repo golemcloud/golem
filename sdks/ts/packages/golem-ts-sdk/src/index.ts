@@ -26,7 +26,7 @@ export { AgentId } from './agentId';
 export { description } from './decorators/description';
 export { agent, AgentDecoratorOptions } from './decorators/agent';
 export { prompt } from './decorators/prompt';
-export { endpoint } from './decorators/httpEndpoint';
+export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
@@ -37,8 +37,6 @@ export * from './newTypes/multimodalAdvanced';
 export { Client } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
-
-export * from './options';
 
 export * from './host/hostapi';
 export * from './host/guard';
