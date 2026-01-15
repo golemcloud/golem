@@ -13,11 +13,13 @@
 // limitations under the License.
 
 import { TypeInfoInternal } from './typeInfoInternal';
+import { HttpEndpointDetails } from 'golem:agent/common';
 
 export interface AgentMethodMetadata {
   prompt?: string;
   description?: string;
   returnType?: TypeInfoInternal;
+  httpEndpoint?: HttpEndpointDetails;
 }
 
 /**
@@ -76,6 +78,16 @@ class AgentMethodRegistryImpl {
     this.ensureMeta(agentClassName, method);
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.returnType = returnType;
+  }
+
+  setHttpEndpoint(
+    agentClassName: string,
+    method: string,
+    endpoint: HttpEndpointDetails,
+  ): void {
+    this.ensureMeta(agentClassName, method);
+    const classMeta = this.registry.get(agentClassName)!;
+    classMeta.get(method)!.httpEndpoint = endpoint;
   }
 
   debugDump(): void {

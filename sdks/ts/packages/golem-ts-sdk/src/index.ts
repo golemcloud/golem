@@ -24,6 +24,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { prompt, description, agent } from './decorators';
+export { endpoint } from './http/endpoint';
 
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
