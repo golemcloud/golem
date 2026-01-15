@@ -1948,7 +1948,7 @@ impl TypeScriptBridgeGenerator {
             AnalysedType::Handle(_) => Err(anyhow!("Handle types are not supported")),
             _ => match typ.name() {
                 Some(name) => Ok(name.to_upper_camel_case()), // TODO: use owner too?
-                None => Self::type_definition(&typ),
+                None => Self::type_definition(typ),
             },
         }
     }
