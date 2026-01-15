@@ -152,6 +152,25 @@ describe('getHttpMountDetails – webhook suffix', () => {
       },
     ]);
   });
+
+  it('parses webhook suffix with mixed literal and variable segment', () => {
+    const opts: AgentDecoratorOptions = {
+      mount: '/chats/{id}',
+      webhookSuffix: '/webhook/{event}Callback',
+    };
+
+    const result = getHttpMountDetails(opts)!;
+
+    expect(result.webhookSuffix).toEqual([
+      { concat: [{ tag: 'literal', val: 'webhook' }] },
+      {
+        concat: [
+          { tag: 'path-variable', val: { variableName: 'event' } },
+          { tag: 'literal', val: 'Callback' },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('getHttpMountDetails – validation errors', () => {
