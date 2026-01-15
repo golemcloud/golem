@@ -93,7 +93,7 @@ export function endpoint(opts: EndpointDecoratorOptions) {
     );
 
     const queryVars: QueryVariable[] = query ? parseQuery(query) || [] : [];
-    const authDetails: AuthDetails = { required: opts.auth ?? true };
+    const authDetails: AuthDetails = { required: opts.auth ?? false };
     const corsOptions: CorsOptions = { allowedPatterns: opts.cors ?? [] };
 
     const httpEndpoint: HttpEndpointDetails = {

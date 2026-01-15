@@ -36,6 +36,7 @@ import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import process from 'node:process';
 import { Uuid } from 'golem:agent/host';
 import { AgentClassName, AgentId } from '../src';
+import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
@@ -872,6 +873,41 @@ describe('Http Agent class', () => {
           {
             tag: 'system-variable',
             val: 'agent-type',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('should register HTTP endpoint details with endpoint details', () => {
+    const simpleHttpAgent = AgentMethodRegistry.get(
+      SimpleHttpAgentClassName.value,
+    )?.get('greet');
+
+    if (!simpleHttpAgent) {
+      throw new Error(
+        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
+      );
+    }
+
+    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
+    expect(simpleHttpAgent.httpEndpoint).toEqual([
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: false },
+        queryVars: [],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            concat: [
+              {
+                tag: 'literal',
+                val: 'greet',
+              },
+            ],
           },
         ],
       },

@@ -19,7 +19,8 @@ import {
   UnstructuredBinary,
   UnstructuredText,
   Result,
-  Multimodal, endpoint,
+  Multimodal,
+  endpoint,
 } from '../src';
 import * as Types from './testTypes';
 import {

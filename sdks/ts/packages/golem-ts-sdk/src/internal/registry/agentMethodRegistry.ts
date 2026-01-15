@@ -19,7 +19,7 @@ export interface AgentMethodMetadata {
   prompt?: string;
   description?: string;
   returnType?: TypeInfoInternal;
-  httpEndpoint?: HttpEndpointDetails;
+  httpEndpoint?: HttpEndpointDetails[];
 }
 
 /**
@@ -87,7 +87,9 @@ class AgentMethodRegistryImpl {
   ): void {
     this.ensureMeta(agentClassName, method);
     const classMeta = this.registry.get(agentClassName)!;
-    classMeta.get(method)!.httpEndpoint = endpoint;
+    classMeta.get(method)!.httpEndpoint =
+      classMeta.get(method)!.httpEndpoint || [];
+    classMeta.get(method)!.httpEndpoint!.push(endpoint);
   }
 
   debugDump(): void {
