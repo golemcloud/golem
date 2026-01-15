@@ -30,12 +30,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
+use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 
 pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
 pub const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
-pub const LOCAL_WELL_KNOWN_TOKEN: &str = "5c832d93-ff85-4a8f-9803-513950fdfdb1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

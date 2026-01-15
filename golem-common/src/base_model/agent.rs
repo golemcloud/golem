@@ -16,6 +16,7 @@ use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::model::Empty;
 use async_trait::async_trait;
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
@@ -368,6 +369,49 @@ pub enum DataValue {
     Multimodal(NamedElementValues),
 }
 
+impl DataValue {
+    pub fn try_from_untyped_json(
+        value: UntypedJsonDataValue,
+        schema: DataSchema,
+    ) -> Result<Self, String> {
+        match (value, schema) {
+            (UntypedJsonDataValue::Tuple(tuple), DataSchema::Tuple(schema)) => {
+                if tuple.elements.len() != schema.elements.len() {
+                    return Err("Tuple length mismatch".to_string());
+                }
+                Ok(DataValue::Tuple(ElementValues {
+                    elements: tuple
+                        .elements
+                        .into_iter()
+                        .zip(schema.elements)
+                        .map(|(value, schema)| {
+                            ElementValue::try_from_untyped_json(value, schema.schema)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
+            }
+            (UntypedJsonDataValue::Multimodal(multimodal), DataSchema::Multimodal(schema)) => {
+                Ok(DataValue::Multimodal(NamedElementValues {
+                    elements: multimodal
+                        .elements
+                        .into_iter()
+                        .zip(schema.elements)
+                        .map(|(value, schema)| {
+                            ElementValue::try_from_untyped_json(value.value, schema.schema).map(
+                                |v| NamedElementValue {
+                                    name: value.name,
+                                    value: v,
+                                },
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
+            }
+            _ => Err("Data value does not match schema".to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
 pub enum UntypedDataValue {
@@ -399,6 +443,15 @@ pub struct UntypedJsonNamedElementValue {
     pub value: UntypedJsonElementValue,
 }
 
+impl From<NamedElementValue> for UntypedJsonNamedElementValue {
+    fn from(value: NamedElementValue) -> Self {
+        Self {
+            name: value.name,
+            value: value.value.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -407,12 +460,36 @@ pub struct UntypedJsonElementValues {
     pub elements: Vec<UntypedJsonElementValue>,
 }
 
+impl From<ElementValues> for UntypedJsonElementValues {
+    fn from(value: ElementValues) -> Self {
+        Self {
+            elements: value
+                .elements
+                .into_iter()
+                .map(UntypedJsonElementValue::from)
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct UntypedJsonNamedElementValues {
     pub elements: Vec<UntypedJsonNamedElementValue>,
+}
+
+impl From<NamedElementValues> for UntypedJsonNamedElementValues {
+    fn from(value: NamedElementValues) -> Self {
+        Self {
+            elements: value
+                .elements
+                .into_iter()
+                .map(UntypedJsonNamedElementValue::from)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -424,6 +501,15 @@ pub enum UntypedJsonDataValue {
     Multimodal(UntypedJsonNamedElementValues),
 }
 
+impl From<DataValue> for UntypedJsonDataValue {
+    fn from(value: DataValue) -> Self {
+        match value {
+            DataValue::Tuple(elements) => UntypedJsonDataValue::Tuple(elements.into()),
+            DataValue::Multimodal(elements) => UntypedJsonDataValue::Multimodal(elements.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
@@ -432,6 +518,30 @@ pub enum UntypedJsonElementValue {
     ComponentModel(JsonComponentModelValue),
     UnstructuredText(TextReferenceValue),
     UnstructuredBinary(BinaryReferenceValue),
+}
+
+impl From<ElementValue> for UntypedJsonElementValue {
+    fn from(value: ElementValue) -> Self {
+        match value {
+            ElementValue::ComponentModel(value) => {
+                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
+                    value: value
+                        .to_json_value()
+                        .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
+                })
+            }
+            ElementValue::UnstructuredText(text_reference) => {
+                UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
+                    value: text_reference,
+                })
+            }
+            ElementValue::UnstructuredBinary(binary_reference) => {
+                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: binary_reference,
+                })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -497,6 +607,39 @@ pub enum ElementValue {
     ),
     UnstructuredText(TextReference),
     UnstructuredBinary(BinaryReference),
+}
+
+impl ElementValue {
+    pub fn try_from_untyped_json(
+        value: UntypedJsonElementValue,
+        schema: ElementSchema,
+    ) -> Result<Self, String> {
+        match (value, schema) {
+            (
+                UntypedJsonElementValue::ComponentModel(json_value),
+                ElementSchema::ComponentModel(component_model_schema),
+            ) => {
+                let typ: AnalysedType = component_model_schema.element_type;
+                let value_and_type = ValueAndType::parse_with_type(&json_value.value, &typ)
+                    .map_err(|errors: Vec<String>| {
+                        format!(
+                            "Failed to parse JSON as ComponentModel value: {}",
+                            errors.join(", ")
+                        )
+                    })?;
+                Ok(ElementValue::ComponentModel(value_and_type))
+            }
+            (
+                UntypedJsonElementValue::UnstructuredText(text),
+                ElementSchema::UnstructuredText(_),
+            ) => Ok(ElementValue::UnstructuredText(text.value)),
+            (
+                UntypedJsonElementValue::UnstructuredBinary(binary),
+                ElementSchema::UnstructuredBinary(_),
+            ) => Ok(ElementValue::UnstructuredBinary(binary.value)),
+            _ => Err("Element value does not match schema".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]

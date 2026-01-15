@@ -27,14 +27,13 @@ use crate::bridge_gen::typescript::ts_writer::{
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
+use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use golem_common::model::agent::{
     AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema, TextDescriptor,
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use indoc::formatdoc;
-
-use crate::config::LOCAL_WELL_KNOWN_TOKEN;
 use serde_json::json;
 
 pub struct TypeScriptBridgeGenerator {

@@ -171,15 +171,6 @@ impl DataSchema {
     }
 }
 
-impl From<DataValue> for UntypedJsonDataValue {
-    fn from(value: DataValue) -> Self {
-        match value {
-            DataValue::Tuple(elements) => UntypedJsonDataValue::Tuple(elements.into()),
-            DataValue::Multimodal(elements) => UntypedJsonDataValue::Multimodal(elements.into()),
-        }
-    }
-}
-
 impl DataValue {
     pub fn parse(s: &str, schema: &DataSchema) -> Result<Self, String> {
         match schema {
@@ -316,18 +307,6 @@ impl IntoValue for DataValue {
     }
 }
 
-impl From<ElementValues> for UntypedJsonElementValues {
-    fn from(value: ElementValues) -> Self {
-        Self {
-            elements: value
-                .elements
-                .into_iter()
-                .map(UntypedJsonElementValue::from)
-                .collect(),
-        }
-    }
-}
-
 impl Display for ElementValues {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -342,18 +321,6 @@ impl Display for ElementValues {
     }
 }
 
-impl From<NamedElementValues> for UntypedJsonNamedElementValues {
-    fn from(value: NamedElementValues) -> Self {
-        Self {
-            elements: value
-                .elements
-                .into_iter()
-                .map(UntypedJsonNamedElementValue::from)
-                .collect(),
-        }
-    }
-}
-
 impl Display for NamedElementValues {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -365,15 +332,6 @@ impl Display for NamedElementValues {
                 .collect::<Vec<_>>()
                 .join(",")
         )
-    }
-}
-
-impl From<NamedElementValue> for UntypedJsonNamedElementValue {
-    fn from(value: NamedElementValue) -> Self {
-        Self {
-            name: value.name,
-            value: value.value.into(),
-        }
     }
 }
 
@@ -422,30 +380,6 @@ impl IntoValue for BinaryReferenceValue {
 impl FromValue for BinaryReferenceValue {
     fn from_value(value: Value) -> Result<Self, String> {
         BinaryReference::from_value(value).map(|value| Self { value })
-    }
-}
-
-impl From<ElementValue> for UntypedJsonElementValue {
-    fn from(value: ElementValue) -> Self {
-        match value {
-            ElementValue::ComponentModel(value) => {
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: value
-                        .to_json_value()
-                        .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
-                })
-            }
-            ElementValue::UnstructuredText(text_reference) => {
-                UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
-                    value: text_reference,
-                })
-            }
-            ElementValue::UnstructuredBinary(binary_reference) => {
-                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue {
-                    value: binary_reference,
-                })
-            }
-        }
     }
 }
 
