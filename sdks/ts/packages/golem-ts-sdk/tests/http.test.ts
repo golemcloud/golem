@@ -16,8 +16,11 @@ import { describe, it } from 'vitest';
 import { getHttpMountDetails } from '../src/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/http/query';
-import { HttpMountDetails } from 'golem:agent/common';
-import { validateHttpMountWithConstructor } from '../src/http/validation';
+import { HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
+import {
+  validateHttpEndpoint,
+  validateHttpMountWithConstructor,
+} from '../src/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
   it('returns undefined when mount is not provided', () => {
@@ -305,6 +308,101 @@ describe('validateHttpMountWithConstructor', () => {
       validateHttpMountWithConstructor(agentMount, agentConstructor),
     ).toThrow(
       'HTTP mount header variable "tenant" (from header "X-tenant") is not defined in the agent constructor.',
+    );
+  });
+});
+
+describe('validateHttpEndpoint', () => {
+  function endpoint(
+    pathVars: string[] = [],
+    queryVars: string[] = [],
+    headerVars: string[] = [],
+  ): HttpEndpointDetails {
+    return {
+      pathSuffix: pathVars.map((v) => ({
+        concat: [{ tag: 'path-variable', val: { variableName: v } }],
+      })),
+      queryVars: queryVars.map((v) => ({
+        queryParamName: v,
+        variableName: v,
+      })),
+      headerVars: headerVars.map((v) => ({
+        headerName: `X-${v}`,
+        variableName: v,
+      })),
+    } as any;
+  }
+
+  function method(vars: string[], endpoints: HttpEndpointDetails[]) {
+    return {
+      name: 'doThing',
+      inputSchema: {
+        val: vars.map((v) => [v, {}]),
+      },
+      httpEndpoint: endpoints,
+    } as any;
+  }
+
+  const agentName = 'TestAgent';
+
+  it('passes when all method parameters are provided via path', () => {
+    const m = method(['id', 'event'], [endpoint(['id', 'event'])]);
+
+    expect(() => validateHttpEndpoint(agentName, m)).not.toThrow();
+  });
+
+  it('passes when method parameters are split across path, query, and headers', () => {
+    const m = method(
+      ['id', 'limit', 'tenant'],
+      [endpoint(['id'], ['limit'], ['tenant'])],
+    );
+
+    expect(() => validateHttpEndpoint(agentName, m)).not.toThrow();
+  });
+
+  it('fails when a method parameter is not provided by the endpoint', () => {
+    const m = method(['id', 'userId'], [endpoint(['id'])]);
+
+    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+      'Method parameter "userId" in method doThing of TestAgent is not provided by HTTP endpoint (path, query, or headers).',
+    );
+  });
+
+  it('fails when endpoint path variable is not part of method input', () => {
+    const m = method([], [endpoint(['id'])]);
+
+    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+      'HTTP endpoint path variable "id" is not defined in method input parameters.',
+    );
+  });
+
+  it('fails when endpoint query variable is not part of method input', () => {
+    const m = method([], [endpoint([], ['limit'])]);
+
+    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+      'HTTP endpoint query variable "limit" is not defined in method input parameters.',
+    );
+  });
+
+  it('fails when endpoint header variable is not part of method input', () => {
+    const m = method([], [endpoint([], [], ['tenant'])]);
+
+    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+      'HTTP endpoint header variable "tenant" is not defined in method input parameters.',
+    );
+  });
+
+  it('validates each endpoint independently', () => {
+    const m = method(
+      ['id'],
+      [
+        endpoint(['id']),
+        endpoint([]), // invalid second endpoint
+      ],
+    );
+
+    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+      'Method parameter "id" in method doThing of TestAgent is not provided by HTTP endpoint (path, query, or headers).',
     );
   });
 });
