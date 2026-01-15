@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{AgentMethod, AgentType, DataSchema};
+use golem_common::model::agent::{AgentMethod, AgentType, DataSchema, ElementSchema};
+use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
+mod rust;
 #[cfg(test)]
 mod tests;
 
@@ -101,20 +104,25 @@ impl RustBridgeGenerator {
             entry
         }
 
-        // TODO: reduce features if possible
         doc["dependencies"] = Item::Table(Table::default());
         doc["dependencies"]["chrono"] = dep("0.4", &[]);
         doc["dependencies"]["golem-client"] =
             git_dep("https://github.com/golemcloud/golem", "rust-bridge", &[]); // TODO: use published version when available
-        doc["dependencies"]["golem-common"] =
-            git_dep("https://github.com/golemcloud/golem", "rust-bridge", &["client"]); // TODO: use published version when available
-        doc["dependencies"]["golem-wasm"] =
-            git_dep("https://github.com/golemcloud/golem", "rust-bridge", &["client"]); // TODO: use published version when available
+        doc["dependencies"]["golem-common"] = git_dep(
+            "https://github.com/golemcloud/golem",
+            "rust-bridge",
+            &["client"],
+        ); // TODO: use published version when available
+        doc["dependencies"]["golem-wasm"] = git_dep(
+            "https://github.com/golemcloud/golem",
+            "rust-bridge",
+            &["client"],
+        ); // TODO: use published version when available
         doc["dependencies"]["reqwest"] = dep("0.12", &["default-tls"]);
-        doc["dependencies"]["serde"] = dep("1.0", &["derive"]);
-        doc["dependencies"]["serde_json"] = dep("1.0", &[]);
-        doc["dependencies"]["tokio"] = dep("1", &[]);
-        doc["dependencies"]["uuid"] = dep("1.18.1", &[""]);
+        // doc["dependencies"]["serde"] = dep("1.0", &["derive"]); // TODO: not needed?
+        // doc["dependencies"]["serde_json"] = dep("1.0", &[]); // TODO: not needed?
+        // doc["dependencies"]["tokio"] = dep("1", &[]); // TODO: not needed?
+        doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
         std::fs::write(path, doc.to_string())
             .map_err(|e| anyhow!("Failed to write Cargo.toml file: {e}"))?;
@@ -125,6 +133,8 @@ impl RustBridgeGenerator {
     /// Generates the lib.rs source file
     fn generate_lib_rs(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let tokens = self.generate_lib_rs_tokens()?;
+
+        // println!("{}", tokens);
         let formatted = prettyplease::unparse(&syn::parse2(tokens)?);
 
         std::fs::write(path, formatted).map_err(|e| anyhow!("Failed to write lib.rs file: {e}"))?;
@@ -140,8 +150,13 @@ impl RustBridgeGenerator {
             Ident::new(&agent_type_name.to_upper_camel_case(), Span::call_site());
 
         let constructor_params = self.parameter_list(&self.agent_type.constructor.input_schema);
-        let constructor_params_to_data_value =
-            self.encode_as_data_value(&self.agent_type.constructor.input_schema);
+
+        let typed_constructor_parameters_ident =
+            Ident::new("typed_constructor_parameters", Span::call_site());
+        let constructor_params_to_data_value = self.encode_as_data_value(
+            &typed_constructor_parameters_ident,
+            &self.agent_type.constructor.input_schema,
+        );
 
         let methods = self
             .agent_type
@@ -153,6 +168,8 @@ impl RustBridgeGenerator {
         let global_config = self.global_config();
 
         let tokens = quote! {
+            use golem_wasm::IntoValueAndType;
+
             pub struct #client_struct_name {
                 constructor_parameters: golem_client::model::UntypedJsonDataValue,
                 phantom_id: Option<uuid::Uuid>,
@@ -227,10 +244,132 @@ impl RustBridgeGenerator {
 
     fn parameter_list(&self, data_schema: &DataSchema) -> Vec<TokenStream> {
         // each item is 'name: type'
-        todo!()
+
+        match data_schema {
+            DataSchema::Tuple(elements) => {
+                let mut result = Vec::new();
+                for element in &elements.elements {
+                    let name = Ident::new(&to_rust_ident(&element.name), Span::call_site());
+                    let typ = self.element_schema_to_typeref(&element.schema);
+                    result.push(quote! {#name: #typ});
+                }
+                result
+            }
+            DataSchema::Multimodal(elements) => {
+                todo!()
+            }
+        }
     }
 
-    fn encode_as_data_value(&self, data_schema: &DataSchema) -> TokenStream {
+    fn parameter_refs(&self, data_schema: &DataSchema) -> Vec<TokenStream> {
+        // each item is 'name: type'
+
+        match data_schema {
+            DataSchema::Tuple(elements) => {
+                let mut result = Vec::new();
+                for element in &elements.elements {
+                    let name = Ident::new(&to_rust_ident(&element.name), Span::call_site());
+                    let typ = self.element_schema_to_typeref(&element.schema);
+                    result.push(quote! {#name});
+                }
+                result
+            }
+            DataSchema::Multimodal(elements) => {
+                todo!()
+            }
+        }
+    }
+
+    fn element_schema_to_typeref(&self, element_schema: &ElementSchema) -> TokenStream {
+        match element_schema {
+            ElementSchema::ComponentModel(schema) => self.wit_type_to_typeref(&schema.element_type),
+            ElementSchema::UnstructuredText(_) => {
+                todo!()
+            }
+            ElementSchema::UnstructuredBinary(_) => {
+                todo!()
+            }
+        }
+    }
+
+    fn wit_type_to_typeref(&self, typ: &AnalysedType) -> TokenStream {
+        if let Some(name) = typ.name() {
+            let name = Ident::new(&to_rust_ident(&name), Span::call_site());
+            quote! { #name }
+        } else {
+            match typ {
+                AnalysedType::Variant(_) => {
+                    todo!()
+                }
+                AnalysedType::Result(_) => {
+                    todo!()
+                }
+                AnalysedType::Option(inner) => {
+                    let inner = self.wit_type_to_typeref(&*inner.inner);
+                    quote! { Option<#inner> }
+                }
+                AnalysedType::Enum(_) => {
+                    todo!()
+                }
+                AnalysedType::Flags(_) => {
+                    todo!()
+                }
+                AnalysedType::Record(_) => {
+                    todo!()
+                }
+                AnalysedType::Tuple(_) => {
+                    todo!()
+                }
+                AnalysedType::List(_) => {
+                    todo!()
+                }
+                AnalysedType::Str(_) => {
+                    quote! { String }
+                }
+                AnalysedType::Chr(_) => {
+                    quote! { char }
+                }
+                AnalysedType::F64(_) => {
+                    quote! { f64 }
+                }
+                AnalysedType::F32(_) => {
+                    quote! { f32 }
+                }
+                AnalysedType::U64(_) => {
+                    quote! { u64 }
+                }
+                AnalysedType::S64(_) => {
+                    quote! { i64 }
+                }
+                AnalysedType::U32(_) => {
+                    quote! { u32 }
+                }
+                AnalysedType::S32(_) => {
+                    quote! { i32 }
+                }
+                AnalysedType::U16(_) => {
+                    quote! { u16 }
+                }
+                AnalysedType::S16(_) => {
+                    quote! { i16 }
+                }
+                AnalysedType::U8(_) => {
+                    quote! { u8 }
+                }
+                AnalysedType::S8(_) => {
+                    quote! { i8 }
+                }
+                AnalysedType::Bool(_) => {
+                    quote! { bool }
+                }
+                AnalysedType::Handle(_) => {
+                    todo!()
+                }
+            }
+        }
+    }
+
+    fn encode_as_data_value(&self, name: &Ident, data_schema: &DataSchema) -> TokenStream {
         //         let typed_constructor_parameters = golem_common::model::agent::DataValue::Tuple(
         //             golem_common::model::agent::ElementValues {
         //                 elements: vec![golem_common::model::agent::ElementValue::ComponentModel(
@@ -238,7 +377,48 @@ impl RustBridgeGenerator {
         //                 )],
         //             },
         //         );
-        todo!()
+        match data_schema {
+            DataSchema::Tuple(elements) => {
+                let encoded_elements = elements
+                    .elements
+                    .iter()
+                    .map(|named_element| {
+                        // TODO: support unstructured text/binary
+
+                        let name =
+                            Ident::new(&to_rust_ident(&named_element.name), Span::call_site());
+                        quote! { golem_common::model::agent::ElementValue::ComponentModel(#name.into_value_and_type()) }
+                    })
+                    .collect::<Vec<_>>();
+
+                quote! {
+                    let #name = golem_common::model::agent::DataValue::Tuple(
+                        golem_common::model::agent::ElementValues {
+                            elements: vec![#(#encoded_elements),*]
+                        }
+                    );
+                }
+            }
+            DataSchema::Multimodal(_) => {
+                todo!()
+            }
+        }
+    }
+
+    fn return_type_from_data_schema(&self, data_schema: &DataSchema) -> TokenStream {
+        match data_schema {
+            DataSchema::Tuple(elements) => {
+                if elements.elements.len() == 1 {
+                    let element = &elements.elements[0];
+                    self.element_schema_to_typeref(&element.schema)
+                } else {
+                    panic!("Multiple return values are not supported");
+                }
+            }
+            DataSchema::Multimodal(elements) => {
+                todo!()
+            }
+        }
     }
 
     fn methods(&self, method: &AgentMethod) -> Vec<TokenStream> {
@@ -250,6 +430,26 @@ impl RustBridgeGenerator {
         ]
     }
 
+    fn await_method_name(&self, method: &AgentMethod) -> Ident {
+        let base_name = to_rust_ident(&method.name);
+        Ident::new(&base_name, Span::call_site())
+    }
+
+    fn trigger_method_name(&self, method: &AgentMethod) -> Ident {
+        let base_name = to_rust_ident(&method.name);
+        Ident::new(&format!("trigger_{}", base_name), Span::call_site())
+    }
+
+    fn schedule_method_name(&self, method: &AgentMethod) -> Ident {
+        let base_name = to_rust_ident(&method.name);
+        Ident::new(&format!("schedule_{}", base_name), Span::call_site())
+    }
+
+    fn internal_method_name(&self, method: &AgentMethod) -> Ident {
+        let base_name = to_rust_ident(&method.name);
+        Ident::new(&format!("__{}", base_name), Span::call_site())
+    }
+
     fn await_method(&self, method: &AgentMethod) -> TokenStream {
         //     pub async fn increment(&self) -> Result<f64, golem_client::bridge::ClientError> {
         //         let result = self
@@ -258,7 +458,20 @@ impl RustBridgeGenerator {
         //         let result = result.unwrap(); // always Some because of Await
         //         Ok(result)
         //     }
-        todo!()
+        let name = self.await_method_name(method);
+        let internal_name = self.internal_method_name(method);
+
+        let return_type = self.return_type_from_data_schema(&method.output_schema);
+        let param_defs = self.parameter_list(&method.input_schema);
+        let param_refs = self.parameter_refs(&method.input_schema);
+
+        quote! {
+            pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, golem_client::bridge::ClientError> {
+                let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
+                let result = result.unwrap(); // always Some because of Await
+                Ok(result)
+            }
+        }
     }
 
     fn trigger_method(&self, method: &AgentMethod) -> TokenStream {
@@ -268,7 +481,18 @@ impl RustBridgeGenerator {
         //             .await?;
         //         Ok(())
         //     }
-        todo!()
+        let name = self.trigger_method_name(method);
+        let internal_name = self.internal_method_name(method);
+
+        let param_defs = self.parameter_list(&method.input_schema);
+        let param_refs = self.parameter_refs(&method.input_schema);
+
+        quote! {
+            pub async fn #name(&self, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
+                let result = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
+                Ok(())
+            }
+        }
     }
 
     fn schedule_method(&self, method: &AgentMethod) -> TokenStream {
@@ -284,26 +508,55 @@ impl RustBridgeGenerator {
         //             .await?;
         //         Ok(())
         //     }
-        todo!()
+        let name = self.schedule_method_name(method);
+        let internal_name = self.internal_method_name(method);
+
+        let param_defs = self.parameter_list(&method.input_schema);
+        let param_refs = self.parameter_refs(&method.input_schema);
+
+        quote! {
+            pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
+                let result = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
+                Ok(())
+            }
+        }
     }
 
     fn internal_method(&self, method: &AgentMethod) -> TokenStream {
-        //     async fn __increment(
-        //         &self,
-        //         mode: golem_client::model::AgentInvocationMode,
-        //         when: Option<chrono::DateTime<chrono::Utc>>,
-        //     ) -> Result<Option<f64>, golem_client::bridge::ClientError> {
-        //         let typed_method_parameters = golem_common::model::agent::DataValue::Tuple(
-        //             golem_common::model::agent::ElementValues { elements: vec![] },
-        //         );
-        //         let method_parameters: golem_common::model::agent::UntypedJsonDataValue =
-        //             typed_method_parameters.into();
-        //         let response = self
-        //             .invoke("increment", method_parameters, mode, when)
-        //             .await?;
-        //         if let Some(untyped_data_value) = response {
-        //             let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
-        //                 untyped_data_value,
+        let name_lit = Lit::Str(LitStr::new(&method.name, Span::call_site()));
+        let name = self.internal_method_name(method);
+        let param_defs = self.parameter_list(&method.input_schema);
+        let return_type = self.return_type_from_data_schema(&method.output_schema);
+        let typed_method_parameters_ident =
+            Ident::new("typed_method_parameters", Span::call_site());
+        let typed_method_parameters_to_data_value =
+            self.encode_as_data_value(&typed_method_parameters_ident, &method.input_schema);
+
+        let output_schema_as_value = self.schema_as_value(&method.output_schema);
+        let decode_typed_data_value = self.decode_from_data_value(
+            &Ident::new("typed_data_value", Span::call_site()),
+            &method.output_schema,
+        );
+
+        quote! {
+            async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, golem_client::bridge::ClientError> {
+                #typed_method_parameters_to_data_value
+                let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
+                let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
+                if let Some(untyped_data_value) = response {
+                    let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
+                        untyped_data_value,
+                        #output_schema_as_value
+                    ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
+                    #decode_typed_data_value
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    fn schema_as_value(&self, schema: &DataSchema) -> TokenStream {
         //                 golem_common::model::agent::DataSchema::Tuple(
         //                     golem_common::model::agent::NamedElementSchemas {
         //                         elements: vec![golem_common::model::agent::NamedElementSchema {
@@ -316,10 +569,12 @@ impl RustBridgeGenerator {
         //                         }],
         //                     },
         //                 ),
-        //             )
-        //             .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
-        //                 message: format!("Failed to decode result value: {err}"),
-        //             })?;
+        quote! {
+            todo!()
+        }
+    }
+
+    fn decode_from_data_value(&self, ident: &Ident, data_schema: &DataSchema) -> TokenStream {
         //             match typed_data_value {
         //                 golem_common::model::agent::DataValue::Tuple(element_values) => {
         //                     match element_values.elements.get(0) {
@@ -339,11 +594,9 @@ impl RustBridgeGenerator {
         //                     message: format!("Failed to decode result value"),
         //                 })?,
         //             }
-        //         } else {
-        //             Ok(None)
-        //         }
-        //     }
-        todo!()
+        quote! {
+            todo!()
+        }
     }
 
     fn global_config(&self) -> TokenStream {
@@ -368,3 +621,59 @@ impl RustBridgeGenerator {
         format!("{}_client", self.agent_type.type_name.0.to_snake_case())
     }
 }
+
+//     async fn __increment(
+//         &self,
+//         mode: golem_client::model::AgentInvocationMode,
+//         when: Option<chrono::DateTime<chrono::Utc>>,
+//     ) -> Result<Option<f64>, golem_client::bridge::ClientError> {
+//         let typed_method_parameters = golem_common::model::agent::DataValue::Tuple(
+//             golem_common::model::agent::ElementValues { elements: vec![] },
+//         );
+//         let method_parameters: golem_common::model::agent::UntypedJsonDataValue =
+//             typed_method_parameters.into();
+//         let response = self
+//             .invoke("increment", method_parameters, mode, when)
+//             .await?;
+//         if let Some(untyped_data_value) = response {
+//             let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
+//                 untyped_data_value,
+//                 golem_common::model::agent::DataSchema::Tuple(
+//                     golem_common::model::agent::NamedElementSchemas {
+//                         elements: vec![golem_common::model::agent::NamedElementSchema {
+//                             name: "return".to_string(),
+//                             schema: golem_common::model::agent::ElementSchema::ComponentModel(
+//                                 golem_common::model::agent::ComponentModelElementSchema {
+//                                     element_type: golem_wasm::analysis::analysed_type::f64(),
+//                                 },
+//                             ),
+//                         }],
+//                     },
+//                 ),
+//             )
+//             .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
+//                 message: format!("Failed to decode result value: {err}"),
+//             })?;
+//             match typed_data_value {
+//                 golem_common::model::agent::DataValue::Tuple(element_values) => {
+//                     match element_values.elements.get(0) {
+//                         Some(golem_common::model::agent::ElementValue::ComponentModel(vnt)) => {
+//                             Ok(Some(f64::from_value_and_type(vnt.clone()).map_err(
+//                                 |err| golem_client::bridge::ClientError::InvocationFailed {
+//                                     message: format!("Failed to decode result value: {err}"),
+//                                 },
+//                             )?))
+//                         }
+//                         _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+//                             message: format!("Failed to decode result value"),
+//                         })?,
+//                     }
+//                 }
+//                 _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+//                     message: format!("Failed to decode result value"),
+//                 })?,
+//             }
+//         } else {
+//             Ok(None)
+//         }
+//     }
