@@ -14,7 +14,6 @@
 
 import {
   AgentConstructor,
-  AgentMethod,
   HttpMountDetails,
 } from 'golem:agent/common';
 
