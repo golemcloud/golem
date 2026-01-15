@@ -1044,7 +1044,16 @@ describe('Http Agent class', () => {
         corsOptions: {
           allowedPatterns: ['*'],
         },
-        headerVars: [],
+        headerVars: [
+          {
+            headerName: 'X-Foo',
+            variableName: 'location',
+          },
+          {
+            headerName: 'X-Bar',
+            variableName: 'name',
+          },
+        ],
         pathSuffix: [
           {
             concat: [
