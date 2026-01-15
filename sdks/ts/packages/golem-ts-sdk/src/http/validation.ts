@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  AgentConstructor,
-  HttpMountDetails,
-} from 'golem:agent/common';
+import { AgentConstructor, HttpMountDetails } from 'golem:agent/common';
 
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
