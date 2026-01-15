@@ -16,12 +16,12 @@ use crate::model::text::fmt::{
     format_main_id, format_message_highlight, log_table, FieldsBuilder, MessageWithFields, TextView,
 };
 use cli_table::Table;
-use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
 use itertools::Itertools;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpApiDeploymentGetView(pub HttpApiDeployment);
+pub struct HttpApiDeploymentGetView(pub LegacyHttpApiDeployment);
 
 impl MessageWithFields for HttpApiDeploymentGetView {
     fn message(&self) -> String {
@@ -36,7 +36,7 @@ impl MessageWithFields for HttpApiDeploymentGetView {
     }
 }
 
-fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> {
+fn http_api_deployment_fields(dep: &LegacyHttpApiDeployment) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
 
     fields
@@ -64,8 +64,8 @@ struct HttpApiDeploymentTableView {
     pub revision: u64,
 }
 
-impl From<&HttpApiDeployment> for HttpApiDeploymentTableView {
-    fn from(value: &HttpApiDeployment) -> Self {
+impl From<&LegacyHttpApiDeployment> for HttpApiDeploymentTableView {
+    fn from(value: &LegacyHttpApiDeployment) -> Self {
         Self {
             domain: value.domain.to_string(),
             id: value.id.to_string(),
@@ -75,7 +75,7 @@ impl From<&HttpApiDeployment> for HttpApiDeploymentTableView {
     }
 }
 
-impl TextView for Vec<HttpApiDeployment> {
+impl TextView for Vec<LegacyHttpApiDeployment> {
     fn log(&self) {
         log_table::<_, HttpApiDeploymentTableView>(self);
     }

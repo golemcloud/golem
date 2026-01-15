@@ -50,9 +50,8 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_definition::{
     HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
 };
-use golem_common::model::http_api_deployment::{
-    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
-};
+use golem_common::model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
+use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
@@ -965,7 +964,7 @@ pub struct Caches {
     pub http_api_deployment_revision: Cache<
         (HttpApiDeploymentId, HttpApiDeploymentRevision),
         (),
-        HttpApiDeployment,
+        LegacyHttpApiDeployment,
         Arc<anyhow::Error>,
     >,
     pub plugin_grants: Cache<

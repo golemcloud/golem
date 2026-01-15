@@ -17,12 +17,12 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
 };
@@ -30,6 +30,7 @@ use golem_service_base::repo::RepoError;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::{Database, FromRow};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -46,9 +47,9 @@ error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 
 // stored as string containing a json array
 #[derive(Debug, Clone, PartialEq)]
-pub struct HttpApiDefinitionNameList(pub Vec<HttpApiDefinitionName>);
+pub struct AgentTypeSet(pub BTreeSet<AgentTypeName>);
 
-impl<DB: Database> sqlx::Type<DB> for HttpApiDefinitionNameList
+impl<DB: Database> sqlx::Type<DB> for AgentTypeSet
 where
     String: sqlx::Type<DB>,
 {
@@ -61,7 +62,7 @@ where
     }
 }
 
-impl<'q, DB: Database> sqlx::Encode<'q, DB> for HttpApiDefinitionNameList
+impl<'q, DB: Database> sqlx::Encode<'q, DB> for AgentTypeSet
 where
     String: sqlx::Encode<'q, DB>,
 {
@@ -81,12 +82,12 @@ where
     }
 }
 
-impl<'r, DB: Database> sqlx::Decode<'r, DB> for HttpApiDefinitionNameList
+impl<'r, DB: Database> sqlx::Decode<'r, DB> for AgentTypeSet
 where
     &'r str: sqlx::Decode<'r, DB>,
 {
     fn decode(value: <DB as Database>::ValueRef<'r>) -> Result<Self, BoxDynError> {
-        let deserialized: Vec<HttpApiDefinitionName> =
+        let deserialized: BTreeSet<AgentTypeName> =
             serde_json::from_str(<&'r str>::decode(value)?)?;
         Ok(Self(deserialized))
     }
@@ -111,11 +112,11 @@ pub struct HttpApiDeploymentRevisionRecord {
     pub audit: DeletableRevisionAuditFields,
 
     // json string array as string
-    pub http_api_definitions: HttpApiDefinitionNameList,
+    pub agent_types: AgentTypeSet,
 }
 
 impl HttpApiDeploymentRevisionRecord {
-    pub fn for_recreation(
+    pub(in crate::repo) fn for_recreation(
         mut self,
         http_api_deployment_id: Uuid,
         revision_id: i64,
@@ -131,7 +132,7 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn creation(
         http_api_deployment_id: HttpApiDeploymentId,
-        http_api_definitions: Vec<HttpApiDefinitionName>,
+        agent_types: BTreeSet<AgentTypeName>,
         actor: AccountId,
     ) -> Self {
         let mut value = Self {
@@ -139,7 +140,7 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: HttpApiDeploymentRevision::INITIAL.into(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
-            http_api_definitions: HttpApiDefinitionNameList(http_api_definitions),
+            agent_types: AgentTypeSet(agent_types),
         };
         value.update_hash();
         value
@@ -151,7 +152,7 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: value.revision.into(),
             hash: SqlBlake3Hash::empty(),
             audit,
-            http_api_definitions: HttpApiDefinitionNameList(value.api_definitions),
+            agent_types: AgentTypeSet(value.agent_types),
         };
         value.update_hash();
         value
@@ -167,18 +168,13 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: current_revision_id,
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
-            http_api_definitions: HttpApiDefinitionNameList(Vec::new()),
+            agent_types: AgentTypeSet(BTreeSet::new()),
         }
     }
 
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
-            apis: self
-                .http_api_definitions
-                .0
-                .iter()
-                .map(|had| had.0.clone())
-                .collect(),
+            agent_types: self.agent_types.0.iter().map(|had| had.0.clone()).collect(),
         }
     }
 
@@ -212,7 +208,7 @@ impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
-            api_definitions: value.revision.http_api_definitions.0,
+            agent_types: value.revision.agent_types.0,
             created_at: value.entity_created_at.into(),
         })
     }

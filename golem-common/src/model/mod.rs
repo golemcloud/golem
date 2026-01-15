@@ -34,6 +34,7 @@ pub mod error;
 pub mod exports;
 pub mod http_api_definition;
 pub mod http_api_deployment;
+pub mod http_api_deployment_legacy;
 pub mod invocation_context;
 pub mod login;
 pub mod lucene;

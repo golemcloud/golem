@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::rib::CorsPreflightExpr;
-use crate::model::api_definition::{CompiledRouteWithContext, CompiledRouteWithoutSecurity};
 use crate::model::component::Component;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
@@ -21,19 +19,18 @@ use crate::services::component::{ComponentError, ComponentService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_definition::{HttpApiDefinitionError, HttpApiDefinitionService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
-use crate::services::run_cpu_bound_work;
 use futures::TryFutureExt;
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{RegisteredAgentType, RegisteredAgentTypeImplementer};
+use golem_common::model::agent::{
+    AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
+};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_definition::{
-    CorsPreflightBinding, FileServerBinding, GatewayBinding, HttpApiDefinition,
-    HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpHandlerBinding,
-    RouteMethod, WorkerGatewayBinding,
+    HttpApiDefinition, HttpApiDefinitionName, RouteMethod,
 };
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::{
@@ -41,33 +38,26 @@ use golem_common::model::{
     environment::EnvironmentId,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::custom_api::HttpCors;
-use golem_service_base::custom_api::path_pattern::AllPathPatterns;
-use golem_service_base::custom_api::rib_compiler::ComponentDependencyWithAgentInfo;
-use golem_service_base::custom_api::{
-    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
-    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
-    ResponseMappingCompiled, SwaggerUiBindingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
-};
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use indoc::formatdoc;
-use rib::{ComponentDependencyKey, RibCompilationError};
+use rib::RibCompilationError;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-macro_rules! ok_or_continue {
-    ($expr:expr, $errors:ident) => {{
-        match ($expr) {
-            Ok(v) => v,
-            Err(e) => {
-                $errors.push(e);
-                continue;
-            }
-        }
-    }};
-}
+// Fixme: code-first routes
+// macro_rules! ok_or_continue {
+//     ($expr:expr, $errors:ident) => {{
+//         match ($expr) {
+//             Ok(v) => v,
+//             Err(e) => {
+//                 $errors.push(e);
+//                 continue;
+//             }
+//         }
+//     }};
+// }
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentWriteError {
@@ -151,7 +141,7 @@ pub enum DeployValidationError {
     #[error("Component {0} not found in deployment")]
     ComponentNotFound(ComponentName),
     #[error("Agent type name {0} is provided by multiple components")]
-    AmbiguousAgentTypeName(String),
+    AmbiguousAgentTypeName(AgentTypeName),
 }
 
 fn indent_multiline_string(text: &str, indent: usize) -> String {
@@ -319,24 +309,26 @@ impl DeploymentWriteService {
             }
         }
 
-        deployment_context.validate_http_api_deployments()?;
+        // Fixme: code-first routes
+        // deployment_context.validate_http_api_deployments()?;
 
         let registered_agent_types = deployment_context.extract_registered_agent_types()?;
 
-        let (domain_http_api_definitions, compiled_http_api_routes, deployment_context) = {
-            let deployment_context = Arc::new(deployment_context);
-            let deployment_context_clone = deployment_context.clone();
-            let (domain_http_api_definitions, compiled_http_api_routes) =
-                run_cpu_bound_work(move || deployment_context_clone.compiled_http_api_routes())
-                    .await?;
-            let deployment_context = Arc::try_unwrap(deployment_context)
-                .expect("should only have one reference to deployment context");
-            (
-                domain_http_api_definitions,
-                compiled_http_api_routes,
-                deployment_context,
-            )
-        };
+        // Fixme: code-first routes
+        // let (domain_http_api_definitions, compiled_http_api_routes, deployment_context) = {
+        //     let deployment_context = Arc::new(deployment_context);
+        //     let deployment_context_clone = deployment_context.clone();
+        //     let (domain_http_api_definitions, compiled_http_api_routes) =
+        //         run_cpu_bound_work(move || deployment_context_clone.compiled_http_api_routes())
+        //             .await?;
+        //     let deployment_context = Arc::try_unwrap(deployment_context)
+        //         .expect("should only have one reference to deployment context");
+        //     (
+        //         domain_http_api_definitions,
+        //         compiled_http_api_routes,
+        //         deployment_context,
+        //     )
+        // };
 
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,
@@ -344,16 +336,13 @@ impl DeploymentWriteService {
             data.version,
             data.expected_deployment_hash,
             deployment_context.components.into_values().collect(),
-            deployment_context
-                .http_api_definitions
-                .into_values()
-                .collect(),
+            Vec::new(),
             deployment_context
                 .http_api_deployments
                 .into_values()
                 .collect(),
-            domain_http_api_definitions,
-            compiled_http_api_routes,
+            HashSet::new(),
+            Vec::new(),
             registered_agent_types,
         );
 
@@ -521,9 +510,7 @@ impl DeploymentContext {
             for agent_type in component.metadata.agent_types() {
                 if !seen_wit_named_agent_types.insert(agent_type.type_name.to_wit_naming()) {
                     return Err(DeploymentWriteError::DeploymentValidationFailed(vec![
-                        DeployValidationError::AmbiguousAgentTypeName(
-                            agent_type.type_name.to_string(),
-                        ),
+                        DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()),
                     ]));
                 }
                 agent_types.push(RegisteredAgentType {
@@ -538,372 +525,379 @@ impl DeploymentContext {
         Ok(agent_types)
     }
 
-    fn validate_http_api_deployments(&self) -> Result<(), DeploymentWriteError> {
-        let mut errors = Vec::new();
+    // Fixme: code-first routes
+    // fn validate_http_api_deployments(&self) -> Result<(), DeploymentWriteError> {
+    //     let mut errors = Vec::new();
 
-        for deployment in self.http_api_deployments.values() {
-            for definition_name in &deployment.api_definitions {
-                if !self.http_api_definitions.contains_key(definition_name) {
-                    errors.push(
-                        DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
-                            http_api_deployment_domain: deployment.domain.clone(),
-                            missing_http_api_definition: definition_name.clone(),
-                        },
-                    );
-                }
-            }
-        }
+    //     for deployment in self.http_api_deployments.values() {
+    //         for definition_name in &deployment.api_definitions {
+    //             if !self.http_api_definitions.contains_key(definition_name) {
+    //                 errors.push(
+    //                     DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
+    //                         http_api_deployment_domain: deployment.domain.clone(),
+    //                         missing_http_api_definition: definition_name.clone(),
+    //                     },
+    //                 );
+    //             }
+    //         }
+    //     }
 
-        if !errors.is_empty() {
-            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
-        };
+    //     if !errors.is_empty() {
+    //         return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+    //     };
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    #[allow(clippy::type_complexity)]
-    fn compiled_http_api_routes(
-        &self,
-    ) -> Result<
-        (
-            HashSet<(Domain, HttpApiDefinitionId)>,
-            Vec<CompiledRouteWithContext>,
-        ),
-        DeploymentWriteError,
-    > {
-        let mut domain_http_api_definitions = HashSet::new();
-        let mut compiled_routes = Vec::new();
-        let mut errors = Vec::new();
+    // Fixme: code-first routes
+    // #[allow(clippy::type_complexity)]
+    // fn compiled_http_api_routes(
+    //     &self,
+    // ) -> Result<
+    //     (
+    //         HashSet<(Domain, HttpApiDefinitionId)>,
+    //         Vec<CompiledRouteWithContext>,
+    //     ),
+    //     DeploymentWriteError,
+    // > {
+    //     let mut domain_http_api_definitions = HashSet::new();
+    //     let mut compiled_routes = Vec::new();
+    //     let mut errors = Vec::new();
 
-        for deployment in self.http_api_deployments.values() {
-            for definition_name in &deployment.api_definitions {
-                let definition = ok_or_continue!(
-                    self.http_api_definitions.get(definition_name).ok_or(
-                        DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
-                            http_api_deployment_domain: deployment.domain.clone(),
-                            missing_http_api_definition: definition_name.clone()
-                        }
-                    ),
-                    errors
-                );
+    //     for deployment in self.http_api_deployments.values() {
+    //         for definition_name in &deployment.api_definitions {
+    //             let definition = ok_or_continue!(
+    //                 self.http_api_definitions.get(definition_name).ok_or(
+    //                     DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
+    //                         http_api_deployment_domain: deployment.domain.clone(),
+    //                         missing_http_api_definition: definition_name.clone()
+    //                     }
+    //                 ),
+    //                 errors
+    //             );
 
-                if !definition.routes.is_empty() {
-                    domain_http_api_definitions.insert((deployment.domain.clone(), definition.id));
-                };
+    //             if !definition.routes.is_empty() {
+    //                 domain_http_api_definitions.insert((deployment.domain.clone(), definition.id));
+    //             };
 
-                for route in &definition.routes {
-                    let path_pattern = ok_or_continue!(
-                        AllPathPatterns::parse(&route.path).map_err(|_| {
-                            DeployValidationError::HttpApiDefinitionInvalidPathPattern(
-                                route.path.clone(),
-                            )
-                        }),
-                        errors
-                    );
+    //             for route in &definition.routes {
+    //                 let path_pattern = ok_or_continue!(
+    //                     AllPathPatterns::parse(&route.path).map_err(|_| {
+    //                         DeployValidationError::HttpApiDefinitionInvalidPathPattern(
+    //                             route.path.clone(),
+    //                         )
+    //                     }),
+    //                     errors
+    //                 );
 
-                    let binding = ok_or_continue!(
-                        self.compile_gateway_binding(
-                            definition.id,
-                            &definition.name,
-                            &definition.version,
-                            route.method,
-                            &route.path,
-                            &route.binding
-                        ),
-                        errors
-                    );
+    //                 let binding = ok_or_continue!(
+    //                     self.compile_gateway_binding(
+    //                         definition.id,
+    //                         &definition.name,
+    //                         &definition.version,
+    //                         route.method,
+    //                         &route.path,
+    //                         &route.binding
+    //                     ),
+    //                     errors
+    //                 );
 
-                    let compiled_route = CompiledRouteWithContext {
-                        http_api_definition_id: definition.id,
-                        security_scheme: route.security.clone(),
-                        route: CompiledRouteWithoutSecurity {
-                            method: route.method,
-                            path: path_pattern,
-                            binding,
-                        },
-                    };
+    //                 let compiled_route = CompiledRouteWithContext {
+    //                     http_api_definition_id: definition.id,
+    //                     security_scheme: route.security.clone(),
+    //                     route: CompiledRouteWithoutSecurity {
+    //                         method: route.method,
+    //                         path: path_pattern,
+    //                         binding,
+    //                     },
+    //                 };
 
-                    compiled_routes.push(compiled_route);
-                }
-            }
-        }
+    //                 compiled_routes.push(compiled_route);
+    //             }
+    //         }
+    //     }
 
-        if !errors.is_empty() {
-            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
-        };
+    //     if !errors.is_empty() {
+    //         return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+    //     };
 
-        Ok((domain_http_api_definitions, compiled_routes))
-    }
+    //     Ok((domain_http_api_definitions, compiled_routes))
+    // }
 
-    fn compile_gateway_binding(
-        &self,
-        http_api_definition_id: HttpApiDefinitionId,
-        http_api_definition_name: &HttpApiDefinitionName,
-        http_api_definition_version: &HttpApiDefinitionVersion,
-        method: RouteMethod,
-        path: &str,
-        binding: &GatewayBinding,
-    ) -> Result<GatewayBindingCompiled, DeployValidationError> {
-        match binding {
-            GatewayBinding::Worker(inner) => {
-                self.compile_worker_binding(http_api_definition_name, method, path, inner)
-            }
-            GatewayBinding::FileServer(inner) => {
-                self.compile_file_server_binding(http_api_definition_name, method, path, inner)
-            }
-            GatewayBinding::HttpHandler(inner) => {
-                self.compile_http_handler_binding(http_api_definition_name, method, path, inner)
-            }
-            GatewayBinding::CorsPreflight(inner) => self.compile_cors_preflight_binding(inner),
-            GatewayBinding::SwaggerUi(_) => Ok(GatewayBindingCompiled::SwaggerUi(Box::new(
-                SwaggerUiBindingCompiled {
-                    http_api_definition_id,
-                    http_api_definition_name: http_api_definition_name.clone(),
-                    http_api_definition_version: http_api_definition_version.clone(),
-                },
-            ))),
-        }
-    }
+    // Fixme: code-first routes
+    // fn compile_gateway_binding(
+    //     &self,
+    //     http_api_definition_id: HttpApiDefinitionId,
+    //     http_api_definition_name: &HttpApiDefinitionName,
+    //     http_api_definition_version: &HttpApiDefinitionVersion,
+    //     method: RouteMethod,
+    //     path: &str,
+    //     binding: &GatewayBinding,
+    // ) -> Result<GatewayBindingCompiled, DeployValidationError> {
+    //     match binding {
+    //         GatewayBinding::Worker(inner) => {
+    //             self.compile_worker_binding(http_api_definition_name, method, path, inner)
+    //         }
+    //         GatewayBinding::FileServer(inner) => {
+    //             self.compile_file_server_binding(http_api_definition_name, method, path, inner)
+    //         }
+    //         GatewayBinding::HttpHandler(inner) => {
+    //             self.compile_http_handler_binding(http_api_definition_name, method, path, inner)
+    //         }
+    //         GatewayBinding::CorsPreflight(inner) => self.compile_cors_preflight_binding(inner),
+    //         GatewayBinding::SwaggerUi(_) => Ok(GatewayBindingCompiled::SwaggerUi(Box::new(
+    //             SwaggerUiBindingCompiled {
+    //                 http_api_definition_id,
+    //                 http_api_definition_name: http_api_definition_name.clone(),
+    //                 http_api_definition_version: http_api_definition_version.clone(),
+    //             },
+    //         ))),
+    //     }
+    // }
 
-    fn compile_worker_binding(
-        &self,
-        definition: &HttpApiDefinitionName,
-        method: RouteMethod,
-        path: &str,
-        binding: &WorkerGatewayBinding,
-    ) -> Result<GatewayBindingCompiled, DeployValidationError> {
-        let component = self.components.get(&binding.component_name).ok_or(
-            DeployValidationError::ComponentNotFound(binding.component_name.clone()),
-        )?;
+    // Fixme: code-first routes
+    // fn compile_worker_binding(
+    //     &self,
+    //     definition: &HttpApiDefinitionName,
+    //     method: RouteMethod,
+    //     path: &str,
+    //     binding: &WorkerGatewayBinding,
+    // ) -> Result<GatewayBindingCompiled, DeployValidationError> {
+    //     let component = self.components.get(&binding.component_name).ok_or(
+    //         DeployValidationError::ComponentNotFound(binding.component_name.clone()),
+    //     )?;
 
-        let idempotency_key_compiled = if let Some(expr) = &binding.idempotency_key {
-            let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
-            Some(
-                IdempotencyKeyCompiled::from_expr(&rib_expr).map_err(|error| {
-                    DeployValidationError::RibCompilationFailed {
-                        definition: definition.clone(),
-                        method,
-                        path: path.to_string(),
-                        field: "idempotency_key".to_string(),
-                        error,
-                    }
-                })?,
-            )
-        } else {
-            None
-        };
+    //     let idempotency_key_compiled = if let Some(expr) = &binding.idempotency_key {
+    //         let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
+    //         Some(
+    //             IdempotencyKeyCompiled::from_expr(&rib_expr).map_err(|error| {
+    //                 DeployValidationError::RibCompilationFailed {
+    //                     definition: definition.clone(),
+    //                     method,
+    //                     path: path.to_string(),
+    //                     field: "idempotency_key".to_string(),
+    //                     error,
+    //                 }
+    //             })?,
+    //         )
+    //     } else {
+    //         None
+    //     };
 
-        let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
-            let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
-            Some(
-                InvocationContextCompiled::from_expr(&rib_expr).map_err(|error| {
-                    DeployValidationError::RibCompilationFailed {
-                        definition: definition.clone(),
-                        method,
-                        path: path.to_string(),
-                        field: "invocation_context".to_string(),
-                        error,
-                    }
-                })?,
-            )
-        } else {
-            None
-        };
+    //     let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
+    //         let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
+    //         Some(
+    //             InvocationContextCompiled::from_expr(&rib_expr).map_err(|error| {
+    //                 DeployValidationError::RibCompilationFailed {
+    //                     definition: definition.clone(),
+    //                     method,
+    //                     path: path.to_string(),
+    //                     field: "invocation_context".to_string(),
+    //                     error,
+    //                 }
+    //             })?,
+    //         )
+    //     } else {
+    //         None
+    //     };
 
-        let response_compiled = {
-            let component_dependency_key = ComponentDependencyKey {
-                component_id: component.id.0,
-                component_revision: component.revision.into(),
-                component_name: component.component_name.0.clone(),
-                root_package_name: component.metadata.root_package_name().clone(),
-                root_package_version: component.metadata.root_package_version().clone(),
-            };
+    //     let response_compiled = {
+    //         let component_dependency_key = ComponentDependencyKey {
+    //             component_id: component.id.0,
+    //             component_revision: component.revision.into(),
+    //             component_name: component.component_name.0.clone(),
+    //             root_package_name: component.metadata.root_package_name().clone(),
+    //             root_package_version: component.metadata.root_package_version().clone(),
+    //         };
 
-            let component_dependency = ComponentDependencyWithAgentInfo::new(
-                component_dependency_key,
-                component.metadata.clone(),
-            );
+    //         let component_dependency = ComponentDependencyWithAgentInfo::new(
+    //             component_dependency_key,
+    //             component.metadata.clone(),
+    //         );
 
-            let component_dependencies = vec![component_dependency];
+    //         let component_dependencies = vec![component_dependency];
 
-            let rib_expr = rib::from_string(&binding.response)
-                .map_err(DeployValidationError::InvalidRibExpr)?;
-            ResponseMappingCompiled::from_expr(&rib_expr, &component_dependencies).map_err(
-                |error| DeployValidationError::RibCompilationFailed {
-                    definition: definition.clone(),
-                    method,
-                    path: path.to_string(),
-                    field: "response".to_string(),
-                    error,
-                },
-            )?
-        };
+    //         let rib_expr = rib::from_string(&binding.response)
+    //             .map_err(DeployValidationError::InvalidRibExpr)?;
+    //         ResponseMappingCompiled::from_expr(&rib_expr, &component_dependencies).map_err(
+    //             |error| DeployValidationError::RibCompilationFailed {
+    //                 definition: definition.clone(),
+    //                 method,
+    //                 path: path.to_string(),
+    //                 field: "response".to_string(),
+    //                 error,
+    //             },
+    //         )?
+    //     };
 
-        let binding = WorkerBindingCompiled {
-            component_id: component.id,
-            component_name: component.component_name.clone(),
-            component_revision: component.revision,
-            idempotency_key_compiled,
-            invocation_context_compiled,
-            response_compiled,
-        };
+    //     let binding = WorkerBindingCompiled {
+    //         component_id: component.id,
+    //         component_name: component.component_name.clone(),
+    //         component_revision: component.revision,
+    //         idempotency_key_compiled,
+    //         invocation_context_compiled,
+    //         response_compiled,
+    //     };
 
-        Ok(GatewayBindingCompiled::Worker(Box::new(binding)))
-    }
+    //     Ok(GatewayBindingCompiled::Worker(Box::new(binding)))
+    // }
 
-    fn compile_file_server_binding(
-        &self,
-        definition: &HttpApiDefinitionName,
-        method: RouteMethod,
-        path: &str,
-        binding: &FileServerBinding,
-    ) -> Result<GatewayBindingCompiled, DeployValidationError> {
-        let component = self.components.get(&binding.component_name).ok_or(
-            DeployValidationError::ComponentNotFound(binding.component_name.clone()),
-        )?;
+    // Fixme: code-first routes
+    // fn compile_file_server_binding(
+    //     &self,
+    //     definition: &HttpApiDefinitionName,
+    //     method: RouteMethod,
+    //     path: &str,
+    //     binding: &FileServerBinding,
+    // ) -> Result<GatewayBindingCompiled, DeployValidationError> {
+    //     let component = self.components.get(&binding.component_name).ok_or(
+    //         DeployValidationError::ComponentNotFound(binding.component_name.clone()),
+    //     )?;
 
-        let response_compiled = {
-            let component_dependency_key = ComponentDependencyKey {
-                component_id: component.id.0,
-                component_revision: component.revision.into(),
-                component_name: component.component_name.0.clone(),
-                root_package_name: component.metadata.root_package_name().clone(),
-                root_package_version: component.metadata.root_package_version().clone(),
-            };
+    //     let response_compiled = {
+    //         let component_dependency_key = ComponentDependencyKey {
+    //             component_id: component.id.0,
+    //             component_revision: component.revision.into(),
+    //             component_name: component.component_name.0.clone(),
+    //             root_package_name: component.metadata.root_package_name().clone(),
+    //             root_package_version: component.metadata.root_package_version().clone(),
+    //         };
 
-            let component_dependency = ComponentDependencyWithAgentInfo::new(
-                component_dependency_key,
-                component.metadata.clone(),
-            );
+    //         let component_dependency = ComponentDependencyWithAgentInfo::new(
+    //             component_dependency_key,
+    //             component.metadata.clone(),
+    //         );
 
-            let rib_expr = rib::from_string(&binding.response)
-                .map_err(DeployValidationError::InvalidRibExpr)?;
-            ResponseMappingCompiled::from_expr(&rib_expr, &[component_dependency]).map_err(
-                |error| DeployValidationError::RibCompilationFailed {
-                    definition: definition.clone(),
-                    method,
-                    path: path.to_string(),
-                    field: "response".to_string(),
-                    error,
-                },
-            )?
-        };
+    //         let rib_expr = rib::from_string(&binding.response)
+    //             .map_err(DeployValidationError::InvalidRibExpr)?;
+    //         ResponseMappingCompiled::from_expr(&rib_expr, &[component_dependency]).map_err(
+    //             |error| DeployValidationError::RibCompilationFailed {
+    //                 definition: definition.clone(),
+    //                 method,
+    //                 path: path.to_string(),
+    //                 field: "response".to_string(),
+    //                 error,
+    //             },
+    //         )?
+    //     };
 
-        let worker_name_compiled = {
-            let rib_expr = rib::from_string(&binding.worker_name)
-                .map_err(DeployValidationError::InvalidRibExpr)?;
-            WorkerNameCompiled::from_expr(&rib_expr).map_err(|error| {
-                DeployValidationError::RibCompilationFailed {
-                    definition: definition.clone(),
-                    method,
-                    path: path.to_string(),
-                    field: "worker_name".to_string(),
-                    error,
-                }
-            })?
-        };
+    //     let worker_name_compiled = {
+    //         let rib_expr = rib::from_string(&binding.worker_name)
+    //             .map_err(DeployValidationError::InvalidRibExpr)?;
+    //         WorkerNameCompiled::from_expr(&rib_expr).map_err(|error| {
+    //             DeployValidationError::RibCompilationFailed {
+    //                 definition: definition.clone(),
+    //                 method,
+    //                 path: path.to_string(),
+    //                 field: "worker_name".to_string(),
+    //                 error,
+    //             }
+    //         })?
+    //     };
 
-        let binding = FileServerBindingCompiled {
-            component_id: component.id,
-            component_name: component.component_name.clone(),
-            component_revision: component.revision,
-            worker_name_compiled,
-            response_compiled,
-        };
+    //     let binding = FileServerBindingCompiled {
+    //         component_id: component.id,
+    //         component_name: component.component_name.clone(),
+    //         component_revision: component.revision,
+    //         worker_name_compiled,
+    //         response_compiled,
+    //     };
 
-        Ok(GatewayBindingCompiled::FileServer(Box::new(binding)))
-    }
+    //     Ok(GatewayBindingCompiled::FileServer(Box::new(binding)))
+    // }
 
-    fn compile_http_handler_binding(
-        &self,
-        definition: &HttpApiDefinitionName,
-        method: RouteMethod,
-        path: &str,
-        binding: &HttpHandlerBinding,
-    ) -> Result<GatewayBindingCompiled, DeployValidationError> {
-        let component = self.components.get(&binding.component_name).ok_or(
-            DeployValidationError::ComponentNotFound(binding.component_name.clone()),
-        )?;
+    // Fixme: code-first routes
+    // fn compile_http_handler_binding(
+    //     &self,
+    //     definition: &HttpApiDefinitionName,
+    //     method: RouteMethod,
+    //     path: &str,
+    //     binding: &HttpHandlerBinding,
+    // ) -> Result<GatewayBindingCompiled, DeployValidationError> {
+    //     let component = self.components.get(&binding.component_name).ok_or(
+    //         DeployValidationError::ComponentNotFound(binding.component_name.clone()),
+    //     )?;
 
-        let worker_name_compiled = {
-            let rib_expr = rib::from_string(&binding.worker_name)
-                .map_err(DeployValidationError::InvalidRibExpr)?;
-            WorkerNameCompiled::from_expr(&rib_expr).map_err(|error| {
-                DeployValidationError::RibCompilationFailed {
-                    definition: definition.clone(),
-                    method,
-                    path: path.to_string(),
-                    field: "worker_name".to_string(),
-                    error,
-                }
-            })?
-        };
+    //     let worker_name_compiled = {
+    //         let rib_expr = rib::from_string(&binding.worker_name)
+    //             .map_err(DeployValidationError::InvalidRibExpr)?;
+    //         WorkerNameCompiled::from_expr(&rib_expr).map_err(|error| {
+    //             DeployValidationError::RibCompilationFailed {
+    //                 definition: definition.clone(),
+    //                 method,
+    //                 path: path.to_string(),
+    //                 field: "worker_name".to_string(),
+    //                 error,
+    //             }
+    //         })?
+    //     };
 
-        let idempotency_key_compiled = if let Some(expr) = &binding.idempotency_key {
-            let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
-            Some(
-                IdempotencyKeyCompiled::from_expr(&rib_expr).map_err(|error| {
-                    DeployValidationError::RibCompilationFailed {
-                        definition: definition.clone(),
-                        method,
-                        path: path.to_string(),
-                        field: "idempotency_key".to_string(),
-                        error,
-                    }
-                })?,
-            )
-        } else {
-            None
-        };
+    //     let idempotency_key_compiled = if let Some(expr) = &binding.idempotency_key {
+    //         let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
+    //         Some(
+    //             IdempotencyKeyCompiled::from_expr(&rib_expr).map_err(|error| {
+    //                 DeployValidationError::RibCompilationFailed {
+    //                     definition: definition.clone(),
+    //                     method,
+    //                     path: path.to_string(),
+    //                     field: "idempotency_key".to_string(),
+    //                     error,
+    //                 }
+    //             })?,
+    //         )
+    //     } else {
+    //         None
+    //     };
 
-        let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
-            let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
-            Some(
-                InvocationContextCompiled::from_expr(&rib_expr).map_err(|error| {
-                    DeployValidationError::RibCompilationFailed {
-                        definition: definition.clone(),
-                        method,
-                        path: path.to_string(),
-                        field: "invocation_context".to_string(),
-                        error,
-                    }
-                })?,
-            )
-        } else {
-            None
-        };
+    //     let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
+    //         let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
+    //         Some(
+    //             InvocationContextCompiled::from_expr(&rib_expr).map_err(|error| {
+    //                 DeployValidationError::RibCompilationFailed {
+    //                     definition: definition.clone(),
+    //                     method,
+    //                     path: path.to_string(),
+    //                     field: "invocation_context".to_string(),
+    //                     error,
+    //                 }
+    //             })?,
+    //         )
+    //     } else {
+    //         None
+    //     };
 
-        let binding = HttpHandlerBindingCompiled {
-            component_id: component.id,
-            component_name: component.component_name.clone(),
-            component_revision: component.revision,
-            worker_name_compiled,
-            idempotency_key_compiled,
-            invocation_context_compiled,
-        };
+    //     let binding = HttpHandlerBindingCompiled {
+    //         component_id: component.id,
+    //         component_name: component.component_name.clone(),
+    //         component_revision: component.revision,
+    //         worker_name_compiled,
+    //         idempotency_key_compiled,
+    //         invocation_context_compiled,
+    //     };
 
-        Ok(GatewayBindingCompiled::HttpHandler(Box::new(binding)))
-    }
+    //     Ok(GatewayBindingCompiled::HttpHandler(Box::new(binding)))
+    // }
 
-    fn compile_cors_preflight_binding(
-        &self,
-        binding: &CorsPreflightBinding,
-    ) -> Result<GatewayBindingCompiled, DeployValidationError> {
-        match &binding.response {
-            Some(expr) => {
-                let expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
-                let cors_preflight_expr = CorsPreflightExpr(expr);
-                let http_cors = cors_preflight_expr
-                    .into_http_cors()
-                    .map_err(DeployValidationError::InvalidHttpCorsBindingExpr)?;
-                let binding = HttpCorsBindingCompiled { http_cors };
-                Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(binding)))
-            }
-            None => {
-                let http_cors = HttpCors::default();
-                let binding = HttpCorsBindingCompiled { http_cors };
-                Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(binding)))
-            }
-        }
-    }
+    // Fixme: code-first routes
+    // fn compile_cors_preflight_binding(
+    //     &self,
+    //     binding: &CorsPreflightBinding,
+    // ) -> Result<GatewayBindingCompiled, DeployValidationError> {
+    //     match &binding.response {
+    //         Some(expr) => {
+    //             let expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
+    //             let cors_preflight_expr = CorsPreflightExpr(expr);
+    //             let http_cors = cors_preflight_expr
+    //                 .into_http_cors()
+    //                 .map_err(DeployValidationError::InvalidHttpCorsBindingExpr)?;
+    //             let binding = HttpCorsBindingCompiled { http_cors };
+    //             Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(binding)))
+    //         }
+    //         None => {
+    //             let http_cors = HttpCors::default();
+    //             let binding = HttpCorsBindingCompiled { http_cors };
+    //             Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(binding)))
+    //         }
+    //     }
+    // }
 }
