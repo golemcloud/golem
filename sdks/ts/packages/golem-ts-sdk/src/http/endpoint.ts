@@ -141,44 +141,45 @@ export function endpoint(opts: EndpointDecoratorOptions) {
       );
     }
 
-    const pathAndQuery = split_path_and_query(
-      opts.get || opts.post || opts.put || opts.delete || opts.custom || '',
-    );
+    const methods = ['get', 'post', 'put', 'delete', 'custom'] as const;
+    const providedMethods = methods.filter((m) => !!opts[m]);
 
-    const path = pathAndQuery.path;
-    const query = pathAndQuery.query;
+    if (providedMethods.length === 0) {
+      throw new Error(
+        `Endpoint decorator must specify one HTTP method (get/post/put/delete/custom) for method ${methodName}`,
+      );
+    }
 
+    if (providedMethods.length > 1) {
+      throw new Error(
+        `Endpoint decorator must specify only one HTTP method for method ${methodName}. Provided: ${providedMethods.join(', ')}`,
+      );
+    }
+
+    const selectedMethod = providedMethods[0] as (typeof methods)[number];
     let httpMethod: HttpEndpointDetails['httpMethod'];
-
-    if (opts.get) {
-      httpMethod = { tag: 'get' };
-    } else if (opts.post) {
-      httpMethod = { tag: 'post' };
-    } else if (opts.put) {
-      httpMethod = { tag: 'put' };
-    } else if (opts.delete) {
-      httpMethod = { tag: 'delete' };
-    } else if (opts.custom) {
+    if (selectedMethod === 'custom') {
+      if (!opts.custom || opts.custom.trim() === '') {
+        throw new Error(
+          `Custom HTTP method cannot be empty for method ${methodName}`,
+        );
+      }
       httpMethod = { tag: 'custom', val: opts.custom };
     } else {
-      throw new Error(
-        `Endpoint decorator must specify one of get/post/put/delete/custom for method ${methodName}`,
-      );
+      httpMethod = { tag: selectedMethod };
     }
 
-    if (!path.startsWith('/')) {
-      throw new Error(
-        `Endpoint path must start with '/'. Method: ${methodName}`,
-      );
-    }
+    const pathAndQuery = split_path_and_query(opts[selectedMethod] as string);
 
-    const pathSuffix: PathSegment[] = parsePath(path);
+    const pathSuffix: PathSegment[] = parsePath(pathAndQuery.path);
+    const queryVars: QueryVariable[] = pathAndQuery.query
+      ? parseQuery(pathAndQuery.query) || []
+      : [];
 
     const headerVars: HeaderVariable[] = Object.entries(opts.headers || {}).map(
       ([headerName, variableName]) => ({ headerName, variableName }),
     );
 
-    const queryVars: QueryVariable[] = query ? parseQuery(query) || [] : [];
     const authDetails: AuthDetails = { required: opts.auth ?? false };
     const corsOptions: CorsOptions = { allowedPatterns: opts.cors ?? [] };
 
