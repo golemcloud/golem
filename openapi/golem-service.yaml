@@ -7151,6 +7151,94 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}/openapi:
+    get:
+      tags:
+      - RegistryService
+      - ApiDeployment
+      - Environment
+      - Deployment
+      summary: Get openapi spec of http api definition in the deployment
+      operationId: get_openapi_of_http_api_deployment_in_deployment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: domain
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UntypedJsonBody'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
@@ -13812,12 +13900,22 @@ components:
         propertyName: type
         mapping:
           Get: '#/components/schemas/HttpMethod_Empty'
-          Put: '#/components/schemas/HttpMethod_Empty'
+          Head: '#/components/schemas/HttpMethod_Empty'
           Post: '#/components/schemas/HttpMethod_Empty'
+          Put: '#/components/schemas/HttpMethod_Empty'
           Delete: '#/components/schemas/HttpMethod_Empty'
+          Connect: '#/components/schemas/HttpMethod_Empty'
+          Options: '#/components/schemas/HttpMethod_Empty'
+          Trace: '#/components/schemas/HttpMethod_Empty'
+          Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
       type: object
       oneOf:
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
@@ -13840,10 +13938,10 @@ components:
       - type: object
         properties:
           type:
-            example: Delete
+            example: Patch
             type: string
             enum:
-            - Delete
+            - Patch
         required:
         - type
       - $ref: '#/components/schemas/Empty'

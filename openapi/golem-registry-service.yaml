@@ -5382,6 +5382,91 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_http_api_deployment_in_deployment
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}/openapi:
+    get:
+      tags:
+      - RegistryService
+      - ApiDeployment
+      - Environment
+      - Deployment
+      summary: Get openapi spec of http api definition in the deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: domain
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UntypedJsonBody'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_openapi_of_http_api_deployment_in_deployment
   /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
@@ -9247,14 +9332,24 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
       discriminator:
         propertyName: type
         mapping:
           Get: '#/components/schemas/HttpMethod_Empty'
-          Put: '#/components/schemas/HttpMethod_Empty'
+          Head: '#/components/schemas/HttpMethod_Empty'
           Post: '#/components/schemas/HttpMethod_Empty'
+          Put: '#/components/schemas/HttpMethod_Empty'
           Delete: '#/components/schemas/HttpMethod_Empty'
+          Connect: '#/components/schemas/HttpMethod_Empty'
+          Options: '#/components/schemas/HttpMethod_Empty'
+          Trace: '#/components/schemas/HttpMethod_Empty'
+          Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
     HttpMethod_CustomHttpMethod:
       allOf:
@@ -9277,8 +9372,8 @@ components:
           type:
             type: string
             enum:
-            - Delete
-            example: Delete
+            - Patch
+            example: Patch
       - $ref: '#/components/schemas/Empty'
     HttpMountDetails:
       type: object
