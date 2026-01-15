@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentConstructor, AgentMethod, HttpMountDetails } from 'golem:agent/common';
+import {
+  AgentConstructor,
+  AgentMethod,
+  HttpMountDetails,
+} from 'golem:agent/common';
 
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
@@ -58,9 +62,9 @@ function validatePathVarsAgainstConstructor(
   constructorVars: Set<string>,
 ) {
   const pathVars = agentMount.pathPrefix
-    .flatMap(segment => segment.concat)
-    .filter(node => node.tag === 'path-variable')
-    .map(node => node.val.variableName);
+    .flatMap((segment) => segment.concat)
+    .filter((node) => node.tag === 'path-variable')
+    .map((node) => node.val.variableName);
 
   for (const variableName of pathVars) {
     if (!constructorVars.has(variableName)) {
@@ -70,4 +74,3 @@ function validatePathVarsAgainstConstructor(
     }
   }
 }
-

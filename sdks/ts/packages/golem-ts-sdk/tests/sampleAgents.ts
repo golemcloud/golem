@@ -517,7 +517,10 @@ class SimpleHttpAgent extends BaseAgent {
   webhookSuffix: '/{agent-type}/events/{foo}/{bar}',
 })
 class ComplexHttpAgent extends BaseAgent {
-  constructor(readonly foo: string, readonly bar: string) {
+  constructor(
+    readonly foo: string,
+    readonly bar: string,
+  ) {
     super();
   }
 

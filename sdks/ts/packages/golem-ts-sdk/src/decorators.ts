@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentMode, AgentConstructor, AgentMethod } from 'golem:agent/common';
+import {
+  AgentType,
+  DataValue,
+  AgentMode,
+  AgentConstructor,
+  AgentMethod,
+} from 'golem:agent/common';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -235,13 +241,10 @@ export function agent(options?: AgentDecoratorOptions) {
       description: agentTypeDescription,
       promptHint: agentTypePromptHint,
       inputSchema: constructorDataSchema,
-    }
+    };
 
     if (httpMount) {
-      validateHttpMountWithConstructor(
-        httpMount,
-        constructor,
-      )
+      validateHttpMountWithConstructor(httpMount, constructor);
     }
 
     const agentType: AgentType = {
