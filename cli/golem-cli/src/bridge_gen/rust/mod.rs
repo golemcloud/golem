@@ -35,6 +35,7 @@ pub struct RustBridgeGenerator {
     testing: bool,
 }
 
+// TODO: convert panics to error results
 impl BridgeGenerator for RustBridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
         Self {
@@ -168,7 +169,7 @@ impl RustBridgeGenerator {
         let global_config = self.global_config();
 
         let tokens = quote! {
-            use golem_wasm::IntoValueAndType;
+            use golem_wasm::{FromValueAndType, IntoValueAndType};
 
             pub struct #client_struct_name {
                 constructor_parameters: golem_client::model::UntypedJsonDataValue,
@@ -489,7 +490,7 @@ impl RustBridgeGenerator {
 
         quote! {
             pub async fn #name(&self, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
-                let result = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
+                let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
                 Ok(())
             }
         }
@@ -516,7 +517,7 @@ impl RustBridgeGenerator {
 
         quote! {
             pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
-                let result = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
+                let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
                 Ok(())
             }
         }
@@ -964,27 +965,55 @@ impl RustBridgeGenerator {
     }
 
     fn decode_from_data_value(&self, ident: &Ident, data_schema: &DataSchema) -> TokenStream {
-        //             match typed_data_value {
-        //                 golem_common::model::agent::DataValue::Tuple(element_values) => {
-        //                     match element_values.elements.get(0) {
-        //                         Some(golem_common::model::agent::ElementValue::ComponentModel(vnt)) => {
-        //                             Ok(Some(f64::from_value_and_type(vnt.clone()).map_err(
-        //                                 |err| golem_client::bridge::ClientError::InvocationFailed {
-        //                                     message: format!("Failed to decode result value: {err}"),
-        //                                 },
-        //                             )?))
-        //                         }
-        //                         _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-        //                             message: format!("Failed to decode result value"),
-        //                         })?,
-        //                     }
-        //                 }
-        //                 _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-        //                     message: format!("Failed to decode result value"),
-        //                 })?,
-        //             }
-        quote! {
-            todo!()
+        match data_schema {
+            DataSchema::Tuple(elements) => {
+                if elements.elements.len() != 1 {
+                    panic!("multiple result values not supported");
+                }
+
+                let element = &elements.elements[0];
+                match &element.schema {
+                    ElementSchema::ComponentModel(_) => {
+                        let return_type = self.return_type_from_data_schema(data_schema);
+                        quote! {
+                            match #ident {
+                                golem_common::model::agent::DataValue::Tuple(element_values) => {
+                                    match element_values.elements.get(0) {
+                                        Some(golem_common::model::agent::ElementValue::ComponentModel(vnt)) => {
+                                            Ok(Some(<#return_type>::from_value_and_type(vnt.clone()).map_err(
+                                                |err| golem_client::bridge::ClientError::InvocationFailed {
+                                                    message: format!("Failed to decode result value: {err}"),
+                                                },
+                                            )?))
+                                        }
+                                        _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                            message: format!("Failed to decode result value"),
+                                        })?,
+                                    }
+                                }
+                                _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                    message: format!("Failed to decode result value"),
+                                })?,
+                            }
+                        }
+                    }
+                    ElementSchema::UnstructuredText(_) => {
+                        quote! {
+                            todo!("unstructured text decoding not yet implemented")
+                        }
+                    }
+                    ElementSchema::UnstructuredBinary(_) => {
+                        quote! {
+                            todo!("unstructured binary decoding not yet implemented")
+                        }
+                    }
+                }
+            }
+            DataSchema::Multimodal(_) => {
+                quote! {
+                    todo!("multimodal decoding not yet implemented")
+                }
+            }
         }
     }
 
