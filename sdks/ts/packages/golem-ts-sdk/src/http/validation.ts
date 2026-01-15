@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export function rejectEmpty(name: string) {
+export function rejectEmptyString(name: string) {
   if (name.length === 0) {
     throw new Error(`Empty variable name is not allowed`);
   }

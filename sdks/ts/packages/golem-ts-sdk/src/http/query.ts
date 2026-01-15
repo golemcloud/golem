@@ -13,8 +13,9 @@
 // limitations under the License.
 
 import { QueryVariable } from 'golem:agent/common';
-import { rejectEmpty } from './validation';
+import { rejectEmptyString } from './validation';
 
+// parseQuery is intended for HTTP endpoint definitions, not mounts
 export function parseQuery(query: string): QueryVariable[] {
   if (!query) return [];
 
@@ -25,14 +26,16 @@ export function parseQuery(query: string): QueryVariable[] {
       throw new Error(`Invalid query segment "${pair}"`);
     }
 
+    if (value !== value.trim()) {
+      throw new Error(`Whitespace is not allowed in query variables`);
+    }
+
     if (!value.startsWith('{') || !value.endsWith('}')) {
       throw new Error(`Query value for "${key}" must be a variable reference`);
     }
 
-    const trimmedValue = value.trim();
-
-    const variableName = trimmedValue.slice(1, -1);
-    rejectEmpty(variableName);
+    const variableName = value.slice(1, -1);
+    rejectEmptyString(variableName);
 
     return {
       queryParamName: key,

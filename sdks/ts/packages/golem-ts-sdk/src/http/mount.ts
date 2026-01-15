@@ -19,7 +19,7 @@ import {
 } from 'golem:agent/common';
 import { AgentDecoratorOptions } from '../options';
 import { parsePath } from './path';
-import { rejectEmpty } from './validation';
+import { rejectEmptyString } from './validation';
 
 export type HeaderVariables = Record<string, string>;
 
@@ -54,7 +54,7 @@ function parseWebhook(webhook?: string): PathSegment[] {
   if (!webhook) return [];
 
   if (webhook.includes('?')) {
-    throw new Error(`Http '${webhook}' option cannot contain query parameters`);
+    throw new Error(`Http 'webhookSuffix' must not contain query parameters`);
   }
 
   return parsePath(webhook);
@@ -64,7 +64,7 @@ function parseHeaderVars(headers?: HeaderVariables): HeaderVariable[] {
   if (!headers) return [];
 
   return Object.entries(headers).map(([headerName, variableName]) => {
-    rejectEmpty(variableName);
+    rejectEmptyString(variableName);
 
     return {
       headerName,

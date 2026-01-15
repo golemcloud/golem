@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { PathSegment, PathSegmentNode } from 'golem:agent/common';
-import { rejectEmpty } from './validation';
+import { rejectEmptyString } from './validation';
 
 export function parsePath(path: string): PathSegment[] {
   if (!path.startsWith('/')) {
@@ -30,19 +30,22 @@ function parseSegment(segment: string): PathSegment {
     throw new Error(`Empty path segment ("//") is not allowed`);
   }
 
-  const trimmedSegment = segment.trim();
+  if (segment !== segment.trim()) {
+    throw new Error(`Whitespace is not allowed in path segments`);
+  }
+
 
   const nodes: PathSegmentNode[] = [];
 
   let i = 0;
-  while (i < trimmedSegment.length) {
-    if (trimmedSegment[i] === '{') {
-      const end = trimmedSegment.indexOf('}', i);
+  while (i < segment.length) {
+    if (segment[i] === '{') {
+      const end = segment.indexOf('}', i);
       if (end === -1) {
         throw new Error(`Unclosed "{" in path segment "${segment}"`);
       }
 
-      const name = trimmedSegment.slice(i + 1, end);
+      const name = segment.slice(i + 1, end);
 
       if (!name) {
         throw new Error(`Empty path variable "{}" is not allowed`);
@@ -54,7 +57,7 @@ function parseSegment(segment: string): PathSegment {
           val: name,
         });
       } else {
-        rejectEmpty(name);
+        rejectEmptyString(name);
         nodes.push({
           tag: 'path-variable',
           val: { variableName: name },
@@ -66,12 +69,12 @@ function parseSegment(segment: string): PathSegment {
     }
 
     let start = i;
-    while (i < trimmedSegment.length && trimmedSegment[i] !== '{') {
+    while (i < segment.length && segment[i] !== '{') {
       i++;
     }
 
-    const literal = trimmedSegment.slice(start, i);
-    rejectEmpty(literal);
+    const literal = segment.slice(start, i);
+    rejectEmptyString(literal);
 
     nodes.push({
       tag: 'literal',
