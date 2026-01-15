@@ -21,9 +21,9 @@ import {
   PathSegment,
   QueryVariable,
 } from 'golem:agent/common';
-import { parsePath } from './path';
-import { parseQuery } from './query';
 import { AgentMethodRegistry } from '../internal/registry/agentMethodRegistry';
+import { parsePath } from '../http/path';
+import { parseQuery } from '../http/query';
 
 export type EndpointDecoratorOptions = {
   get?: string;

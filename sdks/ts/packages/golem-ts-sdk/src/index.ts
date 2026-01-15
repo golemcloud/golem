@@ -23,8 +23,10 @@ import { getRawSelfAgentId } from './host/hostapi';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
-export { prompt, description, agent } from './decorators';
-export { endpoint } from './http/endpoint';
+export { description } from './decorators/description';
+export { agent } from './decorators/agent';
+export { prompt } from './decorators/prompt';
+export { endpoint } from './decorators/httpEndpoint';
 
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
