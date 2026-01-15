@@ -24,7 +24,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { description } from './decorators/description';
-export { agent } from './decorators/agent';
+export { agent, AgentDecoratorOptions } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint } from './decorators/httpEndpoint';
 

@@ -17,6 +17,7 @@ import {
   DataValue,
   AgentConstructor,
   AgentMethod,
+  AgentMode,
 } from 'golem:agent/common';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
@@ -43,9 +44,18 @@ import {
   ParameterDetail,
 } from '../internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from '../host/hostapi';
-import { AgentDecoratorOptions } from '../options';
 import { getHttpMountDetails } from '../http/mount';
 import { validateHttpMountWithConstructor } from '../http/validation';
+
+export type AgentDecoratorOptions = {
+  name?: string;
+  mode?: AgentMode;
+  mount?: string;
+  cors?: string[];
+  auth?: boolean;
+  headers?: Record<string, string>;
+  webhookSuffix?: string;
+};
 
 /**
  *
@@ -80,10 +90,34 @@ import { validateHttpMountWithConstructor } from '../http/validation';
  * - `name`: Custom agent name (default: class name)
  * - `mode`: Agent durability mode, either "durable" or "ephemeral" (default: "durable")
  *
- * Example:
+ * ### HTTP Mount Options
+ * Agents can optionally expose an HTTP API using a base mount path. The following options are available:
+ * - `mount`: The base HTTP path to expose agent methods (e.g., `'/api/weather'`). A path can have path variables (example: `'/api/{city}/weather'`),
+ *    or system variables (e.g., `'/api/{agent-type}/status'`) or both.
+ * - `headers`: Default HTTP headers mapped to constructor parameters (e.g., `{ 'X-Api-Key': 'apiKey' }`).
+ *    Note that the value of the header is the name of the constructor parameter to which it maps. In this case `apiKey` is one of the constructor parameters.
+ * -  Note that all the parameters in the constructor must be provided either via header variables or path variables.
+ * - `auth`: Boolean flag indicating if authentication is required for all HTTP endpoints.
+ * - `cors`: Array of allowed origins for cross-origin requests (e.g., `['https://app.acme.com']` or `['*']` for all origins).
+ * - `webhookSuffix`: Optional suffix path that gets appended to the globally configured webhook url exposing webhook endpoints
+ * - Only if we have a mount defined, we can use `endpoint` decorator on methods to expose them over HTTP.
+ *
+ *
+ * Example with HTTP mount:
  * ```ts
- * @agent({ name: "weather-api", mode: "durable" })
- * class WeatherAgent extends BaseAgent { ... }
+ * @agent({
+ *   mount: '/api/weather',
+ *   headers: { 'X-Api-Key': 'apiKey' },
+ *   auth: true,
+ *   cors: ['https://app.acme.com'],
+ *   webhookSuffix: '/webhook/{event}'
+ * })
+ * class WeatherAgent {
+ *   constructor(apiKey: string) {}
+ *
+ *   @endpoint({ get: '/current/{city}' })
+ *   getWeather(city: string): WeatherReport { ... }
+ * }
  * ```
  *
  * ### Metadata
@@ -127,7 +161,7 @@ import { validateHttpMountWithConstructor } from '../http/validation';
  * ### Remote Client
  *
  * The purpose of a remote client is that it allows you to invoke the agent constructor
- * and methods of an agent (even if it's defined with in the same code) in a different container.
+ * and methods of an agent (even if it's defined within the same code) in a different container.
  *
  * By passing the constructor parameters to `get()`, the SDK will ensure that an instance of the agent,
  * is created in a different container, and the method calls are proxied to that container.
