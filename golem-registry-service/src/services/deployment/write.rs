@@ -597,7 +597,7 @@ impl DeploymentContext {
         let mut result = Vec::new();
 
         for method in methods {
-            for http_endpoint in method.http_endpoint {
+            for http_endpoint in &method.http_endpoint {
                 let cors = if !http_endpoint.cors_options.allowed_patterns.is_empty() {
                     http_endpoint.cors_options.clone()
                 } else {
@@ -605,10 +605,10 @@ impl DeploymentContext {
                 };
 
                 let mut header_vars = http_mount.header_vars.clone();
-                header_vars.extend(http_endpoint.header_vars);
+                header_vars.extend(http_endpoint.header_vars.clone());
 
                 let mut query_vars = http_mount.query_vars.clone();
-                query_vars.extend(http_endpoint.query_vars);
+                query_vars.extend(http_endpoint.query_vars.clone());
 
                 let compiled = CompiledRouteWithDynamicReferences {
                     method: http_endpoint.http_method.clone(),
