@@ -525,7 +525,7 @@ class ComplexHttpAgent extends BaseAgent {
     super();
   }
 
-  @endpoint({ get: '/greet' })
+  @endpoint({ get: '/greet?l={location}&n={name}' })
   async greet(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }

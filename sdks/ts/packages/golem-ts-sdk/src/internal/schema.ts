@@ -45,7 +45,10 @@ import {
 } from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
-import { validateHttpEndpoint, validateHttpMountWithConstructor } from '../http/validation';
+import {
+  validateHttpEndpoint,
+  validateHttpMountWithConstructor,
+} from '../http/validation';
 
 const MULTIMODAL_TYPE_NAMES = [
   'Multimodal',
@@ -247,9 +250,9 @@ export function getAgentMethodSchema(
         inputSchema: inputSchema,
         outputSchema: outputSchema,
         httpEndpoint: baseMeta.httpEndpoint ?? [],
-      }
+      };
 
-      validateHttpEndpoint(agentClassName, agentMethod)
+      validateHttpEndpoint(agentClassName, agentMethod);
 
       return Either.right({
         name: methodName,

@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentConstructor, AgentMethod, DataSchema, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
+import {
+  AgentConstructor,
+  AgentMethod,
+  DataSchema,
+  HttpEndpointDetails,
+  HttpMountDetails,
+} from 'golem:agent/common';
 
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
@@ -26,12 +32,22 @@ export function rejectQueryParamsInPath(path: string, entityName: string) {
   }
 }
 
-export function validateHttpEndpoint(agentClassName: string, agentMethod: AgentMethod) {
+// Ensures that all method input parameters are provided
+// by the HTTP endpoint, and that no foreign variables are used.
+export function validateHttpEndpoint(
+  agentClassName: string,
+  agentMethod: AgentMethod,
+) {
   const methodVars = collectMethodInputVars(agentMethod.inputSchema);
 
   for (const endpoint of agentMethod.httpEndpoint) {
     validateNoForeignEndpointVariables(endpoint, methodVars);
-    validateAllMethodParamsProvided(endpoint, methodVars, agentClassName, agentMethod.name);
+    validateAllMethodParamsProvided(
+      endpoint,
+      methodVars,
+      agentClassName,
+      agentMethod.name,
+    );
   }
 }
 
@@ -55,9 +71,9 @@ function validateAllMethodParamsProvided(
   endpoint: HttpEndpointDetails,
   methodVars: Set<string>,
   agentClassName: string,
-  agentMethodName: string
+  agentMethodName: string,
 ) {
-  const providedVars = collectEndpointVariables(endpoint);
+  const providedVars = collectHttpEndpointVariables(endpoint);
 
   for (const methodVar of methodVars) {
     if (!providedVars.has(methodVar)) {
@@ -68,8 +84,9 @@ function validateAllMethodParamsProvided(
   }
 }
 
-
-function collectEndpointVariables(endpoint: HttpEndpointDetails): Set<string> {
+function collectHttpEndpointVariables(
+  endpoint: HttpEndpointDetails,
+): Set<string> {
   const vars = new Set<string>();
 
   for (const { variableName } of endpoint.headerVars) {
@@ -124,7 +141,6 @@ function validateNoForeignEndpointVariables(
     }
   }
 }
-
 
 function collectConstructorVars(
   agentConstructor: AgentConstructor,

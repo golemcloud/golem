@@ -909,6 +909,16 @@ describe('Http Agent class', () => {
               },
             ],
           },
+          {
+            concat: [
+              {
+                tag: 'path-variable',
+                val: {
+                  variableName: 'name',
+                },
+              },
+            ],
+          },
         ],
       },
     ]);
