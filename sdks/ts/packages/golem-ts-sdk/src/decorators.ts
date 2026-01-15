@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentMode } from 'golem:agent/common';
+import { AgentType, DataValue, AgentMode, AgentConstructor, AgentMethod } from 'golem:agent/common';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -41,6 +41,7 @@ import {
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentDecoratorOptions } from './options';
 import { getHttpMountDetails } from './http/mount';
+import { validateHttpMountWithConstructor } from './http/validation';
 
 /**
  *
@@ -201,7 +202,7 @@ export function agent(options?: AgentDecoratorOptions) {
         `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.val}`,
       );
     }
-    const methods = methodSchemaEither.val;
+    const methods: AgentMethod[] = methodSchemaEither.val;
 
     const agentTypeName = new AgentClassName(
       options?.name || agentClassName.value,
@@ -229,15 +230,24 @@ export function agent(options?: AgentDecoratorOptions) {
       AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ??
       defaultPromptHint;
 
+    const constructor: AgentConstructor = {
+      name: agentClassName.value,
+      description: agentTypeDescription,
+      promptHint: agentTypePromptHint,
+      inputSchema: constructorDataSchema,
+    }
+
+    if (httpMount) {
+      validateHttpMountWithConstructor(
+        httpMount,
+        constructor,
+      )
+    }
+
     const agentType: AgentType = {
       typeName: agentTypeName.value,
       description: agentTypeDescription,
-      constructor: {
-        name: agentClassName.value,
-        description: agentTypeDescription,
-        promptHint: agentTypePromptHint,
-        inputSchema: constructorDataSchema,
-      },
+      constructor,
       methods,
       dependencies: [],
       mode: options?.mode ?? 'durable',

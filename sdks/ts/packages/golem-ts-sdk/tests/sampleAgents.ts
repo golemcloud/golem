@@ -510,16 +510,15 @@ class SimpleHttpAgent extends BaseAgent {
 }
 
 @agent({
-  mount: '/chats/{agent-type}',
+  mount: '/chats/{agent-type}/{foo}/{bar}',
   cors: ['https://app.acme.com', 'https://staging.acme.com'],
   auth: true,
-  headers: { 'X-Foo': 'FooValue', 'X-Bar': 'BarValue' },
-  webhookSuffix: '/{agent-type}/events',
+  headers: { 'X-Foo': 'foo', 'X-Bar': 'bar' },
+  webhookSuffix: '/{agent-type}/events/{foo}/{bar}',
 })
 class ComplexHttpAgent extends BaseAgent {
-  constructor(readonly input: string) {
+  constructor(readonly foo: string, readonly bar: string) {
     super();
-    this.input = input;
   }
 
   async greet(name: string): Promise<string> {
