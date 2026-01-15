@@ -12,19 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::RouteBehaviour;
 use super::SecuritySchemeDetails;
-use super::path_pattern::AllPathPatterns;
 use super::{CompiledRoute, CompiledRoutes};
-use super::{
-    RouteBehaviour,
-};
-use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_common::model::http_api_definition::{HttpApiDefinitionName, HttpApiDefinitionVersion};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
 use std::ops::Deref;
-use golem_common::model::agent::AgentTypeName;
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails>
     for SecuritySchemeDetails
@@ -86,18 +81,25 @@ impl From<SecuritySchemeDetails>
     }
 }
 
-
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for CompiledRoutes {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::apidefinition::CompiledRoutes) -> Result<Self, Self::Error> {
-        let account_id = value.account_id.ok_or("Missing field: account_id")?.try_into()?;
-        let environment_id = value.environment_id.ok_or("Missing field: environment_id")?.try_into()?;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledRoutes,
+    ) -> Result<Self, Self::Error> {
+        let account_id = value
+            .account_id
+            .ok_or("Missing field: account_id")?
+            .try_into()?;
+        let environment_id = value
+            .environment_id
+            .ok_or("Missing field: environment_id")?
+            .try_into()?;
 
         let mut security_schemes = HashMap::new();
         for scheme in value.security_schemes {
             let scheme: SecuritySchemeDetails = scheme.try_into()?;
-            security_schemes.insert(scheme.id.clone(), scheme);
+            security_schemes.insert(scheme.id, scheme);
         }
 
         let mut routes = Vec::new();
@@ -121,7 +123,11 @@ impl From<CompiledRoutes> for golem_api_grpc::proto::golem::apidefinition::Compi
             account_id: Some(value.account_id.into()),
             environment_id: Some(value.environment_id.into()),
             deployment_revision: value.deployment_revision.into(),
-            security_schemes: value.security_schemes.into_iter().map(|(_, v)| v.into()).collect(),
+            security_schemes: value
+                .security_schemes
+                .into_values()
+                .map(|v| v.into())
+                .collect(),
             compiled_routes: value.routes.into_iter().map(Into::into).collect(),
         }
     }
@@ -130,13 +136,35 @@ impl From<CompiledRoutes> for golem_api_grpc::proto::golem::apidefinition::Compi
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoute> for CompiledRoute {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::apidefinition::CompiledRoute) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledRoute,
+    ) -> Result<Self, Self::Error> {
         Ok(Self {
             method: value.method.ok_or("Missing field: method")?.try_into()?,
-            path: value.path.parse().map_err(|e| format!("Invalid path: {e}"))?,
-            behavior: value.behaviour.ok_or("Missing field: behaviour")?.try_into()?,
+            path: value
+                .path
+                .into_iter()
+                .map(|p| p.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            header_vars: value
+                .header_vars
+                .into_iter()
+                .map(|p| p.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            query_vars: value
+                .query_vars
+                .into_iter()
+                .map(|p| p.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            behavior: value
+                .behaviour
+                .ok_or("Missing field: behaviour")?
+                .try_into()?,
             security_scheme: value.security_scheme_id.map(|v| v.try_into()).transpose()?,
-            cors: value.cors_options.ok_or("Missing field: cors_options")?.try_into()?,
+            cors: value
+                .cors_options
+                .ok_or("Missing field: cors_options")?
+                .try_into()?,
         })
     }
 }
@@ -145,7 +173,9 @@ impl From<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Compil
     fn from(value: CompiledRoute) -> Self {
         Self {
             method: Some(value.method.into()),
-            path: value.path.to_string(),
+            path: value.path.into_iter().map(|v| v.into()).collect(),
+            header_vars: value.header_vars.into_iter().map(|v| v.into()).collect(),
+            query_vars: value.query_vars.into_iter().map(|v| v.into()).collect(),
             behaviour: value.behavior.into(),
             security_scheme_id: value.security_scheme.map(Into::into),
             cors_options: Some(value.cors.into()),
@@ -156,17 +186,28 @@ impl From<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Compil
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::RouteBehaviour> for RouteBehaviour {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::apidefinition::RouteBehaviour) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::RouteBehaviour,
+    ) -> Result<Self, Self::Error> {
         use golem_api_grpc::proto::golem::apidefinition::route_behaviour::Behavior;
 
         match value.behavior.ok_or("RouteBehaviour.behavior missing")? {
             Behavior::CallAgent(agent) => Ok(RouteBehaviour::CallAgent {
-                component_id: agent.component_id.ok_or("Missing field: component_id")?.try_into()?,
+                component_id: agent
+                    .component_id
+                    .ok_or("Missing field: component_id")?
+                    .try_into()?,
                 component_revision: agent.component_revision.try_into()?,
                 agent_type: AgentTypeName(agent.agent_type),
                 method_name: agent.method_name,
-                input_schema: agent.input_schema.ok_or("Missing field: input_schema")?.try_into()?,
-                output_schema: agent.output_schema.ok_or("Missing field: output_schema")?.try_into()?,
+                input_schema: agent
+                    .input_schema
+                    .ok_or("Missing field: input_schema")?
+                    .try_into()?,
+                output_schema: agent
+                    .output_schema
+                    .ok_or("Missing field: output_schema")?
+                    .try_into()?,
             }),
             Behavior::ServeSwaggerUi(_) => Ok(RouteBehaviour::ServeSwaggerUi),
             Behavior::HandleWebhookCallback(_) => Ok(RouteBehaviour::HandleWebhookCallback),
@@ -179,24 +220,39 @@ impl From<RouteBehaviour> for Option<golem_api_grpc::proto::golem::apidefinition
         use golem_api_grpc::proto::golem::apidefinition::route_behaviour::Behavior;
 
         Some(match value {
-            RouteBehaviour::CallAgent { component_id, component_revision, agent_type, method_name, input_schema, output_schema } => {
-                golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
-                    behavior: Some(Behavior::CallAgent(golem_api_grpc::proto::golem::apidefinition::CallAgent {
+            RouteBehaviour::CallAgent {
+                component_id,
+                component_revision,
+                agent_type,
+                method_name,
+                input_schema,
+                output_schema,
+            } => golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
+                behavior: Some(Behavior::CallAgent(
+                    golem_api_grpc::proto::golem::apidefinition::CallAgent {
                         component_id: Some(component_id.into()),
                         component_revision: component_revision.get(),
                         agent_type: agent_type.0,
                         method_name,
                         input_schema: Some(input_schema.into()),
                         output_schema: Some(output_schema.into()),
-                    })),
+                    },
+                )),
+            },
+            RouteBehaviour::ServeSwaggerUi => {
+                golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
+                    behavior: Some(Behavior::ServeSwaggerUi(
+                        golem_api_grpc::proto::golem::common::Empty {},
+                    )),
                 }
             }
-            RouteBehaviour::ServeSwaggerUi => golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
-                behavior: Some(Behavior::ServeSwaggerUi(golem_api_grpc::proto::golem::common::Empty {})),
-            },
-            RouteBehaviour::HandleWebhookCallback => golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
-                behavior: Some(Behavior::HandleWebhookCallback(golem_api_grpc::proto::golem::common::Empty {})),
-            },
+            RouteBehaviour::HandleWebhookCallback => {
+                golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
+                    behavior: Some(Behavior::HandleWebhookCallback(
+                        golem_api_grpc::proto::golem::common::Empty {},
+                    )),
+                }
+            }
         })
     }
 }

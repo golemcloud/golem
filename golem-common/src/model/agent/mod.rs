@@ -1448,7 +1448,7 @@ impl From<HttpMethod> for http::Method {
             HttpMethod::Options(_) => Self::OPTIONS,
             HttpMethod::Trace(_) => Self::TRACE,
             HttpMethod::Patch(_) => Self::PATCH,
-            HttpMethod::Custom(_) => unimplemented!()
+            HttpMethod::Custom(_) => unimplemented!(),
         }
     }
 }

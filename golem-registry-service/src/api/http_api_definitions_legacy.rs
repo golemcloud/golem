@@ -51,34 +51,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinition>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "create_http_api_definition",
-        //     environment_id = environment_id.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .create_http_api_definition_internal(environment_id.0, payload.0, auth)
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn create_http_api_definition_internal(
-    //     &self,
-    //     environment_id: EnvironmentId,
-    //     payload: HttpApiDefinitionCreation,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<HttpApiDefinition>> {
-    //     let result = self
-    //         .http_api_definition_service
-    //         .create(environment_id, payload, &auth)
-    //         .await?;
-
-    //     Ok(Json(result))
-    // }
 
     /// Get http api definition
     #[oai(
@@ -92,33 +65,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinition>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "get_http_api_definition",
-        //     http_api_definition_id = http_api_definition_id.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .get_http_api_definition_internal(http_api_definition_id.0, auth)
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn get_http_api_definition_internal(
-    //     &self,
-    //     http_api_definition_id: HttpApiDefinitionId,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<HttpApiDefinition>> {
-    //     let result = self
-    //         .http_api_definition_service
-    //         .get_staged(&http_api_definition_id, &auth)
-    //         .await?;
-
-    //     Ok(Json(result))
-    // }
 
     /// Update http api definition
     #[oai(
@@ -133,34 +80,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinition>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "update_http_api_definition",
-        //     http_api_definition_id = http_api_definition_id.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .update_http_api_definition_internal(http_api_definition_id.0, payload.0, auth)
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn update_http_api_definition_internal(
-    //     &self,
-    //     http_api_definition_id: HttpApiDefinitionId,
-    //     payload: HttpApiDefinitionUpdate,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<HttpApiDefinition>> {
-    //     let result = self
-    //         .http_api_definition_service
-    //         .update(&http_api_definition_id, payload, &auth)
-    //         .await?;
-
-    //     Ok(Json(result))
-    // }
 
     /// Delete http api definition
     #[oai(
@@ -175,33 +95,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<NoContentResponse> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "delete_http_api_definition",
-        //     http_api_definition_id = http_api_definition_id.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .delete_http_api_definition_internal(http_api_definition_id.0, current_revision.0, auth)
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn delete_http_api_definition_internal(
-    //     &self,
-    //     http_api_definition_id: HttpApiDefinitionId,
-    //     current_revision: HttpApiDefinitionRevision,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<NoContentResponse> {
-    //     self.http_api_definition_service
-    //         .delete(http_api_definition_id, current_revision, &auth)
-    //         .await?;
-
-    //     Ok(NoContentResponse::NoContent)
-    // }
 
     /// Get a specific http api definition revision
     #[oai(
@@ -216,34 +110,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinition>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "get_http_api_definition_revision",
-        //     http_api_definition_id = http_api_definition_id.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .get_http_api_definition_revision_internal(http_api_definition_id.0, revision.0, auth)
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn get_http_api_definition_revision_internal(
-    //     &self,
-    //     http_api_definition_id: HttpApiDefinitionId,
-    //     revision: HttpApiDefinitionRevision,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<HttpApiDefinition>> {
-    //     let result = self
-    //         .http_api_definition_service
-    //         .get_revision(http_api_definition_id, revision, &auth)
-    //         .await?;
-
-    //     Ok(Json(result))
-    // }
 
     /// Get http api definition by name in the environment
     #[oai(
@@ -259,39 +126,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinition>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "get_http_api_definition_in_environment",
-        //     environment_id = environment_id.0.to_string(),
-        //     http_api_definition_name = http_api_definition_name.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .get_http_api_definition_in_environment_internal(
-        //         environment_id.0,
-        //         http_api_definition_name.0,
-        //         auth,
-        //     )
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn get_http_api_definition_in_environment_internal(
-    //     &self,
-    //     environment_id: EnvironmentId,
-    //     http_api_definition_name: HttpApiDefinitionName,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<HttpApiDefinition>> {
-    //     let http_api_definition = self
-    //         .http_api_definition_service
-    //         .get_staged_by_name(environment_id, &http_api_definition_name, &auth)
-    //         .await?;
-
-    //     Ok(Json(http_api_definition))
-    // }
 
     /// Get http api definition by name in the deployment
     #[oai(
@@ -309,47 +144,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinition>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "get_http_api_definition_in_deployment",
-        //     environment_id = environment_id.0.to_string(),
-        //     deployment_revision = deployment_revision.0.to_string(),
-        //     http_api_definition_name = http_api_definition_name.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .get_http_api_definition_in_deployment_internal(
-        //         environment_id.0,
-        //         deployment_revision.0,
-        //         http_api_definition_name.0,
-        //         auth,
-        //     )
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn get_http_api_definition_in_deployment_internal(
-    //     &self,
-    //     environment_id: EnvironmentId,
-    //     deployment_revision: DeploymentRevision,
-    //     http_api_definition_name: HttpApiDefinitionName,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<HttpApiDefinition>> {
-    //     let http_api_definition = self
-    //         .http_api_definition_service
-    //         .get_in_deployment_by_name(
-    //             environment_id,
-    //             deployment_revision,
-    //             &http_api_definition_name,
-    //             &auth,
-    //         )
-    //         .await?;
-
-    //     Ok(Json(http_api_definition))
-    // }
 
     /// Get openapi spec of http api definition in the deployment
     #[oai(
@@ -424,33 +219,7 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "list_environment_http_api_definitions",
-        //     environment_id = environment_id.0.to_string(),
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .list_environment_http_api_definitions_internal(environment_id.0, auth)
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn list_environment_http_api_definitions_internal(
-    //     &self,
-    //     environment_id: EnvironmentId,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
-    //     let values = self
-    //         .http_api_definition_service
-    //         .list_staged(environment_id, &auth)
-    //         .await?;
-
-    //     Ok(Json(Page { values }))
-    // }
 
     /// List http api definitions in the deployment
     #[oai(
@@ -466,37 +235,5 @@ impl LegacyHttpApiDefinitionsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
         unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "list_deployment_http_api_definitions",
-        //     environment_id = environment_id.0.to_string(),
-        //     deployment_revision = deployment_revision.0.to_string()
-        // );
-
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        // let response = self
-        //     .list_deployment_http_api_definitions_internal(
-        //         environment_id.0,
-        //         deployment_revision.0,
-        //         auth,
-        //     )
-        //     .instrument(record.span.clone())
-        //     .await;
-
-        // record.result(response)
     }
-
-    // async fn list_deployment_http_api_definitions_internal(
-    //     &self,
-    //     environment_id: EnvironmentId,
-    //     deployment_revision: DeploymentRevision,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
-    //     let values = self
-    //         .http_api_definition_service
-    //         .list_in_deployment(environment_id, deployment_revision, &auth)
-    //         .await?;
-
-    //     Ok(Json(Page { values }))
-    // }
 }

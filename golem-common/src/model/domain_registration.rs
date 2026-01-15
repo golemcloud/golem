@@ -15,11 +15,13 @@
 use super::environment::EnvironmentId;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
+use desert_rust::BinaryCodec;
 
 newtype_uuid!(DomainRegistrationId);
 
 declare_transparent_newtypes! {
-    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[derive(Display, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
+    #[desert(transparent)]
     pub struct Domain(pub String);
 }
 

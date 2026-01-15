@@ -21,7 +21,7 @@ use self::auth::{AuthService, RemoteAuthService};
 use self::component::RemoteComponentService;
 use self::limit::{LimitService, RemoteLimitService};
 use self::worker::WorkerService;
-use crate::config::{GatewaySessionStorageConfig, WorkerServiceConfig};
+use crate::config::WorkerServiceConfig;
 // use crate::gateway_execution::api_definition_lookup::{
 //     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 // };
@@ -41,7 +41,6 @@ use crate::config::{GatewaySessionStorageConfig, WorkerServiceConfig};
 use crate::service::component::ComponentService;
 use crate::service::worker::{AgentsService, WorkerClient, WorkerExecutorWorkerClient};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -125,7 +124,7 @@ impl Services {
             }
         };
 
-        let initial_component_files_service: Arc<InitialComponentFilesService> =
+        let _initial_component_files_service: Arc<InitialComponentFilesService> =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let component_service: Arc<dyn ComponentService> = Arc::new(RemoteComponentService::new(

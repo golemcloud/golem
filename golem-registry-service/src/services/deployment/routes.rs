@@ -13,19 +13,16 @@
 // limitations under the License.
 
 use crate::model::api_definition::{
-    CompiledRouteWithSecuritySchemeDetails, CompiledRoutesForHttpApiDefinition,
-    MaybeDisabledCompiledRoute,
+    BoundCompiledRoute, CompiledRoutesForDomain, MaybeDisabledCompiledRoute,
 };
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
-use crate::services::http_api_definition::{HttpApiDefinitionError, HttpApiDefinitionService};
-use anyhow::anyhow;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_common::{SafeDisplay, error_forwarding};
 // use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
+use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
@@ -36,8 +33,12 @@ use std::sync::Arc;
 pub enum DeployedRoutesError {
     #[error("No active routes for domain {0} found")]
     NoActiveRoutesForDomain(Domain),
-    #[error("Http api definition for name {0} not found")]
-    HttpApiDefinitionNotFound(HttpApiDefinitionName),
+    #[error("Environment {0} not found")]
+    ParentEnvironmentNotFound(EnvironmentId),
+    #[error("Deployment revision {0} does not exist")]
+    DeploymentRevisionNotFound(DeploymentRevision),
+    #[error("Api deployment for domain {0} not found in deployment")]
+    DomainNotFoundInDeployment(Domain),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -46,7 +47,9 @@ impl SafeDisplay for DeployedRoutesError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::NoActiveRoutesForDomain(_) => self.to_string(),
-            Self::HttpApiDefinitionNotFound(_) => self.to_string(),
+            Self::ParentEnvironmentNotFound(_) => self.to_string(),
+            Self::DeploymentRevisionNotFound(_) => self.to_string(),
+            Self::DomainNotFoundInDeployment(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -56,22 +59,22 @@ error_forwarding!(
     DeployedRoutesError,
     RepoError,
     DeployRepoError,
-    HttpApiDefinitionError
+    HttpApiDeploymentError
 );
 
 pub struct DeployedRoutesService {
     deployment_repo: Arc<dyn DeploymentRepo>,
-    http_api_definition_service: Arc<HttpApiDefinitionService>,
+    http_api_deployment_service: Arc<HttpApiDeploymentService>,
 }
 
 impl DeployedRoutesService {
     pub fn new(
         deployment_repo: Arc<dyn DeploymentRepo>,
-        http_api_definition_service: Arc<HttpApiDefinitionService>,
+        http_api_deployment_service: Arc<HttpApiDeploymentService>,
     ) -> Self {
         Self {
             deployment_repo,
-            http_api_definition_service,
+            http_api_deployment_service,
         }
     }
 
@@ -102,35 +105,36 @@ impl DeployedRoutesService {
     //     Ok(openapi_spec)
     // }
 
-    pub async fn get_compiled_routes_for_http_api_definition(
+    pub async fn get_compiled_routes_for_domain(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
-        http_api_definition_name: &HttpApiDefinitionName,
+        domain: &Domain,
         auth: &AuthCtx,
-    ) -> Result<CompiledRoutesForHttpApiDefinition, DeployedRoutesError> {
-        let http_api_definition = self
-            .http_api_definition_service
-            .get_in_deployment_by_name(
-                environment_id,
-                deployment_revision,
-                http_api_definition_name,
-                auth,
-            )
+    ) -> Result<CompiledRoutesForDomain, DeployedRoutesError> {
+        let _http_api_deployment = self
+            .http_api_deployment_service
+            .get_in_deployment_by_domain(environment_id, deployment_revision, domain, auth)
             .await
             .map_err(|err| match err {
-                HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(name) => {
-                    DeployedRoutesError::HttpApiDefinitionNotFound(name)
+                HttpApiDeploymentError::ParentEnvironmentNotFound(environment_id) => {
+                    DeployedRoutesError::ParentEnvironmentNotFound(environment_id)
+                }
+                HttpApiDeploymentError::DeploymentRevisionNotFound(deployment_revision) => {
+                    DeployedRoutesError::DeploymentRevisionNotFound(deployment_revision)
+                }
+                HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(name) => {
+                    DeployedRoutesError::DomainNotFoundInDeployment(name)
                 }
                 other => other.into(),
             })?;
 
-        let routes: Vec<CompiledRouteWithSecuritySchemeDetails> = self
+        let routes: Vec<BoundCompiledRoute> = self
             .deployment_repo
-            .list_compiled_http_api_routes_for_http_api_definition(
+            .list_compiled_routes_for_domain_and_deployment(
                 environment_id.0,
                 deployment_revision.into(),
-                &http_api_definition_name.0,
+                &domain.0,
             )
             .await?
             .into_iter()
@@ -147,21 +151,21 @@ impl DeployedRoutesService {
                 security_schemes.insert(security_scheme.id, security_scheme);
             }
             let converted = MaybeDisabledCompiledRoute {
-                security_scheme_missing: route.security_scheme_missing,
-                security_scheme: security_scheme_id,
                 method: route.route.method,
                 path: route.route.path,
-                binding: route.route.binding,
+                header_vars: route.route.header_vars,
+                query_vars: route.route.query_vars,
+                behavior: route.route.behaviour,
+                security_scheme_missing: route.security_scheme_missing,
+                security_scheme: security_scheme_id,
+                cors: route.route.cors,
             };
             converted_routes.push(converted);
         }
 
-        Ok(CompiledRoutesForHttpApiDefinition {
-            http_api_definition_id: http_api_definition.id,
-            http_api_definition_name: http_api_definition.name,
-            http_api_definition_version: http_api_definition.version,
-            routes: converted_routes,
+        Ok(CompiledRoutesForDomain {
             security_schemes,
+            routes: converted_routes,
         })
     }
 
@@ -169,9 +173,9 @@ impl DeployedRoutesService {
         &self,
         domain: &Domain,
     ) -> Result<CompiledRoutes, DeployedRoutesError> {
-        let routes: Vec<CompiledRouteWithSecuritySchemeDetails> = self
+        let routes: Vec<BoundCompiledRoute> = self
             .deployment_repo
-            .list_active_compiled_http_api_routes_for_domain(&domain.0)
+            .list_active_compiled_routes_for_domain(&domain.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -199,11 +203,13 @@ impl DeployedRoutesService {
                 security_schemes.insert(security_scheme.id, security_scheme);
             }
             let converted = CompiledRoute {
-                http_api_definition_id: route.http_api_definition_id,
                 method: route.route.method,
                 path: route.route.path,
-                binding: route.route.binding,
+                header_vars: route.route.header_vars,
+                query_vars: route.route.query_vars,
+                behavior: route.route.behaviour,
                 security_scheme: security_scheme_id,
+                cors: route.route.cors,
             };
             converted_routes.push(converted);
         }

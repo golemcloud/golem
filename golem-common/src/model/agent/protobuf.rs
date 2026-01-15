@@ -15,7 +15,6 @@ use golem_api_grpc::proto::golem::component::element_schema;
 use golem_api_grpc::proto::golem::component::{
     binary_reference, data_value, element_value, text_reference,
 };
-use fred::bytes_utils::string::StrInner;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
     fn from(value: golem_api_grpc::proto::golem::component::AgentMode) -> Self {
@@ -844,7 +843,9 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
             .ok_or_else(|| "Missing oneof: value".to_string())?
         {
             Value::Standard(inner) => {
-                let typed = golem_api_grpc::proto::golem::component::StandardHttpMethod::try_from(inner).unwrap_or_default();
+                let typed =
+                    golem_api_grpc::proto::golem::component::StandardHttpMethod::try_from(inner)
+                        .unwrap_or_default();
                 match typed {
                     StandardHttpMethod::Get => Ok(Self::Get(Empty {})),
                     StandardHttpMethod::Head => Ok(Self::Head(Empty {})),
@@ -855,9 +856,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
                     StandardHttpMethod::Options => Ok(Self::Options(Empty {})),
                     StandardHttpMethod::Trace => Ok(Self::Trace(Empty {})),
                     StandardHttpMethod::Patch => Ok(Self::Patch(Empty {})),
-                    StandardHttpMethod::Unspecified => Err("Unknown http method variant".to_string()),
+                    StandardHttpMethod::Unspecified => {
+                        Err("Unknown http method variant".to_string())
+                    }
                 }
-            },
+            }
             Value::Custom(c) => Ok(HttpMethod::Custom(CustomHttpMethod { value: c })),
         }
     }

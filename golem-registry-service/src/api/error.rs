@@ -22,7 +22,6 @@ use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
-use crate::services::http_api_definition::HttpApiDefinitionError;
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
@@ -501,7 +500,9 @@ impl From<DeployedRoutesError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             DeployedRoutesError::NoActiveRoutesForDomain(_)
-            | DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
+            | DeployedRoutesError::ParentEnvironmentNotFound(_)
+            | DeployedRoutesError::DeploymentRevisionNotFound(_)
+            | DeployedRoutesError::DomainNotFoundInDeployment(_) => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
@@ -565,38 +566,6 @@ impl From<SecuritySchemeError> for ApiError {
 
             SecuritySchemeError::Unauthorized(inner) => inner.into(),
             SecuritySchemeError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error,
-                cause: Some(value.into_anyhow()),
-            })),
-        }
-    }
-}
-
-impl From<HttpApiDefinitionError> for ApiError {
-    fn from(value: HttpApiDefinitionError) -> Self {
-        let error: String = value.to_safe_string();
-        match value {
-            HttpApiDefinitionError::ParentEnvironmentNotFound(_)
-            | HttpApiDefinitionError::DeploymentRevisionNotFound(_)
-            | HttpApiDefinitionError::HttpApiDefinitionNotFound(_)
-            | HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(_) => {
-                Self::NotFound(Json(ErrorBody { error, cause: None }))
-            }
-
-            HttpApiDefinitionError::InvalidDefinition(_) => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                cause: None,
-            })),
-
-            HttpApiDefinitionError::SecuritySchemeDoesNotExist(_)
-            | HttpApiDefinitionError::HttpApiDefinitionVersionAlreadyExists(_)
-            | HttpApiDefinitionError::HttpApiDefinitionWithNameAlreadyExists(_)
-            | HttpApiDefinitionError::ConcurrentUpdate => {
-                Self::Conflict(Json(ErrorBody { error, cause: None }))
-            }
-
-            HttpApiDefinitionError::Unauthorized(inner) => inner.into(),
-            HttpApiDefinitionError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

@@ -14,16 +14,10 @@
 
 // use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 // use crate::gateway_api_deployment::ApiSite;
-use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::{HttpApiDefinitionId, RouteMethod};
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::ScanCursor;
-use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 // use golem_service_base::custom_api::HttpCors;
-use golem_service_base::custom_api::SecuritySchemeDetails;
 use poem_openapi::Object;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 

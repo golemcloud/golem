@@ -390,7 +390,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetActiveRoutesForDomainSuccessResponse {
-            compiled_routes: Some(compiled_routes.try_into()?),
+            compiled_routes: Some(compiled_routes.into()),
         })
     }
 

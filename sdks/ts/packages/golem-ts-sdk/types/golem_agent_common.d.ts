@@ -15,13 +15,28 @@ declare module 'golem:agent/common' {
     tag: 'get'
   } |
   {
-    tag: 'put'
+    tag: 'head'
   } |
   {
     tag: 'post'
   } |
   {
+    tag: 'put'
+  } |
+  {
     tag: 'delete'
+  } |
+  {
+    tag: 'connect'
+  } |
+  {
+    tag: 'options'
+  } |
+  {
+    tag: 'trace'
+  } |
+  {
+    tag: 'patch'
   } |
   {
     tag: 'custom'

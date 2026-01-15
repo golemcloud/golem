@@ -26,9 +26,7 @@ use desert_rust::BinaryCodec;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-newtype_uuid!(
-    HttpApiDefinitionId
-);
+newtype_uuid!(HttpApiDefinitionId);
 
 declare_revision!(HttpApiDefinitionRevision);
 

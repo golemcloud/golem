@@ -805,7 +805,7 @@ impl From<super::bindings::golem::agent::common::HttpMethod> for HttpMethod {
             super::bindings::golem::agent::common::HttpMethod::Delete => Self::Delete(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Connect => Self::Connect(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Options => Self::Options(Empty {}),
-            super::bindings::golem::agent::common::HttpMethod::Trace=> Self::Trace(Empty {}),
+            super::bindings::golem::agent::common::HttpMethod::Trace => Self::Trace(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Patch => Self::Patch(Empty {}),
             super::bindings::golem::agent::common::HttpMethod::Custom(value) => {
                 Self::Custom(CustomHttpMethod { value })

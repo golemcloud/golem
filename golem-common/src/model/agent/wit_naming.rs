@@ -13,12 +13,9 @@
 // limitations under the License.
 
 use super::{
-    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentType, AgentTypeName,
-    ComponentModelElementSchema, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, HeaderVariable, HttpEndpointDetails, HttpMethod,
-    HttpMountDetails, LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue,
-    NamedElementValues, PathSegment, PathSegmentNode, PathVariable, QueryVariable, SystemVariable,
-    SystemVariableSegment,
+    AgentConstructor, AgentDependency, AgentMethod, AgentType, AgentTypeName,
+    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
 };
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
@@ -82,7 +79,7 @@ impl ToWitNaming for AgentType {
             methods: self.methods.to_wit_naming(),
             dependencies: self.dependencies.to_wit_naming(),
             mode: self.mode,
-            http_mount: self.http_mount.clone()
+            http_mount: self.http_mount.clone(),
         }
     }
 }
@@ -106,7 +103,7 @@ impl ToWitNaming for AgentMethod {
             prompt_hint: self.prompt_hint.clone(),
             input_schema: self.input_schema.to_wit_naming(),
             output_schema: self.output_schema.to_wit_naming(),
-            http_endpoint: self.http_endpoint.clone()
+            http_endpoint: self.http_endpoint.clone(),
         }
     }
 }

@@ -14,63 +14,58 @@
 
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::{
-    HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, RouteMethod,
+use golem_common::model::agent::{
+    CorsOptions, HeaderVariable, HttpMethod, PathSegmentNode, QueryVariable,
 };
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::RouteBehaviour;
 use golem_service_base::custom_api::SecuritySchemeDetails;
-use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use std::collections::HashMap;
-use golem_common::model::agent::{CorsOptions, HeaderVariable, HttpMethod, PathSegment, PathSegmentNode, QueryVariable};
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub struct CompiledRouteWithDynamicReferences {
+// Flattened version of golem_service_base::custom_api::CompiledRoute with late-bound references still unresolved
+pub struct UnboundCompiledRoute {
+    pub domain: Domain,
+    pub route_id: i32,
     pub method: HttpMethod,
     pub path: Vec<PathSegmentNode>,
     pub header_vars: Vec<HeaderVariable>,
     pub query_vars: Vec<QueryVariable>,
     pub behaviour: RouteBehaviour,
     pub security_scheme: Option<SecuritySchemeName>,
-    pub cors: CorsOptions
-}
-
-#[derive(Debug, Clone, PartialEq, BinaryCodec)]
-#[desert(evolution())]
-pub struct CompiledRouteWithoutSecurity {
-    pub method: HttpMethod,
-    pub path: AllPathPatterns,
-    pub behaviour: RouteBehaviour,
-    pub cors: CorsOptions
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompiledRouteWithContext {
-    pub security_scheme: Option<SecuritySchemeName>,
-    pub route: CompiledRouteWithoutSecurity,
+    pub cors: CorsOptions,
 }
 
 #[derive(Debug, Clone)]
-pub struct CompiledRouteWithSecuritySchemeDetails {
+pub struct BoundCompiledRoute {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
-    pub http_api_definition_id: HttpApiDefinitionId,
     pub deployment_revision: DeploymentRevision,
     pub security_scheme_missing: bool,
     pub security_scheme: Option<SecuritySchemeDetails>,
-    pub route: CompiledRouteWithoutSecurity,
+    pub route: UnboundCompiledRoute,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompiledRoutesForDomain {
+    pub security_schemes: HashMap<SecuritySchemeId, SecuritySchemeDetails>,
+    pub routes: Vec<MaybeDisabledCompiledRoute>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MaybeDisabledCompiledRoute {
+    pub method: HttpMethod,
+    pub path: Vec<PathSegmentNode>,
+    pub header_vars: Vec<HeaderVariable>,
+    pub query_vars: Vec<QueryVariable>,
+    pub behavior: RouteBehaviour,
     pub security_scheme_missing: bool,
     pub security_scheme: Option<SecuritySchemeId>,
-    pub method: HttpMethod,
-    pub path: AllPathPatterns,
-    pub binding: RouteBehaviour,
+    pub cors: CorsOptions,
 }
 
 // impl golem_service_base::custom_api::openapi::HttpApiRoute for MaybeDisabledCompiledRoute {
@@ -90,12 +85,3 @@ pub struct MaybeDisabledCompiledRoute {
 //         &self.binding
 //     }
 // }
-
-#[derive(Debug, Clone)]
-pub struct CompiledRoutesForHttpApiDefinition {
-    pub http_api_definition_id: HttpApiDefinitionId,
-    pub http_api_definition_name: HttpApiDefinitionName,
-    pub http_api_definition_version: HttpApiDefinitionVersion,
-    pub security_schemes: HashMap<SecuritySchemeId, SecuritySchemeDetails>,
-    pub routes: Vec<MaybeDisabledCompiledRoute>,
-}

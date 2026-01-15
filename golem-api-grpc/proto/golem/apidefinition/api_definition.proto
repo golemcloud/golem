@@ -29,10 +29,12 @@ message CompiledRoutes {
 
 message CompiledRoute {
    golem.component.HttpMethod method = 1;
-   string path = 2;
-   RouteBehaviour behaviour = 3;
-   optional SecuritySchemeId security_scheme_id = 4;
-   golem.component.CorsOptions cors_options = 5;
+   repeated golem.component.PathSegmentNode path = 2;
+   repeated golem.component.HeaderVariable header_vars = 3;
+   repeated golem.component.QueryVariable query_vars = 4;
+   RouteBehaviour behaviour = 5;
+   optional SecuritySchemeId security_scheme_id = 6;
+   golem.component.CorsOptions cors_options = 7;
 }
 
 message RouteBehaviour {
