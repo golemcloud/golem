@@ -499,9 +499,8 @@ class EphemeralAgent extends BaseAgent {
   mount: '/chats/{agent-type}',
 })
 class SimpleHttpAgent extends BaseAgent {
-  constructor(readonly input: string) {
+  constructor() {
     super();
-    this.input = input;
   }
 
   async greet(name: string): Promise<string> {

@@ -26,8 +26,8 @@ export function rejectQueryParamsInPath(path: string, entityName: string) {
   }
 }
 
-// Ensures that all variables referenced by the HTTP mount
-// (path and headers) are declared in the agent constructor.
+// Ensures that all agent constructor variables are provided
+// by the HTTP mount, either via path variables or header variables.
 export function validateHttpMountWithConstructor(
   agentMount: HttpMountDetails,
   agentConstructor: AgentConstructor,
@@ -36,37 +36,31 @@ export function validateHttpMountWithConstructor(
     agentConstructor.inputSchema.val.map(([name]) => name),
   );
 
-  validateHeaderVarsAgainstConstructor(agentMount, constructorVars);
-  validatePathVarsAgainstConstructor(agentMount, constructorVars);
+  const providedVars = collectHttpMountVariables(agentMount);
+
+  for (const constructorVar of constructorVars) {
+    if (!providedVars.has(constructorVar)) {
+      throw new Error(
+        `Agent constructor variable "${constructorVar}" is not provided by the HTTP mount (path or headers).`,
+      );
+    }
+  }
 }
 
-function validateHeaderVarsAgainstConstructor(
-  agentMount: HttpMountDetails,
-  constructorVars: Set<string>,
-) {
+function collectHttpMountVariables(agentMount: HttpMountDetails): Set<string> {
+  const vars = new Set<string>();
+
   for (const { variableName } of agentMount.headerVars) {
-    if (!constructorVars.has(variableName)) {
-      throw new Error(
-        `HTTP mount header variable "${variableName}" is not defined in the agent constructor variables.`,
-      );
+    vars.add(variableName);
+  }
+
+  for (const segment of agentMount.pathPrefix) {
+    for (const node of segment.concat) {
+      if (node.tag === 'path-variable') {
+        vars.add(node.val.variableName);
+      }
     }
   }
-}
 
-function validatePathVarsAgainstConstructor(
-  agentMount: HttpMountDetails,
-  constructorVars: Set<string>,
-) {
-  const pathVars = agentMount.pathPrefix
-    .flatMap((segment) => segment.concat)
-    .filter((node) => node.tag === 'path-variable')
-    .map((node) => node.val.variableName);
-
-  for (const variableName of pathVars) {
-    if (!constructorVars.has(variableName)) {
-      throw new Error(
-        `HTTP mount path variable "${variableName}" is not defined in the agent constructor variables.`,
-      );
-    }
-  }
+  return vars;
 }
