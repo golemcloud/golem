@@ -45,6 +45,7 @@ import {
 } from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
+import { validateHttpEndpoint, validateHttpMountWithConstructor } from '../http/validation';
 
 const MULTIMODAL_TYPE_NAMES = [
   'Multimodal',
@@ -239,14 +240,24 @@ export function getAgentMethodSchema(
           break;
       }
 
+      const agentMethod: AgentMethod = {
+        name: methodName,
+        description: baseMeta.description ?? '',
+        promptHint: baseMeta.prompt ?? '',
+        inputSchema: inputSchema,
+        outputSchema: outputSchema,
+        httpEndpoint: baseMeta.httpEndpoint ?? [],
+      }
+
+      validateHttpEndpoint(agentClassName, agentMethod)
+
       return Either.right({
         name: methodName,
         description: baseMeta.description ?? '',
         promptHint: baseMeta.prompt ?? '',
         inputSchema: inputSchema,
         outputSchema: outputSchema,
-        // TODO
-        httpEndpoint: [],
+        httpEndpoint: baseMeta.httpEndpoint ?? [],
       });
     }),
   );

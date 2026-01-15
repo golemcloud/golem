@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentConstructor, HttpMountDetails } from 'golem:agent/common';
+import { AgentConstructor, AgentMethod, DataSchema, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
 
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
@@ -23,6 +23,15 @@ export function rejectEmptyString(name: string, entityName: string) {
 export function rejectQueryParamsInPath(path: string, entityName: string) {
   if (path.includes('?')) {
     throw new Error(`HTTP ${entityName} must not contain query parameters`);
+  }
+}
+
+export function validateHttpEndpoint(agentClassName: string, agentMethod: AgentMethod) {
+  const methodVars = collectMethodInputVars(agentMethod.inputSchema);
+
+  for (const endpoint of agentMethod.httpEndpoint) {
+    validateNoForeignEndpointVariables(endpoint, methodVars);
+    validateAllMethodParamsProvided(endpoint, methodVars, agentClassName, agentMethod.name);
   }
 }
 
@@ -37,6 +46,85 @@ export function validateHttpMountWithConstructor(
   validateMountVariablesExistInConstructor(agentMount, constructorVars);
   validateConstructorVarsAreSatisfied(agentMount, constructorVars);
 }
+
+function collectMethodInputVars(schema: DataSchema): Set<string> {
+  return new Set(schema.val.map(([name]) => name));
+}
+
+function validateAllMethodParamsProvided(
+  endpoint: HttpEndpointDetails,
+  methodVars: Set<string>,
+  agentClassName: string,
+  agentMethodName: string
+) {
+  const providedVars = collectEndpointVariables(endpoint);
+
+  for (const methodVar of methodVars) {
+    if (!providedVars.has(methodVar)) {
+      throw new Error(
+        `Method parameter "${methodVar}" in method ${agentMethodName} of ${agentClassName} is not provided by HTTP endpoint (path, query, or headers).`,
+      );
+    }
+  }
+}
+
+
+function collectEndpointVariables(endpoint: HttpEndpointDetails): Set<string> {
+  const vars = new Set<string>();
+
+  for (const { variableName } of endpoint.headerVars) {
+    vars.add(variableName);
+  }
+
+  for (const { variableName } of endpoint.queryVars) {
+    vars.add(variableName);
+  }
+
+  for (const segment of endpoint.pathSuffix) {
+    for (const node of segment.concat) {
+      if (node.tag === 'path-variable') {
+        vars.add(node.val.variableName);
+      }
+    }
+  }
+
+  return vars;
+}
+
+function validateNoForeignEndpointVariables(
+  endpoint: HttpEndpointDetails,
+  methodVars: Set<string>,
+) {
+  for (const { variableName } of endpoint.headerVars) {
+    if (!methodVars.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint header variable "${variableName}" is not defined in method input parameters.`,
+      );
+    }
+  }
+
+  for (const { variableName } of endpoint.queryVars) {
+    if (!methodVars.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint query variable "${variableName}" is not defined in method input parameters.`,
+      );
+    }
+  }
+
+  for (const segment of endpoint.pathSuffix) {
+    for (const node of segment.concat) {
+      if (node.tag === 'path-variable') {
+        const name = node.val.variableName;
+        if (!methodVars.has(name)) {
+          throw new Error(
+            `HTTP endpoint path variable "${name}" is not defined in method input parameters.`,
+          );
+        }
+      }
+    }
+  }
+}
+
 
 function collectConstructorVars(
   agentConstructor: AgentConstructor,

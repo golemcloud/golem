@@ -504,7 +504,7 @@ class SimpleHttpAgent extends BaseAgent {
     super();
   }
 
-  @endpoint({ get: '/greet' })
+  @endpoint({ get: '/greet/{name}' })
   async greet(name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
