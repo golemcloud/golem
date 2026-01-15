@@ -46,6 +46,7 @@ use rib::RibCompilationError;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
+// Fixme: code-first routes
 // macro_rules! ok_or_continue {
 //     ($expr:expr, $errors:ident) => {{
 //         match ($expr) {
@@ -524,6 +525,7 @@ impl DeploymentContext {
         Ok(agent_types)
     }
 
+    // Fixme: code-first routes
     // fn validate_http_api_deployments(&self) -> Result<(), DeploymentWriteError> {
     //     let mut errors = Vec::new();
 
@@ -547,6 +549,7 @@ impl DeploymentContext {
     //     Ok(())
     // }
 
+    // Fixme: code-first routes
     // #[allow(clippy::type_complexity)]
     // fn compiled_http_api_routes(
     //     &self,
@@ -621,6 +624,7 @@ impl DeploymentContext {
     //     Ok((domain_http_api_definitions, compiled_routes))
     // }
 
+    // Fixme: code-first routes
     // fn compile_gateway_binding(
     //     &self,
     //     http_api_definition_id: HttpApiDefinitionId,
@@ -651,6 +655,7 @@ impl DeploymentContext {
     //     }
     // }
 
+    // Fixme: code-first routes
     // fn compile_worker_binding(
     //     &self,
     //     definition: &HttpApiDefinitionName,
@@ -737,6 +742,7 @@ impl DeploymentContext {
     //     Ok(GatewayBindingCompiled::Worker(Box::new(binding)))
     // }
 
+    // Fixme: code-first routes
     // fn compile_file_server_binding(
     //     &self,
     //     definition: &HttpApiDefinitionName,
@@ -800,6 +806,7 @@ impl DeploymentContext {
     //     Ok(GatewayBindingCompiled::FileServer(Box::new(binding)))
     // }
 
+    // Fixme: code-first routes
     // fn compile_http_handler_binding(
     //     &self,
     //     definition: &HttpApiDefinitionName,
@@ -871,6 +878,7 @@ impl DeploymentContext {
     //     Ok(GatewayBindingCompiled::HttpHandler(Box::new(binding)))
     // }
 
+    // Fixme: code-first routes
     // fn compile_cors_preflight_binding(
     //     &self,
     //     binding: &CorsPreflightBinding,
