@@ -19,7 +19,7 @@ import {
   UnstructuredBinary,
   UnstructuredText,
   Result,
-  Multimodal,
+  Multimodal, endpoint,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -503,6 +503,7 @@ class SimpleHttpAgent extends BaseAgent {
     super();
   }
 
+  @endpoint({ get: '/greet' })
   async greet(name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
@@ -523,7 +524,13 @@ class ComplexHttpAgent extends BaseAgent {
     super();
   }
 
-  async greet(name: string): Promise<string> {
+  @endpoint({ get: '/greet' })
+  async greet(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  async greetCustom(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
 }
