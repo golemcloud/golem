@@ -619,7 +619,7 @@ impl TypeScriptBridgeGenerator {
             &format!(
                 "base.RemoteMethod<[{}], {}>",
                 Self::data_schema_as_type_list(&method_def.input_schema)?,
-                Self::schemas_as_result_type(&method_def.output_schema)?
+                Self::data_schema_as_result_type(&method_def.output_schema)?
             ),
             Some(&formatdoc!(
                 "
@@ -1872,7 +1872,7 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
-    fn schemas_as_result_type(schema: &DataSchema) -> anyhow::Result<String> {
+    fn data_schema_as_result_type(schema: &DataSchema) -> anyhow::Result<String> {
         Ok(match schema {
             DataSchema::Tuple(params) => {
                 if params.elements.is_empty() {
