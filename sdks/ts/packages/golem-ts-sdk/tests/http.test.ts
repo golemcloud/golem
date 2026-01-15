@@ -345,10 +345,22 @@ describe('validateHttpEndpoint', () => {
 
   const agentName = 'TestAgent';
 
+  const httpMountDetails: HttpMountDetails = {
+    pathPrefix: [{ concat: [{ tag: 'literal', val: 'test' }] }],
+    headerVars: [],
+    queryVars: [],
+    authDetails: { required: false },
+    phantomAgent: false,
+    corsOptions: { allowedPatterns: [] },
+    webhookSuffix: [],
+  };
+
   it('passes when all method parameters are provided via path', () => {
     const m = method(['id', 'event'], [endpoint(['id', 'event'])]);
 
-    expect(() => validateHttpEndpoint(agentName, m)).not.toThrow();
+    expect(() =>
+      validateHttpEndpoint(agentName, m, httpMountDetails),
+    ).not.toThrow();
   });
 
   it('passes when method parameters are split across path, query, and headers', () => {
@@ -357,13 +369,15 @@ describe('validateHttpEndpoint', () => {
       [endpoint(['id'], ['limit'], ['tenant'])],
     );
 
-    expect(() => validateHttpEndpoint(agentName, m)).not.toThrow();
+    expect(() =>
+      validateHttpEndpoint(agentName, m, httpMountDetails),
+    ).not.toThrow();
   });
 
   it('fails when a method parameter is not provided by the endpoint', () => {
     const m = method(['id', 'userId'], [endpoint(['id'])]);
 
-    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+    expect(() => validateHttpEndpoint(agentName, m, httpMountDetails)).toThrow(
       'Method parameter "userId" in method doThing of TestAgent is not provided by HTTP endpoint (path, query, or headers).',
     );
   });
@@ -371,7 +385,7 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint path variable is not part of method input', () => {
     const m = method([], [endpoint(['id'])]);
 
-    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+    expect(() => validateHttpEndpoint(agentName, m, httpMountDetails)).toThrow(
       'HTTP endpoint path variable "id" is not defined in method input parameters.',
     );
   });
@@ -379,7 +393,7 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint query variable is not part of method input', () => {
     const m = method([], [endpoint([], ['limit'])]);
 
-    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+    expect(() => validateHttpEndpoint(agentName, m, httpMountDetails)).toThrow(
       'HTTP endpoint query variable "limit" is not defined in method input parameters.',
     );
   });
@@ -387,7 +401,7 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint header variable is not part of method input', () => {
     const m = method([], [endpoint([], [], ['tenant'])]);
 
-    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+    expect(() => validateHttpEndpoint(agentName, m, httpMountDetails)).toThrow(
       'HTTP endpoint header variable "tenant" is not defined in method input parameters.',
     );
   });
@@ -401,7 +415,7 @@ describe('validateHttpEndpoint', () => {
       ],
     );
 
-    expect(() => validateHttpEndpoint(agentName, m)).toThrow(
+    expect(() => validateHttpEndpoint(agentName, m, httpMountDetails)).toThrow(
       'Method parameter "id" in method doThing of TestAgent is not provided by HTTP endpoint (path, query, or headers).',
     );
   });

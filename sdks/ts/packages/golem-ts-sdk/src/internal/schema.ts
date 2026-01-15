@@ -20,6 +20,7 @@ import {
   BinaryDescriptor,
   DataSchema,
   ElementSchema,
+  HttpMountDetails,
   TextDescriptor,
 } from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
@@ -127,6 +128,7 @@ export function getConstructorDataSchema(
 export function getAgentMethodSchema(
   classMetadata: ClassMetadata,
   agentClassName: string,
+  httpMountDetails: HttpMountDetails | undefined,
 ): Either.Either<AgentMethod[], string> {
   if (!classMetadata) {
     return Either.left(`No metadata found for agent class ${agentClassName}`);
@@ -252,7 +254,7 @@ export function getAgentMethodSchema(
         httpEndpoint: baseMeta.httpEndpoint ?? [],
       };
 
-      validateHttpEndpoint(agentClassName, agentMethod);
+      validateHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
 
       return Either.right({
         name: methodName,

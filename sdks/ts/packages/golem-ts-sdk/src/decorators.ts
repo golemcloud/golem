@@ -197,9 +197,12 @@ export function agent(options?: AgentDecoratorOptions) {
       },
     );
 
+    const httpMount = getHttpMountDetails(options);
+
     const methodSchemaEither = getAgentMethodSchema(
       classMetadata,
       agentClassName.value,
+      httpMount,
     );
 
     // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
@@ -213,8 +216,6 @@ export function agent(options?: AgentDecoratorOptions) {
     const agentTypeName = new AgentClassName(
       options?.name || agentClassName.value,
     );
-
-    const httpMount = getHttpMountDetails(options);
 
     if (AgentInitiatorRegistry.exists(agentTypeName.value)) {
       throw new Error(

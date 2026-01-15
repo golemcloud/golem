@@ -37,8 +37,16 @@ export function rejectQueryParamsInPath(path: string, entityName: string) {
 export function validateHttpEndpoint(
   agentClassName: string,
   agentMethod: AgentMethod,
+  httpMountDetails: HttpMountDetails | undefined,
 ) {
   const methodVars = collectMethodInputVars(agentMethod.inputSchema);
+
+  if (!httpMountDetails && agentMethod.httpEndpoint.length > 0) {
+    throw new Error(
+      `Agent method ${agentMethod.name} of ${agentClassName} defines HTTP endpoints ` +
+        `but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.`,
+    );
+  }
 
   for (const endpoint of agentMethod.httpEndpoint) {
     validateNoForeignEndpointVariables(endpoint, methodVars);
