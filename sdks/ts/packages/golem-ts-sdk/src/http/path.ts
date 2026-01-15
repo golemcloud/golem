@@ -34,7 +34,6 @@ function parseSegment(segment: string): PathSegment {
     throw new Error(`Whitespace is not allowed in path segments`);
   }
 
-
   const nodes: PathSegmentNode[] = [];
 
   let i = 0;
