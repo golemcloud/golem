@@ -73,6 +73,26 @@ describe('getHttpMountDetails – path variables', () => {
       },
     ]);
   });
+
+  it('parses mixed path segment with variable and literal', () => {
+    const opts: AgentDecoratorOptions = {
+      mount: '/bar/{baz}abc',
+    };
+
+    const result = getHttpMountDetails(opts)!;
+
+    expect(result.pathPrefix).toEqual([
+      {
+        concat: [{ tag: 'literal', val: 'bar' }],
+      },
+      {
+        concat: [
+          { tag: 'path-variable', val: { variableName: 'baz' } },
+          { tag: 'literal', val: 'abc' },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('getHttpMountDetails – header variables', () => {
