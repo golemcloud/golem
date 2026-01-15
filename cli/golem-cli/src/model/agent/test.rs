@@ -711,7 +711,10 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
     .named("UnionWithLiterals");
 
     let union_with_only_literals = r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
+
     let anonymous_union_with_only_literals = r#enum(&["foo", "bar", "baz"]);
+
+    let anonymous_union_with_only_literals2 = r#enum(&["foo", "bar", "baz", "baz2"]);
 
     vec![
         // FooAgent
@@ -1330,11 +1333,11 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                 },
                 AgentMethod {
                     name: "funAnonymousUnionWithOnlyLiterals".to_string(),
-                    description: "Takes UnionWithOnlyLiterals".to_string(),
+                    description: "Takes AnonymousUnionWithOnlyLiterals".to_string(),
                     prompt_hint: None,
                     input_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
-                            name: "unionWithLiterals".to_string(),
+                            name: "anonymousUnionWithLiterals".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                                 element_type: anonymous_union_with_only_literals.clone(),
                             }),
@@ -1345,6 +1348,28 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                                 element_type: anonymous_union_with_only_literals.clone(),
+                            }),
+                        }],
+                    }),
+                    http_endpoint: vec![],
+                },
+                AgentMethod {
+                    name: "funAnonymousUnionWithOnlyLiterals2".to_string(),
+                    description: "Takes AnonymousUnionWithOnlyLiterals".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "anonymousUnionWithLiterals".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: anonymous_union_with_only_literals2.clone(),
+                            }),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: anonymous_union_with_only_literals2.clone(),
                             }),
                         }],
                     }),
