@@ -51,7 +51,7 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         }
     }
 
-    fn generate(&self) -> anyhow::Result<()> {
+    fn generate(&mut self) -> anyhow::Result<()> {
         let library_name = self.library_name();
 
         let ts_path = self.target_path.join(format!("{library_name}.ts"));

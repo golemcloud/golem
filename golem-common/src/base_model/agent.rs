@@ -125,7 +125,7 @@ pub struct TextDescriptor {
     pub restrictions: Option<Vec<TextType>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)

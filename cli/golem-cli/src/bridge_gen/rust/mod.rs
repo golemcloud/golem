@@ -16,11 +16,12 @@ use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{AgentMethod, AgentType, DataSchema, ElementSchema};
+use golem_common::model::agent::{AgentMethod, AgentType, DataSchema, ElementSchema, TextType};
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
+use std::collections::BTreeMap;
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
@@ -33,6 +34,8 @@ pub struct RustBridgeGenerator {
     target_path: Utf8PathBuf,
     agent_type: AgentType,
     testing: bool,
+
+    generated_language_enums: BTreeMap<Vec<TextType>, String>,
 }
 
 // TODO: convert panics to error results
@@ -42,10 +45,12 @@ impl BridgeGenerator for RustBridgeGenerator {
             target_path: target_path.to_path_buf(),
             agent_type,
             testing,
+
+            generated_language_enums: BTreeMap::new(),
         }
     }
 
-    fn generate(&self) -> anyhow::Result<()> {
+    fn generate(&mut self) -> anyhow::Result<()> {
         let cargo_toml_path = self.target_path.join("Cargo.toml");
         let lib_rs_path = self.target_path.join("src/lib.rs");
 
@@ -132,7 +137,7 @@ impl RustBridgeGenerator {
     }
 
     /// Generates the lib.rs source file
-    fn generate_lib_rs(&self, path: &Utf8Path) -> anyhow::Result<()> {
+    fn generate_lib_rs(&mut self, path: &Utf8Path) -> anyhow::Result<()> {
         let tokens = self.generate_lib_rs_tokens()?;
 
         // println!("{}", tokens);
@@ -144,13 +149,14 @@ impl RustBridgeGenerator {
     }
 
     /// Generates the TokenStream for lib.rs content
-    fn generate_lib_rs_tokens(&self) -> anyhow::Result<TokenStream> {
+    fn generate_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
         let agent_type_name = &self.agent_type.type_name.0;
         let agent_type_name_lit = Lit::Str(LitStr::new(agent_type_name, Span::call_site()));
         let client_struct_name =
             Ident::new(&agent_type_name.to_upper_camel_case(), Span::call_site());
 
-        let constructor_params = self.parameter_list(&self.agent_type.constructor.input_schema);
+        let input_schema = self.agent_type.constructor.input_schema.clone();
+        let constructor_params = self.parameter_list(&input_schema);
 
         let typed_constructor_parameters_ident =
             Ident::new("typed_constructor_parameters", Span::call_site());
@@ -162,11 +168,14 @@ impl RustBridgeGenerator {
         let methods = self
             .agent_type
             .methods
+            .clone()
             .iter()
             .flat_map(|method| self.methods(method))
             .collect::<Vec<_>>();
 
         let global_config = self.global_config();
+
+        let languages = self.languages_module();
 
         let tokens = quote! {
             use golem_wasm::{FromValueAndType, IntoValueAndType};
@@ -238,12 +247,14 @@ impl RustBridgeGenerator {
             }
 
             #global_config
+
+            #languages
         };
 
         Ok(tokens)
     }
 
-    fn parameter_list(&self, data_schema: &DataSchema) -> Vec<TokenStream> {
+    fn parameter_list(&mut self, data_schema: &DataSchema) -> Vec<TokenStream> {
         // each item is 'name: type'
 
         match data_schema {
@@ -262,7 +273,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn parameter_refs(&self, data_schema: &DataSchema) -> Vec<TokenStream> {
+    fn parameter_refs(&mut self, data_schema: &DataSchema) -> Vec<TokenStream> {
         // each item is 'name: type'
 
         match data_schema {
@@ -281,14 +292,38 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn element_schema_to_typeref(&self, element_schema: &ElementSchema) -> TokenStream {
+    fn get_languages_enum(&mut self, restrictions: &[TextType]) -> TokenStream {
+        let restrictions = restrictions.to_vec();
+        if let Some(existing) = self.generated_language_enums.get(&restrictions) {
+            let ident = Ident::new(existing, Span::call_site());
+            quote! { crate::languages::#ident }
+        } else {
+            let counter = self.generated_language_enums.len();
+            let ident = Ident::new(&format!("Languages{}", counter), Span::call_site());
+            self.generated_language_enums
+                .insert(restrictions.clone(), ident.to_string());
+            quote! { crate::languages::#ident }
+        }
+    }
+
+    fn element_schema_to_typeref(&mut self, element_schema: &ElementSchema) -> TokenStream {
         match element_schema {
             ElementSchema::ComponentModel(schema) => self.wit_type_to_typeref(&schema.element_type),
-            ElementSchema::UnstructuredText(_) => {
-                todo!()
+            ElementSchema::UnstructuredText(descriptor) => {
+                if let Some(restrictions) = &descriptor.restrictions {
+                    let languages_enum = self.get_languages_enum(restrictions);
+                    quote! { golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum> }
+                } else {
+                    quote! { golem_wasm::agentic::unstructured_text::UnstructuredText }
+                }
             }
-            ElementSchema::UnstructuredBinary(_) => {
-                todo!()
+            ElementSchema::UnstructuredBinary(descriptor) => {
+                if let Some(restrictions) = descriptor.restrictions {
+                    let mimetypes_enum = self.get_mimetypes_enum(restrictions);
+                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum> }
+                } else {
+                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary }
+                }
             }
         }
     }
@@ -406,7 +441,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn return_type_from_data_schema(&self, data_schema: &DataSchema) -> TokenStream {
+    fn return_type_from_data_schema(&mut self, data_schema: &DataSchema) -> TokenStream {
         match data_schema {
             DataSchema::Tuple(elements) => {
                 if elements.elements.len() == 1 {
@@ -422,7 +457,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn methods(&self, method: &AgentMethod) -> Vec<TokenStream> {
+    fn methods(&mut self, method: &AgentMethod) -> Vec<TokenStream> {
         vec![
             self.await_method(method),
             self.trigger_method(method),
@@ -451,7 +486,7 @@ impl RustBridgeGenerator {
         Ident::new(&format!("__{}", base_name), Span::call_site())
     }
 
-    fn await_method(&self, method: &AgentMethod) -> TokenStream {
+    fn await_method(&mut self, method: &AgentMethod) -> TokenStream {
         //     pub async fn increment(&self) -> Result<f64, golem_client::bridge::ClientError> {
         //         let result = self
         //             .__increment(golem_client::model::AgentInvocationMode::Await, None)
@@ -475,7 +510,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn trigger_method(&self, method: &AgentMethod) -> TokenStream {
+    fn trigger_method(&mut self, method: &AgentMethod) -> TokenStream {
         //     pub async fn trigger_increment(&self) -> Result<(), golem_client::bridge::ClientError> {
         //         let _ = self
         //             .__increment(golem_client::model::AgentInvocationMode::Schedule, None)
@@ -496,7 +531,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn schedule_method(&self, method: &AgentMethod) -> TokenStream {
+    fn schedule_method(&mut self, method: &AgentMethod) -> TokenStream {
         //  pub async fn schedule_increment(
         //         &self,
         //         when: chrono::DateTime<chrono::Utc>,
@@ -523,7 +558,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn internal_method(&self, method: &AgentMethod) -> TokenStream {
+    fn internal_method(&mut self, method: &AgentMethod) -> TokenStream {
         let name_lit = Lit::Str(LitStr::new(&method.name, Span::call_site()));
         let name = self.internal_method_name(method);
         let param_defs = self.parameter_list(&method.input_schema);
@@ -964,7 +999,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn decode_from_data_value(&self, ident: &Ident, data_schema: &DataSchema) -> TokenStream {
+    fn decode_from_data_value(&mut self, ident: &Ident, data_schema: &DataSchema) -> TokenStream {
         match data_schema {
             DataSchema::Tuple(elements) => {
                 if elements.elements.len() != 1 {
@@ -1030,6 +1065,70 @@ impl RustBridgeGenerator {
                     })
                     .map_err(|_| ())
                     .expect("Configuration has already been set");
+            }
+        }
+    }
+
+    fn languages_module(&self) -> TokenStream {
+        if self.generated_language_enums.is_empty() {
+            quote! {}
+        } else {
+            let mut language_enums = Vec::new();
+
+            for (types, name) in &self.generated_language_enums {
+                let ident = Ident::new(name, Span::call_site());
+
+                let mut cases = Vec::new();
+                let mut code_strings = Vec::new();
+                let mut from_match_cases = Vec::new();
+                let mut to_match_cases = Vec::new();
+
+                for typ in types {
+                    let ident = Ident::new(
+                        &to_rust_ident(&typ.language_code).to_upper_camel_case(),
+                        Span::call_site(),
+                    );
+                    let lit = Lit::Str(LitStr::new(&typ.language_code, Span::call_site()));
+
+                    cases.push(quote! { #ident });
+                    code_strings.push(quote! { #lit });
+                    from_match_cases
+                        .push(quote! { #ident => golem_wasm::analysis::TextType::#ident });
+                    to_match_cases
+                        .push(quote! { golem_wasm::analysis::TextType::#ident => Ok(#ident) });
+                }
+
+                language_enums.push(quote! {
+                    pub enum #ident {
+                        #(#cases),*
+                    }
+
+                    impl golem_wasm::agentic::unstructured_text::AllowedLanguages for #ident {
+                        fn all() -> &'static [&'static str] {
+                            &[#(#code_strings),*]
+                        }
+
+                        fn from_language_code(code: &str) -> Option<Self>
+                        where
+                            Self: Sized {
+                            match code {
+                                #(#from_match_cases),*
+                            }
+                        }
+
+                        fn to_language_code(&self) -> &'static str {
+                            match self {
+                                #(#to_match_cases),*
+                            }
+                        }
+                    }
+                });
+            }
+
+            quote! {
+                pub mod languages {
+                    #(#language_enums)*
+                }
             }
         }
     }

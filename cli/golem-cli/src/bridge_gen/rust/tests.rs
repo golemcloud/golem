@@ -23,34 +23,37 @@ use test_r::{test, test_dep};
 struct GeneratedPackage {
     pub dir: TempDir,
 }
-
-#[test_dep(tagged_as = "single_agent_wrapper_types_1")]
-fn rust_single_agent_wrapper_1() -> GeneratedPackage {
-    let agent_type =
-        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-    let dir = TempDir::new().unwrap();
-
-    // let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-
-    let target_dir = Utf8Path::new("/Users/vigoo/tmp/rsclient");
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
-
-    GeneratedPackage { dir }
-}
 //
-// #[test_dep(tagged_as = "multi_agent_wrapper_2_types_1")]
-// fn rust_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
+// #[test_dep(tagged_as = "single_agent_wrapper_types_1")]
+// fn rust_single_agent_wrapper_1() -> GeneratedPackage {
 //     let agent_type =
-//         super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
+//         super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
 //     let dir = TempDir::new().unwrap();
 //
-//     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+//     // let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+//
+//     TODO: undo
+//     let target_dir = Utf8Path::new("/Users/vigoo/tmp/rsclient");
 //     std::fs::remove_dir_all(target_dir).ok();
 //     generate_and_compile(agent_type, target_dir);
 //
 //     GeneratedPackage { dir }
 // }
+
+#[test_dep(tagged_as = "multi_agent_wrapper_2_types_1")]
+fn rust_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
+    let agent_type =
+        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
+    let dir = TempDir::new().unwrap();
+
+    // let target_dir = Utf8Path::from_path(dir.path()).unwrap(); // TODO: undo
+    let target_dir = Utf8Path::new("/Users/vigoo/tmp/rsclient");
+
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
+}
 //
 // #[test_dep(tagged_as = "multi_agent_wrapper_2_types_2")]
 // fn rust_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
@@ -123,20 +126,20 @@ fn rust_single_agent_wrapper_1() -> GeneratedPackage {
 //     GeneratedPackage { dir }
 // }
 
+// #[test]
+// fn bridge_rust_compiles_single_agent_wrapper(
+//     #[tagged_as("single_agent_wrapper_types_1")] _pkg: &GeneratedPackage,
+// ) {
+//     The test_dep ensures it was compiled successfully in generate_and_compile
+// }
+
 #[test]
-fn bridge_rust_compiles_single_agent_wrapper(
-    #[tagged_as("single_agent_wrapper_types_1")] _pkg: &GeneratedPackage,
+fn bridge_rust_compiles_multi_agent_1(
+    #[tagged_as("multi_agent_wrapper_2_types_1")] _pkg: &GeneratedPackage,
 ) {
     // The test_dep ensures it was compiled successfully in generate_and_compile
 }
-//
-// #[test]
-// fn bridge_rust_compiles_multi_agent_1(
-//     #[tagged_as("multi_agent_wrapper_2_types_1")] _pkg: &GeneratedPackage,
-// ) {
-//     // The test_dep ensures it was compiled successfully in generate_and_compile
-// }
-//
+
 // #[test]
 // fn bridge_rust_compiles_multi_agent_2(
 //     #[tagged_as("multi_agent_wrapper_2_types_2")] _pkg: &GeneratedPackage,
@@ -157,7 +160,7 @@ fn bridge_rust_compiles_single_agent_wrapper(
 // }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
-    let gen = RustBridgeGenerator::new(agent_type, target_dir, false);
+    let mut gen = RustBridgeGenerator::new(agent_type, target_dir, false);
     gen.generate().expect("Failed to generate Rust bridge");
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");

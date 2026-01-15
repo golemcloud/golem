@@ -21,6 +21,8 @@ mod bindings;
 #[cfg(test)]
 test_r::enable!();
 
+pub mod agentic;
+
 pub mod analysis;
 
 /// Implements desert encoders and decoders for WitValue instances

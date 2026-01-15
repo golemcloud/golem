@@ -23,7 +23,7 @@ use std::collections::{HashSet, VecDeque};
 #[allow(dead_code)]
 pub trait BridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self;
-    fn generate(&self) -> anyhow::Result<()>;
+    fn generate(&mut self) -> anyhow::Result<()>;
 }
 
 fn collect_all_wit_types(agent_type: &AgentType) -> Vec<AnalysedType> {
