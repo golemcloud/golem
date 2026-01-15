@@ -12,8 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export function rejectEmptyString(name: string) {
+export function rejectEmptyString(name: string, errorMessage: string) {
   if (name.length === 0) {
-    throw new Error(`Empty variable name is not allowed`);
+    throw new Error(errorMessage);
+  }
+}
+
+export function rejectQueryParamsInPath(name: string, errorMessage: string) {
+  if (name.includes('?')) {
+    throw new Error(errorMessage);
   }
 }

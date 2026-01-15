@@ -35,7 +35,11 @@ export function parseQuery(query: string): QueryVariable[] {
     }
 
     const variableName = value.slice(1, -1);
-    rejectEmptyString(variableName);
+
+    rejectEmptyString(
+      variableName,
+      `Query variable name cannot be an empty string`,
+    );
 
     return {
       queryParamName: key,

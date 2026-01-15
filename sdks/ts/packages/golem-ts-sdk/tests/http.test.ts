@@ -141,9 +141,7 @@ describe('invalid http mount ', () => {
         mount: '/chats',
         webhookSuffix: '/hook?event={event}',
       }),
-    ).toThrow(
-      "Http '/hook?event={event}' option cannot contain query parameters",
-    );
+    ).toThrow("HTTP 'webhookSuffix' must not contain query parameters");
   });
 
   it('rejects mount without leading slash', () => {

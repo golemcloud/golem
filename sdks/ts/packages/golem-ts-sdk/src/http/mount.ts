@@ -19,7 +19,7 @@ import {
 } from 'golem:agent/common';
 import { AgentDecoratorOptions } from '../options';
 import { parsePath } from './path';
-import { rejectEmptyString } from './validation';
+import { rejectEmptyString, rejectQueryParamsInPath } from './validation';
 
 export type HeaderVariables = Record<string, string>;
 
@@ -28,9 +28,14 @@ export function getHttpMountDetails(
 ): HttpMountDetails | undefined {
   if (!agentDecoratorOptions?.mount) return undefined;
 
-  if (agentDecoratorOptions.mount.includes('?')) {
-    throw new Error(`HTTP 'mount' must not contain query parameters`);
-  }
+  rejectQueryParamsInPath(
+    agentDecoratorOptions.mount,
+    `HTTP 'mount' must not contain query parameters`,
+  );
+  rejectEmptyString(
+    agentDecoratorOptions.mount,
+    "HTTP 'mount' cannot be an empty string",
+  );
 
   const pathPrefix = parsePath(agentDecoratorOptions.mount);
   const headerVars = parseHeaderVars(agentDecoratorOptions.headers);
@@ -53,9 +58,12 @@ export function getHttpMountDetails(
 function parseWebhook(webhook?: string): PathSegment[] {
   if (!webhook) return [];
 
-  if (webhook.includes('?')) {
-    throw new Error(`Http 'webhookSuffix' must not contain query parameters`);
-  }
+  rejectQueryParamsInPath(
+    webhook,
+    `HTTP 'webhookSuffix' must not contain query parameters`,
+  );
+
+  rejectEmptyString(webhook, "HTTP 'webhookSuffix' cannot be an empty string");
 
   return parsePath(webhook);
 }
@@ -64,7 +72,8 @@ function parseHeaderVars(headers?: HeaderVariables): HeaderVariable[] {
   if (!headers) return [];
 
   return Object.entries(headers).map(([headerName, variableName]) => {
-    rejectEmptyString(variableName);
+    rejectEmptyString(variableName, 'Header variable name cannot be empty');
+    rejectEmptyString(headerName, 'Header name cannot be empty');
 
     return {
       headerName,

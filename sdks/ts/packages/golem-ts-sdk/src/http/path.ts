@@ -56,7 +56,8 @@ function parseSegment(segment: string): PathSegment {
           val: name,
         });
       } else {
-        rejectEmptyString(name);
+        rejectEmptyString(name, `Path variable name cannot be an empty string`);
+
         nodes.push({
           tag: 'path-variable',
           val: { variableName: name },
@@ -73,7 +74,10 @@ function parseSegment(segment: string): PathSegment {
     }
 
     const literal = segment.slice(start, i);
-    rejectEmptyString(literal);
+    rejectEmptyString(
+      literal,
+      `Literal path segment cannot be an empty string`,
+    );
 
     nodes.push({
       tag: 'literal',
