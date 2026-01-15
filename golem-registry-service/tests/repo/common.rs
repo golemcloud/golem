@@ -16,9 +16,9 @@ use crate::repo::Deps;
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
@@ -40,7 +40,7 @@ use golem_registry_service::repo::model::http_api_definition::{
     HttpApiDefinitionDefinitionBlob, HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
 };
 use golem_registry_service::repo::model::http_api_deployment::{
-    HttpApiDefinitionNameList, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
+    AgentTypeSet, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
@@ -1002,8 +1002,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
     };
 
-    let created_definition = deps
-        .http_api_definition_repo
+    deps.http_api_definition_repo
         .create(
             env.revision.environment_id,
             definition_name,
@@ -1018,9 +1017,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        http_api_definitions: HttpApiDefinitionNameList(vec![HttpApiDefinitionName(
-            created_definition.name,
-        )]),
+        agent_types: AgentTypeSet([AgentTypeName("test-agent".to_string())].into()),
     }
     .with_updated_hash();
 
