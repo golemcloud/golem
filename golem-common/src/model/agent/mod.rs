@@ -159,6 +159,18 @@ pub struct AgentDependency {
     pub methods: Vec<AgentMethod>,
 }
 
+impl AgentDependency {
+    pub fn normalized(mut self) -> Self {
+        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            type_name: self.type_name,
+            description: self.description,
+            constructor: self.constructor,
+            methods: self.methods,
+        }
+    }
+}
+
 #[derive(Debug, Clone, BinaryCodec, IntoValue, FromValue)]
 pub enum AgentError {
     InvalidInput(String),
@@ -244,6 +256,20 @@ impl Display for AgentTypeName {
     }
 }
 
+impl FromStr for AgentTypeName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.to_string()))
+    }
+}
+
+impl AgentTypeName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(
     Debug,
     Clone,
@@ -272,6 +298,31 @@ pub struct AgentType {
 impl AgentType {
     pub fn wrapper_type_name(&self) -> String {
         self.type_name.0.to_wit_naming()
+    }
+
+    pub fn normalized(mut self) -> Self {
+        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
+        self.dependencies
+            .sort_by(|a, b| a.type_name.cmp(&b.type_name));
+
+        Self {
+            type_name: self.type_name,
+            description: self.description,
+            constructor: self.constructor,
+            methods: self.methods,
+            dependencies: self
+                .dependencies
+                .into_iter()
+                .map(AgentDependency::normalized)
+                .collect(),
+            mode: self.mode,
+            http_mount: self.http_mount,
+        }
+    }
+
+    pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
+        agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+        agent_types.into_iter().map(Self::normalized).collect()
     }
 }
 

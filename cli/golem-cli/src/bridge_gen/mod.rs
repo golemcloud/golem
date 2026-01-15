@@ -20,9 +20,10 @@ use golem_common::model::agent::{AgentType, DataSchema, ElementSchema};
 use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashSet, VecDeque};
 
-#[allow(dead_code)]
 pub trait BridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self;
+    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self
+    where
+        Self: Sized;
     fn generate(&self) -> anyhow::Result<()>;
 }
 
