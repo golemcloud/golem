@@ -557,20 +557,409 @@ impl RustBridgeGenerator {
     }
 
     fn schema_as_value(&self, schema: &DataSchema) -> TokenStream {
-        //                 golem_common::model::agent::DataSchema::Tuple(
-        //                     golem_common::model::agent::NamedElementSchemas {
-        //                         elements: vec![golem_common::model::agent::NamedElementSchema {
-        //                             name: "return".to_string(),
-        //                             schema: golem_common::model::agent::ElementSchema::ComponentModel(
-        //                                 golem_common::model::agent::ComponentModelElementSchema {
-        //                                     element_type: golem_wasm::analysis::analysed_type::f64(),
-        //                                 },
-        //                             ),
-        //                         }],
-        //                     },
-        //                 ),
+        let named_element_schemas = self.named_element_schemas_as_value(match schema {
+            DataSchema::Tuple(s) | DataSchema::Multimodal(s) => s,
+        });
+
+        match schema {
+            DataSchema::Tuple(_) => {
+                quote! {
+                    golem_common::model::agent::DataSchema::Tuple(#named_element_schemas)
+                }
+            }
+            DataSchema::Multimodal(_) => {
+                quote! {
+                    golem_common::model::agent::DataSchema::Multimodal(#named_element_schemas)
+                }
+            }
+        }
+    }
+
+    fn named_element_schemas_as_value(
+        &self,
+        schemas: &golem_common::model::agent::NamedElementSchemas,
+    ) -> TokenStream {
+        let elements = schemas
+            .elements
+            .iter()
+            .map(|elem| self.named_element_schema_as_value(elem))
+            .collect::<Vec<_>>();
+
         quote! {
-            todo!()
+            golem_common::model::agent::NamedElementSchemas {
+                elements: vec![#(#elements),*],
+            }
+        }
+    }
+
+    fn named_element_schema_as_value(
+        &self,
+        schema: &golem_common::model::agent::NamedElementSchema,
+    ) -> TokenStream {
+        let name = &schema.name;
+        let element_schema = self.element_schema_as_value(&schema.schema);
+
+        quote! {
+            golem_common::model::agent::NamedElementSchema {
+                name: #name.to_string(),
+                schema: #element_schema,
+            }
+        }
+    }
+
+    fn element_schema_as_value(&self, schema: &ElementSchema) -> TokenStream {
+        match schema {
+            ElementSchema::ComponentModel(cm_schema) => {
+                let element_type = self.analysed_type_as_value(&cm_schema.element_type);
+                quote! {
+                    golem_common::model::agent::ElementSchema::ComponentModel(
+                        golem_common::model::agent::ComponentModelElementSchema {
+                            element_type: #element_type,
+                        },
+                    )
+                }
+            }
+            ElementSchema::UnstructuredText(text_descriptor) => {
+                let restrictions = match &text_descriptor.restrictions {
+                    Some(text_types) => {
+                        let text_type_tokens = text_types
+                            .iter()
+                            .map(|tt| {
+                                let language_code = &tt.language_code;
+                                quote! {
+                                    golem_common::model::agent::TextType {
+                                        language_code: #language_code.to_string(),
+                                    }
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        quote! {
+                            Some(vec![#(#text_type_tokens),*])
+                        }
+                    }
+                    None => quote! { None },
+                };
+
+                quote! {
+                    golem_common::model::agent::ElementSchema::UnstructuredText(
+                        golem_common::model::agent::TextDescriptor {
+                            restrictions: #restrictions,
+                        },
+                    )
+                }
+            }
+            ElementSchema::UnstructuredBinary(binary_descriptor) => {
+                let restrictions = match &binary_descriptor.restrictions {
+                    Some(binary_types) => {
+                        let binary_type_tokens = binary_types
+                            .iter()
+                            .map(|bt| {
+                                let mime_type = &bt.mime_type;
+                                quote! {
+                                    golem_common::model::agent::BinaryType {
+                                        mime_type: #mime_type.to_string(),
+                                    }
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        quote! {
+                            Some(vec![#(#binary_type_tokens),*])
+                        }
+                    }
+                    None => quote! { None },
+                };
+
+                quote! {
+                    golem_common::model::agent::ElementSchema::UnstructuredBinary(
+                        golem_common::model::agent::BinaryDescriptor {
+                            restrictions: #restrictions,
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    fn analysed_type_as_value(&self, analysed_type: &AnalysedType) -> TokenStream {
+        match analysed_type {
+            AnalysedType::Variant(tv) => {
+                let name = &tv.name;
+                let owner = &tv.owner;
+                let cases = tv
+                    .cases
+                    .iter()
+                    .map(|case| {
+                        let case_name = &case.name;
+                        let case_type = case.typ.as_ref().map(|t| self.analysed_type_as_value(t));
+                        match case_type {
+                            Some(typ) => {
+                                quote! {
+                                    golem_wasm::analysis::NameOptionTypePair {
+                                        name: #case_name.to_string(),
+                                        typ: Some(Box::new(#typ)),
+                                    }
+                                }
+                            }
+                            None => {
+                                quote! {
+                                    golem_wasm::analysis::NameOptionTypePair {
+                                        name: #case_name.to_string(),
+                                        typ: None,
+                                    }
+                                }
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Variant(
+                        golem_wasm::analysis::TypeVariant {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            cases: vec![#(#cases),*],
+                        },
+                    )
+                }
+            }
+            AnalysedType::Result(tr) => {
+                let name = &tr.name;
+                let owner = &tr.owner;
+                let ok_type = tr.ok.as_ref().map(|t| self.analysed_type_as_value(t));
+                let err_type = tr.err.as_ref().map(|t| self.analysed_type_as_value(t));
+                let ok_tokens = match ok_type {
+                    Some(t) => quote! { Some(Box::new(#t)) },
+                    None => quote! { None },
+                };
+                let err_tokens = match err_type {
+                    Some(t) => quote! { Some(Box::new(#t)) },
+                    None => quote! { None },
+                };
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Result(
+                        golem_wasm::analysis::TypeResult {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            ok: #ok_tokens,
+                            err: #err_tokens,
+                        },
+                    )
+                }
+            }
+            AnalysedType::Option(to) => {
+                let name = &to.name;
+                let owner = &to.owner;
+                let inner = self.analysed_type_as_value(&to.inner);
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Option(
+                        golem_wasm::analysis::TypeOption {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            inner: Box::new(#inner),
+                        },
+                    )
+                }
+            }
+            AnalysedType::Enum(te) => {
+                let name = &te.name;
+                let owner = &te.owner;
+                let cases = &te.cases;
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Enum(
+                        golem_wasm::analysis::TypeEnum {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            cases: vec![#(#cases.to_string()),*],
+                        },
+                    )
+                }
+            }
+            AnalysedType::Flags(tf) => {
+                let name = &tf.name;
+                let owner = &tf.owner;
+                let names = &tf.names;
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Flags(
+                        golem_wasm::analysis::TypeFlags {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            names: vec![#(#names.to_string()),*],
+                        },
+                    )
+                }
+            }
+            AnalysedType::Record(tr) => {
+                let name = &tr.name;
+                let owner = &tr.owner;
+                let fields = tr
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let field_name = &field.name;
+                        let field_type = self.analysed_type_as_value(&field.typ);
+                        quote! {
+                            golem_wasm::analysis::NameTypePair {
+                                name: #field_name.to_string(),
+                                typ: #field_type,
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Record(
+                        golem_wasm::analysis::TypeRecord {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            fields: vec![#(#fields),*],
+                        },
+                    )
+                }
+            }
+            AnalysedType::Tuple(tt) => {
+                let name = &tt.name;
+                let owner = &tt.owner;
+                let items = tt
+                    .items
+                    .iter()
+                    .map(|item| self.analysed_type_as_value(item))
+                    .collect::<Vec<_>>();
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Tuple(
+                        golem_wasm::analysis::TypeTuple {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            items: vec![#(#items),*],
+                        },
+                    )
+                }
+            }
+            AnalysedType::List(tl) => {
+                let name = &tl.name;
+                let owner = &tl.owner;
+                let inner = self.analysed_type_as_value(&tl.inner);
+                quote! {
+                    golem_wasm::analysis::AnalysedType::List(
+                        golem_wasm::analysis::TypeList {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            inner: Box::new(#inner),
+                        },
+                    )
+                }
+            }
+            AnalysedType::Str(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Str(
+                        golem_wasm::analysis::TypeStr,
+                    )
+                }
+            }
+            AnalysedType::Chr(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Chr(
+                        golem_wasm::analysis::TypeChr,
+                    )
+                }
+            }
+            AnalysedType::F64(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::F64(
+                        golem_wasm::analysis::TypeF64,
+                    )
+                }
+            }
+            AnalysedType::F32(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::F32(
+                        golem_wasm::analysis::TypeF32,
+                    )
+                }
+            }
+            AnalysedType::U64(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::U64(
+                        golem_wasm::analysis::TypeU64,
+                    )
+                }
+            }
+            AnalysedType::S64(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::S64(
+                        golem_wasm::analysis::TypeS64,
+                    )
+                }
+            }
+            AnalysedType::U32(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::U32(
+                        golem_wasm::analysis::TypeU32,
+                    )
+                }
+            }
+            AnalysedType::S32(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::S32(
+                        golem_wasm::analysis::TypeS32,
+                    )
+                }
+            }
+            AnalysedType::U16(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::U16(
+                        golem_wasm::analysis::TypeU16,
+                    )
+                }
+            }
+            AnalysedType::S16(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::S16(
+                        golem_wasm::analysis::TypeS16,
+                    )
+                }
+            }
+            AnalysedType::U8(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::U8(
+                        golem_wasm::analysis::TypeU8,
+                    )
+                }
+            }
+            AnalysedType::S8(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::S8(
+                        golem_wasm::analysis::TypeS8,
+                    )
+                }
+            }
+            AnalysedType::Bool(_) => {
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Bool(
+                        golem_wasm::analysis::TypeBool,
+                    )
+                }
+            }
+            AnalysedType::Handle(th) => {
+                let name = &th.name;
+                let owner = &th.owner;
+                let resource_id = th.resource_id.0;
+                let mode = match th.mode {
+                    golem_wasm::analysis::AnalysedResourceMode::Owned => {
+                        quote! { golem_wasm::analysis::AnalysedResourceMode::Owned }
+                    }
+                    golem_wasm::analysis::AnalysedResourceMode::Borrowed => {
+                        quote! { golem_wasm::analysis::AnalysedResourceMode::Borrowed }
+                    }
+                };
+                quote! {
+                    golem_wasm::analysis::AnalysedType::Handle(
+                        golem_wasm::analysis::TypeHandle {
+                            name: #name.clone(),
+                            owner: #owner.clone(),
+                            resource_id: golem_wasm::analysis::AnalysedResourceId(#resource_id),
+                            mode: #mode,
+                        },
+                    )
+                }
+            }
         }
     }
 
