@@ -419,4 +419,12 @@ describe('validateHttpEndpoint', () => {
       'Method parameter "id" in method doThing of TestAgent is not provided by HTTP endpoint (path, query, or headers).',
     );
   });
+
+  it('endpoints with no mount details', () => {
+    const m = method(['id'], [endpoint(['id'])]);
+
+    expect(() => validateHttpEndpoint(agentName, m, undefined)).toThrow(
+      "Agent method 'doThing' of 'TestAgent' defines HTTP endpoints but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.",
+    );
+  });
 });

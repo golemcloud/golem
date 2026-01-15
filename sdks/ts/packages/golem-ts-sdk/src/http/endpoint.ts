@@ -37,7 +37,93 @@ export type EndpointDecoratorOptions = {
 };
 
 /**
- * Decorates a method as an HTTP endpoint for this agent.
+ * Marks a method as an HTTP-accessible endpoint for an agent.
+ *
+ * Only methods of classes decorated with `@agent()` and an optional HTTP mount
+ * can be annotated with `@endpoint()`. This decorator registers the method as
+ * an HTTP endpoint and allows it to receive path variables, header variables,
+ * query parameters, and apply authentication and CORS rules.
+ *
+ * ### Example: Basic GET Endpoint
+ * ```ts
+ * @agent({ mount: '/api' })
+ * class WeatherAgent {
+ *   constructor(apiKey: string) {}
+ *
+ *   @endpoint({ get: '/weather/{city}' })
+ *   getWeather(city: string): WeatherReport { ... }
+ * }
+ * ```
+ *
+ * ### Example: Multiple Endpoints for a Single Method
+ * You can decorate the same method with multiple HTTP endpoints.
+ * ```ts
+ * @endpoint({ get: '/weather/{city}' })
+ * @endpoint({ post: '/weather', headers: { 'X-City': 'city' } })
+ * getWeather(city: string): WeatherReport { ... }
+ * ```
+ *
+ * ### HTTP Methods
+ * - Specify **one** of `get`, `post`, `put`, `delete`, or `custom`.
+ * - The value of the option is the endpoint path.
+ * - Examples:
+ *   - Simple GET: `{ get: '/status' }`
+ *   - GET with path variables: `{ get: '/rooms/{roomId}/messages/{messageId}' }`
+ * - Path variables must exactly match method parameters.
+ * - No "foreign" path variables are allowed.
+ *
+ * ### Path Variables
+ * - Declared using `{variableName}` in the path.
+ * - Must correspond to a method parameter.
+ * - Example:
+ * ```ts
+ * getRoomMessage(@param roomId: string, @param messageId: string)
+ * @endpoint({ get: '/rooms/{roomId}/messages/{messageId}' })
+ * ```
+ *
+ * ### Header Variables
+ * - Map HTTP headers to method parameters using the `headers` option.
+ * - Example:
+ * ```ts
+ * @endpoint({
+ *   post: '/create',
+ *   headers: { 'X-Tenant': 'tenantId', 'X-Request-Id': 'requestId' }
+ * })
+ * createSomething(tenantId: string, requestId: string) { ... }
+ * ```
+ *
+ * ### Query Variables
+ * - Defined in the path using standard query syntax `?foo={bar}&limit={count}`.
+ * - Must match method parameters exactly.
+ * - Example:
+ * ```ts
+ * @endpoint({ get: '/search?query={q}&limit={n}' })
+ * search(q: string, n: number) { ... }
+ * ```
+ *
+ * ### CORS
+ * - Use the `cors` option to allow cross-origin requests.
+ * - Example: `cors: ['https://app.acme.com']` or `cors: ['*']` to allow all origins.
+ *
+ * ### Authentication
+ * - `auth: true` requires the request to be authenticated.
+ * - Example:
+ * ```ts
+ * @endpoint({ get: '/secure-data', auth: true })
+ * getSecureData(userId: string) { ... }
+ * ```
+ *
+ * ### Errors / Validation
+ * This decorator will throw an error if:
+ * - No HTTP method is specified.
+ * - Path does not start with `/`.
+ * - Path contains query parameters (`?`) when using the path property.
+ * - Path or header variables do not exist on the method parameters.
+ *
+ * ### Notes
+ * - Methods can be decorated multiple times to expose different HTTP routes.
+ * - Path, header, and query variables are strictly validated against method parameters.
+ * - See `EndpointDecoratorOptions` for all available configuration options.
  */
 export function endpoint(opts: EndpointDecoratorOptions) {
   return function (

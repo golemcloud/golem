@@ -43,7 +43,7 @@ export function validateHttpEndpoint(
 
   if (!httpMountDetails && agentMethod.httpEndpoint.length > 0) {
     throw new Error(
-      `Agent method ${agentMethod.name} of ${agentClassName} defines HTTP endpoints ` +
+      `Agent method '${agentMethod.name}' of '${agentClassName}' defines HTTP endpoints ` +
         `but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.`,
     );
   }
