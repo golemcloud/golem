@@ -17,7 +17,7 @@ import { getHttpMountDetails } from '../src/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/http/query';
 
-describe('http mount tests', () => {
+describe('getHttpMountDetails – basic behavior', () => {
   it('returns undefined when mount is not provided', () => {
     const result = getHttpMountDetails({});
     expect(result).toBeUndefined();
@@ -41,7 +41,9 @@ describe('http mount tests', () => {
     expect(result.corsOptions.allowedPatterns).toEqual([]);
     expect(result.webhookSuffix).toEqual([]);
   });
+});
 
+describe('getHttpMountDetails – path variables', () => {
   it('parses system and user path variables', () => {
     const opts: AgentDecoratorOptions = {
       mount: '/v{agent-version}/chats/{chatId}',
@@ -69,7 +71,9 @@ describe('http mount tests', () => {
       },
     ]);
   });
+});
 
+describe('getHttpMountDetails – header variables', () => {
   it('parses header variables', () => {
     const opts: AgentDecoratorOptions = {
       mount: '/chats',
@@ -128,7 +132,7 @@ describe('getHttpMountDetails – webhook suffix', () => {
   });
 });
 
-describe('invalid http mount ', () => {
+describe('getHttpMountDetails – validation errors', () => {
   it('rejects mount with query parameters', () => {
     expect(() => getHttpMountDetails({ mount: '/chats?id={chatId}' })).toThrow(
       'HTTP mount must not contain query parameters',
@@ -163,11 +167,13 @@ describe('invalid http mount ', () => {
   });
 });
 
-test('parse query parameters', () => {
-  const result = parseQuery('foo={bar}&limit={limit}')!;
+describe('parseQuery', () => {
+  it('parses query variables', () => {
+    const result = parseQuery('foo={bar}&limit={limit}');
 
-  expect(result).toEqual([
-    { queryParamName: 'foo', variableName: 'bar' },
-    { queryParamName: 'limit', variableName: 'limit' },
-  ]);
+    expect(result).toEqual([
+      { queryParamName: 'foo', variableName: 'bar' },
+      { queryParamName: 'limit', variableName: 'limit' },
+    ]);
+  });
 });
