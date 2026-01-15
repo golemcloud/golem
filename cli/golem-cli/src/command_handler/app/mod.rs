@@ -764,7 +764,7 @@ impl AppCommandHandler {
                 diffable_local_http_api_deployments.insert(
                     domain.0.clone(),
                     diff::HttpApiDeployment {
-                        apis: http_api_deployment
+                        agent_types: http_api_deployment
                             .iter()
                             .map(|def| def.0.clone())
                             .collect(),
