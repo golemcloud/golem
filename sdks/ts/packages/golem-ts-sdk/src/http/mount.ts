@@ -28,14 +28,8 @@ export function getHttpMountDetails(
 ): HttpMountDetails | undefined {
   if (!agentDecoratorOptions?.mount) return undefined;
 
-  rejectQueryParamsInPath(
-    agentDecoratorOptions.mount,
-    `HTTP 'mount' must not contain query parameters`,
-  );
-  rejectEmptyString(
-    agentDecoratorOptions.mount,
-    "HTTP 'mount' cannot be an empty string",
-  );
+  rejectQueryParamsInPath(agentDecoratorOptions.mount, 'mount');
+  rejectEmptyString(agentDecoratorOptions.mount, 'mount');
 
   const pathPrefix = parsePath(agentDecoratorOptions.mount);
   const headerVars = parseHeaderVars(agentDecoratorOptions.headers);
@@ -58,12 +52,9 @@ export function getHttpMountDetails(
 function parseWebhook(webhook?: string): PathSegment[] {
   if (!webhook) return [];
 
-  rejectQueryParamsInPath(
-    webhook,
-    `HTTP 'webhookSuffix' must not contain query parameters`,
-  );
+  rejectQueryParamsInPath(webhook, 'webhook suffix');
 
-  rejectEmptyString(webhook, "HTTP 'webhookSuffix' cannot be an empty string");
+  rejectEmptyString(webhook, 'webhook suffix');
 
   return parsePath(webhook);
 }
@@ -72,8 +63,8 @@ function parseHeaderVars(headers?: HeaderVariables): HeaderVariable[] {
   if (!headers) return [];
 
   return Object.entries(headers).map(([headerName, variableName]) => {
-    rejectEmptyString(variableName, 'Header variable name cannot be empty');
-    rejectEmptyString(headerName, 'Header name cannot be empty');
+    rejectEmptyString(variableName, 'header value name');
+    rejectEmptyString(headerName, 'header variable name');
 
     return {
       headerName,

@@ -131,7 +131,7 @@ describe('getHttpMountDetails – webhook suffix', () => {
 describe('invalid http mount ', () => {
   it('rejects mount with query parameters', () => {
     expect(() => getHttpMountDetails({ mount: '/chats?id={chatId}' })).toThrow(
-      "HTTP 'mount' must not contain query parameters",
+      'HTTP mount must not contain query parameters',
     );
   });
 
@@ -141,7 +141,7 @@ describe('invalid http mount ', () => {
         mount: '/chats',
         webhookSuffix: '/hook?event={event}',
       }),
-    ).toThrow("HTTP 'webhookSuffix' must not contain query parameters");
+    ).toThrow('HTTP webhook suffix must not contain query parameters');
   });
 
   it('rejects mount without leading slash', () => {

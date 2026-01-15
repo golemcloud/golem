@@ -56,7 +56,7 @@ function parseSegment(segment: string): PathSegment {
           val: name,
         });
       } else {
-        rejectEmptyString(name, `Path variable name cannot be an empty string`);
+        rejectEmptyString(name, 'path variable');
 
         nodes.push({
           tag: 'path-variable',
