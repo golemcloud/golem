@@ -901,6 +901,26 @@ describe('Http Agent class', () => {
           },
         ],
       },
+      {
+        concat: [
+          {
+            tag: 'path-variable',
+            val: {
+              variableName: 'foo',
+            },
+          },
+        ],
+      },
+      {
+        concat: [
+          {
+            tag: 'path-variable',
+            val: {
+              variableName: 'bar',
+            },
+          },
+        ],
+      },
     ];
 
     const expectedWebhookSuffix = [
@@ -920,6 +940,26 @@ describe('Http Agent class', () => {
           },
         ],
       },
+      {
+        concat: [
+          {
+            tag: 'path-variable',
+            val: {
+              variableName: 'foo',
+            },
+          },
+        ],
+      },
+      {
+        concat: [
+          {
+            tag: 'path-variable',
+            val: {
+              variableName: 'bar',
+            },
+          },
+        ],
+      },
     ];
 
     expect(simpleHttpAgent.httpMount).toBeDefined();
@@ -927,8 +967,8 @@ describe('Http Agent class', () => {
       pathPrefix: expectedPathPrefix,
       queryVars: [],
       headerVars: [
-        { headerName: 'X-Foo', variableName: 'FooValue' },
-        { headerName: 'X-Bar', variableName: 'BarValue' },
+        { headerName: 'X-Foo', variableName: 'foo' },
+        { headerName: 'X-Bar', variableName: 'bar' },
       ],
       authDetails: { required: true },
       phantomAgent: false,
