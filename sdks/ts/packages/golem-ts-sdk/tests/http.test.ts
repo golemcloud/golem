@@ -16,6 +16,8 @@ import { describe, it } from 'vitest';
 import { getHttpMountDetails } from '../src/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/http/query';
+import { HttpMountDetails } from 'golem:agent/common';
+import { validateHttpMountWithConstructor } from '../src/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
   it('returns undefined when mount is not provided', () => {
@@ -175,5 +177,82 @@ describe('parseQuery', () => {
       { queryParamName: 'foo', variableName: 'bar' },
       { queryParamName: 'limit', variableName: 'limit' },
     ]);
+  });
+});
+
+describe('validateHttpMountWithConstructor', () => {
+  function mount(
+    pathVars: string[] = [],
+    headerVars: string[] = [],
+  ): HttpMountDetails {
+    return {
+      pathPrefix: pathVars.map((v) => ({
+        concat: [{ tag: 'path-variable', val: { variableName: v } }],
+      })),
+      headerVars: headerVars.map((v) => ({
+        headerName: `X-${v}`,
+        variableName: v,
+      })),
+      queryVars: [],
+      authDetails: { required: false },
+      phantomAgent: false,
+      corsOptions: { allowedPatterns: [] },
+      webhookSuffix: [],
+    };
+  }
+
+  function constructorVars(...names: string[]) {
+    return {
+      inputSchema: {
+        val: names.map((n) => [n, {}]),
+      },
+    } as any;
+  }
+
+  it('passes when all constructor variables are provided via path variables', () => {
+    const agentMount = mount(['chatId', 'userId']);
+    const agentConstructor = constructorVars('chatId', 'userId');
+
+    expect(() =>
+      validateHttpMountWithConstructor(agentMount, agentConstructor),
+    ).not.toThrow();
+  });
+
+  it('passes when all constructor variables are provided via header variables', () => {
+    const agentMount = mount([], ['tenant', 'requestId']);
+    const agentConstructor = constructorVars('tenant', 'requestId');
+
+    expect(() =>
+      validateHttpMountWithConstructor(agentMount, agentConstructor),
+    ).not.toThrow();
+  });
+
+  it('passes when constructor variables are split across path and headers', () => {
+    const agentMount = mount(['chatId'], ['tenant']);
+    const agentConstructor = constructorVars('chatId', 'tenant');
+
+    expect(() =>
+      validateHttpMountWithConstructor(agentMount, agentConstructor),
+    ).not.toThrow();
+  });
+
+  it('fails when a constructor variable is not provided by the mount', () => {
+    const agentMount = mount(['chatId'], ['tenant']);
+    const agentConstructor = constructorVars('chatId', 'tenant', 'userId');
+
+    expect(() =>
+      validateHttpMountWithConstructor(agentMount, agentConstructor),
+    ).toThrow(
+      'Agent constructor variable "userId" is not provided by the HTTP mount (path or headers).',
+    );
+  });
+
+  it('passes when the constructor has no variables', () => {
+    const agentMount = mount(['chatId'], ['tenant']);
+    const agentConstructor = constructorVars();
+
+    expect(() =>
+      validateHttpMountWithConstructor(agentMount, agentConstructor),
+    ).not.toThrow();
   });
 });
