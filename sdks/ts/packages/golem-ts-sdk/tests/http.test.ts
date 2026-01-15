@@ -286,12 +286,25 @@ describe('validateHttpMountWithConstructor', () => {
     );
   });
 
-  it('passes when the constructor has no variables', () => {
-    const agentMount = mount(['chatId'], ['tenant']);
+  it('fails when the mount refers to the path variables that are not part of the constructor', () => {
+    const agentMount = mount(['chatId']);
     const agentConstructor = constructorVars();
 
     expect(() =>
       validateHttpMountWithConstructor(agentMount, agentConstructor),
-    ).not.toThrow();
+    ).toThrow(
+      'HTTP mount path variable "chatId" (in path segment 0) is not defined in the agent constructor.',
+    );
+  });
+
+  it('fails when the mount refers to the header variables that are not part of the constructor', () => {
+    const agentMount = mount([], ['tenant']);
+    const agentConstructor = constructorVars();
+
+    expect(() =>
+      validateHttpMountWithConstructor(agentMount, agentConstructor),
+    ).toThrow(
+      'HTTP mount header variable "tenant" (from header "X-tenant") is not defined in the agent constructor.',
+    );
   });
 });

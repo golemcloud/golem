@@ -32,16 +32,59 @@ export function validateHttpMountWithConstructor(
   agentMount: HttpMountDetails,
   agentConstructor: AgentConstructor,
 ) {
-  const constructorVars = new Set(
-    agentConstructor.inputSchema.val.map(([name]) => name),
-  );
+  const constructorVars = collectConstructorVars(agentConstructor);
 
+  validateMountVariablesExistInConstructor(agentMount, constructorVars);
+  validateConstructorVarsAreSatisfied(agentMount, constructorVars);
+}
+
+function collectConstructorVars(
+  agentConstructor: AgentConstructor,
+): Set<string> {
+  return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
+}
+
+function validateMountVariablesExistInConstructor(
+  agentMount: HttpMountDetails,
+  constructorVars: Set<string>,
+) {
+  for (const { headerName, variableName } of agentMount.headerVars) {
+    if (!constructorVars.has(variableName)) {
+      throw new Error(
+        `HTTP mount header variable "${variableName}" (from header "${headerName}") ` +
+          `is not defined in the agent constructor.`,
+      );
+    }
+  }
+
+  for (const [segmentIndex, segment] of agentMount.pathPrefix.entries()) {
+    for (const node of segment.concat) {
+      if (node.tag === 'path-variable') {
+        const variableName = node.val.variableName;
+
+        if (!constructorVars.has(variableName)) {
+          throw new Error(
+            `HTTP mount path variable "${variableName}" ` +
+              `(in path segment ${segmentIndex}) ` +
+              `is not defined in the agent constructor.`,
+          );
+        }
+      }
+    }
+  }
+}
+
+function validateConstructorVarsAreSatisfied(
+  agentMount: HttpMountDetails,
+  constructorVars: Set<string>,
+) {
   const providedVars = collectHttpMountVariables(agentMount);
 
   for (const constructorVar of constructorVars) {
     if (!providedVars.has(constructorVar)) {
       throw new Error(
-        `Agent constructor variable "${constructorVar}" is not provided by the HTTP mount (path or headers).`,
+        `Agent constructor variable "${constructorVar}" ` +
+          `is not provided by the HTTP mount (path or headers).`,
       );
     }
   }
