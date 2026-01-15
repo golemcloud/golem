@@ -16,7 +16,7 @@ use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{AgentMethod, AgentType, DataSchema, ElementSchema, TextType};
+use golem_common::model::agent::{AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, TextType};
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -36,6 +36,7 @@ pub struct RustBridgeGenerator {
     testing: bool,
 
     generated_language_enums: BTreeMap<Vec<TextType>, String>,
+    generated_mimetypes_enums: BTreeMap<Vec<BinaryType>, String>,
 }
 
 // TODO: convert panics to error results
@@ -47,6 +48,7 @@ impl BridgeGenerator for RustBridgeGenerator {
             testing,
 
             generated_language_enums: BTreeMap::new(),
+            generated_mimetypes_enums: BTreeMap::new(),
         }
     }
 
@@ -176,6 +178,7 @@ impl RustBridgeGenerator {
         let global_config = self.global_config();
 
         let languages = self.languages_module();
+        let mimetypes = self.mimetypes_module();
 
         let tokens = quote! {
             use golem_wasm::{FromValueAndType, IntoValueAndType};
@@ -249,6 +252,8 @@ impl RustBridgeGenerator {
             #global_config
 
             #languages
+
+            #mimetypes
         };
 
         Ok(tokens)
@@ -281,7 +286,6 @@ impl RustBridgeGenerator {
                 let mut result = Vec::new();
                 for element in &elements.elements {
                     let name = Ident::new(&to_rust_ident(&element.name), Span::call_site());
-                    let typ = self.element_schema_to_typeref(&element.schema);
                     result.push(quote! {#name});
                 }
                 result
@@ -306,6 +310,23 @@ impl RustBridgeGenerator {
         }
     }
 
+    fn get_mimetypes_enum(
+        &mut self,
+        restrictions: &[BinaryType],
+    ) -> TokenStream {
+        let restrictions = restrictions.to_vec();
+        if let Some(existing) = self.generated_mimetypes_enums.get(&restrictions) {
+            let ident = Ident::new(existing, Span::call_site());
+            quote! { crate::mimetypes::#ident }
+        } else {
+            let counter = self.generated_mimetypes_enums.len();
+            let ident = Ident::new(&format!("Mimetypes{}", counter), Span::call_site());
+            self.generated_mimetypes_enums
+                .insert(restrictions.clone(), ident.to_string());
+            quote! { crate::mimetypes::#ident }
+        }
+    }
+
     fn element_schema_to_typeref(&mut self, element_schema: &ElementSchema) -> TokenStream {
         match element_schema {
             ElementSchema::ComponentModel(schema) => self.wit_type_to_typeref(&schema.element_type),
@@ -318,7 +339,7 @@ impl RustBridgeGenerator {
                 }
             }
             ElementSchema::UnstructuredBinary(descriptor) => {
-                if let Some(restrictions) = descriptor.restrictions {
+                if let Some(restrictions) = &descriptor.restrictions {
                     let mimetypes_enum = self.get_mimetypes_enum(restrictions);
                     quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum> }
                 } else {
@@ -330,7 +351,7 @@ impl RustBridgeGenerator {
 
     fn wit_type_to_typeref(&self, typ: &AnalysedType) -> TokenStream {
         if let Some(name) = typ.name() {
-            let name = Ident::new(&to_rust_ident(&name), Span::call_site());
+            let name = Ident::new(&to_rust_ident(&name.to_upper_camel_case()), Span::call_site());
             quote! { #name }
         } else {
             match typ {
@@ -419,11 +440,19 @@ impl RustBridgeGenerator {
                     .elements
                     .iter()
                     .map(|named_element| {
-                        // TODO: support unstructured text/binary
-
                         let name =
                             Ident::new(&to_rust_ident(&named_element.name), Span::call_site());
-                        quote! { golem_common::model::agent::ElementValue::ComponentModel(#name.into_value_and_type()) }
+                        match &named_element.schema {
+                            ElementSchema::ComponentModel(_) => {
+                                quote! { golem_common::model::agent::ElementValue::ComponentModel(#name.into_value_and_type()) }
+                            }
+                            ElementSchema::UnstructuredText(_) => {
+                                quote! { golem_common::model::agent::ElementValue::UnstructuredText(#name) }
+                            }
+                            ElementSchema::UnstructuredBinary(_) => {
+                                quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(#name) }
+                            }
+                        }
                     })
                     .collect::<Vec<_>>();
 
@@ -1133,64 +1162,71 @@ impl RustBridgeGenerator {
         }
     }
 
+    fn mimetypes_module(&self) -> TokenStream {
+        if self.generated_mimetypes_enums.is_empty() {
+            quote! {}
+        } else {
+            let mut mimetypes_enums = Vec::new();
+
+            for (types, name) in &self.generated_mimetypes_enums {
+                let ident = Ident::new(name, Span::call_site());
+
+                let mut cases = Vec::new();
+                let mut code_strings = Vec::new();
+                let mut from_match_cases = Vec::new();
+                let mut to_match_cases = Vec::new();
+
+                for typ in types {
+                    let enum_variant_ident = Ident::new(
+                        &to_rust_ident(&typ.mime_type).to_upper_camel_case(),
+                        Span::call_site(),
+                    );
+                    let lit = Lit::Str(LitStr::new(&typ.mime_type, Span::call_site()));
+
+                    cases.push(quote! { #enum_variant_ident });
+                    code_strings.push(quote! { #lit });
+                    from_match_cases.push(quote! { #lit => Some(Self::#enum_variant_ident) });
+                    to_match_cases.push(quote! { Self::#enum_variant_ident => #lit.to_string() });
+                }
+
+                mimetypes_enums.push(quote! {
+                    pub enum #ident {
+                        #(#cases),*
+                    }
+
+                    impl golem_wasm::agentic::unstructured_binary::AllowedMimeTypes for #ident {
+                        fn all() -> &'static [&'static str] {
+                            &[#(#code_strings),*]
+                        }
+
+                        fn from_string(mime_type: &str) -> Option<Self>
+                        where
+                            Self: Sized {
+                            match mime_type {
+                                #(#from_match_cases),*
+                                _ => None,
+                            }
+                        }
+
+                        fn to_string(&self) -> String {
+                            match self {
+                                #(#to_match_cases),*
+                            }
+                        }
+                    }
+                });
+            }
+
+            quote! {
+                pub mod mimetypes {
+                    #(#mimetypes_enums)*
+                }
+            }
+        }
+    }
+
     /// Helper to generate the package name from the agent type name
     fn package_name(&self) -> String {
         format!("{}_client", self.agent_type.type_name.0.to_snake_case())
     }
 }
-
-//     async fn __increment(
-//         &self,
-//         mode: golem_client::model::AgentInvocationMode,
-//         when: Option<chrono::DateTime<chrono::Utc>>,
-//     ) -> Result<Option<f64>, golem_client::bridge::ClientError> {
-//         let typed_method_parameters = golem_common::model::agent::DataValue::Tuple(
-//             golem_common::model::agent::ElementValues { elements: vec![] },
-//         );
-//         let method_parameters: golem_common::model::agent::UntypedJsonDataValue =
-//             typed_method_parameters.into();
-//         let response = self
-//             .invoke("increment", method_parameters, mode, when)
-//             .await?;
-//         if let Some(untyped_data_value) = response {
-//             let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
-//                 untyped_data_value,
-//                 golem_common::model::agent::DataSchema::Tuple(
-//                     golem_common::model::agent::NamedElementSchemas {
-//                         elements: vec![golem_common::model::agent::NamedElementSchema {
-//                             name: "return".to_string(),
-//                             schema: golem_common::model::agent::ElementSchema::ComponentModel(
-//                                 golem_common::model::agent::ComponentModelElementSchema {
-//                                     element_type: golem_wasm::analysis::analysed_type::f64(),
-//                                 },
-//                             ),
-//                         }],
-//                     },
-//                 ),
-//             )
-//             .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
-//                 message: format!("Failed to decode result value: {err}"),
-//             })?;
-//             match typed_data_value {
-//                 golem_common::model::agent::DataValue::Tuple(element_values) => {
-//                     match element_values.elements.get(0) {
-//                         Some(golem_common::model::agent::ElementValue::ComponentModel(vnt)) => {
-//                             Ok(Some(f64::from_value_and_type(vnt.clone()).map_err(
-//                                 |err| golem_client::bridge::ClientError::InvocationFailed {
-//                                     message: format!("Failed to decode result value: {err}"),
-//                                 },
-//                             )?))
-//                         }
-//                         _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-//                             message: format!("Failed to decode result value"),
-//                         })?,
-//                     }
-//                 }
-//                 _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-//                     message: format!("Failed to decode result value"),
-//                 })?,
-//             }
-//         } else {
-//             Ok(None)
-//         }
-//     }

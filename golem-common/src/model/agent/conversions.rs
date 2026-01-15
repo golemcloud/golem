@@ -24,11 +24,10 @@ use crate::model::agent::{
     ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
     RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
-    UntypedElementValue, UntypedJsonDataValue, UntypedJsonElementValue, Url,
+    UntypedElementValue, Url,
 };
 use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{Value, ValueAndType};
 
 impl From<super::bindings::golem::agent::common::AgentMode> for AgentMode {
