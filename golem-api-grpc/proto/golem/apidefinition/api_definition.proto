@@ -29,7 +29,7 @@ message CompiledRoutes {
 
 message CompiledRoute {
    golem.component.HttpMethod method = 1;
-   repeated golem.component.PathSegmentNode path = 2;
+   repeated golem.component.PathSegment path = 2;
    repeated golem.component.HeaderVariable header_vars = 3;
    repeated golem.component.QueryVariable query_vars = 4;
    RouteBehaviour behaviour = 5;

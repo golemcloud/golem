@@ -15,7 +15,7 @@
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    CorsOptions, HeaderVariable, HttpMethod, PathSegmentNode, QueryVariable,
+    CorsOptions, HeaderVariable, HttpMethod, PathSegment, QueryVariable,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
@@ -32,7 +32,7 @@ pub struct UnboundCompiledRoute {
     pub domain: Domain,
     pub route_id: i32,
     pub method: HttpMethod,
-    pub path: Vec<PathSegmentNode>,
+    pub path: Vec<PathSegment>,
     pub header_vars: Vec<HeaderVariable>,
     pub query_vars: Vec<QueryVariable>,
     pub behaviour: RouteBehaviour,
@@ -59,7 +59,7 @@ pub struct CompiledRoutesForDomain {
 #[derive(Debug, Clone)]
 pub struct MaybeDisabledCompiledRoute {
     pub method: HttpMethod,
-    pub path: Vec<PathSegmentNode>,
+    pub path: Vec<PathSegment>,
     pub header_vars: Vec<HeaderVariable>,
     pub query_vars: Vec<QueryVariable>,
     pub behavior: RouteBehaviour,

@@ -511,16 +511,9 @@ impl DeploymentContext {
                     method: http_endpoint.http_method.clone(),
                     path: http_mount
                         .path_prefix
-                        .clone()
-                        .into_iter()
-                        .flat_map(|p| p.concat)
-                        .chain(
-                            http_endpoint
-                                .path_suffix
-                                .clone()
-                                .into_iter()
-                                .flat_map(|p| p.concat),
-                        )
+                        .iter()
+                        .cloned()
+                        .chain(http_endpoint.path_suffix.iter().cloned())
                         .collect(),
                     header_vars,
                     query_vars,

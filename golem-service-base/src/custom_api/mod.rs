@@ -21,8 +21,7 @@ pub mod rib_compiler;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentTypeName, CorsOptions, DataSchema, HeaderVariable, HttpMethod, PathSegmentNode,
-    QueryVariable,
+    AgentTypeName, CorsOptions, DataSchema, HeaderVariable, HttpMethod, PathSegment, QueryVariable,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -43,7 +42,7 @@ pub struct CompiledRoutes {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRoute {
     pub method: HttpMethod,
-    pub path: Vec<PathSegmentNode>,
+    pub path: Vec<PathSegment>,
     pub header_vars: Vec<HeaderVariable>,
     pub query_vars: Vec<QueryVariable>,
     pub behavior: RouteBehaviour,
