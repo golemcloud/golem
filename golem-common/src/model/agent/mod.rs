@@ -218,7 +218,7 @@ impl Display for AgentError {
     FromValue,
     poem_openapi::Object,
 )]
-#[desert(evolution(FieldAdded("http_endpoint", Vec::new())))]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethod {
@@ -282,7 +282,7 @@ impl AgentTypeName {
     FromValue,
     poem_openapi::Object,
 )]
-#[desert(evolution(FieldAdded("http_mount", None)))]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {

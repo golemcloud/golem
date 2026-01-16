@@ -1,6 +1,21 @@
+DELETE FROM deployment_registered_agent_types;
+DELETE FROM deployment_compiled_http_api_definition_routes;
+DELETE FROM deployment_domain_http_api_definitions;
 DELETE FROM deployment_http_api_deployment_revisions;
+DELETE FROM deployment_http_api_definition_revisions;
+DELETE FROM deployment_component_revisions;
+DELETE FROM current_deployments;
+DELETE FROM current_deployment_revisions;
+DELETE FROM deployment_revisions;
 DELETE FROM http_api_deployment_revisions;
 DELETE FROM http_api_deployments;
+DELETE FROM http_api_definition_revisions;
+DELETE FROM http_api_definitions;
+DELETE FROM original_component_files;
+DELETE FROM component_files;
+DELETE FROM component_plugin_installations;
+DELETE FROM component_revisions;
+DELETE FROM components;
 
 ALTER TABLE http_api_deployment_revisions RENAME COLUMN http_api_definitions TO agent_types;
 
