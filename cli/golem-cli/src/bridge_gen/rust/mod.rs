@@ -16,7 +16,9 @@ use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, TextType};
+use golem_common::model::agent::{
+    AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, TextType,
+};
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -310,10 +312,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn get_mimetypes_enum(
-        &mut self,
-        restrictions: &[BinaryType],
-    ) -> TokenStream {
+    fn get_mimetypes_enum(&mut self, restrictions: &[BinaryType]) -> TokenStream {
         let restrictions = restrictions.to_vec();
         if let Some(existing) = self.generated_mimetypes_enums.get(&restrictions) {
             let ident = Ident::new(existing, Span::call_site());
@@ -343,7 +342,7 @@ impl RustBridgeGenerator {
                     let mimetypes_enum = self.get_mimetypes_enum(restrictions);
                     quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum> }
                 } else {
-                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary }
+                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> }
                 }
             }
         }
@@ -351,7 +350,10 @@ impl RustBridgeGenerator {
 
     fn wit_type_to_typeref(&self, typ: &AnalysedType) -> TokenStream {
         if let Some(name) = typ.name() {
-            let name = Ident::new(&to_rust_ident(&name.to_upper_camel_case()), Span::call_site());
+            let name = Ident::new(
+                &to_rust_ident(&name).to_upper_camel_case(),
+                Span::call_site(),
+            );
             quote! { #name }
         } else {
             match typ {
@@ -447,10 +449,10 @@ impl RustBridgeGenerator {
                                 quote! { golem_common::model::agent::ElementValue::ComponentModel(#name.into_value_and_type()) }
                             }
                             ElementSchema::UnstructuredText(_) => {
-                                quote! { golem_common::model::agent::ElementValue::UnstructuredText(#name) }
+                                quote! { golem_common::model::agent::ElementValue::UnstructuredText(#name.into_text_reference()) }
                             }
                             ElementSchema::UnstructuredBinary(_) => {
-                                quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(#name) }
+                                quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(#name.into_binary_reference()) }
                             }
                         }
                     })
@@ -748,8 +750,22 @@ impl RustBridgeGenerator {
     fn analysed_type_as_value(&self, analysed_type: &AnalysedType) -> TokenStream {
         match analysed_type {
             AnalysedType::Variant(tv) => {
-                let name = &tv.name;
-                let owner = &tv.owner;
+                let name = tv
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = tv
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let cases = tv
                     .cases
                     .iter()
@@ -787,8 +803,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::Result(tr) => {
-                let name = &tr.name;
-                let owner = &tr.owner;
+                let name = tr
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = tr
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let ok_type = tr.ok.as_ref().map(|t| self.analysed_type_as_value(t));
                 let err_type = tr.err.as_ref().map(|t| self.analysed_type_as_value(t));
                 let ok_tokens = match ok_type {
@@ -811,8 +841,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::Option(to) => {
-                let name = &to.name;
-                let owner = &to.owner;
+                let name = to
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = to
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let inner = self.analysed_type_as_value(&to.inner);
                 quote! {
                     golem_wasm::analysis::AnalysedType::Option(
@@ -825,8 +869,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::Enum(te) => {
-                let name = &te.name;
-                let owner = &te.owner;
+                let name = te
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = te
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let cases = &te.cases;
                 quote! {
                     golem_wasm::analysis::AnalysedType::Enum(
@@ -839,8 +897,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::Flags(tf) => {
-                let name = &tf.name;
-                let owner = &tf.owner;
+                let name = tf
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = tf
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let names = &tf.names;
                 quote! {
                     golem_wasm::analysis::AnalysedType::Flags(
@@ -853,8 +925,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::Record(tr) => {
-                let name = &tr.name;
-                let owner = &tr.owner;
+                let name = tr
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = tr
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let fields = tr
                     .fields
                     .iter()
@@ -880,8 +966,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::Tuple(tt) => {
-                let name = &tt.name;
-                let owner = &tt.owner;
+                let name = tt
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = tt
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let items = tt
                     .items
                     .iter()
@@ -898,8 +998,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::List(tl) => {
-                let name = &tl.name;
-                let owner = &tl.owner;
+                let name = tl
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = tl
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let inner = self.analysed_type_as_value(&tl.inner);
                 quote! {
                     golem_wasm::analysis::AnalysedType::List(
@@ -1003,8 +1117,22 @@ impl RustBridgeGenerator {
                 }
             }
             AnalysedType::Handle(th) => {
-                let name = &th.name;
-                let owner = &th.owner;
+                let name = th
+                    .name
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
+                let owner = th
+                    .owner
+                    .as_ref()
+                    .map(|n| {
+                        let lit = Lit::Str(LitStr::new(n, Span::call_site()));
+                        quote! { Some(#lit.to_string()) }
+                    })
+                    .unwrap_or_else(|| quote! { None });
                 let resource_id = th.resource_id.0;
                 let mode = match th.mode {
                     golem_wasm::analysis::AnalysedResourceMode::Owned => {

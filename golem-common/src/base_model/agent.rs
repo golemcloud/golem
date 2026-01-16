@@ -15,6 +15,8 @@
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::model::Empty;
 use async_trait::async_trait;
+use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
+use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{Value, ValueAndType};
@@ -89,7 +91,9 @@ pub enum AgentMode {
     Ephemeral = 1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -125,7 +129,9 @@ pub struct TextDescriptor {
     pub restrictions: Option<Vec<TextType>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -862,4 +868,45 @@ pub struct AgentHttpAuthContext {
     pub picture: Option<String>,
     pub preferred_username: Option<String>,
     pub claims: String,
+}
+
+pub trait UnstructuredTextExtensions {
+    fn into_text_reference(self) -> TextReference;
+}
+
+pub trait UnstructuredBinaryExtensions {
+    fn into_binary_reference(self) -> BinaryReference;
+}
+
+impl<LC: AllowedLanguages> UnstructuredTextExtensions for UnstructuredText<LC> {
+    fn into_text_reference(self) -> TextReference {
+        match self {
+            UnstructuredText::Url(url) => TextReference::Url(Url { value: url }),
+            UnstructuredText::Text {
+                text,
+                language_code,
+            } => TextReference::Inline(TextSource {
+                data: text,
+                text_type: language_code.map(|lc| TextType {
+                    language_code: lc.to_language_code().to_string(),
+                }),
+            }),
+        }
+    }
+}
+
+impl<MT: AllowedMimeTypes> UnstructuredBinaryExtensions for UnstructuredBinary<MT> {
+    fn into_binary_reference(self) -> BinaryReference {
+        match self {
+            UnstructuredBinary::Url(url) => BinaryReference::Url(Url { value: url }),
+            UnstructuredBinary::Inline { data, mime_type } => {
+                BinaryReference::Inline(BinarySource {
+                    data,
+                    binary_type: BinaryType {
+                        mime_type: mime_type.to_string(),
+                    },
+                })
+            }
+        }
+    }
 }

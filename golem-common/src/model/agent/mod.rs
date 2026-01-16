@@ -44,7 +44,6 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{
     parse_value_and_type, print_value_and_type, FromValue, IntoValue, IntoValueAndType, Value,
     ValueAndType,
