@@ -357,33 +357,106 @@ impl RustBridgeGenerator {
     }
 
     fn wit_type_to_typedef(&mut self, typ: &AnalysedType) -> TokenStream {
-        // TODO: need to implement IntoValueAndType/FromValueAndType for all generated types
-        if let Some(name) = typ.name() {
-            let name = Ident::new(&name, Span::call_site());
+        if let Some(type_name) = typ.name() {
+            let name = Ident::new(&type_name, Span::call_site());
             match typ {
                 AnalysedType::Variant(variant) => {
                     let mut cases = Vec::new();
-                    for case in &variant.cases {
+                    let mut into_value_cases = Vec::new();
+                    let mut from_value_cases = Vec::new();
+                    let mut case_names_lit = Vec::new();
+
+                    for (idx, case) in variant.cases.iter().enumerate() {
                         let case_ident = Ident::new(
                             &to_rust_ident(&case.name).to_upper_camel_case(),
                             Span::call_site(),
                         );
+                        let idx_u32 = idx as u32;
+                        case_names_lit.push(case.name.clone());
+
                         match &case.typ {
                             Some(typ) => {
                                 // TODO: auto-inline anonymous records
 
                                 let inner = self.wit_type_to_typeref(typ);
                                 cases.push(quote! { #case_ident(#inner) });
+
+                                // IntoValue implementation
+                                into_value_cases.push(quote! {
+                                    Self::#case_ident(value) => golem_wasm::Value::Variant {
+                                        case_idx: #idx_u32,
+                                        case_value: Some(Box::new(value.into_value())),
+                                    }
+                                });
+
+                                // FromValue implementation
+                                from_value_cases.push(quote! {
+                                    #idx_u32 => {
+                                        let inner_value = case_value.ok_or_else(|| format!("Expected case_value for {}", stringify!(#case_ident)))?;
+                                        Ok(Self::#case_ident(<#inner as golem_wasm::FromValue>::from_value(*inner_value)?))
+                                    }
+                                });
                             }
                             None => {
                                 cases.push(quote! { #case_ident });
+
+                                // IntoValue implementation
+                                into_value_cases.push(quote! {
+                                    Self::#case_ident => golem_wasm::Value::Variant {
+                                        case_idx: #idx_u32,
+                                        case_value: None,
+                                    }
+                                });
+
+                                // FromValue implementation
+                                from_value_cases.push(quote! {
+                                    #idx_u32 => Ok(Self::#case_ident)
+                                });
                             }
                         }
                     }
+
                     quote! {
                         #[derive(Debug, Clone)]
                         pub enum #name {
                             #(#cases),*
+                        }
+
+                        impl golem_wasm::IntoValue for #name {
+                            fn into_value(self) -> golem_wasm::Value {
+                                match self {
+                                    #(#into_value_cases),*
+                                }
+                            }
+
+                            fn get_type() -> golem_wasm::analysis::AnalysedType {
+                                golem_wasm::analysis::AnalysedType::Variant(golem_wasm::analysis::TypeVariant {
+                                    name: Some(stringify!(#name).to_string()),
+                                    owner: None,
+                                    cases: vec![
+                                        #(
+                                            golem_wasm::analysis::NameOptionTypePair {
+                                                name: #case_names_lit.to_string(),
+                                                typ: None,
+                                            }
+                                        ),*
+                                    ],
+                                })
+                            }
+                        }
+
+                        impl golem_wasm::FromValue for #name {
+                            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                                match value {
+                                    golem_wasm::Value::Variant { case_idx, case_value } => {
+                                        match case_idx {
+                                            #(#from_value_cases,)*
+                                            _ => Err(format!("Invalid variant case index: {}", case_idx)),
+                                        }
+                                    }
+                                    _ => Err(format!("Expected Variant value, got {:?}", value)),
+                                }
+                            }
                         }
                     }
                 }
@@ -406,17 +479,64 @@ impl RustBridgeGenerator {
                 }
                 AnalysedType::Enum(r#enum) => {
                     let mut cases = Vec::new();
-                    for case in &r#enum.cases {
+                    let mut into_value_cases = Vec::new();
+                    let mut from_value_cases = Vec::new();
+                    let mut case_names_lit = Vec::new();
+
+                    for (idx, case) in r#enum.cases.iter().enumerate() {
                         let case_ident = Ident::new(
                             &to_rust_ident(&case).to_upper_camel_case(),
                             Span::call_site(),
                         );
                         cases.push(quote! { #case_ident });
+                        case_names_lit.push(case.clone());
+
+                        // IntoValue implementation
+                        into_value_cases.push(quote! {
+                            Self::#case_ident => golem_wasm::Value::Enum(#idx as u32)
+                        });
+
+                        // FromValue implementation
+                        let idx_u32 = idx as u32;
+                        from_value_cases.push(quote! {
+                            #idx_u32 => Ok(Self::#case_ident)
+                        });
                     }
+
                     quote! {
                         #[derive(Debug, Clone)]
                         pub enum #name {
                             #(#cases),*
+                        }
+
+                        impl golem_wasm::IntoValue for #name {
+                            fn into_value(self) -> golem_wasm::Value {
+                                match self {
+                                    #(#into_value_cases),*
+                                }
+                            }
+
+                            fn get_type() -> golem_wasm::analysis::AnalysedType {
+                                golem_wasm::analysis::AnalysedType::Enum(golem_wasm::analysis::TypeEnum {
+                                    cases: vec![#(#case_names_lit.to_string()),*],
+                                    name: Some(stringify!(#name).to_string()),
+                                    owner: None,
+                                })
+                            }
+                        }
+
+                        impl golem_wasm::FromValue for #name {
+                            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                                match value {
+                                    golem_wasm::Value::Enum(idx) => {
+                                        match idx {
+                                            #(#from_value_cases,)*
+                                            _ => Err(format!("Invalid enum index: {}", idx)),
+                                        }
+                                    }
+                                    _ => Err(format!("Expected Enum value, got {:?}", value)),
+                                }
+                            }
                         }
                     }
                 }
@@ -425,16 +545,78 @@ impl RustBridgeGenerator {
                 }
                 AnalysedType::Record(record) => {
                     let mut fields = Vec::new();
+                    let mut field_idents = Vec::new();
+                    let mut field_types = Vec::new();
+                    let mut field_names_lit = Vec::new();
+                    let mut into_value_fields = Vec::new();
+                    let mut from_value_fields = Vec::new();
+
                     for field in &record.fields {
                         let field_ident =
                             Ident::new(&to_rust_ident(&field.name), Span::call_site());
                         let field_type = self.wit_type_to_typeref(&field.typ);
+                        
                         fields.push(quote! { pub #field_ident: #field_type });
+                        field_idents.push(field_ident.clone());
+                        field_types.push(field_type.clone());
+                        field_names_lit.push(field.name.clone());
+
+                        // IntoValue implementation
+                        into_value_fields.push(quote! {
+                            self.#field_ident.into_value()
+                        });
+
+                        // FromValue implementation
+                        from_value_fields.push(quote! {
+                            let #field_ident = <#field_type as golem_wasm::FromValue>::from_value(fields.remove(0))?;
+                        });
                     }
+
+                    let field_count = field_idents.len();
+
                     quote! {
                         #[derive(Debug, Clone)]
                         pub struct #name {
                             #(#fields),*
+                        }
+
+                        impl golem_wasm::IntoValue for #name {
+                            fn into_value(self) -> golem_wasm::Value {
+                                golem_wasm::Value::Record(vec![
+                                    #(#into_value_fields),*
+                                ])
+                            }
+
+                            fn get_type() -> golem_wasm::analysis::AnalysedType {
+                                use golem_wasm::analysis::analysed_type::field;
+
+                                golem_wasm::analysis::AnalysedType::Record(golem_wasm::analysis::TypeRecord {
+                                    fields: vec![
+                                        #(
+                                            field(#field_names_lit, <#field_types as golem_wasm::IntoValue>::get_type())
+                                        ),*
+                                    ],
+                                    name: Some(stringify!(#name).to_string()),
+                                    owner: None,
+                                })
+                            }
+                        }
+
+                        impl golem_wasm::FromValue for #name {
+                            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                                match value {
+                                    golem_wasm::Value::Record(mut fields) if fields.len() == #field_count => {
+                                        #(#from_value_fields)*
+                                        Ok(Self {
+                                            #(#field_idents),*
+                                        })
+                                    }
+                                    golem_wasm::Value::Record(fields) => {
+                                        Err(format!("Expected Record with {} fields, got {}", #field_count, fields.len()))
+                                    }
+                                    _ => Err(format!("Expected Record value, got {:?}", value)),
+                                }
+                            }
                         }
                     }
                 }
@@ -955,7 +1137,7 @@ impl RustBridgeGenerator {
                                 quote! {
                                     golem_wasm::analysis::NameOptionTypePair {
                                         name: #case_name.to_string(),
-                                        typ: Some(Box::new(#typ)),
+                                        typ: Some(#typ),
                                     }
                                 }
                             }
