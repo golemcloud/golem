@@ -30,7 +30,10 @@ export type EndpointDecoratorOptions = {
   post?: string;
   put?: string;
   delete?: string;
-  custom?: string;
+  custom?: {
+    method: string;
+    path: string;
+  };
   headers?: Record<string, string>;
   auth?: boolean;
   cors?: string[];
@@ -142,7 +145,10 @@ export function endpoint(opts: EndpointDecoratorOptions) {
     }
 
     const methods = ['get', 'post', 'put', 'delete', 'custom'] as const;
-    const providedMethods = methods.filter((m) => !!opts[m]);
+
+    const providedMethods = methods.filter((m) =>
+      m === 'custom' ? !!opts.custom : !!opts[m],
+    );
 
     if (providedMethods.length === 0) {
       throw new Error(
@@ -156,22 +162,33 @@ export function endpoint(opts: EndpointDecoratorOptions) {
       );
     }
 
-    const selectedMethod = providedMethods[0] as (typeof methods)[number];
+    const selectedMethod = providedMethods[0];
+
     let httpMethod: HttpEndpointDetails['httpMethod'];
+
+    let pathWithQuery: string;
+
     if (selectedMethod === 'custom') {
-      if (!opts.custom || opts.custom.trim() === '') {
+      const custom = opts.custom!;
+
+      if (!custom.method || !custom.path) {
         throw new Error(
-          `Custom HTTP method cannot be empty for method ${methodName}`,
+          `Custom endpoint must specify both method and path for method ${methodName}`,
         );
       }
-      httpMethod = { tag: 'custom', val: opts.custom };
+
+      httpMethod = { tag: 'custom', val: custom.method };
+
+      pathWithQuery = custom.path;
     } else {
       httpMethod = { tag: selectedMethod };
+      pathWithQuery = opts[selectedMethod]!;
     }
 
-    const pathAndQuery = split_path_and_query(opts[selectedMethod] as string);
+    const pathAndQuery = split_path_and_query(pathWithQuery);
 
     const pathSuffix: PathSegment[] = parsePath(pathAndQuery.path);
+
     const queryVars: QueryVariable[] = pathAndQuery.query
       ? parseQuery(pathAndQuery.query) || []
       : [];
@@ -181,6 +198,7 @@ export function endpoint(opts: EndpointDecoratorOptions) {
     );
 
     const authDetails: AuthDetails = { required: opts.auth ?? false };
+
     const corsOptions: CorsOptions = { allowedPatterns: opts.cors ?? [] };
 
     const httpEndpoint: HttpEndpointDetails = {

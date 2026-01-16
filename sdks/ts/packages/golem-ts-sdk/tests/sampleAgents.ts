@@ -542,6 +542,9 @@ class ComplexHttpAgent extends BaseAgent {
     auth: true,
     headers: { 'X-Foo': 'location', 'X-Bar': 'name' },
   })
+  @endpoint({
+    custom: { method: 'patch', path: '/greet?l={location}&n={name}' },
+  })
   async greetCustom2(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }

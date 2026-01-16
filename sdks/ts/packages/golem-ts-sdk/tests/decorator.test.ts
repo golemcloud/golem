@@ -1039,6 +1039,34 @@ describe('Http Agent class', () => {
     expect(simpleHttpAgent.httpEndpoint).toBeDefined();
     expect(simpleHttpAgent.httpEndpoint).toEqual([
       {
+        httpMethod: { tag: 'custom', val: 'patch' },
+        authDetails: { required: false },
+        queryVars: [
+          {
+            queryParamName: 'l',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'n',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            concat: [
+              {
+                tag: 'literal',
+                val: 'greet',
+              },
+            ],
+          },
+        ],
+      },
+      {
         httpMethod: { tag: 'get' },
         authDetails: { required: true },
         queryVars: [
