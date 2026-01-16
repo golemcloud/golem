@@ -156,10 +156,10 @@ impl GuestLanguage {
         }
     }
 
-    pub fn id(&self) -> String {
+    pub fn id(&self) -> &'static str {
         match self {
-            GuestLanguage::Rust => "rust".to_string(),
-            GuestLanguage::TypeScript => "ts".to_string(),
+            GuestLanguage::Rust => "rust",
+            GuestLanguage::TypeScript => "ts",
         }
     }
 

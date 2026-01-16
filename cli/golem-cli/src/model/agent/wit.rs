@@ -1487,6 +1487,19 @@ mod tests {
                 interface types {
                   use golem:agent/common.{text-reference, binary-reference};
 
+                  enum element {
+                    foo,
+                    bar,
+                    baz,
+                  }
+
+                  enum element1 {
+                    foo,
+                    bar,
+                    baz,
+                    baz2,
+                  }
+
                   variant fun-multimodal-advanced-input {
                     text(string),
                     image(list<u8>),
@@ -1622,7 +1635,7 @@ mod tests {
                 /// FooAgent class
                 interface foo-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
+                  use types.{element, element1, fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for FooAgent
                   initialize: func(input: string);
@@ -1680,6 +1693,12 @@ mod tests {
                   /// Takes UnionWithOnlyLiterals
                   fun-union-with-only-literals: func(union-with-literals: union-with-only-literals) -> union-with-only-literals;
 
+                  /// Takes AnonymousUnionWithOnlyLiterals
+                  fun-anonymous-union-with-only-literals: func(anonymous-union-with-literals: element) -> element;
+
+                  /// Takes AnonymousUnionWithOnlyLiterals
+                  fun-anonymous-union-with-only-literals2: func(anonymous-union-with-literals: element1) -> element1;
+
                   /// Returns void
                   fun-void-return: func(text: string);
 
@@ -1732,7 +1751,7 @@ mod tests {
                 /// BarAgent class
                 interface bar-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
+                  use types.{element, element1, fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for BarAgent
                   initialize: func(optional-string-type: option<string>, optional-union-type: option<union-type>);
@@ -1842,7 +1861,7 @@ mod tests {
                 /// TestAgent class
                 interface test-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
+                  use types.{element, element1, fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for TestAgent
                   initialize: func(name: string);
@@ -1862,7 +1881,7 @@ mod tests {
                 /// StringAgent class
                 interface string-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
+                  use types.{element, element1, fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for StringAgent
                   initialize: func(name: string);
@@ -1876,7 +1895,7 @@ mod tests {
                 /// StructAgent class
                 interface struct-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                  use types.{fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, struct-args, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
+                  use types.{element, element1, fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-exact, result-like, result-like-with-no-tag, result-like-with-void, struct-args, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
 
                   /// Constructor for StructAgent
                   initialize: func(args: struct-args);
