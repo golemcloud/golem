@@ -81,7 +81,7 @@ fn worker_filter_parse() {
 
     assert_eq!(
         WorkerFilter::from_str("version >= 10").unwrap(),
-        WorkerFilter::new_version(
+        WorkerFilter::new_revision(
             FilterComparator::GreaterEqual,
             ComponentRevision::new(10).unwrap()
         )
@@ -123,14 +123,14 @@ fn worker_filter_combination() {
                 FilterComparator::Equal,
                 WorkerStatus::Running,
             ))
-            .and(WorkerFilter::new_version(
+            .and(WorkerFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
         WorkerFilter::new_and(vec![
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
             WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
-            WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
@@ -150,14 +150,14 @@ fn worker_filter_combination() {
                 FilterComparator::NotEqual,
                 WorkerStatus::Running,
             ))
-            .or(WorkerFilter::new_version(
+            .or(WorkerFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
         WorkerFilter::new_or(vec![
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
             WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
-            WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
@@ -167,7 +167,7 @@ fn worker_filter_combination() {
                 FilterComparator::NotEqual,
                 WorkerStatus::Running,
             ))
-            .or(WorkerFilter::new_version(
+            .or(WorkerFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
@@ -176,7 +176,7 @@ fn worker_filter_combination() {
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
             ]),
-            WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
@@ -186,7 +186,7 @@ fn worker_filter_combination() {
                 FilterComparator::NotEqual,
                 WorkerStatus::Running,
             ))
-            .and(WorkerFilter::new_version(
+            .and(WorkerFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
@@ -195,7 +195,7 @@ fn worker_filter_combination() {
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
             ]),
-            WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 }
@@ -259,7 +259,7 @@ fn worker_filter_matches() {
 
     assert!(
         WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .and(WorkerFilter::new_version(
+            .and(WorkerFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             ))
@@ -268,18 +268,18 @@ fn worker_filter_matches() {
 
     assert!(
         WorkerFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
-            .or(WorkerFilter::new_version(
+            .or(WorkerFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             ))
             .matches(&worker_metadata)
     );
 
-    assert!(WorkerFilter::new_version(
+    assert!(WorkerFilter::new_revision(
         FilterComparator::GreaterEqual,
         ComponentRevision::new(1).unwrap()
     )
-    .and(WorkerFilter::new_version(
+    .and(WorkerFilter::new_revision(
         FilterComparator::Less,
         ComponentRevision::new(2).unwrap()
     ))
