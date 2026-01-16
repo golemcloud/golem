@@ -1314,7 +1314,7 @@ async fn get_workers(
                         WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
                     ),
                 )
-                .and(WorkerFilter::new_version(
+                .and(WorkerFilter::new_revision(
                     FilterComparator::Equal,
                     ComponentRevision::INITIAL,
                 )),
@@ -1493,7 +1493,7 @@ async fn get_worker_metadata(
         metadata1.status == WorkerStatus::Running
     );
     check!(metadata2.status == WorkerStatus::Idle);
-    check!(metadata1.component_version == ComponentRevision::INITIAL);
+    check!(metadata1.component_revision == ComponentRevision::INITIAL);
     check!(metadata1.worker_id == worker_id);
     check!(metadata1.created_by == context.account_id);
 

@@ -398,7 +398,7 @@ mod protobuf {
                 plugin_version: value.plugin_version,
 
                 oplog_processor_component_id: value.oplog_processor_component_id.map(|v| v.into()),
-                oplog_processor_component_version: value
+                oplog_processor_component_revision: value
                     .oplog_processor_component_revision
                     .map(|v| v.0),
             }
@@ -430,7 +430,7 @@ mod protobuf {
                     .map(|v| v.try_into())
                     .transpose()?,
                 oplog_processor_component_revision: value
-                    .oplog_processor_component_version
+                    .oplog_processor_component_revision
                     .map(ComponentRevision),
             })
         }

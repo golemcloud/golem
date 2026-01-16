@@ -23,5 +23,5 @@ message PluginInstallation {
   string plugin_version = 6;
 
   optional golem.component.ComponentId oplog_processor_component_id = 7;
-  optional uint64 oplog_processor_component_version = 8;
+  optional uint64 oplog_processor_component_revision = 8;
 }

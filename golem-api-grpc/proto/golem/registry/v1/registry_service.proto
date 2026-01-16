@@ -138,7 +138,7 @@ message BatchUpdateFuelUsageSuccessResponse {
 
 message DownloadComponentRequest {
   golem.component.ComponentId componentId = 1;
-  uint64 version = 2;
+  uint64 revision = 2;
 }
 
 message DownloadComponentResponse {
@@ -150,7 +150,7 @@ message DownloadComponentResponse {
 
 message GetComponentMetadataRequest {
   golem.component.ComponentId componentId = 1;
-  uint64 version = 2;
+  uint64 revision = 2;
 }
 
 message GetComponentMetadataResponse {

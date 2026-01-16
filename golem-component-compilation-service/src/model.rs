@@ -23,12 +23,12 @@ use wasmtime::component::Component;
 #[derive(Debug, Copy, Clone)]
 pub struct ComponentIdAndRevision {
     pub id: ComponentId,
-    pub version: ComponentRevision,
+    pub revision: ComponentRevision,
 }
 
 impl Display for ComponentIdAndRevision {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.id, self.version)
+        write!(f, "{}@{}", self.id, self.revision)
     }
 }
 
@@ -40,7 +40,7 @@ pub struct CompilationRequest {
 }
 
 pub struct CompiledComponent {
-    pub component_and_version: ComponentIdAndRevision,
+    pub component_and_revision: ComponentIdAndRevision,
     pub environment_id: EnvironmentId,
     pub component: Component,
 }

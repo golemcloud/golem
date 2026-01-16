@@ -98,7 +98,7 @@ pub trait TestDsl {
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
 
-    async fn get_latest_component_version(
+    async fn get_latest_component_revision(
         &self,
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto>;
@@ -108,10 +108,10 @@ pub trait TestDsl {
         component_id: &ComponentId,
         name: &str,
     ) -> anyhow::Result<ComponentDto> {
-        let latest_version = self.get_latest_component_version(component_id).await?;
+        let latest_revision = self.get_latest_component_revision(component_id).await?;
         self.update_component_with(
             component_id,
-            latest_version.revision,
+            latest_revision.revision,
             Some(name),
             Vec::new(),
             Vec::new(),
@@ -127,13 +127,13 @@ pub trait TestDsl {
         name: &str,
         files: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        let latest_version = self.get_latest_component_version(component_id).await?;
+        let latest_revision = self.get_latest_component_revision(component_id).await?;
         self.update_component_with(
             component_id,
-            latest_version.revision,
+            latest_revision.revision,
             Some(name),
             files,
-            latest_version.files.into_iter().map(|f| f.path).collect(),
+            latest_revision.files.into_iter().map(|f| f.path).collect(),
             None,
             None,
         )
@@ -146,10 +146,10 @@ pub trait TestDsl {
         name: &str,
         env: &[(String, String)],
     ) -> anyhow::Result<ComponentDto> {
-        let latest_version = self.get_latest_component_version(component_id).await?;
+        let latest_revision = self.get_latest_component_revision(component_id).await?;
         self.update_component_with(
             component_id,
-            latest_version.revision,
+            latest_revision.revision,
             Some(name),
             Vec::new(),
             Vec::new(),
@@ -162,7 +162,7 @@ pub trait TestDsl {
     async fn update_component_with(
         &self,
         component_id: &ComponentId,
-        previous_version: ComponentRevision,
+        previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
@@ -413,13 +413,13 @@ pub trait TestDsl {
     async fn auto_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<()>;
 
     async fn manual_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<()>;
 
     async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()>;

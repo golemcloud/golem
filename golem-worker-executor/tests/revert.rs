@@ -343,7 +343,7 @@ async fn revert_auto_update(
     // The traces of the update should be gone.
     check!(result1[0] == 0u64.into_value());
     check!(result2[0] != 0u64.into_value());
-    check!(metadata.component_version == ComponentRevision::INITIAL);
+    check!(metadata.component_revision == ComponentRevision::INITIAL);
     check!(update_counts(&metadata) == (0, 0, 0));
 
     Ok(())

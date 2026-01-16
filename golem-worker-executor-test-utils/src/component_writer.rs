@@ -59,7 +59,7 @@ impl FileSystemComponentWriter {
         source_path: &Path,
         component_name: &str,
         component_id: &ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
         files: Vec<InitialComponentFile>,
         skip_analysis: bool,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -85,7 +85,7 @@ impl FileSystemComponentWriter {
             return Err(anyhow!("Source file does not exist: {source_path:?}"));
         }
 
-        let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_version}.wasm");
+        let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_revision}.wasm");
         let target_path = target_dir.join(&wasm_filename);
 
         let wasm_hash = {
@@ -125,7 +125,7 @@ impl FileSystemComponentWriter {
             application_id,
             component_id: *component_id,
             component_name: component_name.to_string(),
-            version: component_version,
+            revision: component_revision,
             files,
             size,
             memories: memories.clone(),
@@ -145,14 +145,14 @@ impl FileSystemComponentWriter {
 
         write_metadata_to_file(
             &metadata,
-            &target_dir.join(metadata_filename(component_id, component_version)),
+            &target_dir.join(metadata_filename(component_id, component_revision)),
         )
         .await?;
 
         tracing::info!(
-            "Wrote component {} with version {} to local component service",
+            "Wrote component {} with revision {} to local component service",
             metadata.component_id,
-            metadata.version
+            metadata.revision
         );
 
         Ok(metadata.into())
@@ -173,11 +173,11 @@ impl FileSystemComponentWriter {
     async fn load_metadata(
         &self,
         component_id: &ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
     ) -> anyhow::Result<LocalFileSystemComponentMetadata> {
         let path = self
             .root
-            .join(metadata_filename(component_id, component_version));
+            .join(metadata_filename(component_id, component_revision));
 
         let content = tokio::fs::read_to_string(path)
             .await
@@ -290,12 +290,12 @@ impl FileSystemComponentWriter {
                 .expect("Failed to create component store directory");
         }
 
-        let last_version = self.get_latest_version(component_id).await;
+        let last_revision = self.get_latest_revision(component_id).await;
 
-        let new_version = last_version.next().unwrap();
+        let new_revision = last_revision.next().unwrap();
 
         let old_metadata = self
-            .load_metadata(component_id, last_version)
+            .load_metadata(component_id, last_revision)
             .await
             .expect("failed to read metadata");
 
@@ -314,7 +314,7 @@ impl FileSystemComponentWriter {
                 local_path.unwrap_or(old_metadata.target_path.as_path()),
                 &old_metadata.component_name,
                 component_id,
-                new_version,
+                new_revision,
                 files,
                 false,
                 dynamic_linking.unwrap_or(old_metadata.dynamic_linking),
@@ -330,11 +330,11 @@ impl FileSystemComponentWriter {
         Ok(component)
     }
 
-    pub async fn get_latest_version(&self, component_id: &ComponentId) -> ComponentRevision {
+    pub async fn get_latest_revision(&self, component_id: &ComponentId) -> ComponentRevision {
         let target_dir = &self.root;
 
         let component_id_str = component_id.to_string();
-        let mut versions = std::fs::read_dir(target_dir)
+        let mut revisions = std::fs::read_dir(target_dir)
             .expect("Failed to read component store directory")
             .filter_map(|entry| {
                 let entry = entry.unwrap();
@@ -350,16 +350,16 @@ impl FileSystemComponentWriter {
                 }
             })
             .collect::<Vec<u64>>();
-        versions.sort();
-        ComponentRevision::new(*versions.last().unwrap_or(&0)).unwrap()
+        revisions.sort();
+        ComponentRevision::new(*revisions.last().unwrap_or(&0)).unwrap()
     }
 
     pub async fn get_latest_component_metadata(
         &self,
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
-        let version = self.get_latest_version(component_id).await;
-        let metadata = self.load_metadata(component_id, version).await?;
+        let revision = self.get_latest_revision(component_id).await;
+        let metadata = self.load_metadata(component_id, revision).await?;
         let component: golem_common::model::component::ComponentDto = metadata.into();
         Ok(component)
     }
@@ -376,15 +376,15 @@ async fn write_metadata_to_file(
         .map_err(|_| anyhow!("Failed to write component file properties".to_string()))
 }
 
-fn metadata_filename(component_id: &ComponentId, component_version: ComponentRevision) -> String {
-    format!("{component_id}-{component_version}.json")
+fn metadata_filename(component_id: &ComponentId, component_revision: ComponentRevision) -> String {
+    format!("{component_id}-{component_revision}.json")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct LocalFileSystemComponentMetadata {
     pub component_id: ComponentId,
-    pub version: ComponentRevision,
+    pub revision: ComponentRevision,
     pub environment_id: EnvironmentId,
     pub application_id: ApplicationId,
     pub account_id: AccountId,
@@ -421,7 +421,7 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
             id: value.component_id,
-            revision: value.version,
+            revision: value.revision,
             environment_id: value.environment_id,
             application_id: value.application_id,
             account_id: value.account_id,

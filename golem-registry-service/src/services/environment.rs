@@ -356,7 +356,7 @@ impl EnvironmentService {
         env_name: Option<&EnvironmentName>,
         auth: &AuthCtx,
     ) -> Result<Vec<EnvironmentWithDetails>, EnvironmentError> {
-        // When we go for an admin ui / view, this should be extended with an optional, admin-only paramter that allows listing for a different account.
+        // When we go for an admin ui / view, this should be extended with an optional, admin-only parameter that allows listing for a different account.
         self.environment_repo
             .list_visible_to_account(
                 auth.account_id().0,

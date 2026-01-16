@@ -339,14 +339,14 @@ impl GrpcInvokeRequest
     }
 }
 
-/// Assumes what component version a worker will execute the next enqueued invocation with
-fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentRevision {
-    let mut version = metadata.last_known_status.component_revision;
+/// Assumes what component revision a worker will execute the next enqueued invocation with
+fn assume_future_component_revision(metadata: &WorkerMetadata) -> ComponentRevision {
+    let mut revision = metadata.last_known_status.component_revision;
     for pending_update in &metadata.last_known_status.pending_updates {
         // Assuming this update will succeed
-        version = *pending_update.description.target_revision();
+        revision = *pending_update.description.target_revision();
     }
-    version
+    revision
 }
 
 fn resolve_function<'t>(
@@ -397,12 +397,12 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
 ) -> Result<Vec<Val>, WorkerExecutorError> {
     let metadata = worker.get_latest_worker_metadata().await;
-    let assumed_component_version = assume_future_component_version(&metadata);
+    let assumed_component_revision = assume_future_component_revision(&metadata);
     let component_metadata = worker
         .component_service()
         .get_metadata(
             metadata.worker_id.component_id,
-            Some(assumed_component_version),
+            Some(assumed_component_revision),
         )
         .await?;
     let (function, _parsed) = resolve_function(&component_metadata, function_name)?;

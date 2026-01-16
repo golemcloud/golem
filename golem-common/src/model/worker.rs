@@ -125,17 +125,17 @@ declare_unions! {
 declare_structs! {
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
-        pub target_version: ComponentRevision,
+        pub target_revision: ComponentRevision,
     }
 
     pub struct SuccessfulUpdate {
         pub timestamp: Timestamp,
-        pub target_version: ComponentRevision,
+        pub target_revision: ComponentRevision,
     }
 
     pub struct FailedUpdate {
         pub timestamp: Timestamp,
-        pub target_version: ComponentRevision,
+        pub target_revision: ComponentRevision,
         pub details: Option<String>,
     }
 
@@ -151,7 +151,7 @@ declare_structs! {
         pub env: HashMap<String, String>,
         pub wasi_config_vars: WasiConfigVars,
         pub status: WorkerStatus,
-        pub component_version: ComponentRevision,
+        pub component_revision: ComponentRevision,
         pub retry_count: u32,
         pub pending_invocation_count: u64,
         pub updates: Vec<UpdateRecord>,
@@ -283,7 +283,7 @@ mod protobuf {
                     .ok_or("Missing wasi_config_vars field")?
                     .into(),
                 status: value.status.try_into()?,
-                component_version: value.component_version.try_into()?,
+                component_revision: value.component_revision.try_into()?,
                 retry_count: value.retry_count,
                 pending_invocation_count: value.pending_invocation_count,
                 updates: value
@@ -334,7 +334,7 @@ mod protobuf {
                 env: value.env,
                 wasi_config_vars: Some(value.wasi_config_vars.into()),
                 status: value.status.into(),
-                component_version: value.component_version.into(),
+                component_revision: value.component_revision.into(),
                 retry_count: value.retry_count,
                 pending_invocation_count: value.pending_invocation_count,
                 updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
@@ -368,20 +368,20 @@ mod protobuf {
                 golem_api_grpc::proto::golem::worker::update_record::Update::Failed(failed) => {
                     Ok(Self::FailedUpdate(FailedUpdate {
                         timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                        target_version: value.target_version.try_into()?,
+                        target_revision: value.target_revision.try_into()?,
                         details: { failed.details },
                     }))
                 }
                 golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
                     Ok(Self::PendingUpdate(PendingUpdate {
                         timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                        target_version: value.target_version.try_into()?,
+                        target_revision: value.target_revision.try_into()?,
                     }))
                 }
                 golem_api_grpc::proto::golem::worker::update_record::Update::Successful(_) => {
                     Ok(Self::SuccessfulUpdate(SuccessfulUpdate {
                         timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                        target_version: value.target_version.try_into()?,
+                        target_revision: value.target_revision.try_into()?,
                     }))
                 }
             }
@@ -393,11 +393,11 @@ mod protobuf {
             match value {
                 UpdateRecord::FailedUpdate(FailedUpdate {
                     timestamp,
-                    target_version,
+                    target_revision,
                     details,
                 }) => Self {
                     timestamp: Some(timestamp.into()),
-                    target_version: target_version.into(),
+                    target_revision: target_revision.into(),
                     update: Some(
                         golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
                             golem_api_grpc::proto::golem::worker::FailedUpdate { details },
@@ -406,10 +406,10 @@ mod protobuf {
                 },
                 UpdateRecord::PendingUpdate(PendingUpdate {
                     timestamp,
-                    target_version,
+                    target_revision,
                 }) => Self {
                     timestamp: Some(timestamp.into()),
-                    target_version: target_version.into(),
+                    target_revision: target_revision.into(),
                     update: Some(
                         golem_api_grpc::proto::golem::worker::update_record::Update::Pending(
                             golem_api_grpc::proto::golem::worker::PendingUpdate {},
@@ -418,10 +418,10 @@ mod protobuf {
                 },
                 UpdateRecord::SuccessfulUpdate(SuccessfulUpdate {
                     timestamp,
-                    target_version,
+                    target_revision,
                 }) => Self {
                     timestamp: Some(timestamp.into()),
-                    target_version: target_version.into(),
+                    target_revision: target_revision.into(),
                     update: Some(
                         golem_api_grpc::proto::golem::worker::update_record::Update::Successful(
                             golem_api_grpc::proto::golem::worker::SuccessfulUpdate {},

@@ -79,7 +79,7 @@ impl CompileWorker {
                         Err(error) => {
                             warn!(
                                 component_id = request.component.id.to_string(),
-                                component_version = request.component.version.to_string(),
+                                component_revision = request.component.revision.to_string(),
                                 error = error.to_string(),
                                 "Failed to compile component"
                             );
@@ -87,7 +87,7 @@ impl CompileWorker {
                         Ok(component) => {
                             let send_result = sender
                                 .send(CompiledComponent {
-                                    component_and_version: request.component,
+                                    component_and_revision: request.component,
                                     component,
                                     environment_id: request.environment_id,
                                 })
@@ -123,7 +123,7 @@ impl CompileWorker {
 
     async fn compile_component(
         &self,
-        component_with_version: ComponentIdAndRevision,
+        component_with_revision: ComponentIdAndRevision,
         environment_id: EnvironmentId,
     ) -> Result<Component, CompilationError> {
         let engine = self.engine.clone();
@@ -133,8 +133,8 @@ impl CompileWorker {
             .compiled_component_service
             .get(
                 environment_id,
-                component_with_version.id,
-                component_with_version.version,
+                component_with_revision.id,
+                component_with_revision.revision,
                 &engine,
             )
             .await;
@@ -145,7 +145,7 @@ impl CompileWorker {
             Err(err) => {
                 warn!(
                     "Failed to download compiled component {:?}: {}",
-                    component_with_version, err
+                    component_with_revision, err
                 );
             }
         };
@@ -153,7 +153,7 @@ impl CompileWorker {
         // TODO: we should download directly from blob store here.
         if let Some(client) = &*self.client.lock().await {
             let bytes = client
-                .download_component(component_with_version.id, component_with_version.version)
+                .download_component(component_with_revision.id, component_with_revision.revision)
                 .await
                 .map_err(|e| CompilationError::ComponentDownloadFailed(e.to_string()))?;
 
@@ -162,7 +162,7 @@ impl CompileWorker {
                 move || {
                     Component::from_binary(&engine, &bytes).map_err(|e| {
                         CompilationError::CompileFailure(format!(
-                            "Failed to compile component {component_with_version:?}: {e}"
+                            "Failed to compile component {component_with_revision:?}: {e}"
                         ))
                     })
                 }
@@ -177,8 +177,8 @@ impl CompileWorker {
             record_compilation_time(compilation_time);
 
             tracing::info!(
-                component_id = component_with_version.id.to_string(),
-                component_version = component_with_version.version.to_string(),
+                component_id = component_with_revision.id.to_string(),
+                component_revision = component_with_revision.revision.to_string(),
                 compilation_time_ms = compilation_time.as_millis(),
                 "Compiled component"
             );

@@ -818,23 +818,23 @@ impl ComponentCommandHandler {
         &self,
         environment: &ResolvedEnvironmentIdentity,
         component_name: &ComponentName,
-        component_version_selection: Option<ComponentRevisionSelection<'_>>,
+        component_revision_selection: Option<ComponentRevisionSelection<'_>>,
     ) -> anyhow::Result<Option<ComponentDto>> {
         let component = self
             .get_current_deployed_server_component_by_name(environment, component_name)
             .await?;
 
-        match (component, component_version_selection) {
-            (Some(component), Some(component_version_selection)) => {
-                let revision = match component_version_selection {
+        match (component, component_revision_selection) {
+            (Some(component), Some(component_revision_selection)) => {
+                let revision = match component_revision_selection {
                     ComponentRevisionSelection::ByWorkerName(worker_name) => self
                         .ctx
                         .worker_handler()
                         .worker_metadata(component.id.0, &component.component_name, worker_name)
                         .await
                         .ok()
-                        .map(|worker_metadata| worker_metadata.component_version),
-                    ComponentRevisionSelection::ByExplicitRevision(version) => Some(version),
+                        .map(|worker_metadata| worker_metadata.component_revision),
+                    ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),
                 };
 
                 match revision {
