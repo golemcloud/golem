@@ -92,7 +92,7 @@ pub enum AgentMode {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoValue, FromValue,
 )]
 #[cfg_attr(
     feature = "full",
@@ -105,7 +105,7 @@ pub struct BinaryType {
     pub mime_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
@@ -117,7 +117,7 @@ pub struct ComponentModelElementSchema {
     pub element_type: AnalysedType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -130,7 +130,7 @@ pub struct TextDescriptor {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoValue, FromValue,
 )]
 #[cfg_attr(
     feature = "full",
@@ -182,7 +182,7 @@ pub enum TextReference {
     Inline(TextSource),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -220,7 +220,7 @@ pub enum BinaryReference {
     Inline(BinarySource),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
@@ -234,7 +234,7 @@ pub enum ElementSchema {
     UnstructuredBinary(BinaryDescriptor),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
@@ -247,7 +247,7 @@ pub struct NamedElementSchema {
     pub schema: ElementSchema,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
