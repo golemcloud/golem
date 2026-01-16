@@ -12,44 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::agent::AgentTypeName;
 use super::domain_registration::Domain;
 use super::environment::EnvironmentId;
+use super::http_api_definition::HttpApiDefinitionName;
+use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
+use crate::declare_structs;
 use crate::model::diff;
-use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
-use std::collections::BTreeSet;
-
-newtype_uuid!(HttpApiDeploymentId);
-
-declare_revision!(HttpApiDeploymentRevision);
 
 declare_structs! {
-    pub struct HttpApiDeploymentCreation {
+    pub struct LegacyHttpApiDeploymentCreation {
         pub domain: Domain,
-        pub agent_types: BTreeSet<AgentTypeName>
+        pub api_definitions: Vec<HttpApiDefinitionName>
     }
 
-    pub struct HttpApiDeploymentUpdate {
+    pub struct LegacyHttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
-        pub agent_types: Option<BTreeSet<AgentTypeName>>
+        pub api_definitions: Option<Vec<HttpApiDefinitionName>>
     }
 
-    pub struct HttpApiDeployment {
+    pub struct LegacyHttpApiDeployment {
         pub id: HttpApiDeploymentId,
         pub revision: HttpApiDeploymentRevision,
         pub environment_id: EnvironmentId,
         pub domain: Domain,
         pub hash: diff::Hash,
-        pub agent_types: BTreeSet<AgentTypeName>,
+        pub api_definitions: Vec<HttpApiDefinitionName>,
         pub created_at: DateTime<chrono::Utc>,
     }
 }
 
-impl HttpApiDeployment {
+impl LegacyHttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
-            agent_types: self.agent_types.iter().map(|def| def.0.clone()).collect(),
+            agent_types: self
+                .api_definitions
+                .iter()
+                .map(|def| def.0.clone())
+                .collect(),
         }
     }
 }
