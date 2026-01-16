@@ -23,7 +23,10 @@ import { getRawSelfAgentId } from './host/hostapi';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
-export { prompt, description, agent } from './decorators';
+export { description } from './decorators/description';
+export { agent, AgentDecoratorOptions } from './decorators/agent';
+export { prompt } from './decorators/prompt';
+export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
@@ -34,8 +37,6 @@ export * from './newTypes/multimodalAdvanced';
 export { Client } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
-
-export * from './options';
 
 export * from './host/hostapi';
 export * from './host/guard';

@@ -36,6 +36,7 @@ import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import process from 'node:process';
 import { Uuid } from 'golem:agent/host';
 import { AgentClassName, AgentId } from '../src';
+import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
@@ -878,6 +879,51 @@ describe('Http Agent class', () => {
     ]);
   });
 
+  it('should register HTTP endpoint details with endpoint details', () => {
+    const simpleHttpAgent = AgentMethodRegistry.get(
+      SimpleHttpAgentClassName.value,
+    )?.get('greet');
+
+    if (!simpleHttpAgent) {
+      throw new Error(
+        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
+      );
+    }
+
+    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
+    expect(simpleHttpAgent.httpEndpoint).toEqual([
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: false },
+        queryVars: [],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            concat: [
+              {
+                tag: 'literal',
+                val: 'greet',
+              },
+            ],
+          },
+          {
+            concat: [
+              {
+                tag: 'path-variable',
+                val: {
+                  variableName: 'name',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
   it('should register HTTP mount details with all details', () => {
     const simpleHttpAgent: AgentType = Option.getOrThrowWith(
       AgentTypeRegistry.get(ComplexHttpAgentClassName),
@@ -977,6 +1023,87 @@ describe('Http Agent class', () => {
       },
       webhookSuffix: expectedWebhookSuffix,
     });
+  });
+
+  it('should register complex HTTP endpoint details with endpoint details', () => {
+    const simpleHttpAgent = AgentMethodRegistry.get(
+      ComplexHttpAgentClassName.value,
+    )?.get('greetCustom2');
+
+    if (!simpleHttpAgent) {
+      throw new Error(
+        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
+      );
+    }
+
+    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
+    expect(simpleHttpAgent.httpEndpoint).toEqual([
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: true },
+        queryVars: [
+          {
+            queryParamName: 'lx',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'nm',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: ['*'],
+        },
+        headerVars: [
+          {
+            headerName: 'X-Foo',
+            variableName: 'location',
+          },
+          {
+            headerName: 'X-Bar',
+            variableName: 'name',
+          },
+        ],
+        pathSuffix: [
+          {
+            concat: [
+              {
+                tag: 'literal',
+                val: 'greet',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: false },
+        queryVars: [
+          {
+            queryParamName: 'l',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'n',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            concat: [
+              {
+                tag: 'literal',
+                val: 'greet',
+              },
+            ],
+          },
+        ],
+      },
+    ]);
   });
 });
 

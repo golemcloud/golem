@@ -17,9 +17,9 @@ import {
   HttpMountDetails,
   PathSegment,
 } from 'golem:agent/common';
-import { AgentDecoratorOptions } from '../options';
 import { parsePath } from './path';
 import { rejectEmptyString, rejectQueryParamsInPath } from './validation';
+import { AgentDecoratorOptions } from '../decorators/agent';
 
 export type HeaderVariables = Record<string, string>;
 
