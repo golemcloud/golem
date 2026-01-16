@@ -555,7 +555,7 @@ impl RustBridgeGenerator {
                         let field_ident =
                             Ident::new(&to_rust_ident(&field.name), Span::call_site());
                         let field_type = self.wit_type_to_typeref(&field.typ);
-                        
+
                         fields.push(quote! { pub #field_ident: #field_type });
                         field_idents.push(field_ident.clone());
                         field_types.push(field_type.clone());
@@ -1549,14 +1549,54 @@ impl RustBridgeGenerator {
                             }
                         }
                     }
-                    ElementSchema::UnstructuredText(_) => {
+                    ElementSchema::UnstructuredText(descriptor) => {
+                        let restrictions = descriptor.restrictions.as_deref().unwrap_or(&[]);
+                        let languages_enum = self.get_languages_enum(restrictions);
                         quote! {
-                            todo!("unstructured text decoding not yet implemented")
+                            match #ident {
+                                golem_common::model::agent::DataValue::Tuple(element_values) => {
+                                    match element_values.elements.get(0) {
+                                        Some(golem_common::model::agent::ElementValue::UnstructuredText(text_ref)) => {
+                                            <golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum>>::from_text_reference(text_ref.clone())
+                                                .map(Some)
+                                                .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
+                                                    message: format!("Failed to decode result value: {err}"),
+                                                })
+                                        }
+                                        _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                            message: format!("Failed to decode result value"),
+                                        })?,
+                                    }
+                                }
+                                _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                    message: format!("Failed to decode result value"),
+                                })?,
+                            }
                         }
                     }
-                    ElementSchema::UnstructuredBinary(_) => {
+                    ElementSchema::UnstructuredBinary(descriptor) => {
+                        let restrictions = descriptor.restrictions.as_deref().unwrap_or(&[]);
+                        let mimetypes_enum = self.get_mimetypes_enum(restrictions);
                         quote! {
-                            todo!("unstructured binary decoding not yet implemented")
+                            match #ident {
+                                golem_common::model::agent::DataValue::Tuple(element_values) => {
+                                    match element_values.elements.get(0) {
+                                        Some(golem_common::model::agent::ElementValue::UnstructuredBinary(binary_ref)) => {
+                                            <golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum>>::from_binary_reference(binary_ref.clone())
+                                                .map(Some)
+                                                .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
+                                                    message: format!("Failed to decode result value: {err}"),
+                                                })
+                                        }
+                                        _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                            message: format!("Failed to decode result value"),
+                                        })?,
+                                    }
+                                }
+                                _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                    message: format!("Failed to decode result value"),
+                                })?,
+                            }
                         }
                     }
                 }

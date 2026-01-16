@@ -40,13 +40,28 @@ struct GeneratedPackage {
 //     GeneratedPackage { dir }
 // }
 
-#[test_dep(tagged_as = "multi_agent_wrapper_2_types_1")]
-fn rust_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
+// #[test_dep(tagged_as = "multi_agent_wrapper_2_types_1")]
+// fn rust_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
+//     let agent_type =
+//         super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
+//     let dir = TempDir::new().unwrap();
+//
+//     // let target_dir = Utf8Path::from_path(dir.path()).unwrap(); // TODO: undo
+//     let target_dir = Utf8Path::new("/Users/vigoo/tmp/rsclient");
+//
+//     std::fs::remove_dir_all(target_dir).ok();
+//     generate_and_compile(agent_type, target_dir);
+//
+//     GeneratedPackage { dir }
+// }
+
+#[test_dep(tagged_as = "multi_agent_wrapper_2_types_2")]
+fn rust_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
     let agent_type =
-        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
+        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[1].clone();
     let dir = TempDir::new().unwrap();
 
-    // let target_dir = Utf8Path::from_path(dir.path()).unwrap(); // TODO: undo
+    // let target_dir = Utf8Path::from_path(dir.path()).unwrap(); // TODO
     let target_dir = Utf8Path::new("/Users/vigoo/tmp/rsclient");
 
     std::fs::remove_dir_all(target_dir).ok();
@@ -54,20 +69,7 @@ fn rust_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
 
     GeneratedPackage { dir }
 }
-//
-// #[test_dep(tagged_as = "multi_agent_wrapper_2_types_2")]
-// fn rust_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
-//     let agent_type =
-//         super::super::super::model::agent::test::multi_agent_wrapper_2_types()[1].clone();
-//     let dir = TempDir::new().unwrap();
-//
-//     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-//     std::fs::remove_dir_all(target_dir).ok();
-//     generate_and_compile(agent_type, target_dir);
-//
-//     GeneratedPackage { dir }
-// }
-//
+
 // #[test_dep(tagged_as = "code_first_snippets")]
 // fn rust_code_first_snippets() -> GeneratedPackage {
 //     let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
@@ -133,19 +135,19 @@ fn rust_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
 //     The test_dep ensures it was compiled successfully in generate_and_compile
 // }
 
+// #[test]
+// fn bridge_rust_compiles_multi_agent_1(
+//     #[tagged_as("multi_agent_wrapper_2_types_1")] _pkg: &GeneratedPackage,
+// ) {
+//     The test_dep ensures it was compiled successfully in generate_and_compile
+// }
+
 #[test]
-fn bridge_rust_compiles_multi_agent_1(
-    #[tagged_as("multi_agent_wrapper_2_types_1")] _pkg: &GeneratedPackage,
+fn bridge_rust_compiles_multi_agent_2(
+    #[tagged_as("multi_agent_wrapper_2_types_2")] _pkg: &GeneratedPackage,
 ) {
     // The test_dep ensures it was compiled successfully in generate_and_compile
 }
-
-// #[test]
-// fn bridge_rust_compiles_multi_agent_2(
-//     #[tagged_as("multi_agent_wrapper_2_types_2")] _pkg: &GeneratedPackage,
-// ) {
-//     // The test_dep ensures it was compiled successfully in generate_and_compile
-// }
 //
 // #[test]
 // fn bridge_rust_compiles_counter_agent(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {

@@ -872,10 +872,16 @@ pub struct AgentHttpAuthContext {
 
 pub trait UnstructuredTextExtensions {
     fn into_text_reference(self) -> TextReference;
+    fn from_text_reference(text_ref: TextReference) -> Result<Self, String>
+    where
+        Self: Sized;
 }
 
 pub trait UnstructuredBinaryExtensions {
     fn into_binary_reference(self) -> BinaryReference;
+    fn from_binary_reference(binary_ref: BinaryReference) -> Result<Self, String>
+    where
+        Self: Sized;
 }
 
 impl<LC: AllowedLanguages> UnstructuredTextExtensions for UnstructuredText<LC> {
@@ -893,6 +899,26 @@ impl<LC: AllowedLanguages> UnstructuredTextExtensions for UnstructuredText<LC> {
             }),
         }
     }
+
+    fn from_text_reference(text_ref: TextReference) -> Result<Self, String> {
+        match text_ref {
+            TextReference::Url(url) => Ok(UnstructuredText::Url(url.value)),
+            TextReference::Inline(source) => {
+                let language_code =
+                    if let Some(tt) = &source.text_type {
+                        Some(LC::from_language_code(&tt.language_code).ok_or_else(|| {
+                            format!("Invalid language code: {}", tt.language_code)
+                        })?)
+                    } else {
+                        None
+                    };
+                Ok(UnstructuredText::Text {
+                    text: source.data,
+                    language_code,
+                })
+            }
+        }
+    }
 }
 
 impl<MT: AllowedMimeTypes> UnstructuredBinaryExtensions for UnstructuredBinary<MT> {
@@ -907,6 +933,18 @@ impl<MT: AllowedMimeTypes> UnstructuredBinaryExtensions for UnstructuredBinary<M
                     },
                 })
             }
+        }
+    }
+
+    fn from_binary_reference(binary_ref: BinaryReference) -> Result<Self, String> {
+        match binary_ref {
+            BinaryReference::Url(url) => Ok(UnstructuredBinary::Url(url.value)),
+            BinaryReference::Inline(source) => MT::from_string(&source.binary_type.mime_type)
+                .ok_or_else(|| format!("Invalid mime type: {}", source.binary_type.mime_type))
+                .map(|mime_type| UnstructuredBinary::Inline {
+                    data: source.data,
+                    mime_type,
+                }),
         }
     }
 }
