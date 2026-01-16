@@ -80,7 +80,7 @@ fn worker_filter_parse() {
     );
 
     assert_eq!(
-        WorkerFilter::from_str("version >= 10").unwrap(),
+        WorkerFilter::from_str("revision >= 10").unwrap(),
         WorkerFilter::new_revision(
             FilterComparator::GreaterEqual,
             ComponentRevision::new(10).unwrap()
