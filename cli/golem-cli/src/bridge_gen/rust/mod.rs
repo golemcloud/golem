@@ -1030,10 +1030,7 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn named_element_schemas_as_value(
-        &self,
-        schemas: &golem_common::model::agent::NamedElementSchemas,
-    ) -> TokenStream {
+    fn named_element_schemas_as_value(&self, schemas: &NamedElementSchemas) -> TokenStream {
         let elements = schemas
             .elements
             .iter()
@@ -1578,14 +1575,23 @@ impl RustBridgeGenerator {
                         }
                     }
                     ElementSchema::UnstructuredText(descriptor) => {
-                        let restrictions = descriptor.restrictions.as_deref().unwrap_or(&[]);
-                        let languages_enum = self.get_languages_enum(restrictions);
+                        let unstructured_text = match &descriptor.restrictions {
+                            Some(restrictions) => {
+                                let languages_enum = self.get_languages_enum(restrictions);
+                                quote! {
+                                    golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum>
+                                }
+                            }
+                            None => {
+                                quote! { golem_wasm::agentic::unstructured_text::UnstructuredText }
+                            }
+                        };
                         quote! {
                             match #ident {
                                 golem_common::model::agent::DataValue::Tuple(element_values) => {
                                     match element_values.elements.get(0) {
                                         Some(golem_common::model::agent::ElementValue::UnstructuredText(text_ref)) => {
-                                            <golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum>>::from_text_reference(text_ref.clone())
+                                            <#unstructured_text>::from_text_reference(text_ref.clone())
                                                 .map(Some)
                                                 .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
                                                     message: format!("Failed to decode result value: {err}"),
@@ -1603,14 +1609,23 @@ impl RustBridgeGenerator {
                         }
                     }
                     ElementSchema::UnstructuredBinary(descriptor) => {
-                        let restrictions = descriptor.restrictions.as_deref().unwrap_or(&[]);
-                        let mimetypes_enum = self.get_mimetypes_enum(restrictions);
+                        let unstructured_binary = match &descriptor.restrictions {
+                            Some(restrictions) => {
+                                let mimetypes_enum = self.get_mimetypes_enum(restrictions);
+                                quote! {
+                                    golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum>
+                                }
+                            }
+                            None => {
+                                quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> }
+                            }
+                        };
                         quote! {
                             match #ident {
                                 golem_common::model::agent::DataValue::Tuple(element_values) => {
                                     match element_values.elements.get(0) {
                                         Some(golem_common::model::agent::ElementValue::UnstructuredBinary(binary_ref)) => {
-                                            <golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum>>::from_binary_reference(binary_ref.clone())
+                                            <#unstructured_binary>::from_binary_reference(binary_ref.clone())
                                                 .map(Some)
                                                 .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
                                                     message: format!("Failed to decode result value: {err}"),
@@ -1723,11 +1738,61 @@ impl RustBridgeGenerator {
                                 }?;
                             }
                         }
-                        ElementSchema::UnstructuredText(_) => {
-                            quote! { let value = todo!(); }
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            let unstructured_text = match &descriptor.restrictions {
+                                Some(restrictions) => {
+                                    let languages_enum = self.get_languages_enum(restrictions);
+                                    quote! {
+                                        golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum>
+                                    }
+                                }
+                                None => {
+                                    quote! { golem_wasm::agentic::unstructured_text::UnstructuredText }
+                                }
+                            };
+                            quote! {
+                                let value = match &named_element_value.value {
+                                    golem_common::model::agent::ElementValue::UnstructuredText(text_ref) => {
+                                        <#unstructured_text>::from_text_reference(text_ref.clone())
+                                            .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
+                                                message: format!("Failed to decode result value: {err}"),
+                                            })
+                                    }
+                                    _ => {
+                                        Err(golem_client::bridge::ClientError::InvocationFailed {
+                                            message: format!("Failed to decode result value"),
+                                        })
+                                    }
+                                }?;
+                            }
                         }
-                        ElementSchema::UnstructuredBinary(_) => {
-                            quote! { let value = todo!(); }
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            let unstructured_binary = match &descriptor.restrictions {
+                                Some(restrictions) => {
+                                    let mimetypes_enum = self.get_mimetypes_enum(restrictions);
+                                    quote! {
+                                        golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum>
+                                    }
+                                }
+                                None => {
+                                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> }
+                                }
+                            };
+                            quote! {
+                                let value = match &named_element_value.value {
+                                    golem_common::model::agent::ElementValue::UnstructuredBinary(binary_ref) => {
+                                        <#unstructured_binary>::from_binary_reference(binary_ref.clone())
+                                            .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
+                                                message: format!("Failed to decode result value: {err}"),
+                                            })
+                                    }
+                                    _ => {
+                                        Err(golem_client::bridge::ClientError::InvocationFailed {
+                                            message: format!("Failed to decode result value"),
+                                        })
+                                    }
+                                }?;
+                            }
                         }
                     };
                     from_named_element_value_cases.push(quote! {
@@ -1828,6 +1893,7 @@ impl RustBridgeGenerator {
                 }
 
                 language_enums.push(quote! {
+                    #[derive(Debug, Clone)]
                     pub enum #ident {
                         #(#cases),*
                     }
@@ -1890,6 +1956,7 @@ impl RustBridgeGenerator {
                 }
 
                 mimetypes_enums.push(quote! {
+                    #[derive(Debug, Clone)]
                     pub enum #ident {
                         #(#cases),*
                     }
