@@ -59,14 +59,16 @@ use url::Url;
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
+
     pub static AGENT: &str = "agent";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
     pub static DEPLOY: &str = "deploy";
+    pub static GENERATE_BRIDGE: &str = "generate-bridge";
     pub static GET: &str = "get";
-    pub static LIST: &str = "list";
     pub static INVOKE: &str = "invoke";
+    pub static LIST: &str = "list";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
@@ -75,9 +77,11 @@ mod cmd {
 }
 
 mod flag {
+    pub static AGENT_TYPE_NAME: &str = "--agent-type-name";
     pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
+    pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
     pub static TEMPLATE_GROUP: &str = "--template-group";

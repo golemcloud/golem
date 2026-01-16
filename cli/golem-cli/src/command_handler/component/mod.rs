@@ -14,7 +14,7 @@
 
 use crate::app::context::{to_anyhow, ApplicationContext};
 
-use crate::app::build::extract_agent_type::extract_and_cache_agent_types;
+use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{ComponentTemplateName, DeployArgs, OptionalComponentNames};
 use crate::command_handler::component::ifs::IfsFileManager;
@@ -885,7 +885,7 @@ impl ComponentCommandHandler {
         let linked_wasm_path = component.final_linked_wasm();
         let agent_types = {
             if app_ctx.wit.is_agent(component_name) {
-                extract_and_cache_agent_types(app_ctx, component_name, None).await?
+                extract_and_store_agent_types(app_ctx, component_name).await?
             } else {
                 vec![]
             }
