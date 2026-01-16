@@ -175,12 +175,6 @@ declare module 'golem:api/host@1.3.0' {
    */
   export type ComponentRevision = bigint;
   /**
-   * Represents a Golem Cloud account
-   */
-  export type AccountId = {
-    uuid: Uuid;
-  };
-  /**
    * Represents a Golem environment
    */
   export type EnvironmentId = {

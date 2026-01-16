@@ -29,7 +29,7 @@ use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionName};
-use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
@@ -493,7 +493,7 @@ impl DeployDiff {
         &mut self,
         kind: DeployDiffKind,
         domain: Domain,
-        http_api_deployment: HttpApiDeployment,
+        http_api_deployment: LegacyHttpApiDeployment,
     ) {
         match &kind {
             DeployDiffKind::Stage => {
@@ -522,7 +522,7 @@ impl DeployDiff {
 pub struct DeployDetails {
     pub component: Vec<(ComponentName, ComponentDto)>,
     pub http_api_definition: Vec<(HttpApiDefinitionName, HttpApiDefinition)>,
-    pub http_api_deployment: Vec<(Domain, HttpApiDeployment)>,
+    pub http_api_deployment: Vec<(Domain, LegacyHttpApiDeployment)>,
 }
 
 #[derive(Debug)]
@@ -712,7 +712,7 @@ impl RollbackDiff {
 
     fn add_http_api_deployment_details(
         &mut self,
-        http_api_deployment_details: RollbackEntityDetails<Domain, HttpApiDeployment>,
+        http_api_deployment_details: RollbackEntityDetails<Domain, LegacyHttpApiDeployment>,
     ) {
         if let Some(http_api_deployment) = http_api_deployment_details.new {
             self.diffable_target_deployment.http_api_deployments.insert(
@@ -849,7 +849,7 @@ impl<'a, Name, Entity> RollbackEntityDetails<Name, &'a Entity> {
 pub struct RollbackDetails {
     pub component: Vec<RollbackEntityDetails<ComponentName, ComponentDto>>,
     pub http_api_definition: Vec<RollbackEntityDetails<HttpApiDefinitionName, HttpApiDefinition>>,
-    pub http_api_deployment: Vec<RollbackEntityDetails<Domain, HttpApiDeployment>>,
+    pub http_api_deployment: Vec<RollbackEntityDetails<Domain, LegacyHttpApiDeployment>>,
 }
 
 #[derive(Debug)]

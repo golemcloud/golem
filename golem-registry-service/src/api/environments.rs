@@ -610,7 +610,7 @@ impl EnvironmentsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_id: Path<DeploymentRevision>,
-        agent_type_name: Path<String>,
+        agent_type_name: Path<AgentTypeName>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<RegisteredAgentType>> {
         let record = recorded_http_api_request!(
@@ -639,17 +639,12 @@ impl EnvironmentsApi {
         &self,
         environment_id: EnvironmentId,
         deployment_id: DeploymentRevision,
-        agent_type_name: String,
+        agent_type_name: AgentTypeName,
         auth: AuthCtx,
     ) -> ApiResult<Json<RegisteredAgentType>> {
         let agent_type = self
             .deployment_service
-            .get_deployment_agent_type(
-                environment_id,
-                deployment_id,
-                &AgentTypeName(agent_type_name),
-                &auth,
-            )
+            .get_deployment_agent_type(environment_id, deployment_id, &agent_type_name, &auth)
             .await?;
         Ok(Json(agent_type))
     }

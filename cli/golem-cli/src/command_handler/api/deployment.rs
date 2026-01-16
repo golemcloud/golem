@@ -21,15 +21,15 @@ use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdent
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
 use anyhow::{anyhow, bail};
 use golem_client::api::ApiDeploymentClient;
-use golem_client::model::{HttpApiDeploymentCreation, HttpApiDeploymentUpdate};
 use golem_common::cache::SimpleCache;
 use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::http_api_definition::HttpApiDefinitionName;
-use golem_common::model::http_api_deployment::{
-    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
+use golem_common::model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
+use golem_common::model::http_api_deployment_legacy::{
+    LegacyHttpApiDeployment, LegacyHttpApiDeploymentCreation, LegacyHttpApiDeploymentUpdate,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ impl ApiDeploymentCommandHandler {
         environment: &ResolvedEnvironmentIdentity,
         domain: &Domain,
         revision: Option<&HttpApiDeploymentRevision>,
-    ) -> anyhow::Result<Option<HttpApiDeployment>> {
+    ) -> anyhow::Result<Option<LegacyHttpApiDeployment>> {
         environment
             .with_current_deployment_revision_or_default_warn(
                 |current_deployment_revision| async move {
@@ -174,7 +174,7 @@ impl ApiDeploymentCommandHandler {
         &self,
         http_api_deployment_id: &HttpApiDeploymentId,
         revision: HttpApiDeploymentRevision,
-    ) -> anyhow::Result<HttpApiDeployment> {
+    ) -> anyhow::Result<LegacyHttpApiDeployment> {
         self.ctx
             .caches()
             .http_api_deployment_revision
@@ -216,7 +216,7 @@ impl ApiDeploymentCommandHandler {
                 .api_deployment
                 .create_http_api_deployment_legacy(
                     &environment.environment_id.0,
-                    &HttpApiDeploymentCreation {
+                    &LegacyHttpApiDeploymentCreation {
                         domain: domain.clone(),
                         api_definitions: deployable_http_api_deployment.to_vec(),
                     },
@@ -310,7 +310,7 @@ impl ApiDeploymentCommandHandler {
             .api_deployment
             .update_http_api_deployment_legacy(
                 &http_api_deployment.id.0,
-                &HttpApiDeploymentUpdate {
+                &LegacyHttpApiDeploymentUpdate {
                     current_revision: http_api_deployment.revision,
                     api_definitions: Some(deployable_http_api_deployment.to_vec()),
                 },

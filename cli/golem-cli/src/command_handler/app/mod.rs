@@ -15,9 +15,7 @@
 use crate::app::error::CustomCommandError;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
-use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
-};
+use crate::command::shared_args::{BuildArgs, DeployArgs, ForceBuildArg, OptionalComponentNames};
 use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
@@ -260,7 +258,7 @@ impl AppCommandHandler {
 
     pub async fn cmd_build(
         &self,
-        component_name: AppOptionalComponentNames,
+        component_name: OptionalComponentNames,
         build_args: BuildArgs,
     ) -> anyhow::Result<()> {
         self.build(
@@ -271,7 +269,7 @@ impl AppCommandHandler {
         .await
     }
 
-    pub async fn cmd_clean(&self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
+    pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
         self.clean(
             component_name.component_name,
             &ApplicationComponentSelectMode::CurrentDir,
@@ -423,7 +421,7 @@ impl AppCommandHandler {
 
     pub async fn cmd_diagnose(
         &self,
-        component_names: AppOptionalComponentNames,
+        component_names: OptionalComponentNames,
     ) -> anyhow::Result<()> {
         self.diagnose(
             component_names.component_name,
@@ -766,7 +764,7 @@ impl AppCommandHandler {
                 diffable_local_http_api_deployments.insert(
                     domain.0.clone(),
                     diff::HttpApiDeployment {
-                        apis: http_api_deployment
+                        agent_types: http_api_deployment
                             .iter()
                             .map(|def| def.0.clone())
                             .collect(),

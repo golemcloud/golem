@@ -16,7 +16,7 @@ declare module 'golem:api/oplog@1.3.0' {
   }
   export type Datetime = wasiClocks023WallClock.Datetime;
   export type ValueAndType = golemRpc022Types.ValueAndType;
-  export type AccountId = golemApi130Host.AccountId;
+  export type AccountId = golemRpc022Types.AccountId;
   export type ComponentRevision = golemApi130Host.ComponentRevision;
   export type OplogIndex = golemApi130Host.OplogIndex;
   export type PersistenceLevel = golemApi130Host.PersistenceLevel;

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::agent::AgentTypeName;
 use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::http_api_definition::HttpApiDefinitionName;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
+use std::collections::BTreeSet;
 
 newtype_uuid!(HttpApiDeploymentId);
 
@@ -26,12 +27,12 @@ declare_revision!(HttpApiDeploymentRevision);
 declare_structs! {
     pub struct HttpApiDeploymentCreation {
         pub domain: Domain,
-        pub api_definitions: Vec<HttpApiDefinitionName>
+        pub agent_types: BTreeSet<AgentTypeName>
     }
 
     pub struct HttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
-        pub api_definitions: Option<Vec<HttpApiDefinitionName>>
+        pub agent_types: Option<BTreeSet<AgentTypeName>>
     }
 
     pub struct HttpApiDeployment {
@@ -40,7 +41,7 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub domain: Domain,
         pub hash: diff::Hash,
-        pub api_definitions: Vec<HttpApiDefinitionName>,
+        pub agent_types: BTreeSet<AgentTypeName>,
         pub created_at: DateTime<chrono::Utc>,
     }
 }

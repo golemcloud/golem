@@ -24,14 +24,16 @@ use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::http_api_definition::{GatewayBindingType, HttpApiDefinitionName};
+use golem_templates::model::GuestLanguage;
 use golem_templates::APP_MANIFEST_JSON_SCHEMA;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use strum::IntoEnumIterator;
 use url::Url;
 
 static JSON_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
@@ -88,6 +90,8 @@ pub struct Application {
     pub http_api: Option<HttpApi>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environments: IndexMap<String, Environment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<BridgeSdks>,
 }
 
 #[derive(Debug)]
@@ -205,8 +209,8 @@ impl Application {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
-    #[serde(default, skip_serializing_if = "TemplateReferences::is_empty")]
-    pub templates: TemplateReferences,
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -216,8 +220,8 @@ pub struct ComponentTemplate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Component {
-    #[serde(default, skip_serializing_if = "TemplateReferences::is_empty")]
-    pub templates: TemplateReferences,
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -316,8 +320,8 @@ pub struct Environment {
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub server: Option<Server>,
-    #[serde(skip_serializing_if = "Presets::is_empty", default)]
-    pub component_presets: Presets,
+    #[serde(skip_serializing_if = "LenientTokenList::is_empty", default)]
+    pub component_presets: LenientTokenList,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cli: Option<CliOptions>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -438,76 +442,6 @@ pub struct InitialComponentFile {
     pub source_path: String,
     pub target_path: ComponentFilePath,
     pub permissions: Option<ComponentFilePermissions>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
-#[derive(Default)]
-pub enum Presets {
-    #[default]
-    None,
-    String(String),
-    List(Vec<String>),
-}
-
-impl Presets {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Presets::None => true,
-            Presets::String(s) => Self::parse(s).next().is_none(),
-            Presets::List(l) => l.is_empty(),
-        }
-    }
-
-    pub fn into_vec(self) -> Vec<String> {
-        match self {
-            Self::None => vec![],
-            Self::String(s) => Self::parse(&s).collect(),
-            Self::List(l) => l,
-        }
-    }
-
-    fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
-        s.split([',', '\n', '\r'])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
-#[derive(Default)]
-pub enum TemplateReferences {
-    #[default]
-    None,
-    String(String),
-    List(Vec<String>),
-}
-
-impl TemplateReferences {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            TemplateReferences::None => true,
-            TemplateReferences::String(s) => Self::parse(s).next().is_none(),
-            TemplateReferences::List(l) => l.is_empty(),
-        }
-    }
-
-    pub fn into_vec(self) -> Vec<String> {
-        match self {
-            Self::None => vec![],
-            Self::String(s) => Self::parse(&s).collect(),
-            Self::List(l) => l,
-        }
-    }
-
-    fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
-        s.split([',', '\n', '\r'])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -678,6 +612,47 @@ pub struct PluginInstallation {
     pub parameters: HashMap<String, String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust: Option<BridgeSdkLanguageTargets>,
+}
+
+impl BridgeSdks {
+    pub fn for_language(&self, language: GuestLanguage) -> Option<&BridgeSdkLanguageTargets> {
+        match language {
+            GuestLanguage::Rust => self.rust.as_ref(),
+            GuestLanguage::TypeScript => self.ts.as_ref(),
+        }
+    }
+
+    pub fn for_all_languages(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, Option<&BridgeSdkLanguageTargets>)> {
+        GuestLanguage::iter().map(|lang| (lang, self.for_language(lang)))
+    }
+
+    pub fn for_all_used_languages(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
+        self.for_all_languages().filter_map(|(lang, targets)| {
+            targets.and_then(|targets| (!targets.agents.is_empty()).then_some((lang, targets)))
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub agents: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Marker;
 
@@ -701,6 +676,49 @@ impl<'de> Deserialize<'de> for Marker {
                 "value must be `true`, `false` is not allowed",
             )),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
+pub enum LenientTokenList {
+    #[default]
+    None,
+    String(String),
+    List(Vec<String>),
+}
+
+impl LenientTokenList {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            LenientTokenList::None => true,
+            LenientTokenList::String(s) => Self::parse(s).next().is_none(),
+            LenientTokenList::List(l) => l.is_empty(),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::None => vec![],
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l,
+        }
+    }
+
+    pub fn into_set(self) -> BTreeSet<String> {
+        match self {
+            Self::None => BTreeSet::new(),
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l.into_iter().collect(),
+        }
+    }
+
+    fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
+        s.split([',', '\n', '\r'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
     }
 }
 

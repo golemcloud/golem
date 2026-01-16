@@ -13,3 +13,21 @@
 // limitations under the License.
 
 pub use crate::base_model::account::*;
+
+mod wasm {
+    use super::AccountId;
+
+    impl From<AccountId> for golem_wasm::AccountId {
+        fn from(value: AccountId) -> Self {
+            Self {
+                uuid: value.0.into(),
+            }
+        }
+    }
+
+    impl From<golem_wasm::AccountId> for AccountId {
+        fn from(value: golem_wasm::AccountId) -> Self {
+            Self(value.uuid.into())
+        }
+    }
+}

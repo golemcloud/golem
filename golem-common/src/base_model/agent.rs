@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::model::Empty;
 use async_trait::async_trait;
@@ -23,6 +24,7 @@ use golem_wasm::{Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -319,6 +321,18 @@ pub struct AgentDependency {
     pub methods: Vec<AgentMethod>,
 }
 
+impl AgentDependency {
+    pub fn normalized(mut self) -> Self {
+        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            type_name: self.type_name,
+            description: self.description,
+            constructor: self.constructor,
+            methods: self.methods,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -335,6 +349,33 @@ pub struct AgentType {
     pub dependencies: Vec<AgentDependency>,
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
+}
+
+impl AgentType {
+    pub fn normalized(mut self) -> Self {
+        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
+        self.dependencies
+            .sort_by(|a, b| a.type_name.cmp(&b.type_name));
+
+        Self {
+            type_name: self.type_name,
+            description: self.description,
+            constructor: self.constructor,
+            methods: self.methods,
+            dependencies: self
+                .dependencies
+                .into_iter()
+                .map(AgentDependency::normalized)
+                .collect(),
+            mode: self.mode,
+            http_mount: self.http_mount,
+        }
+    }
+
+    pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
+        agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+        agent_types.into_iter().map(Self::normalized).collect()
+    }
 }
 
 #[async_trait]
@@ -359,6 +400,20 @@ pub struct AgentTypeName(pub String);
 impl Display for AgentTypeName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for AgentTypeName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.to_string()))
+    }
+}
+
+impl AgentTypeName {
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -850,24 +905,82 @@ pub struct AgentHttpAuthDetails {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum Principal {
+    Oidc(OidcPrincipal),
+    Agent(AgentPrincipal),
+    GolemUser(GolemUserPrincipal),
+    #[unit_case]
+    Anonymous(Empty),
+}
+
+impl Principal {
+    pub fn anonymous() -> Self {
+        Self::Anonymous(Empty {})
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 // Meaning of the various claims: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
-pub struct AgentHttpAuthContext {
+pub struct OidcPrincipal {
     pub sub: String,
-    pub provider: String,
-    pub email: String,
-    pub name: String,
+    pub issuer: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
     pub email_verified: Option<bool>,
     pub given_name: Option<String>,
     pub family_name: Option<String>,
-    // Url of the user's picture or avatar
     pub picture: Option<String>,
     pub preferred_username: Option<String>,
     pub claims: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPrincipal {
+    pub agent_id: AgentIdWithComponent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct GolemUserPrincipal {
+    pub account_id: AccountId,
+}
+
+// TODO: this is the same as WorkerId, to be removed
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentIdWithComponent {
+    pub component_id: ComponentId,
+    pub agent_id: String,
 }
 
 pub trait UnstructuredTextExtensions {

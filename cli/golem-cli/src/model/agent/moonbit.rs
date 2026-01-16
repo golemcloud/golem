@@ -541,9 +541,10 @@ fn generate_agent_stub(
         "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", msg); panic(); }}"
     )?;
     writeln!(result, "    }}")?;
+    // Fixme: thread the correct value through once we have new invocation api
     writeln!(
         result,
-        "  match @guest.initialize(\"{original_agent_name}\", encoded_params, None) {{"
+        "  match @guest.initialize(\"{original_agent_name}\", encoded_params, @common.Principal::Anonymous) {{"
     )?;
     writeln!(result, "    Ok(result) => result")?;
     writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", error.to_string()); panic(); }}")?;
@@ -578,9 +579,10 @@ fn generate_agent_stub(
         )?;
         writeln!(result, "    }}")?;
 
+        // Fixme: thread the correct value through once we have new invocation api
         writeln!(
             result,
-            "  let result = match @guest.invoke(\"{original_method_name}\", input, None) {{"
+            "  let result = match @guest.invoke(\"{original_method_name}\", input, @common.Principal::Anonymous) {{"
         )?;
         writeln!(result, "    Ok(result) => result")?;
         writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", error.to_string()); panic(); }}")?;

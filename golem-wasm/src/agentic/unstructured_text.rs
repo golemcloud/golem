@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Value;
 use std::fmt::Debug;
 
 /// Represents a text value that can either be inline or a URL reference.
@@ -62,16 +61,16 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
 
     #[cfg(any(feature = "host", feature = "stub"))]
     pub fn from_wit_value(value: crate::WitValue) -> Result<UnstructuredText<T>, String> {
-        let value = Value::from(value);
+        let value = crate::Value::from(value);
 
         match value {
-            Value::Variant {
+            crate::Value::Variant {
                 case_value,
                 case_idx,
             } => match case_idx {
                 0 => {
                     if let Some(boxed_url) = case_value {
-                        if let Value::String(url) = *boxed_url {
+                        if let crate::Value::String(url) = *boxed_url {
                             Ok(UnstructuredText::Url(url))
                         } else {
                             Err("Expected String for URL variant".to_string())
@@ -82,7 +81,7 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
                 }
                 1 => {
                     if let Some(boxed_record) = case_value {
-                        if let Value::Record(mut fields) = *boxed_record {
+                        if let crate::Value::Record(mut fields) = *boxed_record {
                             if fields.len() != 2 {
                                 return Err("Expected 2 fields in Inline variant".to_string());
                             }
@@ -90,21 +89,21 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
                             let text_value = fields.remove(0);
                             let lang_option_value = fields.remove(0);
 
-                            let text = if let Value::String(t) = text_value {
+                            let text = if let crate::Value::String(t) = text_value {
                                 t
                             } else {
                                 return Err("Expected String for text field".to_string());
                             };
 
                             let language_code = match lang_option_value {
-                                Value::Option(Some(boxed_lang_record)) => {
-                                    if let Value::Record(lang_fields) = *boxed_lang_record {
+                                crate::Value::Option(Some(boxed_lang_record)) => {
+                                    if let crate::Value::Record(lang_fields) = *boxed_lang_record {
                                         if lang_fields.len() != 1 {
                                             return Err("Expected 1 field in language code record"
                                                 .to_string());
                                         }
 
-                                        if let Value::String(code) = &lang_fields[0] {
+                                        if let crate::Value::String(code) = &lang_fields[0] {
                                             T::from_language_code(code)
                                         } else {
                                             return Err(

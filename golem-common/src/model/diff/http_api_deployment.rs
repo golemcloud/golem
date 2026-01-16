@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HttpApiDeployment {
-    pub apis: BTreeSet<String>,
+    pub agent_types: BTreeSet<String>,
 }
 
 impl Hashable for HttpApiDeployment {
@@ -31,6 +31,6 @@ impl Diffable for HttpApiDeployment {
     type DiffResult = BTreeSetDiff<String>;
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        new.apis.diff_with_current(&current.apis)
+        new.agent_types.diff_with_current(&current.agent_types)
     }
 }

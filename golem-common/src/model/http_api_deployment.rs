@@ -19,11 +19,7 @@ pub use crate::base_model::http_api_deployment::*;
 impl HttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
-            apis: self
-                .api_definitions
-                .iter()
-                .map(|def| def.0.clone())
-                .collect(),
+            agent_types: self.agent_types.iter().map(|def| def.0.clone()).collect(),
         }
     }
 }

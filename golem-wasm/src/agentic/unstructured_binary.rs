@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Value;
 use std::fmt::Debug;
 
 /// Represents a binary value that can either be inline or a URL reference.
@@ -55,10 +54,10 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
 
     #[cfg(any(feature = "host", feature = "stub"))]
     pub fn from_wit_value(wit_value: crate::WitValue) -> Result<Self, String> {
-        let value = Value::from(wit_value);
+        let value = crate::Value::from(wit_value);
 
         let (case_idx, case_value) = match value {
-            Value::Variant {
+            crate::Value::Variant {
                 case_idx,
                 case_value,
             } => (case_idx, case_value),
@@ -69,7 +68,7 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
             0 => {
                 let boxed = case_value.ok_or("Expected value for Url variant")?;
                 match *boxed {
-                    Value::String(url) => Ok(UnstructuredBinary::Url(url)),
+                    crate::Value::String(url) => Ok(UnstructuredBinary::Url(url)),
                     _ => Err("Expected String for Url variant".into()),
                 }
             }
@@ -78,7 +77,7 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
                 let boxed = case_value.ok_or("Expected value for Inline variant")?;
 
                 let fields = match *boxed {
-                    Value::Record(fields) => fields,
+                    crate::Value::Record(fields) => fields,
                     _ => return Err("Expected Record for Inline variant".into()),
                 };
 
@@ -87,21 +86,21 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
                 }
 
                 let data_str = match &fields[0] {
-                    Value::String(s) => s,
+                    crate::Value::String(s) => s,
                     _ => return Err("Expected String for data field".into()),
                 };
                 let data_bytes = data_str.as_bytes().to_vec();
 
                 let mime_type_val = match &fields[1] {
-                    Value::Option(Some(inner)) => inner.as_ref(),
-                    Value::Option(None) => {
+                    crate::Value::Option(Some(inner)) => inner.as_ref(),
+                    crate::Value::Option(None) => {
                         return Err("Mime type restriction is required for inline binary".into())
                     }
                     _ => return Err("Expected Option for mime type restriction".into()),
                 };
 
                 let mime_type_record = match mime_type_val {
-                    Value::Record(fields) => fields,
+                    crate::Value::Record(fields) => fields,
                     _ => return Err("Expected Record for mime type restriction".into()),
                 };
 
@@ -110,7 +109,7 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
                 }
 
                 let mime_code = match &mime_type_record[0] {
-                    Value::String(code) => code,
+                    crate::Value::String(code) => code,
                     _ => return Err("Expected String for mime type".into()),
                 };
 
