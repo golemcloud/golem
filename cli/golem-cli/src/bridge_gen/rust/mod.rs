@@ -27,7 +27,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
+#[allow(clippy::module_inception)]
 mod rust;
+
 #[cfg(test)]
 mod tests;
 
@@ -389,7 +391,7 @@ impl RustBridgeGenerator {
 
     fn wit_type_to_typedef(&mut self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
         if let Some(type_name) = typ.name() {
-            let name = Ident::new(&type_name, Span::call_site());
+            let name = Ident::new(type_name, Span::call_site());
             match typ {
                 AnalysedType::Variant(variant) => {
                     let mut cases = Vec::new();
@@ -503,7 +505,7 @@ impl RustBridgeGenerator {
                     Ok(quote! { pub type #name = Result<#ok, #err> })
                 }
                 AnalysedType::Option(option) => {
-                    let inner = self.wit_type_to_typeref(&*option.inner)?;
+                    let inner = self.wit_type_to_typeref(&option.inner)?;
                     Ok(quote! { pub type #name = Option<#inner>; })
                 }
                 AnalysedType::Enum(r#enum) => {
@@ -514,7 +516,7 @@ impl RustBridgeGenerator {
 
                     for (idx, case) in r#enum.cases.iter().enumerate() {
                         let case_ident = Ident::new(
-                            &to_rust_ident(&case).to_upper_camel_case(),
+                            &to_rust_ident(case).to_upper_camel_case(),
                             Span::call_site(),
                         );
                         cases.push(quote! { #case_ident });
@@ -570,7 +572,7 @@ impl RustBridgeGenerator {
                     })
                 }
                 AnalysedType::Flags(_flags) => {
-                    return Err(anyhow!("Flags are not supported")); // NOTE: none of the code-first SDKs support flags at the moment
+                    Err(anyhow!("Flags are not supported"))// NOTE: none of the code-first SDKs support flags at the moment
                 }
                 AnalysedType::Record(record) => {
                     let mut fields = Vec::new();
@@ -674,20 +676,20 @@ impl RustBridgeGenerator {
                 AnalysedType::S8(_) => Ok(quote! { pub type #name = i8; }),
                 AnalysedType::Bool(_) => Ok(quote! { pub type #name = bool; }),
                 AnalysedType::Handle(_) => {
-                    return Err(anyhow!("Handles are not supported"));
+                    Err(anyhow!("Handles are not supported"))
                 }
             }
         } else {
-            return Err(anyhow!("Only named types can be defined"));
+            Err(anyhow!("Only named types can be defined"))
         }
     }
 
     fn wit_type_to_typeref(&mut self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
-        if let Some(_) = typ.name() {
+        if typ.name().is_some() {
             let rust_type = self.known_types.get(typ).expect("Must be in known_types");
             Ok(match rust_type {
                 RustType::Defined { name, .. } => {
-                    let name = Ident::new(&name, Span::call_site());
+                    let name = Ident::new(name, Span::call_site());
                     quote! { #name }
                 }
                 RustType::Remapped(remap) => remap.clone(),
@@ -695,7 +697,7 @@ impl RustBridgeGenerator {
         } else {
             match typ {
                 AnalysedType::Option(inner) => {
-                    let inner = self.wit_type_to_typeref(&*inner.inner)?;
+                    let inner = self.wit_type_to_typeref(&inner.inner)?;
                     Ok(quote! { Option<#inner> })
                 }
                 AnalysedType::Str(_) => Ok(quote! { String }),
@@ -719,7 +721,7 @@ impl RustBridgeGenerator {
                     Ok(quote! { (#(#elements),*) })
                 }
                 AnalysedType::List(list) => {
-                    let inner = self.wit_type_to_typeref(&*list.inner)?;
+                    let inner = self.wit_type_to_typeref(&list.inner)?;
                     Ok(quote! { Vec<#inner> })
                 }
                 AnalysedType::Result(result) => {
@@ -739,7 +741,7 @@ impl RustBridgeGenerator {
                 | AnalysedType::Flags(_)
                 | AnalysedType::Record(_) => {
                     // Anonymous complex types need to be associated with a name
-                    let name = self.name_anonymous_type(&typ);
+                    let name = self.name_anonymous_type(typ);
                     self.known_types.insert(
                         typ.clone(),
                         RustType::Defined {
@@ -747,7 +749,7 @@ impl RustBridgeGenerator {
                             typ: typ.clone(),
                         },
                     );
-                    let _def = self.wit_type_to_typedef(&typ)?; // ensuring the whole type is traversed early
+                    let _def = self.wit_type_to_typedef(typ)?; // ensuring the whole type is traversed early
                     let name = Ident::new(&name, Span::call_site());
                     Ok(quote! { #name })
                 }
@@ -817,7 +819,7 @@ impl RustBridgeGenerator {
     ) -> anyhow::Result<Option<TokenStream>> {
         match data_schema {
             DataSchema::Tuple(elements) => {
-                if elements.elements.len() == 0 {
+                if elements.elements.is_empty() {
                     Ok(None)
                 } else if elements.elements.len() == 1 {
                     let element = &elements.elements[0];
@@ -1541,7 +1543,7 @@ impl RustBridgeGenerator {
             DataSchema::Tuple(elements) => {
                 if elements.elements.len() > 1 {
                     Err(anyhow!("multiple result values not supported"))
-                } else if elements.elements.len() == 0 {
+                } else if elements.elements.is_empty() {
                     Ok(quote! {
                         Ok(())
                     })
