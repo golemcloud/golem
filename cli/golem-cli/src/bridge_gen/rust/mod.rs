@@ -195,6 +195,8 @@ impl RustBridgeGenerator {
         };
 
         let tokens = quote! {
+            #![allow(unused)]
+
             use golem_common::base_model::agent::{UnstructuredBinaryExtensions, UnstructuredTextExtensions};
             use golem_wasm::{FromValueAndType, IntoValueAndType};
             #multimodal_import
@@ -922,11 +924,24 @@ impl RustBridgeGenerator {
         let param_defs = self.parameter_list(&method.input_schema);
         let param_refs = self.parameter_refs(&method.input_schema);
 
-        quote! {
-            pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, golem_client::bridge::ClientError> {
-                let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
-                let result = result.unwrap(); // always Some because of Await
-                Ok(result)
+        match return_type {
+            Some(return_type) => {
+                quote! {
+                    pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, golem_client::bridge::ClientError> {
+                        let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
+                        let result = result.unwrap(); // always Some because of Await
+                        Ok(result)
+                    }
+                }
+            }
+            None => {
+                quote! {
+                    pub async fn #name(&self, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
+                        let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
+                        let _result = result.unwrap(); // always Some because of Await
+                        Ok(())
+                    }
+                }
             }
         }
     }
@@ -995,19 +1010,41 @@ impl RustBridgeGenerator {
             &method.output_schema,
         );
 
-        quote! {
-            async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, golem_client::bridge::ClientError> {
-                #typed_method_parameters_to_data_value
-                let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
-                let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
-                if let Some(untyped_data_value) = response {
-                    let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
-                        untyped_data_value,
-                        #output_schema_as_value
-                    ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
-                    #decode_typed_data_value
-                } else {
-                    Ok(None)
+        match return_type {
+            Some(return_type) => {
+                quote! {
+                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, golem_client::bridge::ClientError> {
+                        #typed_method_parameters_to_data_value
+                        let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
+                        let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
+                        if let Some(untyped_data_value) = response {
+                            let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
+                                untyped_data_value,
+                                #output_schema_as_value
+                            ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
+                            #decode_typed_data_value
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                }
+            }
+            None => {
+                quote! {
+                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<()>, golem_client::bridge::ClientError> {
+                        #typed_method_parameters_to_data_value
+                        let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
+                        let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
+                        if let Some(untyped_data_value) = response {
+                            let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
+                                untyped_data_value,
+                                #output_schema_as_value
+                            ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
+                            Ok(Some(()))
+                        } else {
+                            Ok(None)
+                        }
+                    }
                 }
             }
         }
@@ -1962,8 +1999,8 @@ impl RustBridgeGenerator {
 
                     cases.push(quote! { #enum_variant_ident });
                     code_strings.push(quote! { #lit });
-                    from_match_cases.push(quote! { #lit => Some(Self::#enum_variant_ident) });
-                    to_match_cases.push(quote! { Self::#enum_variant_ident => #lit.to_string() });
+                    from_match_cases.push(quote! { #lit => Some(Self::#enum_variant_ident), });
+                    to_match_cases.push(quote! { Self::#enum_variant_ident => #lit.to_string(), });
                 }
 
                 mimetypes_enums.push(quote! {
@@ -1981,14 +2018,14 @@ impl RustBridgeGenerator {
                         where
                             Self: Sized {
                             match mime_type {
-                                #(#from_match_cases),*
+                                #(#from_match_cases)*
                                 _ => None,
                             }
                         }
 
                         fn to_string(&self) -> String {
                             match self {
-                                #(#to_match_cases),*
+                                #(#to_match_cases)*
                             }
                         }
                     }
