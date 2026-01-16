@@ -858,12 +858,14 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn return_type_from_data_schema(&mut self, data_schema: &DataSchema) -> TokenStream {
+    fn return_type_from_data_schema(&mut self, data_schema: &DataSchema) -> Option<TokenStream> {
         match data_schema {
             DataSchema::Tuple(elements) => {
-                if elements.elements.len() == 1 {
+                if elements.elements.len() == 0 {
+                    None
+                } else if elements.elements.len() == 1 {
                     let element = &elements.elements[0];
-                    self.element_schema_to_typeref(&element.schema)
+                    Some(self.element_schema_to_typeref(&element.schema))
                 } else {
                     panic!("Multiple return values are not supported");
                 }
@@ -871,7 +873,7 @@ impl RustBridgeGenerator {
             DataSchema::Multimodal(elements) => {
                 let name = self.get_or_create_multimodal(elements);
                 let name = Ident::new(&name, Span::call_site());
-                quote! { multimodal::Multimodal<crate::multimodal::#name> }
+                Some(quote! { multimodal::Multimodal<crate::multimodal::#name> })
             }
         }
     }
@@ -1544,101 +1546,110 @@ impl RustBridgeGenerator {
     fn decode_from_data_value(&mut self, ident: &Ident, data_schema: &DataSchema) -> TokenStream {
         match data_schema {
             DataSchema::Tuple(elements) => {
-                if elements.elements.len() != 1 {
+                if elements.elements.len() > 1 {
                     panic!("multiple result values not supported");
-                }
-
-                let element = &elements.elements[0];
-                match &element.schema {
-                    ElementSchema::ComponentModel(_) => {
-                        let return_type = self.return_type_from_data_schema(data_schema);
-                        quote! {
-                            match #ident {
-                                golem_common::model::agent::DataValue::Tuple(element_values) => {
-                                    match element_values.elements.get(0) {
-                                        Some(golem_common::model::agent::ElementValue::ComponentModel(vnt)) => {
-                                            Ok(Some(<#return_type>::from_value_and_type(vnt.clone()).map_err(
-                                                |err| golem_client::bridge::ClientError::InvocationFailed {
-                                                    message: format!("Failed to decode result value: {err}"),
-                                                },
-                                            )?))
+                } else if elements.elements.len() == 0 {
+                    quote! {
+                        Ok(())
+                    }
+                } else {
+                    let element = &elements.elements[0];
+                    match &element.schema {
+                        ElementSchema::ComponentModel(_) => {
+                            if let Some(return_type) =
+                                self.return_type_from_data_schema(data_schema)
+                            {
+                                quote! {
+                                    match #ident {
+                                        golem_common::model::agent::DataValue::Tuple(element_values) => {
+                                            match element_values.elements.get(0) {
+                                                Some(golem_common::model::agent::ElementValue::ComponentModel(vnt)) => {
+                                                    Ok(Some(<#return_type>::from_value_and_type(vnt.clone()).map_err(
+                                                        |err| golem_client::bridge::ClientError::InvocationFailed {
+                                                            message: format!("Failed to decode result value: {err}"),
+                                                        },
+                                                    )?))
+                                                }
+                                                _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                                    message: format!("Failed to decode result value"),
+                                                })?,
+                                            }
                                         }
                                         _ => Err(golem_client::bridge::ClientError::InvocationFailed {
                                             message: format!("Failed to decode result value"),
                                         })?,
                                     }
                                 }
-                                _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-                                    message: format!("Failed to decode result value"),
-                                })?,
+                            } else {
+                                quote! { Ok(()) }
                             }
                         }
-                    }
-                    ElementSchema::UnstructuredText(descriptor) => {
-                        let unstructured_text = match &descriptor.restrictions {
-                            Some(restrictions) => {
-                                let languages_enum = self.get_languages_enum(restrictions);
-                                quote! {
-                                    golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum>
-                                }
-                            }
-                            None => {
-                                quote! { golem_wasm::agentic::unstructured_text::UnstructuredText }
-                            }
-                        };
-                        quote! {
-                            match #ident {
-                                golem_common::model::agent::DataValue::Tuple(element_values) => {
-                                    match element_values.elements.get(0) {
-                                        Some(golem_common::model::agent::ElementValue::UnstructuredText(text_ref)) => {
-                                            <#unstructured_text>::from_text_reference(text_ref.clone())
-                                                .map(Some)
-                                                .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
-                                                    message: format!("Failed to decode result value: {err}"),
-                                                })
-                                        }
-                                        _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-                                            message: format!("Failed to decode result value"),
-                                        })?,
+                        ElementSchema::UnstructuredText(descriptor) => {
+                            let unstructured_text = match &descriptor.restrictions {
+                                Some(restrictions) => {
+                                    let languages_enum = self.get_languages_enum(restrictions);
+                                    quote! {
+                                        golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum>
                                     }
                                 }
-                                _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-                                    message: format!("Failed to decode result value"),
-                                })?,
+                                None => {
+                                    quote! { golem_wasm::agentic::unstructured_text::UnstructuredText }
+                                }
+                            };
+                            quote! {
+                                match #ident {
+                                    golem_common::model::agent::DataValue::Tuple(element_values) => {
+                                        match element_values.elements.get(0) {
+                                            Some(golem_common::model::agent::ElementValue::UnstructuredText(text_ref)) => {
+                                                <#unstructured_text>::from_text_reference(text_ref.clone())
+                                                    .map(Some)
+                                                    .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
+                                                        message: format!("Failed to decode result value: {err}"),
+                                                    })
+                                            }
+                                            _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                                message: format!("Failed to decode result value"),
+                                            })?,
+                                        }
+                                    }
+                                    _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                        message: format!("Failed to decode result value"),
+                                    })?,
+                                }
                             }
                         }
-                    }
-                    ElementSchema::UnstructuredBinary(descriptor) => {
-                        let unstructured_binary = match &descriptor.restrictions {
-                            Some(restrictions) => {
-                                let mimetypes_enum = self.get_mimetypes_enum(restrictions);
-                                quote! {
-                                    golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum>
-                                }
-                            }
-                            None => {
-                                quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> }
-                            }
-                        };
-                        quote! {
-                            match #ident {
-                                golem_common::model::agent::DataValue::Tuple(element_values) => {
-                                    match element_values.elements.get(0) {
-                                        Some(golem_common::model::agent::ElementValue::UnstructuredBinary(binary_ref)) => {
-                                            <#unstructured_binary>::from_binary_reference(binary_ref.clone())
-                                                .map(Some)
-                                                .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
-                                                    message: format!("Failed to decode result value: {err}"),
-                                                })
-                                        }
-                                        _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-                                            message: format!("Failed to decode result value"),
-                                        })?,
+                        ElementSchema::UnstructuredBinary(descriptor) => {
+                            let unstructured_binary = match &descriptor.restrictions {
+                                Some(restrictions) => {
+                                    let mimetypes_enum = self.get_mimetypes_enum(restrictions);
+                                    quote! {
+                                        golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum>
                                     }
                                 }
-                                _ => Err(golem_client::bridge::ClientError::InvocationFailed {
-                                    message: format!("Failed to decode result value"),
-                                })?,
+                                None => {
+                                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> }
+                                }
+                            };
+                            quote! {
+                                match #ident {
+                                    golem_common::model::agent::DataValue::Tuple(element_values) => {
+                                        match element_values.elements.get(0) {
+                                            Some(golem_common::model::agent::ElementValue::UnstructuredBinary(binary_ref)) => {
+                                                <#unstructured_binary>::from_binary_reference(binary_ref.clone())
+                                                    .map(Some)
+                                                    .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
+                                                        message: format!("Failed to decode result value: {err}"),
+                                                    })
+                                            }
+                                            _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                                message: format!("Failed to decode result value"),
+                                            })?,
+                                        }
+                                    }
+                                    _ => Err(golem_client::bridge::ClientError::InvocationFailed {
+                                        message: format!("Failed to decode result value"),
+                                    })?,
+                                }
                             }
                         }
                     }
