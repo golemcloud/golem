@@ -76,7 +76,8 @@ fn rust_code_first_snippets() -> GeneratedPackage {
     let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
     let dir = TempDir::new().unwrap();
 
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    // let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let target_dir = Utf8Path::new("/Users/vigoo/tmp/rsclient");
 
     std::fs::remove_dir_all(target_dir).ok();
     generate_and_compile(agent_type, target_dir);

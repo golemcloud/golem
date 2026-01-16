@@ -148,8 +148,6 @@ impl RustBridgeGenerator {
     /// Generates the lib.rs source file
     fn generate_lib_rs(&mut self, path: &Utf8Path) -> anyhow::Result<()> {
         let tokens = self.generate_lib_rs_tokens()?;
-
-        println!("{}", tokens);
         let formatted = prettyplease::unparse(&syn::parse2(tokens)?);
 
         std::fs::write(path, formatted).map_err(|e| anyhow!("Failed to write lib.rs file: {e}"))?;
@@ -390,295 +388,311 @@ impl RustBridgeGenerator {
     }
 
     fn wit_type_to_typedef(&mut self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
-        if let Some(type_name) = typ.name() {
-            let name = Ident::new(type_name, Span::call_site());
-            match typ {
-                AnalysedType::Variant(variant) => {
-                    let mut cases = Vec::new();
-                    let mut into_value_cases = Vec::new();
-                    let mut from_value_cases = Vec::new();
-                    let mut case_names_lit = Vec::new();
+        let name = if let Some(type_name) = typ.name() {
+            Ident::new(type_name, Span::call_site())
+        } else {
+            match self.known_types.get(typ) {
+                Some(RustType::Defined { name, .. }) => Ident::new(name, Span::call_site()),
+                Some(RustType::Remapped(_)) => {
+                    return Err(anyhow!("wit_type_to_typedef called on remapped type"))
+                }
+                None => {
+                    // Anonymous complex types need to be associated with a name
+                    let name = self.name_anonymous_type(typ);
+                    self.known_types.insert(
+                        typ.clone(),
+                        RustType::Defined {
+                            name: name.clone(),
+                            typ: typ.clone(),
+                        },
+                    );
+                    Ident::new(&name, Span::call_site())
+                }
+            }
+        };
+        match typ {
+            AnalysedType::Variant(variant) => {
+                let mut cases = Vec::new();
+                let mut into_value_cases = Vec::new();
+                let mut from_value_cases = Vec::new();
+                let mut case_names_lit = Vec::new();
 
-                    for (idx, case) in variant.cases.iter().enumerate() {
-                        let case_ident = Ident::new(
-                            &to_rust_ident(&case.name).to_upper_camel_case(),
-                            Span::call_site(),
-                        );
-                        let idx_u32 = idx as u32;
-                        case_names_lit.push(case.name.clone());
+                for (idx, case) in variant.cases.iter().enumerate() {
+                    let case_ident = Ident::new(
+                        &to_rust_ident(&case.name).to_upper_camel_case(),
+                        Span::call_site(),
+                    );
+                    let idx_u32 = idx as u32;
+                    case_names_lit.push(case.name.clone());
 
-                        match &case.typ {
-                            Some(typ) => {
-                                // TODO: auto-inline anonymous records
+                    match &case.typ {
+                        Some(typ) => {
+                            // TODO: auto-inline anonymous records
 
-                                let inner = self.wit_type_to_typeref(typ)?;
-                                cases.push(quote! { #case_ident(#inner) });
+                            let inner = self.wit_type_to_typeref(typ)?;
+                            cases.push(quote! { #case_ident(#inner) });
 
-                                // IntoValue implementation
-                                into_value_cases.push(quote! {
-                                    Self::#case_ident(value) => golem_wasm::Value::Variant {
-                                        case_idx: #idx_u32,
-                                        case_value: Some(Box::new(value.into_value())),
-                                    }
-                                });
+                            // IntoValue implementation
+                            into_value_cases.push(quote! {
+                                Self::#case_ident(value) => golem_wasm::Value::Variant {
+                                    case_idx: #idx_u32,
+                                    case_value: Some(Box::new(value.into_value())),
+                                }
+                            });
 
-                                // FromValue implementation
-                                from_value_cases.push(quote! {
+                            // FromValue implementation
+                            from_value_cases.push(quote! {
                                     #idx_u32 => {
                                         let inner_value = case_value.ok_or_else(|| format!("Expected case_value for {}", stringify!(#case_ident)))?;
                                         Ok(Self::#case_ident(<#inner as golem_wasm::FromValue>::from_value(*inner_value)?))
                                     }
                                 });
-                            }
-                            None => {
-                                cases.push(quote! { #case_ident });
+                        }
+                        None => {
+                            cases.push(quote! { #case_ident });
 
-                                // IntoValue implementation
-                                into_value_cases.push(quote! {
-                                    Self::#case_ident => golem_wasm::Value::Variant {
-                                        case_idx: #idx_u32,
-                                        case_value: None,
-                                    }
-                                });
+                            // IntoValue implementation
+                            into_value_cases.push(quote! {
+                                Self::#case_ident => golem_wasm::Value::Variant {
+                                    case_idx: #idx_u32,
+                                    case_value: None,
+                                }
+                            });
 
-                                // FromValue implementation
-                                from_value_cases.push(quote! {
-                                    #idx_u32 => Ok(Self::#case_ident)
-                                });
+                            // FromValue implementation
+                            from_value_cases.push(quote! {
+                                #idx_u32 => Ok(Self::#case_ident)
+                            });
+                        }
+                    }
+                }
+
+                Ok(quote! {
+                    #[derive(Debug, Clone)]
+                    pub enum #name {
+                        #(#cases),*
+                    }
+
+                    impl golem_wasm::IntoValue for #name {
+                        fn into_value(self) -> golem_wasm::Value {
+                            match self {
+                                #(#into_value_cases),*
                             }
+                        }
+
+                        fn get_type() -> golem_wasm::analysis::AnalysedType {
+                            golem_wasm::analysis::AnalysedType::Variant(golem_wasm::analysis::TypeVariant {
+                                name: Some(stringify!(#name).to_string()),
+                                owner: None,
+                                cases: vec![
+                                    #(
+                                        golem_wasm::analysis::NameOptionTypePair {
+                                            name: #case_names_lit.to_string(),
+                                            typ: None,
+                                        }
+                                    ),*
+                                ],
+                            })
                         }
                     }
 
-                    Ok(quote! {
-                        #[derive(Debug, Clone)]
-                        pub enum #name {
-                            #(#cases),*
-                        }
-
-                        impl golem_wasm::IntoValue for #name {
-                            fn into_value(self) -> golem_wasm::Value {
-                                match self {
-                                    #(#into_value_cases),*
-                                }
-                            }
-
-                            fn get_type() -> golem_wasm::analysis::AnalysedType {
-                                golem_wasm::analysis::AnalysedType::Variant(golem_wasm::analysis::TypeVariant {
-                                    name: Some(stringify!(#name).to_string()),
-                                    owner: None,
-                                    cases: vec![
-                                        #(
-                                            golem_wasm::analysis::NameOptionTypePair {
-                                                name: #case_names_lit.to_string(),
-                                                typ: None,
-                                            }
-                                        ),*
-                                    ],
-                                })
-                            }
-                        }
-
-                        impl golem_wasm::FromValue for #name {
-                            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-                                match value {
-                                    golem_wasm::Value::Variant { case_idx, case_value } => {
-                                        match case_idx {
-                                            #(#from_value_cases,)*
-                                            _ => Err(format!("Invalid variant case index: {}", case_idx)),
-                                        }
+                    impl golem_wasm::FromValue for #name {
+                        fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                            match value {
+                                golem_wasm::Value::Variant { case_idx, case_value } => {
+                                    match case_idx {
+                                        #(#from_value_cases,)*
+                                        _ => Err(format!("Invalid variant case index: {}", case_idx)),
                                     }
-                                    _ => Err(format!("Expected Variant value, got {:?}", value)),
                                 }
+                                _ => Err(format!("Expected Variant value, got {:?}", value)),
                             }
                         }
-                    })
-                }
-                AnalysedType::Result(result) => {
-                    let ok = match result.ok.as_ref() {
-                        Some(ok_type) => self.wit_type_to_typeref(ok_type)?,
-                        None => quote! { () },
-                    };
-                    let err = match result.err.as_ref() {
-                        Some(err_type) => self.wit_type_to_typeref(err_type)?,
-                        None => quote! { () },
-                    };
-                    Ok(quote! { pub type #name = Result<#ok, #err> })
-                }
-                AnalysedType::Option(option) => {
-                    let inner = self.wit_type_to_typeref(&option.inner)?;
-                    Ok(quote! { pub type #name = Option<#inner>; })
-                }
-                AnalysedType::Enum(r#enum) => {
-                    let mut cases = Vec::new();
-                    let mut into_value_cases = Vec::new();
-                    let mut from_value_cases = Vec::new();
-                    let mut case_names_lit = Vec::new();
+                    }
+                })
+            }
+            AnalysedType::Result(result) => {
+                let ok = match result.ok.as_ref() {
+                    Some(ok_type) => self.wit_type_to_typeref(ok_type)?,
+                    None => quote! { () },
+                };
+                let err = match result.err.as_ref() {
+                    Some(err_type) => self.wit_type_to_typeref(err_type)?,
+                    None => quote! { () },
+                };
+                Ok(quote! { pub type #name = Result<#ok, #err> })
+            }
+            AnalysedType::Option(option) => {
+                let inner = self.wit_type_to_typeref(&option.inner)?;
+                Ok(quote! { pub type #name = Option<#inner>; })
+            }
+            AnalysedType::Enum(r#enum) => {
+                let mut cases = Vec::new();
+                let mut into_value_cases = Vec::new();
+                let mut from_value_cases = Vec::new();
+                let mut case_names_lit = Vec::new();
 
-                    for (idx, case) in r#enum.cases.iter().enumerate() {
-                        let case_ident = Ident::new(
-                            &to_rust_ident(case).to_upper_camel_case(),
-                            Span::call_site(),
-                        );
-                        cases.push(quote! { #case_ident });
-                        case_names_lit.push(case.clone());
+                for (idx, case) in r#enum.cases.iter().enumerate() {
+                    let case_ident = Ident::new(
+                        &to_rust_ident(case).to_upper_camel_case(),
+                        Span::call_site(),
+                    );
+                    cases.push(quote! { #case_ident });
+                    case_names_lit.push(case.clone());
 
-                        // IntoValue implementation
-                        into_value_cases.push(quote! {
-                            Self::#case_ident => golem_wasm::Value::Enum(#idx as u32)
-                        });
+                    // IntoValue implementation
+                    into_value_cases.push(quote! {
+                        Self::#case_ident => golem_wasm::Value::Enum(#idx as u32)
+                    });
 
-                        // FromValue implementation
-                        let idx_u32 = idx as u32;
-                        from_value_cases.push(quote! {
-                            #idx_u32 => Ok(Self::#case_ident)
-                        });
+                    // FromValue implementation
+                    let idx_u32 = idx as u32;
+                    from_value_cases.push(quote! {
+                        #idx_u32 => Ok(Self::#case_ident)
+                    });
+                }
+
+                Ok(quote! {
+                    #[derive(Debug, Clone)]
+                    pub enum #name {
+                        #(#cases),*
                     }
 
-                    Ok(quote! {
-                        #[derive(Debug, Clone)]
-                        pub enum #name {
-                            #(#cases),*
-                        }
-
-                        impl golem_wasm::IntoValue for #name {
-                            fn into_value(self) -> golem_wasm::Value {
-                                match self {
-                                    #(#into_value_cases),*
-                                }
-                            }
-
-                            fn get_type() -> golem_wasm::analysis::AnalysedType {
-                                golem_wasm::analysis::AnalysedType::Enum(golem_wasm::analysis::TypeEnum {
-                                    cases: vec![#(#case_names_lit.to_string()),*],
-                                    name: Some(stringify!(#name).to_string()),
-                                    owner: None,
-                                })
+                    impl golem_wasm::IntoValue for #name {
+                        fn into_value(self) -> golem_wasm::Value {
+                            match self {
+                                #(#into_value_cases),*
                             }
                         }
 
-                        impl golem_wasm::FromValue for #name {
-                            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-                                match value {
-                                    golem_wasm::Value::Enum(idx) => {
-                                        match idx {
-                                            #(#from_value_cases,)*
-                                            _ => Err(format!("Invalid enum index: {}", idx)),
-                                        }
+                        fn get_type() -> golem_wasm::analysis::AnalysedType {
+                            golem_wasm::analysis::AnalysedType::Enum(golem_wasm::analysis::TypeEnum {
+                                cases: vec![#(#case_names_lit.to_string()),*],
+                                name: Some(stringify!(#name).to_string()),
+                                owner: None,
+                            })
+                        }
+                    }
+
+                    impl golem_wasm::FromValue for #name {
+                        fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                            match value {
+                                golem_wasm::Value::Enum(idx) => {
+                                    match idx {
+                                        #(#from_value_cases,)*
+                                        _ => Err(format!("Invalid enum index: {}", idx)),
                                     }
-                                    _ => Err(format!("Expected Enum value, got {:?}", value)),
                                 }
+                                _ => Err(format!("Expected Enum value, got {:?}", value)),
                             }
                         }
-                    })
-                }
-                AnalysedType::Flags(_flags) => {
-                    Err(anyhow!("Flags are not supported")) // NOTE: none of the code-first SDKs support flags at the moment
-                }
-                AnalysedType::Record(record) => {
-                    let mut fields = Vec::new();
-                    let mut field_idents = Vec::new();
-                    let mut field_types = Vec::new();
-                    let mut field_names_lit = Vec::new();
-                    let mut into_value_fields = Vec::new();
-                    let mut from_value_fields = Vec::new();
+                    }
+                })
+            }
+            AnalysedType::Flags(_flags) => {
+                Err(anyhow!("Flags are not supported")) // NOTE: none of the code-first SDKs support flags at the moment
+            }
+            AnalysedType::Record(record) => {
+                let mut fields = Vec::new();
+                let mut field_idents = Vec::new();
+                let mut field_types = Vec::new();
+                let mut field_names_lit = Vec::new();
+                let mut into_value_fields = Vec::new();
+                let mut from_value_fields = Vec::new();
 
-                    for field in &record.fields {
-                        let field_ident =
-                            Ident::new(&to_rust_ident(&field.name), Span::call_site());
-                        let field_type = self.wit_type_to_typeref(&field.typ)?;
+                for field in &record.fields {
+                    let field_ident = Ident::new(&to_rust_ident(&field.name), Span::call_site());
+                    let field_type = self.wit_type_to_typeref(&field.typ)?;
 
-                        fields.push(quote! { pub #field_ident: #field_type });
-                        field_idents.push(field_ident.clone());
-                        field_types.push(field_type.clone());
-                        field_names_lit.push(field.name.clone());
+                    fields.push(quote! { pub #field_ident: #field_type });
+                    field_idents.push(field_ident.clone());
+                    field_types.push(field_type.clone());
+                    field_names_lit.push(field.name.clone());
 
-                        // IntoValue implementation
-                        into_value_fields.push(quote! {
-                            self.#field_ident.into_value()
-                        });
+                    // IntoValue implementation
+                    into_value_fields.push(quote! {
+                        self.#field_ident.into_value()
+                    });
 
-                        // FromValue implementation
-                        from_value_fields.push(quote! {
+                    // FromValue implementation
+                    from_value_fields.push(quote! {
                             let #field_ident = <#field_type as golem_wasm::FromValue>::from_value(fields.remove(0))?;
                         });
+                }
+
+                let field_count = field_idents.len();
+
+                Ok(quote! {
+                    #[derive(Debug, Clone)]
+                    pub struct #name {
+                        #(#fields),*
                     }
 
-                    let field_count = field_idents.len();
-
-                    Ok(quote! {
-                        #[derive(Debug, Clone)]
-                        pub struct #name {
-                            #(#fields),*
+                    impl golem_wasm::IntoValue for #name {
+                        fn into_value(self) -> golem_wasm::Value {
+                            golem_wasm::Value::Record(vec![
+                                #(#into_value_fields),*
+                            ])
                         }
 
-                        impl golem_wasm::IntoValue for #name {
-                            fn into_value(self) -> golem_wasm::Value {
-                                golem_wasm::Value::Record(vec![
-                                    #(#into_value_fields),*
-                                ])
-                            }
+                        fn get_type() -> golem_wasm::analysis::AnalysedType {
+                            use golem_wasm::analysis::analysed_type::field;
 
-                            fn get_type() -> golem_wasm::analysis::AnalysedType {
-                                use golem_wasm::analysis::analysed_type::field;
-
-                                golem_wasm::analysis::AnalysedType::Record(golem_wasm::analysis::TypeRecord {
-                                    fields: vec![
-                                        #(
-                                            field(#field_names_lit, <#field_types as golem_wasm::IntoValue>::get_type())
-                                        ),*
-                                    ],
-                                    name: Some(stringify!(#name).to_string()),
-                                    owner: None,
-                                })
-                            }
+                            golem_wasm::analysis::AnalysedType::Record(golem_wasm::analysis::TypeRecord {
+                                fields: vec![
+                                    #(
+                                        field(#field_names_lit, <#field_types as golem_wasm::IntoValue>::get_type())
+                                    ),*
+                                ],
+                                name: Some(stringify!(#name).to_string()),
+                                owner: None,
+                            })
                         }
+                    }
 
-                        impl golem_wasm::FromValue for #name {
-                            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-                                match value {
-                                    golem_wasm::Value::Record(mut fields) if fields.len() == #field_count => {
-                                        #(#from_value_fields)*
-                                        Ok(Self {
-                                            #(#field_idents),*
-                                        })
-                                    }
-                                    golem_wasm::Value::Record(fields) => {
-                                        Err(format!("Expected Record with {} fields, got {}", #field_count, fields.len()))
-                                    }
-                                    _ => Err(format!("Expected Record value, got {:?}", value)),
+                    impl golem_wasm::FromValue for #name {
+                        fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                            match value {
+                                golem_wasm::Value::Record(mut fields) if fields.len() == #field_count => {
+                                    #(#from_value_fields)*
+                                    Ok(Self {
+                                        #(#field_idents),*
+                                    })
                                 }
+                                golem_wasm::Value::Record(fields) => {
+                                    Err(format!("Expected Record with {} fields, got {}", #field_count, fields.len()))
+                                }
+                                _ => Err(format!("Expected Record value, got {:?}", value)),
                             }
                         }
-                    })
-                }
-                AnalysedType::Tuple(tuple) => {
-                    let mut elements = Vec::new();
-                    for item in tuple.items.iter() {
-                        elements.push(self.wit_type_to_typeref(item)?);
                     }
-                    Ok(quote! { pub type #name = (#(#elements),*); })
-                }
-                AnalysedType::List(list) => {
-                    let inner = self.wit_type_to_typeref(&list.inner)?;
-                    Ok(quote! { pub type #name = Vec<#inner>; })
-                }
-                AnalysedType::Str(_) => Ok(quote! { pub type #name = String; }),
-                AnalysedType::Chr(_) => Ok(quote! { pub type #name = char; }),
-                AnalysedType::F64(_) => Ok(quote! { pub type #name = f64; }),
-                AnalysedType::F32(_) => Ok(quote! { pub type #name = f32; }),
-                AnalysedType::U64(_) => Ok(quote! { pub type #name = u64; }),
-                AnalysedType::S64(_) => Ok(quote! { pub type #name = i64; }),
-                AnalysedType::U32(_) => Ok(quote! { pub type #name = u32; }),
-                AnalysedType::S32(_) => Ok(quote! { pub type #name = i32; }),
-                AnalysedType::U16(_) => Ok(quote! { pub type #name = u16; }),
-                AnalysedType::S16(_) => Ok(quote! { pub type #name = i16; }),
-                AnalysedType::U8(_) => Ok(quote! { pub type #name = u8; }),
-                AnalysedType::S8(_) => Ok(quote! { pub type #name = i8; }),
-                AnalysedType::Bool(_) => Ok(quote! { pub type #name = bool; }),
-                AnalysedType::Handle(_) => Err(anyhow!("Handles are not supported")),
+                })
             }
-        } else {
-            Err(anyhow!("Only named types can be defined"))
+            AnalysedType::Tuple(tuple) => {
+                let mut elements = Vec::new();
+                for item in tuple.items.iter() {
+                    elements.push(self.wit_type_to_typeref(item)?);
+                }
+                Ok(quote! { pub type #name = (#(#elements),*); })
+            }
+            AnalysedType::List(list) => {
+                let inner = self.wit_type_to_typeref(&list.inner)?;
+                Ok(quote! { pub type #name = Vec<#inner>; })
+            }
+            AnalysedType::Str(_) => Ok(quote! { pub type #name = String; }),
+            AnalysedType::Chr(_) => Ok(quote! { pub type #name = char; }),
+            AnalysedType::F64(_) => Ok(quote! { pub type #name = f64; }),
+            AnalysedType::F32(_) => Ok(quote! { pub type #name = f32; }),
+            AnalysedType::U64(_) => Ok(quote! { pub type #name = u64; }),
+            AnalysedType::S64(_) => Ok(quote! { pub type #name = i64; }),
+            AnalysedType::U32(_) => Ok(quote! { pub type #name = u32; }),
+            AnalysedType::S32(_) => Ok(quote! { pub type #name = i32; }),
+            AnalysedType::U16(_) => Ok(quote! { pub type #name = u16; }),
+            AnalysedType::S16(_) => Ok(quote! { pub type #name = i16; }),
+            AnalysedType::U8(_) => Ok(quote! { pub type #name = u8; }),
+            AnalysedType::S8(_) => Ok(quote! { pub type #name = i8; }),
+            AnalysedType::Bool(_) => Ok(quote! { pub type #name = bool; }),
+            AnalysedType::Handle(_) => Err(anyhow!("Handles are not supported")),
         }
     }
 
@@ -738,18 +752,28 @@ impl RustBridgeGenerator {
                 | AnalysedType::Enum(_)
                 | AnalysedType::Flags(_)
                 | AnalysedType::Record(_) => {
-                    // Anonymous complex types need to be associated with a name
-                    let name = self.name_anonymous_type(typ);
-                    self.known_types.insert(
-                        typ.clone(),
-                        RustType::Defined {
-                            name: name.clone(),
-                            typ: typ.clone(),
-                        },
-                    );
-                    let _def = self.wit_type_to_typedef(typ)?; // ensuring the whole type is traversed early
-                    let name = Ident::new(&name, Span::call_site());
-                    Ok(quote! { #name })
+                    let rust_type = self.known_types.get(typ);
+                    match rust_type {
+                        Some(RustType::Defined { name, .. }) => {
+                            let name = Ident::new(name, Span::call_site());
+                            Ok(quote! { #name })
+                        }
+                        Some(RustType::Remapped(remap)) => Ok(remap.clone()),
+                        None => {
+                            // Anonymous complex types need to be associated with a name
+                            let name = self.name_anonymous_type(typ);
+                            self.known_types.insert(
+                                typ.clone(),
+                                RustType::Defined {
+                                    name: name.clone(),
+                                    typ: typ.clone(),
+                                },
+                            );
+                            let _def = self.wit_type_to_typedef(typ)?; // ensuring the whole type is traversed early
+                            let name = Ident::new(&name, Span::call_site());
+                            Ok(quote! { #name })
+                        }
+                    }
                 }
             }
         }
@@ -762,13 +786,6 @@ impl RustBridgeGenerator {
     }
 
     fn encode_as_data_value(&self, name: &Ident, data_schema: &DataSchema) -> TokenStream {
-        //         let typed_constructor_parameters = golem_common::model::agent::DataValue::Tuple(
-        //             golem_common::model::agent::ElementValues {
-        //                 elements: vec![golem_common::model::agent::ElementValue::ComponentModel(
-        //                     name.into_value_and_type(),
-        //                 )],
-        //             },
-        //         );
         match data_schema {
             DataSchema::Tuple(elements) => {
                 let encoded_elements = elements
@@ -866,13 +883,6 @@ impl RustBridgeGenerator {
     }
 
     fn await_method(&mut self, method: &AgentMethod) -> anyhow::Result<TokenStream> {
-        //     pub async fn increment(&self) -> Result<f64, golem_client::bridge::ClientError> {
-        //         let result = self
-        //             .__increment(golem_client::model::AgentInvocationMode::Await, None)
-        //             .await?;
-        //         let result = result.unwrap(); // always Some because of Await
-        //         Ok(result)
-        //     }
         let name = self.await_method_name(method);
         let internal_name = self.internal_method_name(method);
 
@@ -903,12 +913,6 @@ impl RustBridgeGenerator {
     }
 
     fn trigger_method(&mut self, method: &AgentMethod) -> anyhow::Result<TokenStream> {
-        //     pub async fn trigger_increment(&self) -> Result<(), golem_client::bridge::ClientError> {
-        //         let _ = self
-        //             .__increment(golem_client::model::AgentInvocationMode::Schedule, None)
-        //             .await?;
-        //         Ok(())
-        //     }
         let name = self.trigger_method_name(method);
         let internal_name = self.internal_method_name(method);
 
@@ -924,18 +928,6 @@ impl RustBridgeGenerator {
     }
 
     fn schedule_method(&mut self, method: &AgentMethod) -> anyhow::Result<TokenStream> {
-        //  pub async fn schedule_increment(
-        //         &self,
-        //         when: chrono::DateTime<chrono::Utc>,
-        //     ) -> Result<(), golem_client::bridge::ClientError> {
-        //         let _ = self
-        //             .__increment(
-        //                 golem_client::model::AgentInvocationMode::Schedule,
-        //                 Some(when),
-        //             )
-        //             .await?;
-        //         Ok(())
-        //     }
         let name = self.schedule_method_name(method);
         let internal_name = self.internal_method_name(method);
 
