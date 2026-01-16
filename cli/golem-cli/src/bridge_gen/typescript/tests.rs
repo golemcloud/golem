@@ -55,6 +55,7 @@ struct TestTypes {
     tagged_union: AnalysedType,
     union_with_literals: AnalysedType,
     union_with_only_literals: AnalysedType,
+    anonymous_union_with_only_literals: AnalysedType,
     object_with_union_undefined: AnalysedType,
 }
 
@@ -133,6 +134,8 @@ impl Default for TestTypes {
         let union_with_only_literals =
             r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
 
+        let anonymous_union_with_only_literals = r#enum(&["foo", "bar", "baz"]);
+
         let object_with_union_undefined = record(vec![field("a", option(str()))]);
 
         TestTypes {
@@ -148,6 +151,7 @@ impl Default for TestTypes {
             tagged_union,
             union_with_literals,
             union_with_only_literals,
+            anonymous_union_with_only_literals,
             object_with_union_undefined,
         }
     }
@@ -898,6 +902,32 @@ fn bridge_tests_unionwithonlyliterals(#[tagged_as("code_first_snippets")] pkg: &
 }
 
 #[test]
+fn bridge_tests_anyonymousunionwithonlyliterals(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_input_encoding(
+        target_dir,
+        "FunAnonymousUnionWithOnlyLiterals",
+        json!(["bar"]),
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Enum(1),
+                        types.anonymous_union_with_only_literals.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+    );
+}
+
+#[test]
 fn bridge_tests_voidreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
@@ -1551,6 +1581,32 @@ fn bridge_tests_unionwithonlyliterals_output(
 }
 
 #[test]
+fn bridge_tests_anyonmousunionwithonlyliterals_output(
+    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+) {
+    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
+    let types = TestTypes::default();
+
+    assert_function_output_decoding(
+        target_dir,
+        "FunAnonymousUnionWithOnlyLiterals",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue {
+                    value: ValueAndType::new(
+                        Value::Enum(1),
+                        types.anonymous_union_with_only_literals.clone(),
+                    )
+                    .to_json_value()
+                    .unwrap(),
+                },
+            )],
+        }),
+        json!("bar"),
+    );
+}
+
+#[test]
 fn bridge_tests_number_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
@@ -1632,6 +1688,8 @@ fn bridge_tests_map_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPa
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
+    println!("Generating into: {}", target_dir);
+
     let mut gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true);
     gen.generate().unwrap();
 
@@ -1688,7 +1746,7 @@ fn assert_function_input_encoding(
     expected: UntypedJsonDataValue,
 ) {
     // In this test we pass a JSON representing an array of function parameters as it is passed to our client method,
-    // and we expect the encoding to be a UntypedDataValue matching the DataSchema of the function's input.
+    // and we expect the encoding to be an UntypedDataValue matching the DataSchema of the function's input.
 
     let mut child = std::process::Command::new("npm")
         .arg("run")

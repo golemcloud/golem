@@ -1,4 +1,4 @@
-use crate::app::build::extract_agent_type::extract_and_cache_agent_types;
+use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::ApplicationContext;
@@ -37,7 +37,7 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
 
                 let agent_types = {
                     let mut agent_types =
-                        extract_and_cache_agent_types(ctx, component_name, None).await?;
+                        extract_and_store_agent_types(ctx, component_name).await?;
 
                     if should_filter_by_agent_type_name {
                         agent_types.retain(|agent_type| {
@@ -102,7 +102,7 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
                     let is_matching_component = matchers.remove(component_name.as_str());
 
                     let mut agent_types =
-                        extract_and_cache_agent_types(ctx, component_name, None).await?;
+                        extract_and_store_agent_types(ctx, component_name).await?;
 
                     if !is_matching_all && !is_matching_component {
                         agent_types

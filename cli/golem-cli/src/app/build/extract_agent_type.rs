@@ -20,22 +20,19 @@ use crate::log::{log_action, log_skipping_up_to_date, LogColorize};
 use anyhow::Context;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
-use std::path::Path;
 
-pub async fn extract_and_cache_agent_types(
+pub async fn extract_and_store_agent_types(
     ctx: &ApplicationContext,
     component_name: &ComponentName,
-    wasm_override: Option<&Path>,
 ) -> anyhow::Result<Vec<AgentType>> {
     let component = ctx.application.component(component_name);
-    let wasm = component.final_linked_wasm();
-    let wasm = wasm_override.unwrap_or(&wasm);
-    let extracted_agent_types_cache = component.extracted_agent_types_cache();
+    let wasm = component.agent_type_extraction_source_wasm();
+    let extracted_agent_types = component.extracted_agent_types(&wasm);
 
     let agent_types = new_task_up_to_date_check(ctx)
         .with_task_result_marker(ExtractAgentTypeMarkerHash { component_name })?
         .with_sources(|| vec![&wasm])
-        .with_targets(|| vec![&extracted_agent_types_cache])
+        .with_targets(|| vec![&extracted_agent_types])
         .run_async_or_skip_returning(
             || async {
                 log_action(
@@ -49,11 +46,11 @@ pub async fn extract_and_cache_agent_types(
 
                 let agent_types = ctx
                     .wit
-                    .get_extracted_agent_types(component_name, wasm)
+                    .get_extracted_agent_types(component_name, &wasm)
                     .await?;
 
                 fs::write_str(
-                    &extracted_agent_types_cache,
+                    &extracted_agent_types,
                     serde_json::to_string(&agent_types)
                         .context("Failed to serialize agent types")?,
                 )?;
@@ -62,9 +59,8 @@ pub async fn extract_and_cache_agent_types(
             },
             || {
                 log_skipping_up_to_date(format!(
-                    "extracting {} agent types from {}, using cached result",
+                    "extracting {} agent types",
                     component_name.as_str().log_color_highlight(),
-                    wasm.log_color_highlight()
                 ));
             },
         )
@@ -73,7 +69,7 @@ pub async fn extract_and_cache_agent_types(
     match agent_types {
         Some(agent_types) => Ok(agent_types),
         None => Ok(
-            serde_json::from_str(&fs::read_to_string(&extracted_agent_types_cache)?)
+            serde_json::from_str(&fs::read_to_string(&extracted_agent_types)?)
                 .context("Failed to deserialize agent types")?,
         ),
     }

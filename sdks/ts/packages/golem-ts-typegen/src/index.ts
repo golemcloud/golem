@@ -35,7 +35,6 @@ import {
 
 import * as fs from "node:fs";
 import path from "path";
-import { option } from "fast-check";
 
 export function getTypeFromTsMorph(
   tsMorphType: TsMorphType,
