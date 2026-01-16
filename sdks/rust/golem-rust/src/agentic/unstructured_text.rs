@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{
     ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType, WitValue,
 };
+use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
 use golem_wasm::Value;
 
 impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
