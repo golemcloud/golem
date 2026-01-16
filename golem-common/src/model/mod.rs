@@ -46,6 +46,8 @@ pub mod protobuf;
 pub mod regions;
 pub mod reports;
 pub mod security_scheme;
+#[cfg(test)]
+mod tests;
 pub mod trim_date;
 pub mod worker;
 
