@@ -23,7 +23,7 @@ use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
@@ -39,6 +39,7 @@ pub struct RustBridgeGenerator {
 
     generated_language_enums: BTreeMap<Vec<TextType>, String>,
     generated_mimetypes_enums: BTreeMap<Vec<BinaryType>, String>,
+    known_types: HashMap<AnalysedType, RustType>,
 }
 
 // TODO: convert panics to error results
@@ -51,6 +52,7 @@ impl BridgeGenerator for RustBridgeGenerator {
 
             generated_language_enums: BTreeMap::new(),
             generated_mimetypes_enums: BTreeMap::new(),
+            known_types: HashMap::new(),
         }
     }
 
@@ -144,7 +146,7 @@ impl RustBridgeGenerator {
     fn generate_lib_rs(&mut self, path: &Utf8Path) -> anyhow::Result<()> {
         let tokens = self.generate_lib_rs_tokens()?;
 
-        // println!("{}", tokens);
+        println!("{}", tokens);
         let formatted = prettyplease::unparse(&syn::parse2(tokens)?);
 
         std::fs::write(path, formatted).map_err(|e| anyhow!("Failed to write lib.rs file: {e}"))?;
@@ -158,6 +160,8 @@ impl RustBridgeGenerator {
         let agent_type_name_lit = Lit::Str(LitStr::new(agent_type_name, Span::call_site()));
         let client_struct_name =
             Ident::new(&agent_type_name.to_upper_camel_case(), Span::call_site());
+
+        self.collect_named_types();
 
         let input_schema = self.agent_type.constructor.input_schema.clone();
         let constructor_params = self.parameter_list(&input_schema);
@@ -179,10 +183,12 @@ impl RustBridgeGenerator {
 
         let global_config = self.global_config();
 
+        let types = self.type_definitions();
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
 
         let tokens = quote! {
+            use golem_common::base_model::agent::{UnstructuredBinaryExtensions, UnstructuredTextExtensions};
             use golem_wasm::{FromValueAndType, IntoValueAndType};
 
             pub struct #client_struct_name {
@@ -252,6 +258,8 @@ impl RustBridgeGenerator {
             }
 
             #global_config
+
+            #types
 
             #languages
 
@@ -348,39 +356,163 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn wit_type_to_typeref(&self, typ: &AnalysedType) -> TokenStream {
+    fn wit_type_to_typedef(&mut self, typ: &AnalysedType) -> TokenStream {
+        // TODO: need to implement IntoValueAndType/FromValueAndType for all generated types
         if let Some(name) = typ.name() {
-            let name = Ident::new(
-                &to_rust_ident(&name).to_upper_camel_case(),
-                Span::call_site(),
-            );
-            quote! { #name }
+            let name = Ident::new(&name, Span::call_site());
+            match typ {
+                AnalysedType::Variant(variant) => {
+                    let mut cases = Vec::new();
+                    for case in &variant.cases {
+                        let case_ident = Ident::new(
+                            &to_rust_ident(&case.name).to_upper_camel_case(),
+                            Span::call_site(),
+                        );
+                        match &case.typ {
+                            Some(typ) => {
+                                // TODO: auto-inline anonymous records
+
+                                let inner = self.wit_type_to_typeref(typ);
+                                cases.push(quote! { #case_ident(#inner) });
+                            }
+                            None => {
+                                cases.push(quote! { #case_ident });
+                            }
+                        }
+                    }
+                    quote! {
+                        #[derive(Debug, Clone)]
+                        pub enum #name {
+                            #(#cases),*
+                        }
+                    }
+                }
+                AnalysedType::Result(result) => {
+                    let ok = result
+                        .ok
+                        .as_ref()
+                        .map(|ok| self.wit_type_to_typeref(ok))
+                        .unwrap_or_else(|| quote! { () });
+                    let err = result
+                        .err
+                        .as_ref()
+                        .map(|err| self.wit_type_to_typeref(err))
+                        .unwrap_or_else(|| quote! { () });
+                    quote! { pub type #name = Result<#ok, #err> }
+                }
+                AnalysedType::Option(option) => {
+                    let inner = self.wit_type_to_typeref(&*option.inner);
+                    quote! { pub type #name = Option<#inner>; }
+                }
+                AnalysedType::Enum(r#enum) => {
+                    let mut cases = Vec::new();
+                    for case in &r#enum.cases {
+                        let case_ident = Ident::new(
+                            &to_rust_ident(&case).to_upper_camel_case(),
+                            Span::call_site(),
+                        );
+                        cases.push(quote! { #case_ident });
+                    }
+                    quote! {
+                        #[derive(Debug, Clone)]
+                        pub enum #name {
+                            #(#cases),*
+                        }
+                    }
+                }
+                AnalysedType::Flags(flags) => {
+                    panic!("Flags are not supported") // NOTE: none of the code-first SDKs support flags at the moment
+                }
+                AnalysedType::Record(record) => {
+                    let mut fields = Vec::new();
+                    for field in &record.fields {
+                        let field_ident =
+                            Ident::new(&to_rust_ident(&field.name), Span::call_site());
+                        let field_type = self.wit_type_to_typeref(&field.typ);
+                        fields.push(quote! { pub #field_ident: #field_type });
+                    }
+                    quote! {
+                        #[derive(Debug, Clone)]
+                        pub struct #name {
+                            #(#fields),*
+                        }
+                    }
+                }
+                AnalysedType::Tuple(tuple) => {
+                    let elements = tuple
+                        .items
+                        .iter()
+                        .map(|item| self.wit_type_to_typeref(item))
+                        .collect::<Vec<_>>();
+                    quote! { pub type #name = (#(#elements),*); }
+                }
+                AnalysedType::List(list) => {
+                    let inner = self.wit_type_to_typeref(&list.inner);
+                    quote! { pub type #name = Vec<#inner>; }
+                }
+                AnalysedType::Str(_) => {
+                    quote! { pub type #name = String; }
+                }
+                AnalysedType::Chr(_) => {
+                    quote! { pub type #name = char; }
+                }
+                AnalysedType::F64(_) => {
+                    quote! { pub type #name = f64; }
+                }
+                AnalysedType::F32(_) => {
+                    quote! { pub type #name = f32; }
+                }
+                AnalysedType::U64(_) => {
+                    quote! { pub type #name = u64; }
+                }
+                AnalysedType::S64(_) => {
+                    quote! { pub type #name = i64; }
+                }
+                AnalysedType::U32(_) => {
+                    quote! { pub type #name = u32; }
+                }
+                AnalysedType::S32(_) => {
+                    quote! { pub type #name = i32; }
+                }
+                AnalysedType::U16(_) => {
+                    quote! { pub type #name = u16; }
+                }
+                AnalysedType::S16(_) => {
+                    quote! { pub type #name = i16; }
+                }
+                AnalysedType::U8(_) => {
+                    quote! { pub type #name = u8; }
+                }
+                AnalysedType::S8(_) => {
+                    quote! { pub type #name = i8; }
+                }
+                AnalysedType::Bool(_) => {
+                    quote! { pub type #name = bool; }
+                }
+                AnalysedType::Handle(_) => {
+                    panic!("Handles are not supported");
+                }
+            }
+        } else {
+            panic!("Only named types can be defined");
+        }
+    }
+
+    fn wit_type_to_typeref(&mut self, typ: &AnalysedType) -> TokenStream {
+        if let Some(_) = typ.name() {
+            let rust_type = self.known_types.get(typ).expect("Must be in known_types");
+            match rust_type {
+                RustType::Defined { name, .. } => {
+                    let name = Ident::new(&name, Span::call_site());
+                    quote! { #name }
+                }
+                RustType::Remapped(remap) => remap.clone(),
+            }
         } else {
             match typ {
-                AnalysedType::Variant(_) => {
-                    todo!()
-                }
-                AnalysedType::Result(_) => {
-                    todo!()
-                }
                 AnalysedType::Option(inner) => {
                     let inner = self.wit_type_to_typeref(&*inner.inner);
                     quote! { Option<#inner> }
-                }
-                AnalysedType::Enum(_) => {
-                    todo!()
-                }
-                AnalysedType::Flags(_) => {
-                    todo!()
-                }
-                AnalysedType::Record(_) => {
-                    todo!()
-                }
-                AnalysedType::Tuple(_) => {
-                    todo!()
-                }
-                AnalysedType::List(_) => {
-                    todo!()
                 }
                 AnalysedType::Str(_) => {
                     quote! { String }
@@ -421,11 +553,57 @@ impl RustBridgeGenerator {
                 AnalysedType::Bool(_) => {
                     quote! { bool }
                 }
-                AnalysedType::Handle(_) => {
-                    todo!()
+                AnalysedType::Tuple(tuple) => {
+                    let elements = tuple
+                        .items
+                        .iter()
+                        .map(|item| self.wit_type_to_typeref(item))
+                        .collect::<Vec<_>>();
+                    quote! { (#(#elements),*) }
+                }
+                AnalysedType::List(list) => {
+                    let inner = self.wit_type_to_typeref(&*list.inner);
+                    quote! { Vec<#inner> }
+                }
+                AnalysedType::Result(result) => {
+                    let ok = result
+                        .ok
+                        .as_ref()
+                        .map(|ok| self.wit_type_to_typeref(ok))
+                        .unwrap_or_else(|| quote! { () });
+                    let err = result
+                        .err
+                        .as_ref()
+                        .map(|err| self.wit_type_to_typeref(err))
+                        .unwrap_or_else(|| quote! { () });
+                    quote! { Result<#ok, #err> }
+                }
+                AnalysedType::Handle(_)
+                | AnalysedType::Variant(_)
+                | AnalysedType::Enum(_)
+                | AnalysedType::Flags(_)
+                | AnalysedType::Record(_) => {
+                    // Anonymous complex types need to be associated with a name
+                    let name = self.name_anonymous_type(&typ);
+                    self.known_types.insert(
+                        typ.clone(),
+                        RustType::Defined {
+                            name: name.clone(),
+                            typ: typ.clone(),
+                        },
+                    );
+                    let _def = self.wit_type_to_typedef(&typ); // ensuring the whole type is traversed early
+                    let name = Ident::new(&name, Span::call_site());
+                    quote! { #name }
                 }
             }
         }
+    }
+
+    fn name_anonymous_type(&self, _typ: &AnalysedType) -> String {
+        // TODO: better naming rules
+        let cnt = self.known_types.len();
+        format!("AnonType{cnt}")
     }
 
     fn encode_as_data_value(&self, name: &Ident, data_schema: &DataSchema) -> TokenStream {
@@ -1353,8 +1531,53 @@ impl RustBridgeGenerator {
         }
     }
 
-    /// Helper to generate the package name from the agent type name
+    fn collect_named_types(&mut self) {
+        let all_types = super::collect_all_wit_types(&self.agent_type);
+        for typ in all_types {
+            if let Some(name) = typ.name() {
+                // TODO: detect special known types and store them as Remapped
+                // TODO: detect name collisions
+                // TODO: use owner for the name
+
+                self.known_types.insert(
+                    typ.clone(),
+                    RustType::Defined {
+                        name: to_rust_ident(name).to_upper_camel_case(),
+                        typ,
+                    },
+                );
+            }
+        }
+    }
+
+    fn type_definitions(&mut self) -> TokenStream {
+        let mut type_definitions = Vec::new();
+
+        let defined = self
+            .known_types
+            .iter()
+            .filter_map(|(_, rust_type)| match rust_type {
+                RustType::Defined { name, typ } => Some((name.clone(), typ.clone())),
+                _ => None,
+            })
+            .collect::<BTreeMap<String, AnalysedType>>();
+
+        for (name, typ) in defined {
+            let def = self.wit_type_to_typedef(&typ.named(name));
+            type_definitions.push(def);
+        }
+
+        quote! {
+            #(#type_definitions)*
+        }
+    }
+
     fn package_name(&self) -> String {
         format!("{}_client", self.agent_type.type_name.0.to_snake_case())
     }
+}
+
+enum RustType {
+    Defined { name: String, typ: AnalysedType },
+    Remapped(TokenStream),
 }
