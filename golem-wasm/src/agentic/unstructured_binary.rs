@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Debug;
 use crate::Value;
 
 /// Represents a binary value that can either be inline or a URL reference.
 ///
 /// `MT` specifies the allowed language codes for inline text.
+#[derive(Debug, Clone)]
 pub enum UnstructuredBinary<MT: AllowedMimeTypes> {
     Url(String),
     Inline { data: Vec<u8>, mime_type: MT },
@@ -131,7 +133,7 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
 /// Implement this trait for enums representing supported languages. Provides
 /// conversion between enum variants and their string language codes.
 /// Use the `#[derive(AllowedMimeTypes)]` macro to automatically implement this trait.
-pub trait AllowedMimeTypes {
+pub trait AllowedMimeTypes: Debug + Clone {
     fn all() -> &'static [&'static str];
 
     fn from_string(mime_type: &str) -> Option<Self>

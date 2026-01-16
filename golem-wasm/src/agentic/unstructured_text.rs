@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Debug;
 use crate::Value;
 
 /// Represents a text value that can either be inline or a URL reference.
 ///
 /// `LC` specifies the allowed language codes for inline text. Defaults to `AnyLanguage`,
 /// which allows all languages.
+#[derive(Debug, Clone)]
 pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
     Url(String),
     Text {
@@ -169,7 +171,7 @@ impl UnstructuredText<AnyLanguage> {
 /// Implement this trait for enums representing supported languages. Provides
 /// conversion between enum variants and their string language codes.
 /// Use the `#[derive(AllowedLanguages)]` macro to automatically implement this trait.
-pub trait AllowedLanguages {
+pub trait AllowedLanguages: Debug + Clone {
     fn all() -> &'static [&'static str];
 
     fn from_language_code(code: &str) -> Option<Self>
@@ -179,6 +181,7 @@ pub trait AllowedLanguages {
     fn to_language_code(&self) -> &'static str;
 }
 
+#[derive(Debug, Clone)]
 pub struct AnyLanguage;
 
 impl AllowedLanguages for AnyLanguage {

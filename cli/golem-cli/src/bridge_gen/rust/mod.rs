@@ -132,7 +132,7 @@ impl RustBridgeGenerator {
             "rust-bridge",
             &["client"],
         ); // TODO: use published version when available
-        doc["dependencies"]["nonempty_collections"] = dep("0.3.1", &[]);
+        doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
         doc["dependencies"]["reqwest"] = dep("0.12", &["default-tls"]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
@@ -188,9 +188,16 @@ impl RustBridgeGenerator {
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
 
+        let multimodal_import = if self.known_multimodals.is_empty() {
+            quote! {}
+        } else {
+            quote! { use crate::multimodal::MultimodalEnum; }
+        };
+
         let tokens = quote! {
             use golem_common::base_model::agent::{UnstructuredBinaryExtensions, UnstructuredTextExtensions};
             use golem_wasm::{FromValueAndType, IntoValueAndType};
+            #multimodal_import
 
             pub struct #client_struct_name {
                 constructor_parameters: golem_client::model::UntypedJsonDataValue,
@@ -276,9 +283,7 @@ impl RustBridgeGenerator {
         let cnt = self.known_multimodals.len() + 1;
         self.known_multimodals
             .entry(elements.clone())
-            .or_insert_with(|| {
-                format!("Multimodal{}", cnt)
-            })
+            .or_insert_with(|| format!("Multimodal{}", cnt))
             .clone()
     }
 
@@ -298,7 +303,7 @@ impl RustBridgeGenerator {
             DataSchema::Multimodal(elements) => {
                 let name = self.get_or_create_multimodal(elements);
                 let name = Ident::new(&name, Span::call_site());
-                vec![quote! { values: crate::multimodal::Multimodal<#name> }]
+                vec![quote! { values: crate::multimodal::Multimodal<crate::multimodal::#name> }]
             }
         }
     }
@@ -845,7 +850,7 @@ impl RustBridgeGenerator {
                 quote! {
                     let #name = golem_common::model::agent::DataValue::Multimodal(
                         golem_common::model::agent::NamedElementValues {
-                            elements: #name.values.iter().map(|v| v.to_named_element_value()).collect()
+                            elements: values.values.iter().map(|v| v.to_named_element_value()).collect()
                         }
                     );
                 }
@@ -866,7 +871,7 @@ impl RustBridgeGenerator {
             DataSchema::Multimodal(elements) => {
                 let name = self.get_or_create_multimodal(elements);
                 let name = Ident::new(&name, Span::call_site());
-                quote! { multimodal::Multimodal<#name> }
+                quote! { multimodal::Multimodal<crate::multimodal::#name> }
             }
         }
     }
@@ -1630,7 +1635,7 @@ impl RustBridgeGenerator {
                 quote! {
                     match #ident {
                         golem_common::model::agent::DataValue::Multimodal(multimodal_value) => {
-                            Ok(Some(<crate::multimodal::Multimodal::from_named_element_values(multimodal_value)?))
+                            Ok(Some(crate::multimodal::Multimodal::<crate::multimodal::#name>::from_named_element_values(multimodal_value)?))
                         }
                         _ => Err(golem_client::bridge::ClientError::InvocationFailed {
                             message: format!("Failed to decode result value"),
@@ -1682,20 +1687,20 @@ impl RustBridgeGenerator {
 
                     let encode_value = match &named_element.schema {
                         ElementSchema::ComponentModel(_) => {
-                            quote! { golem_common::model::agent::ElementValue::ComponentModel(#name.into_value_and_type()) }
+                            quote! { golem_common::model::agent::ElementValue::ComponentModel(value.clone().into_value_and_type()) }
                         }
                         ElementSchema::UnstructuredText(_) => {
-                            quote! { golem_common::model::agent::ElementValue::UnstructuredText(#name.into_text_reference()) }
+                            quote! { golem_common::model::agent::ElementValue::UnstructuredText(value.clone().into_text_reference()) }
                         }
                         ElementSchema::UnstructuredBinary(_) => {
-                            quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(#name.into_binary_reference()) }
+                            quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(value.clone().into_binary_reference()) }
                         }
                     };
                     to_named_element_value_cases.push(quote! {
                         Self::#case_name(value) => golem_common::model::agent::NamedElementValue {
-                            name: #case_name_lit,
+                            name: #case_name_lit.to_string(),
                             value: #encode_value
-                        }
+                        },
                     });
 
                     let decode_value = match &named_element.schema {
@@ -1704,11 +1709,11 @@ impl RustBridgeGenerator {
                             quote! {
                                 let value = match &named_element_value.value {
                                     golem_common::model::agent::ElementValue::ComponentModel(vnt) => {
-                                        Ok(Some(<#value_type>::from_value_and_type(vnt.clone()).map_err(
+                                        Ok(<#value_type>::from_value_and_type(vnt.clone()).map_err(
                                             |err| golem_client::bridge::ClientError::InvocationFailed {
                                                 message: format!("Failed to decode result value: {err}"),
-                                            },
-                                        )?))
+                                            }
+                                        )?)
                                     }
                                     _ => {
                                         Err(golem_client::bridge::ClientError::InvocationFailed {
@@ -1719,17 +1724,17 @@ impl RustBridgeGenerator {
                             }
                         }
                         ElementSchema::UnstructuredText(_) => {
-                            quote! { todo!() }
+                            quote! { let value = todo!(); }
                         }
                         ElementSchema::UnstructuredBinary(_) => {
-                            quote! { todo!() }
+                            quote! { let value = todo!(); }
                         }
                     };
                     from_named_element_value_cases.push(quote! {
                         #case_name_lit => {
                             #decode_value
-                            values.push(value);
-                        }
+                            values.push(Self::#case_name(value));
+                        },
                     });
                 }
 
@@ -1745,7 +1750,7 @@ impl RustBridgeGenerator {
                             }
                         }
 
-                        fn from_named_element_value(named_element_value: golem_common::model::agent::NamedElementValue) -> Result<Multimodal<Self>, golem_client::bridge::ClientError> {
+                        fn from_named_element_values(named_element_values: golem_common::model::agent::NamedElementValues) -> Result<Multimodal<Self>, golem_client::bridge::ClientError> {
                             let mut values = Vec::new();
                             for named_element_value in named_element_values.elements {
                                 match named_element_value.name.as_str() {
@@ -1758,7 +1763,7 @@ impl RustBridgeGenerator {
                                 }
                             }
                             Ok(Multimodal {
-                                values: nonempty_collections::NEVec::from_vec(values).ok_or_else(|| golem_client::bridge::ClientError::InvocationFailed { message: "Empty multimodal value".to_string() })?,
+                                values: nonempty_collections::NEVec::try_from_vec(values).ok_or_else(|| golem_client::bridge::ClientError::InvocationFailed { message: "Empty multimodal value".to_string() })?,
                             })
                         }
                     }
@@ -1767,20 +1772,24 @@ impl RustBridgeGenerator {
 
             quote! {
                 pub mod multimodal {
+                    use super::*;
+                    use golem_common::base_model::agent::{UnstructuredBinaryExtensions, UnstructuredTextExtensions};
+                    use golem_wasm::{FromValueAndType, IntoValueAndType};
+
                     #[derive(Debug, Clone)]
                     pub struct Multimodal<T: MultimodalEnum> {
                         pub values: nonempty_collections::NEVec<T>
                     }
 
                     impl<T: MultimodalEnum> Multimodal<T> {
-                        pub fn from_named_element_values(named_element_values: golem_common::model::agent::MultimodalValue) -> Result<Self, golem_client::bridge::ClientError> {
+                        pub fn from_named_element_values(named_element_values: golem_common::model::agent::NamedElementValues) -> Result<Self, golem_client::bridge::ClientError> {
                             T::from_named_element_values(named_element_values)
                         }
                     }
 
-                    pub trait MultimodalEnum {
+                    pub trait MultimodalEnum: Sized {
                         fn to_named_element_value(&self) -> golem_common::model::agent::NamedElementValue;
-                        fn from_named_element_values(named_element_values: golem_common::model::agent::MultimodalValue) -> Result<Multimodal<Self>, golem_client::bridge::ClientError>;
+                        fn from_named_element_values(named_element_values: golem_common::model::agent::NamedElementValues) -> Result<Multimodal<Self>, golem_client::bridge::ClientError>;
                     }
 
                     #(#multimodal_enums)*
