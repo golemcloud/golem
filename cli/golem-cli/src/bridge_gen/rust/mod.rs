@@ -23,7 +23,7 @@ use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
@@ -41,9 +41,9 @@ pub struct RustBridgeGenerator {
     generated_mimetypes_enums: BTreeMap<Vec<BinaryType>, String>,
     known_types: HashMap<AnalysedType, RustType>,
     known_multimodals: HashMap<NamedElementSchemas, String>,
+    used_names: HashSet<String>,
 }
 
-// TODO: convert panics to error results
 impl BridgeGenerator for RustBridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
         Self {
@@ -55,6 +55,7 @@ impl BridgeGenerator for RustBridgeGenerator {
             generated_mimetypes_enums: BTreeMap::new(),
             known_types: HashMap::new(),
             known_multimodals: HashMap::new(),
+            used_names: HashSet::new(),
         }
     }
 
@@ -164,7 +165,7 @@ impl RustBridgeGenerator {
         self.collect_named_types();
 
         let input_schema = self.agent_type.constructor.input_schema.clone();
-        let constructor_params = self.parameter_list(&input_schema);
+        let constructor_params = self.parameter_list(&input_schema)?;
 
         let typed_constructor_parameters_ident =
             Ident::new("typed_constructor_parameters", Span::call_site());
@@ -173,18 +174,15 @@ impl RustBridgeGenerator {
             &self.agent_type.constructor.input_schema,
         );
 
-        let methods = self
-            .agent_type
-            .methods
-            .clone()
-            .iter()
-            .flat_map(|method| self.methods(method))
-            .collect::<Vec<_>>();
+        let mut methods = Vec::new();
+        for method in self.agent_type.methods.clone() {
+            methods.extend(self.methods(&method)?);
+        }
 
         let global_config = self.global_config();
 
-        let types = self.type_definitions();
-        let multimodals = self.multimodals();
+        let types = self.type_definitions()?;
+        let multimodals = self.multimodals()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
 
@@ -289,7 +287,7 @@ impl RustBridgeGenerator {
             .clone()
     }
 
-    fn parameter_list(&mut self, data_schema: &DataSchema) -> Vec<TokenStream> {
+    fn parameter_list(&mut self, data_schema: &DataSchema) -> anyhow::Result<Vec<TokenStream>> {
         // each item is 'name: type'
 
         match data_schema {
@@ -297,15 +295,17 @@ impl RustBridgeGenerator {
                 let mut result = Vec::new();
                 for element in &elements.elements {
                     let name = Ident::new(&to_rust_ident(&element.name), Span::call_site());
-                    let typ = self.element_schema_to_typeref(&element.schema);
+                    let typ = self.element_schema_to_typeref(&element.schema)?;
                     result.push(quote! {#name: #typ});
                 }
-                result
+                Ok(result)
             }
             DataSchema::Multimodal(elements) => {
                 let name = self.get_or_create_multimodal(elements);
                 let name = Ident::new(&name, Span::call_site());
-                vec![quote! { values: crate::multimodal::Multimodal<crate::multimodal::#name> }]
+                Ok(vec![
+                    quote! { values: crate::multimodal::Multimodal<crate::multimodal::#name> },
+                ])
             }
         }
     }
@@ -356,29 +356,38 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn element_schema_to_typeref(&mut self, element_schema: &ElementSchema) -> TokenStream {
+    fn element_schema_to_typeref(
+        &mut self,
+        element_schema: &ElementSchema,
+    ) -> anyhow::Result<TokenStream> {
         match element_schema {
             ElementSchema::ComponentModel(schema) => self.wit_type_to_typeref(&schema.element_type),
             ElementSchema::UnstructuredText(descriptor) => {
                 if let Some(restrictions) = &descriptor.restrictions {
                     let languages_enum = self.get_languages_enum(restrictions);
-                    quote! { golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum> }
+                    Ok(
+                        quote! { golem_wasm::agentic::unstructured_text::UnstructuredText<#languages_enum> },
+                    )
                 } else {
-                    quote! { golem_wasm::agentic::unstructured_text::UnstructuredText }
+                    Ok(quote! { golem_wasm::agentic::unstructured_text::UnstructuredText })
                 }
             }
             ElementSchema::UnstructuredBinary(descriptor) => {
                 if let Some(restrictions) = &descriptor.restrictions {
                     let mimetypes_enum = self.get_mimetypes_enum(restrictions);
-                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum> }
+                    Ok(
+                        quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<#mimetypes_enum> },
+                    )
                 } else {
-                    quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> }
+                    Ok(
+                        quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> },
+                    )
                 }
             }
         }
     }
 
-    fn wit_type_to_typedef(&mut self, typ: &AnalysedType) -> TokenStream {
+    fn wit_type_to_typedef(&mut self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
         if let Some(type_name) = typ.name() {
             let name = Ident::new(&type_name, Span::call_site());
             match typ {
@@ -400,7 +409,7 @@ impl RustBridgeGenerator {
                             Some(typ) => {
                                 // TODO: auto-inline anonymous records
 
-                                let inner = self.wit_type_to_typeref(typ);
+                                let inner = self.wit_type_to_typeref(typ)?;
                                 cases.push(quote! { #case_ident(#inner) });
 
                                 // IntoValue implementation
@@ -438,7 +447,7 @@ impl RustBridgeGenerator {
                         }
                     }
 
-                    quote! {
+                    Ok(quote! {
                         #[derive(Debug, Clone)]
                         pub enum #name {
                             #(#cases),*
@@ -480,24 +489,22 @@ impl RustBridgeGenerator {
                                 }
                             }
                         }
-                    }
+                    })
                 }
                 AnalysedType::Result(result) => {
-                    let ok = result
-                        .ok
-                        .as_ref()
-                        .map(|ok| self.wit_type_to_typeref(ok))
-                        .unwrap_or_else(|| quote! { () });
-                    let err = result
-                        .err
-                        .as_ref()
-                        .map(|err| self.wit_type_to_typeref(err))
-                        .unwrap_or_else(|| quote! { () });
-                    quote! { pub type #name = Result<#ok, #err> }
+                    let ok = match result.ok.as_ref() {
+                        Some(ok_type) => self.wit_type_to_typeref(ok_type)?,
+                        None => quote! { () },
+                    };
+                    let err = match result.err.as_ref() {
+                        Some(err_type) => self.wit_type_to_typeref(err_type)?,
+                        None => quote! { () },
+                    };
+                    Ok(quote! { pub type #name = Result<#ok, #err> })
                 }
                 AnalysedType::Option(option) => {
-                    let inner = self.wit_type_to_typeref(&*option.inner);
-                    quote! { pub type #name = Option<#inner>; }
+                    let inner = self.wit_type_to_typeref(&*option.inner)?;
+                    Ok(quote! { pub type #name = Option<#inner>; })
                 }
                 AnalysedType::Enum(r#enum) => {
                     let mut cases = Vec::new();
@@ -525,7 +532,7 @@ impl RustBridgeGenerator {
                         });
                     }
 
-                    quote! {
+                    Ok(quote! {
                         #[derive(Debug, Clone)]
                         pub enum #name {
                             #(#cases),*
@@ -560,10 +567,10 @@ impl RustBridgeGenerator {
                                 }
                             }
                         }
-                    }
+                    })
                 }
                 AnalysedType::Flags(_flags) => {
-                    panic!("Flags are not supported") // NOTE: none of the code-first SDKs support flags at the moment
+                    return Err(anyhow!("Flags are not supported")); // NOTE: none of the code-first SDKs support flags at the moment
                 }
                 AnalysedType::Record(record) => {
                     let mut fields = Vec::new();
@@ -576,7 +583,7 @@ impl RustBridgeGenerator {
                     for field in &record.fields {
                         let field_ident =
                             Ident::new(&to_rust_ident(&field.name), Span::call_site());
-                        let field_type = self.wit_type_to_typeref(&field.typ);
+                        let field_type = self.wit_type_to_typeref(&field.typ)?;
 
                         fields.push(quote! { pub #field_ident: #field_type });
                         field_idents.push(field_ident.clone());
@@ -596,7 +603,7 @@ impl RustBridgeGenerator {
 
                     let field_count = field_idents.len();
 
-                    quote! {
+                    Ok(quote! {
                         #[derive(Debug, Clone)]
                         pub struct #name {
                             #(#fields),*
@@ -640,147 +647,91 @@ impl RustBridgeGenerator {
                                 }
                             }
                         }
-                    }
+                    })
                 }
                 AnalysedType::Tuple(tuple) => {
-                    let elements = tuple
-                        .items
-                        .iter()
-                        .map(|item| self.wit_type_to_typeref(item))
-                        .collect::<Vec<_>>();
-                    quote! { pub type #name = (#(#elements),*); }
+                    let mut elements = Vec::new();
+                    for item in tuple.items.iter() {
+                        elements.push(self.wit_type_to_typeref(item)?);
+                    }
+                    Ok(quote! { pub type #name = (#(#elements),*); })
                 }
                 AnalysedType::List(list) => {
-                    let inner = self.wit_type_to_typeref(&list.inner);
-                    quote! { pub type #name = Vec<#inner>; }
+                    let inner = self.wit_type_to_typeref(&list.inner)?;
+                    Ok(quote! { pub type #name = Vec<#inner>; })
                 }
-                AnalysedType::Str(_) => {
-                    quote! { pub type #name = String; }
-                }
-                AnalysedType::Chr(_) => {
-                    quote! { pub type #name = char; }
-                }
-                AnalysedType::F64(_) => {
-                    quote! { pub type #name = f64; }
-                }
-                AnalysedType::F32(_) => {
-                    quote! { pub type #name = f32; }
-                }
-                AnalysedType::U64(_) => {
-                    quote! { pub type #name = u64; }
-                }
-                AnalysedType::S64(_) => {
-                    quote! { pub type #name = i64; }
-                }
-                AnalysedType::U32(_) => {
-                    quote! { pub type #name = u32; }
-                }
-                AnalysedType::S32(_) => {
-                    quote! { pub type #name = i32; }
-                }
-                AnalysedType::U16(_) => {
-                    quote! { pub type #name = u16; }
-                }
-                AnalysedType::S16(_) => {
-                    quote! { pub type #name = i16; }
-                }
-                AnalysedType::U8(_) => {
-                    quote! { pub type #name = u8; }
-                }
-                AnalysedType::S8(_) => {
-                    quote! { pub type #name = i8; }
-                }
-                AnalysedType::Bool(_) => {
-                    quote! { pub type #name = bool; }
-                }
+                AnalysedType::Str(_) => Ok(quote! { pub type #name = String; }),
+                AnalysedType::Chr(_) => Ok(quote! { pub type #name = char; }),
+                AnalysedType::F64(_) => Ok(quote! { pub type #name = f64; }),
+                AnalysedType::F32(_) => Ok(quote! { pub type #name = f32; }),
+                AnalysedType::U64(_) => Ok(quote! { pub type #name = u64; }),
+                AnalysedType::S64(_) => Ok(quote! { pub type #name = i64; }),
+                AnalysedType::U32(_) => Ok(quote! { pub type #name = u32; }),
+                AnalysedType::S32(_) => Ok(quote! { pub type #name = i32; }),
+                AnalysedType::U16(_) => Ok(quote! { pub type #name = u16; }),
+                AnalysedType::S16(_) => Ok(quote! { pub type #name = i16; }),
+                AnalysedType::U8(_) => Ok(quote! { pub type #name = u8; }),
+                AnalysedType::S8(_) => Ok(quote! { pub type #name = i8; }),
+                AnalysedType::Bool(_) => Ok(quote! { pub type #name = bool; }),
                 AnalysedType::Handle(_) => {
-                    panic!("Handles are not supported");
+                    return Err(anyhow!("Handles are not supported"));
                 }
             }
         } else {
-            panic!("Only named types can be defined");
+            return Err(anyhow!("Only named types can be defined"));
         }
     }
 
-    fn wit_type_to_typeref(&mut self, typ: &AnalysedType) -> TokenStream {
+    fn wit_type_to_typeref(&mut self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
         if let Some(_) = typ.name() {
             let rust_type = self.known_types.get(typ).expect("Must be in known_types");
-            match rust_type {
+            Ok(match rust_type {
                 RustType::Defined { name, .. } => {
                     let name = Ident::new(&name, Span::call_site());
                     quote! { #name }
                 }
                 RustType::Remapped(remap) => remap.clone(),
-            }
+            })
         } else {
             match typ {
                 AnalysedType::Option(inner) => {
-                    let inner = self.wit_type_to_typeref(&*inner.inner);
-                    quote! { Option<#inner> }
+                    let inner = self.wit_type_to_typeref(&*inner.inner)?;
+                    Ok(quote! { Option<#inner> })
                 }
-                AnalysedType::Str(_) => {
-                    quote! { String }
-                }
-                AnalysedType::Chr(_) => {
-                    quote! { char }
-                }
-                AnalysedType::F64(_) => {
-                    quote! { f64 }
-                }
-                AnalysedType::F32(_) => {
-                    quote! { f32 }
-                }
-                AnalysedType::U64(_) => {
-                    quote! { u64 }
-                }
-                AnalysedType::S64(_) => {
-                    quote! { i64 }
-                }
-                AnalysedType::U32(_) => {
-                    quote! { u32 }
-                }
-                AnalysedType::S32(_) => {
-                    quote! { i32 }
-                }
-                AnalysedType::U16(_) => {
-                    quote! { u16 }
-                }
-                AnalysedType::S16(_) => {
-                    quote! { i16 }
-                }
-                AnalysedType::U8(_) => {
-                    quote! { u8 }
-                }
-                AnalysedType::S8(_) => {
-                    quote! { i8 }
-                }
-                AnalysedType::Bool(_) => {
-                    quote! { bool }
-                }
+                AnalysedType::Str(_) => Ok(quote! { String }),
+                AnalysedType::Chr(_) => Ok(quote! { char }),
+                AnalysedType::F64(_) => Ok(quote! { f64 }),
+                AnalysedType::F32(_) => Ok(quote! { f32 }),
+                AnalysedType::U64(_) => Ok(quote! { u64 }),
+                AnalysedType::S64(_) => Ok(quote! { i64 }),
+                AnalysedType::U32(_) => Ok(quote! { u32 }),
+                AnalysedType::S32(_) => Ok(quote! { i32 }),
+                AnalysedType::U16(_) => Ok(quote! { u16 }),
+                AnalysedType::S16(_) => Ok(quote! { i16 }),
+                AnalysedType::U8(_) => Ok(quote! { u8 }),
+                AnalysedType::S8(_) => Ok(quote! { i8 }),
+                AnalysedType::Bool(_) => Ok(quote! { bool }),
                 AnalysedType::Tuple(tuple) => {
-                    let elements = tuple
-                        .items
-                        .iter()
-                        .map(|item| self.wit_type_to_typeref(item))
-                        .collect::<Vec<_>>();
-                    quote! { (#(#elements),*) }
+                    let mut elements = Vec::new();
+                    for item in tuple.items.iter() {
+                        elements.push(self.wit_type_to_typeref(item)?);
+                    }
+                    Ok(quote! { (#(#elements),*) })
                 }
                 AnalysedType::List(list) => {
-                    let inner = self.wit_type_to_typeref(&*list.inner);
-                    quote! { Vec<#inner> }
+                    let inner = self.wit_type_to_typeref(&*list.inner)?;
+                    Ok(quote! { Vec<#inner> })
                 }
                 AnalysedType::Result(result) => {
-                    let ok = result
-                        .ok
-                        .as_ref()
-                        .map(|ok| self.wit_type_to_typeref(ok))
-                        .unwrap_or_else(|| quote! { () });
-                    let err = result
-                        .err
-                        .as_ref()
-                        .map(|err| self.wit_type_to_typeref(err))
-                        .unwrap_or_else(|| quote! { () });
-                    quote! { Result<#ok, #err> }
+                    let ok = match result.ok.as_ref() {
+                        Some(ok) => self.wit_type_to_typeref(ok)?,
+                        None => quote! { () },
+                    };
+                    let err = match result.err.as_ref() {
+                        Some(err) => self.wit_type_to_typeref(err)?,
+                        None => quote! { () },
+                    };
+                    Ok(quote! { Result<#ok, #err> })
                 }
                 AnalysedType::Handle(_)
                 | AnalysedType::Variant(_)
@@ -796,9 +747,9 @@ impl RustBridgeGenerator {
                             typ: typ.clone(),
                         },
                     );
-                    let _def = self.wit_type_to_typedef(&typ); // ensuring the whole type is traversed early
+                    let _def = self.wit_type_to_typedef(&typ)?; // ensuring the whole type is traversed early
                     let name = Ident::new(&name, Span::call_site());
-                    quote! { #name }
+                    Ok(quote! { #name })
                 }
             }
         }
@@ -860,33 +811,38 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn return_type_from_data_schema(&mut self, data_schema: &DataSchema) -> Option<TokenStream> {
+    fn return_type_from_data_schema(
+        &mut self,
+        data_schema: &DataSchema,
+    ) -> anyhow::Result<Option<TokenStream>> {
         match data_schema {
             DataSchema::Tuple(elements) => {
                 if elements.elements.len() == 0 {
-                    None
+                    Ok(None)
                 } else if elements.elements.len() == 1 {
                     let element = &elements.elements[0];
-                    Some(self.element_schema_to_typeref(&element.schema))
+                    Ok(Some(self.element_schema_to_typeref(&element.schema)?))
                 } else {
-                    panic!("Multiple return values are not supported");
+                    Err(anyhow!("Multiple return values are not supported"))
                 }
             }
             DataSchema::Multimodal(elements) => {
                 let name = self.get_or_create_multimodal(elements);
                 let name = Ident::new(&name, Span::call_site());
-                Some(quote! { multimodal::Multimodal<crate::multimodal::#name> })
+                Ok(Some(
+                    quote! { multimodal::Multimodal<crate::multimodal::#name> },
+                ))
             }
         }
     }
 
-    fn methods(&mut self, method: &AgentMethod) -> Vec<TokenStream> {
-        vec![
-            self.await_method(method),
-            self.trigger_method(method),
-            self.schedule_method(method),
-            self.internal_method(method),
-        ]
+    fn methods(&mut self, method: &AgentMethod) -> anyhow::Result<Vec<TokenStream>> {
+        Ok(vec![
+            self.await_method(method)?,
+            self.trigger_method(method)?,
+            self.schedule_method(method)?,
+            self.internal_method(method)?,
+        ])
     }
 
     fn await_method_name(&self, method: &AgentMethod) -> Ident {
@@ -909,7 +865,7 @@ impl RustBridgeGenerator {
         Ident::new(&format!("__{}", base_name), Span::call_site())
     }
 
-    fn await_method(&mut self, method: &AgentMethod) -> TokenStream {
+    fn await_method(&mut self, method: &AgentMethod) -> anyhow::Result<TokenStream> {
         //     pub async fn increment(&self) -> Result<f64, golem_client::bridge::ClientError> {
         //         let result = self
         //             .__increment(golem_client::model::AgentInvocationMode::Await, None)
@@ -920,33 +876,33 @@ impl RustBridgeGenerator {
         let name = self.await_method_name(method);
         let internal_name = self.internal_method_name(method);
 
-        let return_type = self.return_type_from_data_schema(&method.output_schema);
-        let param_defs = self.parameter_list(&method.input_schema);
+        let return_type = self.return_type_from_data_schema(&method.output_schema)?;
+        let param_defs = self.parameter_list(&method.input_schema)?;
         let param_refs = self.parameter_refs(&method.input_schema);
 
         match return_type {
             Some(return_type) => {
-                quote! {
+                Ok(quote! {
                     pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, golem_client::bridge::ClientError> {
                         let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
                         let result = result.unwrap(); // always Some because of Await
                         Ok(result)
                     }
-                }
+                })
             }
             None => {
-                quote! {
+                Ok(quote! {
                     pub async fn #name(&self, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
                         let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
                         let _result = result.unwrap(); // always Some because of Await
                         Ok(())
                     }
-                }
+                })
             }
         }
     }
 
-    fn trigger_method(&mut self, method: &AgentMethod) -> TokenStream {
+    fn trigger_method(&mut self, method: &AgentMethod) -> anyhow::Result<TokenStream> {
         //     pub async fn trigger_increment(&self) -> Result<(), golem_client::bridge::ClientError> {
         //         let _ = self
         //             .__increment(golem_client::model::AgentInvocationMode::Schedule, None)
@@ -956,18 +912,18 @@ impl RustBridgeGenerator {
         let name = self.trigger_method_name(method);
         let internal_name = self.internal_method_name(method);
 
-        let param_defs = self.parameter_list(&method.input_schema);
+        let param_defs = self.parameter_list(&method.input_schema)?;
         let param_refs = self.parameter_refs(&method.input_schema);
 
-        quote! {
+        Ok(quote! {
             pub async fn #name(&self, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
                 Ok(())
             }
-        }
+        })
     }
 
-    fn schedule_method(&mut self, method: &AgentMethod) -> TokenStream {
+    fn schedule_method(&mut self, method: &AgentMethod) -> anyhow::Result<TokenStream> {
         //  pub async fn schedule_increment(
         //         &self,
         //         when: chrono::DateTime<chrono::Utc>,
@@ -983,22 +939,22 @@ impl RustBridgeGenerator {
         let name = self.schedule_method_name(method);
         let internal_name = self.internal_method_name(method);
 
-        let param_defs = self.parameter_list(&method.input_schema);
+        let param_defs = self.parameter_list(&method.input_schema)?;
         let param_refs = self.parameter_refs(&method.input_schema);
 
-        quote! {
+        Ok(quote! {
             pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
                 Ok(())
             }
-        }
+        })
     }
 
-    fn internal_method(&mut self, method: &AgentMethod) -> TokenStream {
+    fn internal_method(&mut self, method: &AgentMethod) -> anyhow::Result<TokenStream> {
         let name_lit = Lit::Str(LitStr::new(&method.name, Span::call_site()));
         let name = self.internal_method_name(method);
-        let param_defs = self.parameter_list(&method.input_schema);
-        let return_type = self.return_type_from_data_schema(&method.output_schema);
+        let param_defs = self.parameter_list(&method.input_schema)?;
+        let return_type = self.return_type_from_data_schema(&method.output_schema)?;
         let typed_method_parameters_ident =
             Ident::new("typed_method_parameters", Span::call_site());
         let typed_method_parameters_to_data_value =
@@ -1008,45 +964,41 @@ impl RustBridgeGenerator {
         let decode_typed_data_value = self.decode_from_data_value(
             &Ident::new("typed_data_value", Span::call_site()),
             &method.output_schema,
-        );
+        )?;
 
         match return_type {
-            Some(return_type) => {
-                quote! {
-                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, golem_client::bridge::ClientError> {
-                        #typed_method_parameters_to_data_value
-                        let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
-                        let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
-                        if let Some(untyped_data_value) = response {
-                            let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
-                                untyped_data_value,
-                                #output_schema_as_value
-                            ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
-                            #decode_typed_data_value
-                        } else {
-                            Ok(None)
-                        }
+            Some(return_type) => Ok(quote! {
+                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, golem_client::bridge::ClientError> {
+                    #typed_method_parameters_to_data_value
+                    let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
+                    let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
+                    if let Some(untyped_data_value) = response {
+                        let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
+                            untyped_data_value,
+                            #output_schema_as_value
+                        ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
+                        #decode_typed_data_value
+                    } else {
+                        Ok(None)
                     }
                 }
-            }
-            None => {
-                quote! {
-                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<()>, golem_client::bridge::ClientError> {
-                        #typed_method_parameters_to_data_value
-                        let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
-                        let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
-                        if let Some(untyped_data_value) = response {
-                            let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
-                                untyped_data_value,
-                                #output_schema_as_value
-                            ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
-                            Ok(Some(()))
-                        } else {
-                            Ok(None)
-                        }
+            }),
+            None => Ok(quote! {
+                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<()>, golem_client::bridge::ClientError> {
+                    #typed_method_parameters_to_data_value
+                    let method_parameters: golem_common::model::agent::UntypedJsonDataValue = typed_method_parameters.into();
+                    let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
+                    if let Some(untyped_data_value) = response {
+                        let typed_data_value = golem_common::model::agent::DataValue::try_from_untyped_json(
+                            untyped_data_value,
+                            #output_schema_as_value
+                        ).map_err(|err| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {err}") })?;
+                        Ok(Some(()))
+                    } else {
+                        Ok(None)
                     }
                 }
-            }
+            }),
         }
     }
 
@@ -1580,23 +1532,27 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn decode_from_data_value(&mut self, ident: &Ident, data_schema: &DataSchema) -> TokenStream {
+    fn decode_from_data_value(
+        &mut self,
+        ident: &Ident,
+        data_schema: &DataSchema,
+    ) -> anyhow::Result<TokenStream> {
         match data_schema {
             DataSchema::Tuple(elements) => {
                 if elements.elements.len() > 1 {
-                    panic!("multiple result values not supported");
+                    Err(anyhow!("multiple result values not supported"))
                 } else if elements.elements.len() == 0 {
-                    quote! {
+                    Ok(quote! {
                         Ok(())
-                    }
+                    })
                 } else {
                     let element = &elements.elements[0];
                     match &element.schema {
                         ElementSchema::ComponentModel(_) => {
                             if let Some(return_type) =
-                                self.return_type_from_data_schema(data_schema)
+                                self.return_type_from_data_schema(data_schema)?
                             {
-                                quote! {
+                                Ok(quote! {
                                     match #ident {
                                         golem_common::model::agent::DataValue::Tuple(element_values) => {
                                             match element_values.elements.get(0) {
@@ -1616,9 +1572,9 @@ impl RustBridgeGenerator {
                                             message: format!("Failed to decode result value"),
                                         })?,
                                     }
-                                }
+                                })
                             } else {
-                                quote! { Ok(()) }
+                                Ok(quote! { Ok(()) })
                             }
                         }
                         ElementSchema::UnstructuredText(descriptor) => {
@@ -1633,7 +1589,7 @@ impl RustBridgeGenerator {
                                     quote! { golem_wasm::agentic::unstructured_text::UnstructuredText }
                                 }
                             };
-                            quote! {
+                            Ok(quote! {
                                 match #ident {
                                     golem_common::model::agent::DataValue::Tuple(element_values) => {
                                         match element_values.elements.get(0) {
@@ -1653,7 +1609,7 @@ impl RustBridgeGenerator {
                                         message: format!("Failed to decode result value"),
                                     })?,
                                 }
-                            }
+                            })
                         }
                         ElementSchema::UnstructuredBinary(descriptor) => {
                             let unstructured_binary = match &descriptor.restrictions {
@@ -1667,7 +1623,7 @@ impl RustBridgeGenerator {
                                     quote! { golem_wasm::agentic::unstructured_binary::UnstructuredBinary<String> }
                                 }
                             };
-                            quote! {
+                            Ok(quote! {
                                 match #ident {
                                     golem_common::model::agent::DataValue::Tuple(element_values) => {
                                         match element_values.elements.get(0) {
@@ -1687,7 +1643,7 @@ impl RustBridgeGenerator {
                                         message: format!("Failed to decode result value"),
                                     })?,
                                 }
-                            }
+                            })
                         }
                     }
                 }
@@ -1695,7 +1651,7 @@ impl RustBridgeGenerator {
             DataSchema::Multimodal(elements) => {
                 let name = self.get_or_create_multimodal(elements);
                 let name = Ident::new(&name, Span::call_site());
-                quote! {
+                Ok(quote! {
                     match #ident {
                         golem_common::model::agent::DataValue::Multimodal(multimodal_value) => {
                             Ok(Some(crate::multimodal::Multimodal::<crate::multimodal::#name>::from_named_element_values(multimodal_value)?))
@@ -1704,7 +1660,7 @@ impl RustBridgeGenerator {
                             message: format!("Failed to decode result value"),
                         })
                     }
-                }
+                })
             }
         }
     }
@@ -1726,9 +1682,9 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn multimodals(&mut self) -> TokenStream {
+    fn multimodals(&mut self) -> anyhow::Result<TokenStream> {
         if self.known_multimodals.is_empty() {
-            quote! {}
+            Ok(quote! {})
         } else {
             let mut multimodal_enums = Vec::new();
 
@@ -1745,7 +1701,7 @@ impl RustBridgeGenerator {
                         &to_rust_ident(&named_element.name).to_upper_camel_case(),
                         Span::call_site(),
                     );
-                    let case_type = self.element_schema_to_typeref(&named_element.schema);
+                    let case_type = self.element_schema_to_typeref(&named_element.schema)?;
                     cases.push(quote! { #case_name(#case_type) });
 
                     let encode_value = match &named_element.schema {
@@ -1768,7 +1724,7 @@ impl RustBridgeGenerator {
 
                     let decode_value = match &named_element.schema {
                         ElementSchema::ComponentModel(schema) => {
-                            let value_type = self.wit_type_to_typeref(&schema.element_type);
+                            let value_type = self.wit_type_to_typeref(&schema.element_type)?;
                             quote! {
                                 let value = match &named_element_value.value {
                                     golem_common::model::agent::ElementValue::ComponentModel(vnt) => {
@@ -1883,7 +1839,7 @@ impl RustBridgeGenerator {
                 });
             }
 
-            quote! {
+            Ok(quote! {
                 pub mod multimodal {
                     use super::*;
                     use golem_common::base_model::agent::{UnstructuredBinaryExtensions, UnstructuredTextExtensions};
@@ -1907,7 +1863,7 @@ impl RustBridgeGenerator {
 
                     #(#multimodal_enums)*
                 }
-            }
+            })
         }
     }
 
@@ -2045,13 +2001,12 @@ impl RustBridgeGenerator {
         for typ in all_types {
             if let Some(name) = typ.name() {
                 // TODO: detect special known types and store them as Remapped
-                // TODO: detect name collisions
-                // TODO: use owner for the name
 
+                let final_name = self.generate_type_name(name, typ.owner());
                 self.known_types.insert(
                     typ.clone(),
                     RustType::Defined {
-                        name: to_rust_ident(name).to_upper_camel_case(),
+                        name: final_name,
                         typ,
                     },
                 );
@@ -2059,7 +2014,30 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn type_definitions(&mut self) -> TokenStream {
+    fn generate_type_name(&mut self, name: &str, owner: Option<&str>) -> String {
+        let concatenated = match owner {
+            Some(owner) => format!("{}_{}", owner, name),
+            None => name.to_string(),
+        };
+        let final_name = to_rust_ident(&concatenated).to_upper_camel_case();
+        self.get_unique_name(final_name, None)
+    }
+
+    fn get_unique_name(&mut self, name: String, counter: Option<usize>) -> String {
+        let new_name = if let Some(c) = counter {
+            format!("{name}{c}")
+        } else {
+            name.clone()
+        };
+        if self.used_names.contains(&new_name) {
+            self.get_unique_name(name, Some(counter.unwrap_or(0) + 1))
+        } else {
+            self.used_names.insert(new_name.clone());
+            new_name
+        }
+    }
+
+    fn type_definitions(&mut self) -> anyhow::Result<TokenStream> {
         let mut type_definitions = Vec::new();
 
         let defined = self
@@ -2072,13 +2050,13 @@ impl RustBridgeGenerator {
             .collect::<BTreeMap<String, AnalysedType>>();
 
         for (name, typ) in defined {
-            let def = self.wit_type_to_typedef(&typ.named(name));
+            let def = self.wit_type_to_typedef(&typ.named(name))?;
             type_definitions.push(def);
         }
 
-        quote! {
+        Ok(quote! {
             #(#type_definitions)*
-        }
+        })
     }
 
     fn package_name(&self) -> String {
@@ -2088,5 +2066,6 @@ impl RustBridgeGenerator {
 
 enum RustType {
     Defined { name: String, typ: AnalysedType },
+    #[allow(dead_code)]
     Remapped(TokenStream),
 }
