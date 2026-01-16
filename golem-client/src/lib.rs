@@ -55,4 +55,3 @@ impl MultipartField for PluginRegistrationCreation {
         "application/json"
     }
 }
-

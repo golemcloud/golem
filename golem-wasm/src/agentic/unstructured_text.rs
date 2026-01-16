@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Debug;
 use crate::Value;
+use std::fmt::Debug;
 
 /// Represents a text value that can either be inline or a URL reference.
 ///

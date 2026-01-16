@@ -572,7 +572,7 @@ impl RustBridgeGenerator {
                     })
                 }
                 AnalysedType::Flags(_flags) => {
-                    Err(anyhow!("Flags are not supported"))// NOTE: none of the code-first SDKs support flags at the moment
+                    Err(anyhow!("Flags are not supported")) // NOTE: none of the code-first SDKs support flags at the moment
                 }
                 AnalysedType::Record(record) => {
                     let mut fields = Vec::new();
@@ -675,9 +675,7 @@ impl RustBridgeGenerator {
                 AnalysedType::U8(_) => Ok(quote! { pub type #name = u8; }),
                 AnalysedType::S8(_) => Ok(quote! { pub type #name = i8; }),
                 AnalysedType::Bool(_) => Ok(quote! { pub type #name = bool; }),
-                AnalysedType::Handle(_) => {
-                    Err(anyhow!("Handles are not supported"))
-                }
+                AnalysedType::Handle(_) => Err(anyhow!("Handles are not supported")),
             }
         } else {
             Err(anyhow!("Only named types can be defined"))
@@ -2067,7 +2065,10 @@ impl RustBridgeGenerator {
 }
 
 enum RustType {
-    Defined { name: String, typ: AnalysedType },
+    Defined {
+        name: String,
+        typ: AnalysedType,
+    },
     #[allow(dead_code)]
     Remapped(TokenStream),
 }
