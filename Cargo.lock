@@ -4091,6 +4091,7 @@ dependencies = [
  "dirs 4.0.0",
  "futures",
  "golem-cli",
+ "golem-client",
  "golem-common",
  "golem-component-compilation-service",
  "golem-registry-service",

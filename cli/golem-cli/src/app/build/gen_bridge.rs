@@ -2,6 +2,7 @@ use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::ApplicationContext;
+use crate::bridge_gen::rust::RustBridgeGenerator;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
 use crate::error::NonSuccessfulExit;
@@ -190,10 +191,12 @@ async fn gen_bridge_sdk_target(
                 );
                 let _indent = LogIndent::new();
 
-                let generator: Box<dyn BridgeGenerator> = match target.target_language {
-                    GuestLanguage::Rust => {
-                        todo!("Rust bridge generator not implemented yet")
-                    }
+                let mut generator: Box<dyn BridgeGenerator> = match target.target_language {
+                    GuestLanguage::Rust => Box::new(RustBridgeGenerator::new(
+                        target.agent_type,
+                        &output_dir,
+                        false,
+                    )),
                     GuestLanguage::TypeScript => Box::new(TypeScriptBridgeGenerator::new(
                         target.agent_type,
                         &output_dir,

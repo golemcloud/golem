@@ -1690,7 +1690,7 @@ fn bridge_tests_map_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPa
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
     println!("Generating into: {}", target_dir);
 
-    let gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true);
+    let mut gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true);
     gen.generate().unwrap();
 
     let status = std::process::Command::new("npm")

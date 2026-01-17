@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 mod from;
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 mod into;
-#[cfg(all(feature = "host", test))]
+#[cfg(all(any(feature = "host", feature = "client"), test))]
 mod tests;
 
 use crate::analysis::AnalysedType;
-use crate::{Value, WitValue};
+use crate::Value;
 
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValue;
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValueAndType;
 
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub use from::FromValue;
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub use from::FromValueAndType;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,7 +80,8 @@ impl From<ValueAndType> for AnalysedType {
     }
 }
 
-impl From<ValueAndType> for WitValue {
+#[cfg(feature = "host")]
+impl From<ValueAndType> for crate::WitValue {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.value.into()
     }

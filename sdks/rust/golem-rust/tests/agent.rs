@@ -216,14 +216,14 @@ mod tests {
         _llm_config: Config,
     }
 
-    #[derive(AllowedLanguages)]
+    #[derive(Debug, Clone, AllowedLanguages)]
     enum MyLang {
         #[code("de")]
         German,
         En,
     }
 
-    #[derive(AllowedMimeTypes)]
+    #[derive(Debug, Clone, AllowedMimeTypes)]
     enum MyMimeType {
         #[mime_type("text/plain")]
         PlainText,

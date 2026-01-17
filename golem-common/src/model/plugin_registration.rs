@@ -12,55 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::account::AccountId;
-use super::base64::Base64;
 use super::component::ComponentRevision;
 use super::ComponentId;
+use crate::declare_transparent_newtypes;
 use crate::model::diff;
-use crate::model::Empty;
-use crate::{declare_structs, declare_transparent_newtypes, declare_unions, newtype_uuid};
 
-newtype_uuid!(
-    PluginRegistrationId,
-    golem_api_grpc::proto::golem::component::PluginRegistrationId
-);
+pub use crate::base_model::plugin_registration::*;
 
 declare_transparent_newtypes! {
     pub struct WasmContentHash(pub diff::Hash);
-}
-
-declare_structs! {
-    pub struct PluginRegistrationDto {
-        pub id: PluginRegistrationId,
-        pub account_id: AccountId,
-        pub name: String,
-        pub version: String,
-        pub description: String,
-        pub icon: Base64,
-        pub homepage: String,
-        pub spec: PluginSpecDto,
-    }
-
-    pub struct PluginRegistrationCreation {
-        pub name: String,
-        pub version: String,
-        pub description: String,
-        pub icon: Base64,
-        pub homepage: String,
-        pub spec: PluginSpecDto,
-    }
-
-    pub struct ComponentTransformerPluginSpec {
-        pub provided_wit_package: Option<String>,
-        pub json_schema: Option<serde_json::Value>,
-        pub validate_url: String,
-        pub transform_url: String,
-    }
-
-    pub struct OplogProcessorPluginSpec {
-        pub component_id: ComponentId,
-        pub component_revision: ComponentRevision
-    }
 }
 
 impl PluginRegistrationDto {
@@ -103,14 +63,5 @@ impl PluginRegistrationDto {
             PluginSpecDto::App(_) => "app",
             PluginSpecDto::Library(_) => "library",
         }
-    }
-}
-
-declare_unions! {
-    pub enum PluginSpecDto {
-        ComponentTransformer(ComponentTransformerPluginSpec),
-        OplogProcessor(OplogProcessorPluginSpec),
-        App(Empty),
-        Library(Empty)
     }
 }
