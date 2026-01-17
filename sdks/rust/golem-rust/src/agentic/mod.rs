@@ -17,11 +17,11 @@ pub use agent_initiator::*;
 pub use agent_registry::*;
 pub use async_utils::*;
 pub use errors::*;
+pub use golem_wasm::agentic::unstructured_binary::*;
+pub use golem_wasm::agentic::unstructured_text::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
-pub use unstructured_binary::*;
-pub use unstructured_text::*;
 pub use wit_utils::*;
 
 mod agent;

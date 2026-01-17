@@ -12,35 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::domain_registration::Domain;
-use super::environment::EnvironmentId;
-use super::http_api_definition::HttpApiDefinitionName;
-use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
-use crate::declare_structs;
 use crate::model::diff;
-use chrono::DateTime;
 
-declare_structs! {
-    pub struct LegacyHttpApiDeploymentCreation {
-        pub domain: Domain,
-        pub api_definitions: Vec<HttpApiDefinitionName>
-    }
-
-    pub struct LegacyHttpApiDeploymentUpdate {
-        pub current_revision: HttpApiDeploymentRevision,
-        pub api_definitions: Option<Vec<HttpApiDefinitionName>>
-    }
-
-    pub struct LegacyHttpApiDeployment {
-        pub id: HttpApiDeploymentId,
-        pub revision: HttpApiDeploymentRevision,
-        pub environment_id: EnvironmentId,
-        pub domain: Domain,
-        pub hash: diff::Hash,
-        pub api_definitions: Vec<HttpApiDefinitionName>,
-        pub created_at: DateTime<chrono::Utc>,
-    }
-}
+pub use crate::base_model::http_api_deployment_legacy::*;
 
 impl LegacyHttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {

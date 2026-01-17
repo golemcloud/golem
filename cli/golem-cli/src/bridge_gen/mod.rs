@@ -24,7 +24,7 @@ pub trait BridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self
     where
         Self: Sized;
-    fn generate(&self) -> anyhow::Result<()>;
+    fn generate(&mut self) -> anyhow::Result<()>;
 }
 
 fn collect_all_wit_types(agent_type: &AgentType) -> Vec<AnalysedType> {

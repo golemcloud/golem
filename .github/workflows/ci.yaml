@@ -390,6 +390,32 @@ jobs:
       - name: Build wasm-rpc in stub mode
         run: cargo component build -p golem-wasm --no-default-features --features stub
 
+  golem-client:
+    runs-on: blacksmith
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v4-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+      - name: Prepare WIT dependencies
+        run: cargo make wit
+      - name: Build golem-client (dependencies in features=client mode)
+        run: cargo build -p golem-client
+
   build-golem-rust:
     runs-on: blacksmith
     steps:
