@@ -19,19 +19,39 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 pub mod base_model;
+
+#[cfg(not(feature = "full"))]
+pub mod model {
+    pub use crate::base_model::*;
+}
+
+#[cfg(feature = "full")]
 pub mod cache;
+#[cfg(feature = "full")]
 pub mod config;
+#[cfg(feature = "full")]
 pub mod json_yaml;
+#[cfg(feature = "full")]
 pub mod metrics;
+#[cfg(feature = "full")]
 pub mod model;
+#[cfg(feature = "full")]
 pub mod one_shot;
+#[cfg(feature = "full")]
 pub mod poem;
+#[cfg(feature = "full")]
 pub mod read_only_lock;
+#[cfg(feature = "full")]
 pub mod redis;
+#[cfg(feature = "full")]
 pub mod retriable_error;
+#[cfg(feature = "full")]
 pub mod retries;
+#[cfg(feature = "full")]
 pub mod serialization;
+#[cfg(feature = "full")]
 pub mod tracing;
+#[cfg(feature = "full")]
 pub mod virtual_exports;
 
 mod macros;
