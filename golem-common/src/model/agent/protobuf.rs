@@ -1,11 +1,11 @@
 use super::{
-    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentIdWithComponent, AgentMethod,
-    AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
-    BinarySource, BinaryType, ComponentModelElementSchema, CorsOptions, CustomHttpMethod,
-    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, GolemUserPrincipal,
-    HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal,
-    PathSegment, PathSegmentNode, PathVariable, Principal, QueryVariable, RegisteredAgentType,
+    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentMode,
+    AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource,
+    BinaryType, ComponentModelElementSchema, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, GolemUserPrincipal, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
+    NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
+    PathSegmentNode, PathVariable, Principal, QueryVariable, RegisteredAgentType,
     RegisteredAgentTypeImplementer, SystemVariable, SystemVariableSegment, TextDescriptor,
     TextReference, TextSource, TextType, Url,
 };
@@ -1112,33 +1112,6 @@ impl From<AgentHttpAuthDetails> for golem_api_grpc::proto::golem::component::Age
     fn from(value: AgentHttpAuthDetails) -> Self {
         Self {
             required: value.required,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::AgentIdWithComponent>
-    for AgentIdWithComponent
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::AgentIdWithComponent,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            agent_id: value.agent_id,
-            component_id: value
-                .component_id
-                .ok_or_else(|| "Missing field: component_id".to_string())?
-                .try_into()?,
-        })
-    }
-}
-
-impl From<AgentIdWithComponent> for golem_api_grpc::proto::golem::component::AgentIdWithComponent {
-    fn from(value: AgentIdWithComponent) -> Self {
-        Self {
-            agent_id: value.agent_id,
-            component_id: Some(value.component_id.into()),
         }
     }
 }
