@@ -87,7 +87,7 @@ license-file = "LICENSE"
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
-golem-common = { version = "=0.0.0", path = "golem-common" }
+golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-openapi-client-generator = { version = "=0.0.17" }
 golem-registry-service = { path = "golem-registry-service" }
@@ -97,7 +97,7 @@ golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
-golem-wasm = { version = "=0.0.0", path = "golem-wasm" }
+golem-wasm = { version = "=0.0.0", path = "golem-wasm", default-features = false }
 golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
@@ -257,7 +257,7 @@ rusoto_elbv2 = "0.48.0"
 rusoto_route53 = "0.48.0"
 rusoto_sts = "0.48.0"
 rustc-hash = "2.1.1"
-rustls = { version = "0.23.23" }
+rustls = { version = "0.23.23", features = ["ring"] }
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
 scc = "3.3.2"

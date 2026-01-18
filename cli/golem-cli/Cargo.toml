@@ -32,10 +32,10 @@ harness = false
 [dependencies]
 golem-templates = { workspace = true }
 golem-client = { workspace = true }
-golem-common = { workspace = true }
+golem-common = { workspace = true, default-features = true }
 golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }
-golem-wasm = { workspace = true }
+golem-wasm = { workspace = true , default-features = true }
 golem-wasm-derive = { workspace = true }
 
 # External deps

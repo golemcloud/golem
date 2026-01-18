@@ -12,59 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::plan::PlanId;
-use crate::model::auth::AccountRole;
-use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
-use derive_more::Display;
-use uuid::uuid;
+pub use crate::base_model::account::*;
 
-newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
+mod wasm {
+    use super::AccountId;
 
-impl AccountId {
-    pub const SYSTEM: Self = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
-}
-
-declare_revision!(AccountRevision);
-
-declare_transparent_newtypes! {
-    #[derive(Display)]
-    pub struct AccountEmail(pub String);
-}
-
-declare_structs! {
-    pub struct Account {
-        pub id: AccountId,
-        pub revision: AccountRevision,
-        pub name: String,
-        pub email: AccountEmail,
-        pub plan_id: PlanId,
-        pub roles: Vec<AccountRole>
+    impl From<AccountId> for golem_wasm::AccountId {
+        fn from(value: AccountId) -> Self {
+            Self {
+                uuid: value.0.into(),
+            }
+        }
     }
 
-    pub struct AccountSummary {
-        pub id: AccountId,
-        pub name: String,
-        pub email: AccountEmail,
-    }
-
-    pub struct AccountCreation {
-        pub name: String,
-        pub email: AccountEmail,
-    }
-
-    pub struct AccountUpdate {
-        pub current_revision: AccountRevision,
-        pub name: Option<String>,
-        pub email: Option<AccountEmail>,
-    }
-
-    pub struct AccountSetRoles {
-        pub current_revision: AccountRevision,
-        pub roles: Vec<AccountRole>
-    }
-
-    pub struct AccountSetPlan {
-        pub current_revision: AccountRevision,
-        pub plan: PlanId
+    impl From<golem_wasm::AccountId> for AccountId {
+        fn from(value: golem_wasm::AccountId) -> Self {
+            Self(value.uuid.into())
+        }
     }
 }

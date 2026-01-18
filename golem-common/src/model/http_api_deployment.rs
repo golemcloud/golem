@@ -12,47 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::domain_registration::Domain;
-use super::environment::EnvironmentId;
-use super::http_api_definition::HttpApiDefinitionName;
 use crate::model::diff;
-use crate::{declare_revision, declare_structs, newtype_uuid};
-use chrono::DateTime;
 
-newtype_uuid!(HttpApiDeploymentId);
-
-declare_revision!(HttpApiDeploymentRevision);
-
-declare_structs! {
-    pub struct HttpApiDeploymentCreation {
-        pub domain: Domain,
-        pub api_definitions: Vec<HttpApiDefinitionName>
-    }
-
-    pub struct HttpApiDeploymentUpdate {
-        pub current_revision: HttpApiDeploymentRevision,
-        pub api_definitions: Option<Vec<HttpApiDefinitionName>>
-    }
-
-    pub struct HttpApiDeployment {
-        pub id: HttpApiDeploymentId,
-        pub revision: HttpApiDeploymentRevision,
-        pub environment_id: EnvironmentId,
-        pub domain: Domain,
-        pub hash: diff::Hash,
-        pub api_definitions: Vec<HttpApiDefinitionName>,
-        pub created_at: DateTime<chrono::Utc>,
-    }
-}
+pub use crate::base_model::http_api_deployment::*;
 
 impl HttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
-            apis: self
-                .api_definitions
-                .iter()
-                .map(|def| def.0.clone())
-                .collect(),
+            agent_types: self.agent_types.iter().map(|def| def.0.clone()).collect(),
         }
     }
 }

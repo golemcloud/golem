@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::{log_action, LogColorize};
 use crate::model::text::fmt::format_stderr;
 use anyhow::anyhow;
 use golem_common::model::agent::AgentType;
@@ -26,17 +25,6 @@ pub async fn extract_agent_types(
     wasm_path: &Path,
     enable_wasmtime_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentType>> {
-    log_action(
-        "Extracting",
-        format!(
-            "agent types from {}",
-            wasm_path
-                .to_string_lossy()
-                .to_string()
-                .log_color_highlight()
-        ),
-    );
-
     let stdout = pipe::MemoryOutputPipe::new(usize::MAX);
     let stderr = pipe::MemoryOutputPipe::new(usize::MAX);
 

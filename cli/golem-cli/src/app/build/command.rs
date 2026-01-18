@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::delete_path_logged;
+use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::{
     AgentWrapperCommandMarkerHash, ComposeAgentWrapperCommandMarkerHash,
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
+    InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
 };
-use crate::app::build::{delete_path_logged, is_up_to_date, new_task_up_to_date_check};
+use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::{ApplicationContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
+use crate::error::NonSuccessfulExit;
 use crate::fs::compile_and_collect_globs;
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
@@ -29,9 +32,10 @@ use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
+use crate::model::text::fmt::log_error;
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::{anyhow, bail, Context as AnyhowContext};
 use camino::Utf8Path;
 use colored::Colorize;
 use gag::BufferRedirect;
@@ -41,11 +45,11 @@ use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tracing::{debug, enabled, Level};
+use tracing::{enabled, Level};
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
-    ctx: &mut ApplicationContext,
+    ctx: &ApplicationContext,
     component_name: &ComponentName,
     command: &app_raw::BuildCommand,
 ) -> anyhow::Result<()> {
@@ -77,7 +81,7 @@ pub async fn execute_build_command(
 }
 
 async fn execute_agent_wrapper(
-    ctx: &mut ApplicationContext,
+    ctx: &ApplicationContext,
     component_name: &ComponentName,
     base_build_dir: &Path,
     command: &GenerateAgentWrapper,
@@ -86,73 +90,62 @@ async fn execute_agent_wrapper(
     let wrapper_wasm_path = base_build_dir.join(&command.generate_agent_wrapper);
     let compiled_wasm_path = base_build_dir.join(&command.based_on_compiled_wasm);
 
-    // NOTE: cannot use new_task_up_to_date_check yet, because of the mut app ctx
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        AgentWrapperCommandMarkerHash {
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(AgentWrapperCommandMarkerHash {
             build_dir: base_build_dir.as_std_path(),
             command,
-        },
-    )?;
+        })?
+        .with_sources(|| [&compiled_wasm_path])
+        .with_targets(|| [&wrapper_wasm_path])
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Generating",
+                    format!(
+                        "agent wrapper for {}",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
 
-    let skip_up_to_date_check =
-        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date();
+                let agent_types = extract_and_store_agent_types(ctx, component_name).await?;
 
-    if is_up_to_date(
-        skip_up_to_date_check,
-        || [&compiled_wasm_path],
-        || [&wrapper_wasm_path],
-    ) {
-        log_skipping_up_to_date(format!(
-            "generating agent wrapper for {}",
-            component_name.as_str().log_color_highlight()
-        ));
-        return Ok(());
-    }
+                log_action(
+                    "Generating",
+                    format!(
+                        "agent WIT interface for {}",
+                        component_name.to_string().log_color_highlight()
+                    ),
+                );
 
-    log_action(
-        "Generating",
-        format!(
-            "agent wrapper for {}",
-            component_name.as_str().log_color_highlight()
-        ),
-    );
-    let _indent = LogIndent::new();
+                let wrapper_context = crate::model::agent::wit::generate_agent_wrapper_wit(
+                    component_name,
+                    &agent_types,
+                )?;
 
-    let agent_types = ctx
-        .wit
-        .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
-        .await;
+                log_action(
+                    "Generating",
+                    format!(
+                        "agent WIT interface implementation to {}",
+                        wrapper_wasm_path.to_string().log_color_highlight()
+                    ),
+                );
 
-    task_result_marker.result((|| {
-        let agent_types = agent_types?;
-
-        log_action(
-            "Generating",
-            format!(
-                "agent WIT interface for {}",
-                component_name.to_string().log_color_highlight()
-            ),
-        );
-
-        let wrapper_context =
-            crate::model::agent::wit::generate_agent_wrapper_wit(component_name, &agent_types)?;
-
-        log_action(
-            "Generating",
-            format!(
-                "agent WIT interface implementation to {}",
-                wrapper_wasm_path.to_string().log_color_highlight()
-            ),
-        );
-
-        with_hidden_output_unless_error(|| {
-            crate::model::agent::moonbit::generate_moonbit_wrapper(
-                wrapper_context,
-                wrapper_wasm_path.as_std_path(),
-            )
-        })
-    })())
+                with_hidden_output_unless_error(|| {
+                    crate::model::agent::moonbit::generate_moonbit_wrapper(
+                        wrapper_context,
+                        wrapper_wasm_path.as_std_path(),
+                    )
+                })
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "generating agent wrapper for {}",
+                    component_name.as_str().log_color_highlight()
+                ));
+            },
+        )
+        .await
 }
 
 async fn execute_compose_agent_wrapper(
@@ -184,7 +177,7 @@ async fn execute_compose_agent_wrapper(
                 );
                 let _indent = LogIndent::new();
 
-                commands::composition::compose(
+                let unused_plugs = commands::composition::compose(
                     wrapper_wasm_path.as_std_path(),
                     vec![Plug {
                         name: user_component.to_string(),
@@ -192,7 +185,23 @@ async fn execute_compose_agent_wrapper(
                     }],
                     target_component.as_std_path(),
                 )
-                .await
+                .await?;
+
+                if !unused_plugs.is_empty() {
+                    let _ident = LogIndent::stash();
+
+                    logln("");
+                    log_error(format!(
+                        "Failed to compose agent wrapper, unused plugs: {}",
+                        unused_plugs.join(", ")
+                    ));
+                    logln("");
+                    logln("Confirm that you are using the most recent golem CLI and SDKs!");
+
+                    bail!(NonSuccessfulExit)
+                }
+
+                Ok(())
             },
             || {
                 log_skipping_up_to_date(format!(
@@ -434,99 +443,94 @@ pub async fn execute_external_command(
         .as_ref()
         .map(|dir| base_command_dir.join(dir))
         .unwrap_or_else(|| base_command_dir.to_path_buf());
-    if !std::fs::exists(&build_dir)? {
-        log_action(
-            "Creating",
-            format!("directory {}", build_dir.log_color_highlight()),
-        );
-        std::fs::create_dir_all(&build_dir)?
-    }
 
-    // NOTE: cannot use new_task_up_to_date_check yet, because of the special source and target handling
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ResolvedExternalCommandMarkerHash {
+    let (sources, targets) = {
+        if !command.sources.is_empty() && !command.targets.is_empty() {
+            (
+                compile_and_collect_globs(&build_dir, &command.sources)?,
+                compile_and_collect_globs(&build_dir, &command.targets)?,
+            )
+        } else {
+            (vec![], vec![])
+        }
+    };
+
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(ResolvedExternalCommandMarkerHash {
             build_dir: &build_dir,
             command,
-        },
-    )?;
+        })?
+        .with_sources(|| sources)
+        .with_targets(|| targets)
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Executing",
+                    format!(
+                        "external command '{}' in directory {}",
+                        command.command.log_color_highlight(),
+                        build_dir.log_color_highlight()
+                    ),
+                );
 
-    let skip_up_to_date_checks =
-        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date();
-
-    debug!(
-        command = ?command,
-        "execute external command"
-    );
-
-    if !command.sources.is_empty() && !command.targets.is_empty() {
-        let sources = compile_and_collect_globs(&build_dir, &command.sources)?;
-        let targets = compile_and_collect_globs(&build_dir, &command.targets)?;
-
-        if is_up_to_date(skip_up_to_date_checks, || sources, || targets) {
-            log_skipping_up_to_date(format!(
-                "executing external command '{}' in directory {}",
-                command.command.log_color_highlight(),
-                build_dir.log_color_highlight()
-            ));
-            return Ok(());
-        }
-    }
-
-    log_action(
-        "Executing",
-        format!(
-            "external command '{}' in directory {}",
-            command.command.log_color_highlight(),
-            build_dir.log_color_highlight()
-        ),
-    );
-
-    task_result_marker.result(
-        async {
-            if !command.rmdirs.is_empty() {
-                let _ident = LogIndent::new();
-                for dir in &command.rmdirs {
-                    let dir = build_dir.join(dir);
-                    delete_path_logged("directory", &dir)?;
+                if !std::fs::exists(&build_dir)? {
+                    log_action(
+                        "Creating",
+                        format!("directory {}", build_dir.log_color_highlight()),
+                    );
+                    std::fs::create_dir_all(&build_dir)?
                 }
-            }
 
-            if !command.mkdirs.is_empty() {
-                let _ident = LogIndent::new();
-                for dir in &command.mkdirs {
-                    let dir = build_dir.join(dir);
-                    if !std::fs::exists(&dir)? {
-                        log_action(
-                            "Creating",
-                            format!("directory {}", dir.log_color_highlight()),
-                        );
-                        std::fs::create_dir_all(dir)?
+                if !command.rmdirs.is_empty() {
+                    let _ident = LogIndent::new();
+                    for dir in &command.rmdirs {
+                        let dir = build_dir.join(dir);
+                        delete_path_logged("directory", &dir)?;
                     }
                 }
-            }
 
-            let command_tokens = shlex::split(&command.command).ok_or_else(|| {
-                anyhow::anyhow!("Failed to parse external command: {}", command.command)
-            })?;
-            if command_tokens.is_empty() {
-                return Err(anyhow!("Empty command!"));
-            }
+                if !command.mkdirs.is_empty() {
+                    let _ident = LogIndent::new();
+                    for dir in &command.mkdirs {
+                        let dir = build_dir.join(dir);
+                        if !std::fs::exists(&dir)? {
+                            log_action(
+                                "Creating",
+                                format!("directory {}", dir.log_color_highlight()),
+                            );
+                            std::fs::create_dir_all(dir)?
+                        }
+                    }
+                }
 
-            ensure_common_deps_for_tool(
-                &ctx.tools_with_ensured_common_deps,
-                command_tokens[0].as_str(),
-            )
-            .await?;
+                let command_tokens = shlex::split(&command.command).ok_or_else(|| {
+                    anyhow::anyhow!("Failed to parse external command: {}", command.command)
+                })?;
+                if command_tokens.is_empty() {
+                    return Err(anyhow!("Empty command!"));
+                }
 
-            Command::new(command_tokens[0].clone())
-                .args(command_tokens.iter().skip(1))
-                .current_dir(build_dir)
-                .stream_and_run(&command_tokens[0])
-                .await
-        }
-        .await,
-    )
+                ensure_common_deps_for_tool(
+                    &ctx.tools_with_ensured_common_deps,
+                    command_tokens[0].as_str(),
+                )
+                .await?;
+
+                Command::new(command_tokens[0].clone())
+                    .args(command_tokens.iter().skip(1))
+                    .current_dir(&build_dir)
+                    .stream_and_run(&command_tokens[0])
+                    .await
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "executing external command '{}' in directory {}",
+                    command.command.log_color_highlight(),
+                    build_dir.log_color_highlight()
+                ));
+            },
+        )
+        .await
 }
 
 pub async fn ensure_common_deps_for_tool(

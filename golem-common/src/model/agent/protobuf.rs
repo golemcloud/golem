@@ -1,14 +1,13 @@
 use super::{
-    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PathSegmentNode, PathVariable,
-    QueryVariable, SystemVariable, SystemVariableSegment,
-};
-use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
-    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, LiteralSegment, NamedElementSchema,
-    NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
-    RegisteredAgentTypeImplementer, TextDescriptor, TextReference, TextSource, TextType, Url,
+    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentIdWithComponent, AgentMethod,
+    AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
+    BinarySource, BinaryType, ComponentModelElementSchema, CorsOptions, CustomHttpMethod,
+    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, GolemUserPrincipal,
+    HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal,
+    PathSegment, PathSegmentNode, PathVariable, Principal, QueryVariable, RegisteredAgentType,
+    RegisteredAgentTypeImplementer, SystemVariable, SystemVariableSegment, TextDescriptor,
+    TextReference, TextSource, TextType, Url,
 };
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
@@ -43,7 +42,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
     ) -> Result<Self, Self::Error> {
         Ok(AgentType {
             mode: proto.mode().into(),
-            type_name: proto.type_name,
+            type_name: AgentTypeName(proto.type_name),
             description: proto.description,
             constructor: proto
                 .constructor
@@ -68,7 +67,7 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
     fn from(value: AgentType) -> Self {
         golem_api_grpc::proto::golem::component::AgentType {
             mode: golem_api_grpc::proto::golem::component::AgentMode::from(value.mode) as i32,
-            type_name: value.type_name,
+            type_name: value.type_name.0,
             description: value.description,
             constructor: Some(value.constructor.into()),
             methods: value
@@ -1117,17 +1116,79 @@ impl From<AgentHttpAuthDetails> for golem_api_grpc::proto::golem::component::Age
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthContext>
-    for AgentHttpAuthContext
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentIdWithComponent>
+    for AgentIdWithComponent
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::component::AgentHttpAuthContext,
+        value: golem_api_grpc::proto::golem::component::AgentIdWithComponent,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_id: value.agent_id,
+            component_id: value
+                .component_id
+                .ok_or_else(|| "Missing field: component_id".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<AgentIdWithComponent> for golem_api_grpc::proto::golem::component::AgentIdWithComponent {
+    fn from(value: AgentIdWithComponent) -> Self {
+        Self {
+            agent_id: value.agent_id,
+            component_id: Some(value.component_id.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::Principal> for Principal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::Principal,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::principal::Value;
+
+        match value
+            .value
+            .ok_or_else(|| "Missing field: value".to_string())?
+        {
+            Value::Oidc(v) => Ok(Self::Oidc(v.try_into()?)),
+            Value::Agent(v) => Ok(Self::Agent(v.try_into()?)),
+            Value::GolemUser(v) => Ok(Self::GolemUser(v.try_into()?)),
+            Value::Anonymous(_) => Ok(Self::Anonymous(Empty {})),
+        }
+    }
+}
+
+impl From<Principal> for golem_api_grpc::proto::golem::component::Principal {
+    fn from(value: Principal) -> Self {
+        use golem_api_grpc::proto::golem::component::principal::Value;
+
+        Self {
+            value: Some(match value {
+                Principal::Oidc(v) => Value::Oidc(v.into()),
+                Principal::Agent(v) => Value::Agent(v.into()),
+                Principal::GolemUser(v) => Value::GolemUser(v.into()),
+                Principal::Anonymous(_) => {
+                    Value::Anonymous(golem_api_grpc::proto::golem::common::Empty {})
+                }
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::OidcPrincipal> for OidcPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::OidcPrincipal,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
@@ -1140,11 +1201,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentHttpAuthContext>
     }
 }
 
-impl From<AgentHttpAuthContext> for golem_api_grpc::proto::golem::component::AgentHttpAuthContext {
-    fn from(value: AgentHttpAuthContext) -> Self {
+impl From<OidcPrincipal> for golem_api_grpc::proto::golem::component::OidcPrincipal {
+    fn from(value: OidcPrincipal) -> Self {
         Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
@@ -1153,6 +1214,52 @@ impl From<AgentHttpAuthContext> for golem_api_grpc::proto::golem::component::Age
             picture: value.picture,
             preferred_username: value.preferred_username,
             claims: value.claims,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentPrincipal> for AgentPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::AgentPrincipal,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_id: value
+                .agent_id
+                .ok_or_else(|| "Missing field: agent_id".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<AgentPrincipal> for golem_api_grpc::proto::golem::component::AgentPrincipal {
+    fn from(value: AgentPrincipal) -> Self {
+        Self {
+            agent_id: Some(value.agent_id.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::GolemUserPrincipal> for GolemUserPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::GolemUserPrincipal,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            account_id: value
+                .account_id
+                .ok_or_else(|| "Missing field: account_id".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<GolemUserPrincipal> for golem_api_grpc::proto::golem::component::GolemUserPrincipal {
+    fn from(value: GolemUserPrincipal) -> Self {
+        Self {
+            account_id: Some(value.account_id.into()),
         }
     }
 }

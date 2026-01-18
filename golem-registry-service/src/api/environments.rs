@@ -18,7 +18,7 @@ use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
@@ -610,7 +610,7 @@ impl EnvironmentsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_id: Path<DeploymentRevision>,
-        agent_type_name: Path<String>,
+        agent_type_name: Path<AgentTypeName>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<RegisteredAgentType>> {
         let record = recorded_http_api_request!(
@@ -639,7 +639,7 @@ impl EnvironmentsApi {
         &self,
         environment_id: EnvironmentId,
         deployment_id: DeploymentRevision,
-        agent_type_name: String,
+        agent_type_name: AgentTypeName,
         auth: AuthCtx,
     ) -> ApiResult<Json<RegisteredAgentType>> {
         let agent_type = self

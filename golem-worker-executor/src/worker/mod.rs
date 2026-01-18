@@ -38,7 +38,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentHttpAuthContext, AgentId, AgentMode};
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -308,7 +308,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             agent_id.agent_type.clone().into_value(),
                             agent_id.parameters.clone().into_value(),
                             // Fixme: this needs to come from the invocation that caused this agent to be created
-                            None::<AgentHttpAuthContext>.into_value(),
+                            golem_common::model::agent::Principal::anonymous().into_value(),
                         ],
                         invocation_context: invocation_context_stack.clone(),
                     })
@@ -1814,7 +1814,7 @@ impl WaitingWorker {
             agent_type = parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
         span.follows_from(Span::current());
@@ -1882,7 +1882,7 @@ impl RunningWorker {
             agent_type = parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
         let handle = tokio::task::spawn(

@@ -35,7 +35,7 @@ test_r::enable!();
 
 macro_rules! app_manifest_version {
     () => {
-        "1.4.2"
+        "1.5.0-dev.1"
     };
 }
 static GOLEM_RUST_VERSION: &str = "1.11.0";

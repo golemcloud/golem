@@ -14,10 +14,9 @@
 
 use crate::app::context::{to_anyhow, ApplicationContext};
 
+use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
-use crate::command::shared_args::{
-    ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
-};
+use crate::command::shared_args::{ComponentTemplateName, DeployArgs, OptionalComponentNames};
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
@@ -420,10 +419,7 @@ impl ComponentCommandHandler {
         Ok(components)
     }
 
-    async fn cmd_diagnose(
-        &self,
-        component_names: ComponentOptionalComponentNames,
-    ) -> anyhow::Result<()> {
+    async fn cmd_diagnose(&self, component_names: OptionalComponentNames) -> anyhow::Result<()> {
         self.ctx
             .app_handler()
             .diagnose(
@@ -435,7 +431,7 @@ impl ComponentCommandHandler {
 
     async fn cmd_manifest_trace(
         &self,
-        _component_names: ComponentOptionalComponentNames,
+        _component_names: OptionalComponentNames,
     ) -> anyhow::Result<()> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
@@ -889,10 +885,7 @@ impl ComponentCommandHandler {
         let linked_wasm_path = component.final_linked_wasm();
         let agent_types = {
             if app_ctx.wit.is_agent(component_name) {
-                app_ctx
-                    .wit
-                    .get_extracted_agent_types(component_name, &linked_wasm_path)
-                    .await?
+                extract_and_store_agent_types(app_ctx, component_name).await?
             } else {
                 vec![]
             }

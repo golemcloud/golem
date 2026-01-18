@@ -12,27 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-pub struct ErrorsBody {
-    pub errors: Vec<String>,
-
-    #[oai(skip)]
-    #[serde(skip)]
-    pub cause: Option<anyhow::Error>,
-}
-
-#[derive(Debug, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-pub struct ErrorBody {
-    pub error: String,
-
-    #[oai(skip)]
-    #[serde(skip)]
-    pub cause: Option<anyhow::Error>,
-}
+pub use crate::base_model::error::*;
 
 mod protobuf {
 

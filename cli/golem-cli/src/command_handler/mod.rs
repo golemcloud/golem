@@ -25,6 +25,7 @@ use crate::command_handler::api::domain::ApiDomainCommandHandler;
 use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
+use crate::command_handler::bridge::BridgeCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
 use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::cloud::CloudCommandHandler;
@@ -55,6 +56,7 @@ use tracing::{debug, Level};
 
 mod api;
 mod app;
+mod bridge;
 mod cloud;
 mod component;
 mod environment;
@@ -395,7 +397,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 }
 
 // NOTE: for now every handler can access any other handler, but this can be restricted
-//       by moving these simple factory methods into the specific handlers on demand,
+//       by moving these simple factory methods into the specific handlers on-demand,
 //       if the need ever arises
 pub trait Handlers {
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
@@ -404,6 +406,7 @@ pub trait Handlers {
     fn api_handler(&self) -> ApiCommandHandler;
     fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
     fn app_handler(&self) -> AppCommandHandler;
+    fn bridge_handler(&self) -> BridgeCommandHandler;
     // TODO: atomic: fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler;
     fn cloud_account_handler(&self) -> CloudAccountCommandHandler;
     fn cloud_handler(&self) -> CloudCommandHandler;
@@ -445,6 +448,10 @@ impl Handlers for Arc<Context> {
         AppCommandHandler::new(self.clone())
     }
 
+    fn bridge_handler(&self) -> BridgeCommandHandler {
+        BridgeCommandHandler::new(self.clone())
+    }
+
     // TODO: atomic
     /*
     fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler {
@@ -467,13 +474,6 @@ impl Handlers for Arc<Context> {
     fn component_handler(&self) -> ComponentCommandHandler {
         ComponentCommandHandler::new(self.clone())
     }
-
-    // TODO: atomic:
-    /*
-    fn component_plugin_handler(&self) -> ComponentPluginCommandHandler {
-        ComponentPluginCommandHandler::new(self.clone())
-    }
-    */
 
     fn environment_handler(&self) -> EnvironmentCommandHandler {
         EnvironmentCommandHandler::new(self.clone())

@@ -15,7 +15,7 @@ harness = false
 
 [dependencies]
 golem-rib = { workspace = true }
-golem-wasm = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

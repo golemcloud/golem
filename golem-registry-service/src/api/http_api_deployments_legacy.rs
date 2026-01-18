@@ -17,9 +17,10 @@ use golem_common::model::Page;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_deployment::HttpApiDeploymentRevision;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId};
-use golem_common::model::http_api_deployment::{
-    HttpApiDeploymentCreation, HttpApiDeploymentRevision, HttpApiDeploymentUpdate,
+use golem_common::model::http_api_deployment_legacy::{
+    LegacyHttpApiDeployment, LegacyHttpApiDeploymentCreation, LegacyHttpApiDeploymentUpdate,
 };
 use golem_common::model::poem::NoContentResponse;
 use golem_service_base::api_tags::ApiTags;
@@ -47,7 +48,7 @@ impl LegacyHttpApiDeploymentsApi {
     async fn create_http_api_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<HttpApiDeploymentCreation>,
+        payload: Json<LegacyHttpApiDeploymentCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDeployment>> {
         unimplemented!()
@@ -90,7 +91,7 @@ impl LegacyHttpApiDeploymentsApi {
         &self,
         http_api_deployment_id: Path<HttpApiDeploymentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDeployment>> {
+    ) -> ApiResult<Json<LegacyHttpApiDeployment>> {
         unimplemented!()
         // let record = recorded_http_api_request!(
         //     "get_http_api_deployment",
@@ -129,9 +130,9 @@ impl LegacyHttpApiDeploymentsApi {
     async fn update_http_api_deployment(
         &self,
         http_api_deployment_id: Path<HttpApiDeploymentId>,
-        payload: Json<HttpApiDeploymentUpdate>,
+        payload: Json<LegacyHttpApiDeploymentUpdate>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDeployment>> {
+    ) -> ApiResult<Json<LegacyHttpApiDeployment>> {
         unimplemented!()
         // let record = recorded_http_api_request!(
         //     "update_http_api_deployment",
@@ -214,7 +215,7 @@ impl LegacyHttpApiDeploymentsApi {
         http_api_deployment_id: Path<HttpApiDeploymentId>,
         revision: Path<HttpApiDeploymentRevision>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDeployment>> {
+    ) -> ApiResult<Json<LegacyHttpApiDeployment>> {
         unimplemented!()
         // let record = recorded_http_api_request!(
         //     "get_http_api_deployment_revision",
@@ -257,7 +258,7 @@ impl LegacyHttpApiDeploymentsApi {
         environment_id: Path<EnvironmentId>,
         domain: Path<Domain>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDeployment>> {
+    ) -> ApiResult<Json<LegacyHttpApiDeployment>> {
         unimplemented!()
         // let record = recorded_http_api_request!(
         //     "get_http_api_definition_in_environment",
@@ -303,7 +304,7 @@ impl LegacyHttpApiDeploymentsApi {
         deployment_revision: Path<DeploymentRevision>,
         domain: Path<Domain>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDeployment>> {
+    ) -> ApiResult<Json<LegacyHttpApiDeployment>> {
         unimplemented!()
         // let record = recorded_http_api_request!(
         //     "get_http_api_deployment_in_deployment",
@@ -353,7 +354,7 @@ impl LegacyHttpApiDeploymentsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
+    ) -> ApiResult<Json<Page<LegacyHttpApiDeployment>>> {
         unimplemented!()
         // let record = recorded_http_api_request!(
         //     "list_http_api_deployments_in_environment",
@@ -396,7 +397,7 @@ impl LegacyHttpApiDeploymentsApi {
         environment_id: Path<EnvironmentId>,
         deployment_revision: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
+    ) -> ApiResult<Json<Page<LegacyHttpApiDeployment>>> {
         unimplemented!()
         // let record = recorded_http_api_request!(
         //     "list_http_api_deployments_in_deployment",

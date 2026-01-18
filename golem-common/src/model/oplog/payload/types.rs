@@ -16,7 +16,6 @@ use crate::base_model::TransactionId;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
-use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
@@ -29,8 +28,8 @@ use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use desert_rust::{
-    BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
+    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
+    DeserializationContext, SerializationContext,
 };
 use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::analysis::AnalysedType;

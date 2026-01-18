@@ -16,7 +16,6 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::app_raw;
-use crate::model::app_raw::Marker;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
@@ -27,6 +26,8 @@ use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
 use golem_common::model::domain_registration::Domain;
@@ -35,6 +36,7 @@ use golem_common::model::http_api_definition::{
     HttpApiDefinitionName, HttpApiDefinitionVersion, HttpApiRoute,
 };
 use golem_common::model::{diff, validate_lower_kebab_case_identifier};
+use golem_templates::model::GuestLanguage;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -62,6 +64,7 @@ pub struct ApplicationConfig {
     pub skip_up_to_date_checks: bool,
     pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
+    pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
     pub golem_rust_override: RustDependencyOverride,
     pub dev_mode: bool,
     pub enable_wasmtime_fs_cache: bool,
@@ -224,6 +227,22 @@ pub enum AppBuildStep {
     Componentize,
     Link,
     AddMetadata,
+    GenBridge,
+}
+
+#[derive(Debug, Clone)]
+pub struct BridgeSdkTarget {
+    pub component_name: ComponentName,
+    pub agent_type: AgentType,
+    pub target_language: GuestLanguage,
+    pub output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomBridgeSdkTarget {
+    pub agent_type_names: HashSet<AgentTypeName>,
+    pub target_language: Option<GuestLanguage>,
+    pub output_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -523,6 +542,7 @@ pub struct Application {
     http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
     http_api_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
+    bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
 impl Application {
@@ -555,6 +575,10 @@ impl Application {
 
     pub fn all_sources(&self) -> &BTreeSet<PathBuf> {
         &self.all_sources
+    }
+
+    pub fn component_count(&self) -> usize {
+        self.components.len()
     }
 
     pub fn component_names(&self) -> impl Iterator<Item = &ComponentName> {
@@ -607,6 +631,30 @@ impl Application {
 
     pub fn task_result_marker_dir(&self) -> PathBuf {
         self.temp_dir().join("task-results")
+    }
+
+    pub fn bridge_sdks(&self) -> &app_raw::BridgeSdks {
+        &self.bridge_sdks.value
+    }
+
+    pub fn bridge_sdk_dir(
+        &self,
+        agent_type_name: &AgentTypeName,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        match self
+            .bridge_sdks
+            .value
+            .for_language(language)
+            .and_then(|sdk| sdk.output_dir.as_ref())
+        {
+            Some(output_dir) => self.bridge_sdks.source.join(output_dir),
+            None => self
+                .temp_dir()
+                .join("bridge-sdk")
+                .join(language.id())
+                .join(agent_type_name.to_wit_naming().as_str()),
+        }
     }
 
     pub fn rib_repl_history_file(&self) -> PathBuf {
@@ -699,7 +747,9 @@ impl PartitionedComponentPresets {
                     env_presets.insert(env_name.to_string(), properties.into());
                 }
                 None => {
-                    if properties.default == Some(Marker) || default_custom_preset.is_none() {
+                    if properties.default == Some(app_raw::Marker)
+                        || default_custom_preset.is_none()
+                    {
                         default_custom_preset = Some(preset_name.clone());
                     }
                     custom_presets.insert(preset_name, properties.into());
@@ -808,7 +858,7 @@ impl ComponentLayerId {
     }
 
     fn parent_ids_from_raw_template_references(
-        parent_ids: app_raw::TemplateReferences,
+        parent_ids: app_raw::LenientTokenList,
     ) -> Vec<ComponentLayerId> {
         parent_ids
             .into_vec()
@@ -1122,6 +1172,17 @@ impl<'a> Component<'a> {
         self.properties().component_type
     }
 
+    pub fn guess_language(&self) -> Option<GuestLanguage> {
+        self.applied_layers().iter().find_map(|(id, _)| {
+            id.template_name()
+                .and_then(|template_name| match template_name.as_str() {
+                    "ts" => Some(GuestLanguage::TypeScript),
+                    "rust" => Some(GuestLanguage::Rust),
+                    _ => None,
+                })
+        })
+    }
+
     pub fn source(&self) -> &Path {
         &self.properties.source
     }
@@ -1197,18 +1258,42 @@ impl<'a> Component<'a> {
 
     /// The final linked component WASM
     pub fn final_linked_wasm(&self) -> PathBuf {
-        self.source_dir().join(
-            self.properties()
-                .linked_wasm
-                .as_ref()
-                .cloned()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    self.temp_dir
-                        .join("final-linked-wasm")
-                        .join(format!("{}.wasm", self.component_name.as_str()))
-                }),
-        )
+        self.properties()
+            .linked_wasm
+            .as_ref()
+            .map(|linked_wasm| self.source_dir().join(linked_wasm))
+            .unwrap_or_else(|| {
+                self.temp_dir
+                    .join("final-linked-wasm")
+                    .join(format!("{}.wasm", self.component_name.as_str()))
+            })
+    }
+
+    pub fn agent_type_extraction_source_wasm(&self) -> PathBuf {
+        let custom_source = self.build_commands().iter().find_map(|step| match step {
+            app_raw::BuildCommand::AgentWrapper(app_raw::GenerateAgentWrapper {
+                based_on_compiled_wasm,
+                ..
+            }) => Some(based_on_compiled_wasm),
+            app_raw::BuildCommand::ComposeAgentWrapper(app_raw::ComposeAgentWrapper {
+                with_agent,
+                ..
+            }) => Some(with_agent),
+            _ => None,
+        });
+
+        custom_source
+            .map(|path| self.source_dir().join(path))
+            .unwrap_or_else(|| self.final_linked_wasm())
+    }
+
+    /// File for storing extracted agent types
+    pub fn extracted_agent_types(&self, source_wasm_path: &Path) -> PathBuf {
+        self.temp_dir.join("extracted-agent-types").join(format!(
+            "{}-{}.json",
+            self.component_name.as_str(),
+            blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+        ))
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -1695,6 +1780,7 @@ mod app_builder {
             definition: HttpApiDefinitionName,
         },
         Environment(EnvironmentName),
+        Bridge,
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -1714,6 +1800,7 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::HttpApiDeployment { .. } => "HTTP API Deployment",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
+                UniqueSourceCheckedEntityKey::Bridge => "Bridge",
             }
         }
 
@@ -1767,6 +1854,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
                 }
+                UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
             }
         }
     }
@@ -1798,6 +1886,8 @@ mod app_builder {
         http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
         http_api_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
+
+        bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
@@ -1848,6 +1938,7 @@ mod app_builder {
                 clean: builder.clean,
                 http_api_definitions: builder.http_api_definitions,
                 http_api_deployments: builder.http_api_deployments,
+                bridge_sdks: builder.bridge_sdks,
             })
         }
 
@@ -1937,14 +2028,14 @@ mod app_builder {
 
                     if !app.application.includes.is_empty()
                         && self
-                            .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
+                        .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
                     {
                         self.include = app.application.includes;
                     }
 
                     if !app.application.wit_deps.is_empty()
                         && self
-                            .add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source)
+                        .add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source)
                     {
                         self.wit_deps =
                             WithSource::new(app_source_dir.to_path_buf(), app.application.wit_deps);
@@ -2068,8 +2159,56 @@ mod app_builder {
                             }
                         }
                     }
-                },
-            );
+
+                    if let Some(bridge) = app.application.bridge {
+                        if self
+                            .add_entity_source(UniqueSourceCheckedEntityKey::Bridge, app_source_dir)
+                        {
+                            self.bridge_sdks =
+                                WithSource::new(app_source_dir.to_path_buf(), bridge);
+
+                            for (target_language, sdk_targets) in
+                                self.bridge_sdks.value.for_all_used_languages()
+                            {
+                                let sdk_targets = sdk_targets
+                                    .agents
+                                    .clone()
+                                    .into_vec();
+                                let non_unique_targets = sdk_targets.iter()
+                                    .counts()
+                                    .into_iter()
+                                    .filter(|(_, count)| *count > 1)
+                                    .collect::<Vec<_>>();
+
+                                validation.with_context(
+                                    vec![("bridge SDK language", target_language.to_string())],
+                                    |validation| {
+                                        if !non_unique_targets.is_empty() {
+                                            validation.add_error(format!(
+                                                "Duplicated bridge SDK agent targets: {}",
+                                                non_unique_targets
+                                                    .iter()
+                                                    .map(|(target, _)| target
+                                                        .log_color_error_highlight())
+                                                    .join(", ")
+                                            ));
+                                        }
+
+                                        if sdk_targets.len() > 1 && sdk_targets.iter().any(|t| t == "*") {
+                                            validation.add_warn(format!(
+                                                "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
+                                                sdk_targets
+                                                    .iter()
+                                                    .map(|target| target.log_color_highlight())
+                                                    .join(", ")
+                                            ));
+                                        }
+                                    },
+                                );
+                            }
+                        }
+                    }
+                });
         }
 
         fn add_raw_app_environments_only(

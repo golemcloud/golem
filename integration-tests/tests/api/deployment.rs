@@ -18,6 +18,7 @@ use golem_client::api::{
     RegistryServiceRollbackEnvironmentError,
 };
 use golem_client::model::DeploymentCreation;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{
     DeploymentPlan, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
@@ -251,11 +252,11 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        api_definitions: vec![HttpApiDefinitionName("test-api".to_string())],
+        agent_types: [AgentTypeName("shopping-cart".to_string())].into(),
     };
 
     let http_api_deployment = client
-        .create_http_api_deployment_legacy(&env.id.0, &http_api_deployment_creation)
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
     let expected_hash =

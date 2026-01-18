@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::is_up_to_date;
 use crate::app::build::task_result_marker::{LinkRpcMarkerHash, TaskResultMarker};
+use crate::app::build::up_to_date_check::is_up_to_date;
 use crate::app::context::ApplicationContext;
 use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::DependencyType;
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
@@ -164,8 +164,21 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     );
                     let _indent = LogIndent::new();
 
-                    commands::composition::compose(&component_wasm, plugs, linked_wasm.as_path())
-                        .await
+                    let unused_plugs = commands::composition::compose(
+                        &component_wasm,
+                        plugs,
+                        linked_wasm.as_path(),
+                    )
+                    .await?;
+
+                    for plug_name in unused_plugs {
+                        log_warn_action(
+                            "Skipping",
+                            format!("{}, not used", plug_name.log_color_highlight()),
+                        );
+                    }
+
+                    Ok(())
                 }
             }
             .await,

@@ -13,17 +13,19 @@
 // limitations under the License.
 
 use super::{
-    AgentHttpAuthContext, AgentHttpAuthDetails, CorsOptions, CustomHttpMethod, HeaderVariable,
+    AgentHttpAuthDetails, AgentPrincipal, CorsOptions, CustomHttpMethod, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
     PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
 };
+use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
-    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
-    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
-    NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
-    TextDescriptor, TextReference, TextSource, TextType, Url,
+    AgentConstructor, AgentDependency, AgentError, AgentIdWithComponent, AgentMethod, AgentMode,
+    AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
+    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
+    UntypedElementValue, Url,
 };
 use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
@@ -164,7 +166,7 @@ impl From<AgentMethod> for super::bindings::golem::agent::common::AgentMethod {
 impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
     fn from(value: crate::model::agent::bindings::golem::agent::common::AgentType) -> Self {
         Self {
-            type_name: value.type_name,
+            type_name: AgentTypeName(value.type_name),
             description: value.description,
             constructor: AgentConstructor::from(value.constructor),
             methods: value.methods.into_iter().map(AgentMethod::from).collect(),
@@ -182,7 +184,7 @@ impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
 impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
     fn from(value: AgentType) -> Self {
         Self {
-            type_name: value.type_name,
+            type_name: value.type_name.0,
             description: value.description,
             constructor: value.constructor.into(),
             methods: value.methods.into_iter().map(AgentMethod::into).collect(),
@@ -288,6 +290,40 @@ impl DataValue {
             _ => Err("Data value does not match schema".to_string()),
         }
     }
+
+    pub fn try_from_untyped(value: UntypedDataValue, schema: DataSchema) -> Result<Self, String> {
+        match (value, schema) {
+            (UntypedDataValue::Tuple(tuple), DataSchema::Tuple(schema)) => {
+                if tuple.len() != schema.elements.len() {
+                    return Err("Tuple length mismatch".to_string());
+                }
+                Ok(DataValue::Tuple(ElementValues {
+                    elements: tuple
+                        .into_iter()
+                        .zip(schema.elements)
+                        .map(|(value, schema)| ElementValue::try_from_untyped(value, schema.schema))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
+            }
+            (UntypedDataValue::Multimodal(multimodal), DataSchema::Multimodal(schema)) => {
+                Ok(DataValue::Multimodal(NamedElementValues {
+                    elements: multimodal
+                        .into_iter()
+                        .zip(schema.elements)
+                        .map(|(value, schema)| {
+                            ElementValue::try_from_untyped(value.value, schema.schema).map(|v| {
+                                NamedElementValue {
+                                    name: value.name,
+                                    value: v,
+                                }
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
+            }
+            _ => Err("Data value does not match schema".to_string()),
+        }
+    }
 }
 
 impl From<DataValue> for super::bindings::golem::agent::common::DataValue {
@@ -373,6 +409,30 @@ impl ElementValue {
             ) => {
                 Ok(ElementValue::UnstructuredBinary(binary.into()))
             }
+            _ => Err("Element value does not match schema".to_string()),
+        }
+    }
+
+    pub fn try_from_untyped(
+        value: UntypedElementValue,
+        schema: ElementSchema,
+    ) -> Result<Self, String> {
+        match (value, schema) {
+            (
+                UntypedElementValue::ComponentModel(value),
+                ElementSchema::ComponentModel(component_model_schema),
+            ) => {
+                let typ: AnalysedType = component_model_schema.element_type;
+                Ok(ElementValue::ComponentModel(ValueAndType::new(value, typ)))
+            }
+            (
+                UntypedElementValue::UnstructuredText(text_ref),
+                ElementSchema::UnstructuredText(_),
+            ) => Ok(ElementValue::UnstructuredText(text_ref.value)),
+            (
+                UntypedElementValue::UnstructuredBinary(binary_ref),
+                ElementSchema::UnstructuredBinary(_),
+            ) => Ok(ElementValue::UnstructuredBinary(binary_ref.value)),
             _ => Err("Element value does not match schema".to_string()),
         }
     }
@@ -569,6 +629,24 @@ impl From<RegisteredAgentType> for host::RegisteredAgentType {
         host::RegisteredAgentType {
             agent_type: value.agent_type.into(),
             implemented_by: value.implemented_by.component_id.into(),
+        }
+    }
+}
+
+impl From<AgentIdWithComponent> for super::bindings::golem::rpc::types::AgentId {
+    fn from(value: AgentIdWithComponent) -> Self {
+        Self {
+            component_id: value.component_id.into(),
+            agent_id: value.agent_id,
+        }
+    }
+}
+
+impl From<super::bindings::golem::rpc::types::AgentId> for AgentIdWithComponent {
+    fn from(value: super::bindings::golem::rpc::types::AgentId) -> Self {
+        Self {
+            component_id: value.component_id.into(),
+            agent_id: value.agent_id,
         }
     }
 }
@@ -801,11 +879,35 @@ impl From<super::bindings::golem::agent::common::AuthDetails> for AgentHttpAuthD
     }
 }
 
-impl From<AgentHttpAuthContext> for super::bindings::golem::agent::common::AuthContext {
-    fn from(value: AgentHttpAuthContext) -> Self {
+impl From<Principal> for super::bindings::golem::agent::common::Principal {
+    fn from(value: Principal) -> Self {
+        match value {
+            Principal::Oidc(inner) => Self::Oidc(inner.into()),
+            Principal::Agent(inner) => Self::Agent(inner.into()),
+            Principal::GolemUser(inner) => Self::GolemUser(inner.into()),
+            Principal::Anonymous(_) => Self::Anonymous,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::Principal> for Principal {
+    fn from(value: super::bindings::golem::agent::common::Principal) -> Self {
+        use super::bindings::golem::agent::common::Principal as Value;
+
+        match value {
+            Value::Oidc(inner) => Self::Oidc(inner.into()),
+            Value::Agent(inner) => Self::Agent(inner.into()),
+            Value::GolemUser(inner) => Self::GolemUser(inner.into()),
+            Value::Anonymous => Self::Anonymous(Empty {}),
+        }
+    }
+}
+
+impl From<OidcPrincipal> for super::bindings::golem::agent::common::OidcPrincipal {
+    fn from(value: OidcPrincipal) -> Self {
         Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
@@ -818,11 +920,11 @@ impl From<AgentHttpAuthContext> for super::bindings::golem::agent::common::AuthC
     }
 }
 
-impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthContext {
-    fn from(value: super::bindings::golem::agent::common::AuthContext) -> Self {
+impl From<super::bindings::golem::agent::common::OidcPrincipal> for OidcPrincipal {
+    fn from(value: super::bindings::golem::agent::common::OidcPrincipal) -> Self {
         Self {
             sub: value.sub,
-            provider: value.provider,
+            issuer: value.issuer,
             email: value.email,
             name: value.name,
             email_verified: value.email_verified,
@@ -831,6 +933,38 @@ impl From<super::bindings::golem::agent::common::AuthContext> for AgentHttpAuthC
             picture: value.picture,
             preferred_username: value.preferred_username,
             claims: value.claims,
+        }
+    }
+}
+
+impl From<AgentPrincipal> for super::bindings::golem::agent::common::AgentPrincipal {
+    fn from(value: AgentPrincipal) -> Self {
+        Self {
+            agent_id: value.agent_id.into(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::AgentPrincipal> for AgentPrincipal {
+    fn from(value: super::bindings::golem::agent::common::AgentPrincipal) -> Self {
+        Self {
+            agent_id: value.agent_id.into(),
+        }
+    }
+}
+
+impl From<GolemUserPrincipal> for super::bindings::golem::agent::common::GolemUserPrincipal {
+    fn from(value: GolemUserPrincipal) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::GolemUserPrincipal> for GolemUserPrincipal {
+    fn from(value: super::bindings::golem::agent::common::GolemUserPrincipal) -> Self {
+        Self {
+            account_id: value.account_id.into(),
         }
     }
 }

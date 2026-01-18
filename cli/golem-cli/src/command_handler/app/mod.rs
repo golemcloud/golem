@@ -15,9 +15,7 @@
 use crate::app::error::CustomCommandError;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
-use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
-};
+use crate::command::shared_args::{BuildArgs, DeployArgs, ForceBuildArg, OptionalComponentNames};
 use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
@@ -160,7 +158,7 @@ impl AppCommandHandler {
             let common_templates = languages
                 .iter()
                 .map(|language| {
-                    self.get_template(&language.id(), self.ctx.dev_mode())
+                    self.get_template(language.id(), self.ctx.dev_mode())
                         .map(|(common, _component)| common)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -260,7 +258,7 @@ impl AppCommandHandler {
 
     pub async fn cmd_build(
         &self,
-        component_name: AppOptionalComponentNames,
+        component_name: OptionalComponentNames,
         build_args: BuildArgs,
     ) -> anyhow::Result<()> {
         self.build(
@@ -271,7 +269,7 @@ impl AppCommandHandler {
         .await
     }
 
-    pub async fn cmd_clean(&self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
+    pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
         self.clean(
             component_name.component_name,
             &ApplicationComponentSelectMode::CurrentDir,
@@ -423,7 +421,7 @@ impl AppCommandHandler {
 
     pub async fn cmd_diagnose(
         &self,
-        component_names: AppOptionalComponentNames,
+        component_names: OptionalComponentNames,
     ) -> anyhow::Result<()> {
         self.diagnose(
             component_names.component_name,
@@ -766,7 +764,7 @@ impl AppCommandHandler {
                 diffable_local_http_api_deployments.insert(
                     domain.0.clone(),
                     diff::HttpApiDeployment {
-                        apis: http_api_deployment
+                        agent_types: http_api_deployment
                             .iter()
                             .map(|def| def.0.clone())
                             .collect(),
@@ -1613,10 +1611,17 @@ impl AppCommandHandler {
 
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
+
         let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let all_selected =
+            app_ctx.selected_component_names().len() == app_ctx.application.component_count();
 
         let clean_mode = {
-            if any_component_requested {
+            if all_selected {
+                CleanMode::All
+            } else if any_component_requested {
                 CleanMode::SelectedComponentsOnly
             } else {
                 match &default_component_select_mode {
@@ -1629,7 +1634,7 @@ impl AppCommandHandler {
             }
         };
 
-        app_ctx.some_or_err()?.clean(clean_mode)
+        app_ctx.clean(clean_mode)
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {

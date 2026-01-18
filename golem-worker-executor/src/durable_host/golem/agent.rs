@@ -19,7 +19,7 @@ use golem_common::model::agent::bindings::golem::agent::common::AgentError;
 use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentTypeName};
 use golem_common::model::oplog::host_functions::{
     GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
@@ -65,6 +65,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: String,
     ) -> anyhow::Result<Option<host::RegisteredAgentType>> {
+        let agent_type_name = AgentTypeName(agent_type_name);
         let durability =
             Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -113,7 +114,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             ) {
                 Ok(input) => {
                     let agent_id = AgentId::new(
-                        agent_type_name.to_wit_naming(),
+                        AgentTypeName(agent_type_name).to_wit_naming(),
                         input,
                         phantom_id.map(|id| id.into()),
                     );
@@ -144,7 +145,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let component_metadata = &self.component_metadata().metadata;
         match AgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => Ok(Ok((
-                agent_id.agent_type,
+                agent_id.agent_type.to_string(),
                 agent_id.parameters.into(),
                 agent_id.phantom_id.map(|id| id.into()),
             ))),
