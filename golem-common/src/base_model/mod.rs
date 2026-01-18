@@ -246,6 +246,7 @@ impl golem_wasm::IntoValue for ShardId {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerId {
     pub component_id: ComponentId,
+    #[cfg_attr(feature = "full", wit_field(rename = "agent-id"))]
     pub worker_name: String,
 }
 

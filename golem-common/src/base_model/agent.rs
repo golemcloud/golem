@@ -14,6 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::base_model::WorkerId;
 use crate::model::Empty;
 use async_trait::async_trait;
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
@@ -954,7 +955,7 @@ pub struct OidcPrincipal {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPrincipal {
-    pub agent_id: AgentIdWithComponent,
+    pub agent_id: WorkerId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
@@ -967,20 +968,6 @@ pub struct AgentPrincipal {
 #[serde(rename_all = "camelCase")]
 pub struct GolemUserPrincipal {
     pub account_id: AccountId,
-}
-
-// TODO: this is the same as WorkerId, to be removed
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentIdWithComponent {
-    pub component_id: ComponentId,
-    pub agent_id: String,
 }
 
 pub trait UnstructuredTextExtensions {
