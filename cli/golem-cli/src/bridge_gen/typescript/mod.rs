@@ -33,7 +33,7 @@ use golem_common::model::agent::{
     NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::AnalysedType;
-use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
 use serde_json::json;
 
@@ -2062,7 +2062,7 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn library_name(&self) -> String {
-        self.agent_type.type_name.0.to_snake_case()
+        self.agent_type.type_name.0.to_kebab_case()
     }
 
     fn global_config_var_name(&self) -> String {
