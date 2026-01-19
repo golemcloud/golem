@@ -38,6 +38,10 @@ export function isNamedMultimodal(type: Type.Type): boolean {
   return false;
 }
 
+export function isPrincipal(type: Type.Type): boolean {
+  return type.name === 'Principal';
+}
+
 export function getMultimodalParamDetails(
   type: Type.Type,
 ): Either.Either<ParameterDetail[], string> {

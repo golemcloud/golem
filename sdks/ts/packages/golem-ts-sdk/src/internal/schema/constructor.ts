@@ -120,15 +120,29 @@ function getMultimodalTypeInConstructor(
   }
 }
 
+// For a principal, we don't track any ElementSchema
+type ConstructorArgElementSchema =
+  | { tag: 'principal' }
+  | { tag: 'component-model'; name: string; schema: ElementSchema };
+
 function getParamAndSchemaCollection(
   agentClassName: string,
   constructorParamInfos: readonly ConstructorArg[],
   baseError: string,
-): [string, ElementSchema][] {
+): ConstructorArgElementSchema[] {
   return constructorParamInfos.map((paramInfo) => {
     const paramType = paramInfo.type;
 
     const paramTypeName = paramType.name;
+
+    if (paramTypeName && paramTypeName === 'Principal') {
+      AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
+        tag: 'principal',
+        tsType: paramType,
+      });
+
+      return { tag: 'principal' };
+    }
 
     if (paramTypeName && paramTypeName === 'UnstructuredText') {
       const textDescriptor = getTextDescriptor(paramType);
@@ -150,7 +164,11 @@ function getParamAndSchemaCollection(
         val: textDescriptor.val,
       };
 
-      return [paramInfo.name, elementSchema];
+      return {
+        tag: 'component-model',
+        name: paramInfo.name,
+        schema: elementSchema,
+      };
     }
 
     if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
@@ -173,7 +191,11 @@ function getParamAndSchemaCollection(
         val: binaryDescriptor.val,
       };
 
-      return [paramInfo.name, elementSchema];
+      return {
+        tag: 'component-model',
+        name: paramInfo.name,
+        schema: elementSchema,
+      };
     }
 
     const typeInfoEither = WitType.fromTsType(
@@ -207,6 +229,10 @@ function getParamAndSchemaCollection(
       tag: 'component-model',
       val: witType,
     };
-    return [paramInfo.name, elementSchema];
+    return {
+      tag: 'component-model',
+      name: paramInfo.name,
+      schema: elementSchema,
+    };
   });
 }
