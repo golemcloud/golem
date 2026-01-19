@@ -516,7 +516,7 @@ impl RustBridgeGenerator {
                     Some(err_type) => self.wit_type_to_typeref(err_type)?,
                     None => quote! { () },
                 };
-                Ok(quote! { pub type #name = Result<#ok, #err> })
+                Ok(quote! { pub type #name = Result<#ok, #err>; })
             }
             AnalysedType::Option(option) => {
                 let inner = self.wit_type_to_typeref(&option.inner)?;
