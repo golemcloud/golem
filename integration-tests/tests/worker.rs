@@ -816,7 +816,7 @@ async fn auto_update_on_idle(
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
     check!(result[0] == Value::U64(0));
-    check!(metadata.component_version == updated_component.revision);
+    check!(metadata.component_revision == updated_component.revision);
     check!(update_counts(&metadata) == (0, 1, 0));
     Ok(())
 }
@@ -895,7 +895,7 @@ async fn auto_update_on_idle_via_host_function(
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
     check!(result[0] == Value::U64(0));
-    check!(metadata.component_version == updated_component.revision);
+    check!(metadata.component_revision == updated_component.revision);
     check!(update_counts(&metadata) == (0, 1, 0));
     Ok(())
 }

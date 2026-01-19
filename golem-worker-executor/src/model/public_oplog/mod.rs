@@ -317,7 +317,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
                 let function = metadata.metadata.find_function(&function_name)?.ok_or(
-                    format!("Exported function {function_name} not found in component {} version {component_revision}", owned_worker_id.component_id())
+                    format!("Exported function {function_name} not found in component {} revision {component_revision}", owned_worker_id.component_id())
                 )?;
 
                 let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =

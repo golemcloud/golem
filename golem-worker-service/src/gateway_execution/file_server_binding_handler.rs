@@ -151,7 +151,7 @@ impl FileServerBindingHandler {
                 .await;
 
             match worker_metadata {
-                Ok(metadata) => Some(metadata.component_version),
+                Ok(metadata) => Some(metadata.component_revision),
                 Err(WorkerServiceError::WorkerNotFound(_)) => None,
                 Err(other) => Err(other)?,
             }

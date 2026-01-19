@@ -166,7 +166,7 @@ impl TestDsl for TestWorkerExecutor {
         Ok(component)
     }
 
-    async fn get_latest_component_version(
+    async fn get_latest_component_revision(
         &self,
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
@@ -179,23 +179,23 @@ impl TestDsl for TestWorkerExecutor {
     async fn update_component_with(
         &self,
         component_id: &ComponentId,
-        previous_version: ComponentRevision,
+        previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
-        let latest_version = self
+        let latest_revision = self
             .deps
             .component_writer
             .get_latest_component_metadata(component_id)
             .await?;
 
-        if latest_version.revision != previous_version {
+        if latest_revision.revision != previous_revision {
             return Err(anyhow!(
-                "Unexpected previous version. wanted {previous_version} but found {}",
-                latest_version.revision
+                "Unexpected previous revision. wanted {previous_revision} but found {}",
+                latest_revision.revision
             ));
         };
 
@@ -206,7 +206,7 @@ impl TestDsl for TestWorkerExecutor {
             let source_path = rename_component_if_needed(
                 self.deps.component_temp_directory.path(),
                 &source_path,
-                &latest_version.component_name.0,
+                &latest_revision.component_name.0,
             )?;
             Some(source_path)
         } else {
@@ -221,7 +221,7 @@ impl TestDsl for TestWorkerExecutor {
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
-                    latest_version.environment_id,
+                    latest_revision.environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
@@ -256,7 +256,7 @@ impl TestDsl for TestWorkerExecutor {
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
-        let latest_version = self.get_latest_component_version(component_id).await?;
+        let latest_revision = self.get_latest_component_revision(component_id).await?;
 
         let worker_id = WorkerId {
             component_id: *component_id,
@@ -268,8 +268,8 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .create_worker(CreateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                component_owner_account_id: Some(latest_version.account_id.into()),
-                environment_id: Some(latest_version.environment_id.into()),
+                component_owner_account_id: Some(latest_revision.account_id.into()),
+                environment_id: Some(latest_revision.environment_id.into()),
                 env,
                 wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
                 ignore_already_existing: false,
@@ -309,7 +309,7 @@ impl TestDsl for TestWorkerExecutor {
         params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<(), WorkerExecutorError>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let result = self
@@ -354,7 +354,7 @@ impl TestDsl for TestWorkerExecutor {
         params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let result = self
@@ -408,7 +408,7 @@ impl TestDsl for TestWorkerExecutor {
         params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let result = self
@@ -463,7 +463,7 @@ impl TestDsl for TestWorkerExecutor {
         params: Vec<serde_json::Value>,
     ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let result = self
@@ -514,7 +514,7 @@ impl TestDsl for TestWorkerExecutor {
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -544,7 +544,7 @@ impl TestDsl for TestWorkerExecutor {
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let mut result = Vec::new();
@@ -612,7 +612,7 @@ impl TestDsl for TestWorkerExecutor {
         query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let mut result = Vec::new();
@@ -670,7 +670,7 @@ impl TestDsl for TestWorkerExecutor {
         recover_immediately: bool,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -696,7 +696,7 @@ impl TestDsl for TestWorkerExecutor {
 
     async fn resume(&self, worker_id: &WorkerId, force: bool) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -722,7 +722,7 @@ impl TestDsl for TestWorkerExecutor {
 
     async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&promise_id.worker_id.component_id)
+            .get_latest_component_revision(&promise_id.worker_id.component_id)
             .await?;
 
         let response = self
@@ -751,7 +751,7 @@ impl TestDsl for TestWorkerExecutor {
         worker_id: &WorkerId,
     ) -> anyhow::Result<impl WorkerLogEventStream> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let stream = self
@@ -772,10 +772,10 @@ impl TestDsl for TestWorkerExecutor {
     async fn auto_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -784,7 +784,7 @@ impl TestDsl for TestWorkerExecutor {
             .update_worker(UpdateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                target_version: target_version.into(),
+                target_revision: target_revision.into(),
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -803,10 +803,10 @@ impl TestDsl for TestWorkerExecutor {
     async fn manual_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -815,7 +815,7 @@ impl TestDsl for TestWorkerExecutor {
             .update_worker(UpdateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                target_version: target_version.into(),
+                target_revision: target_revision.into(),
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -833,7 +833,7 @@ impl TestDsl for TestWorkerExecutor {
 
     async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -861,7 +861,7 @@ impl TestDsl for TestWorkerExecutor {
         worker_id: &WorkerId,
     ) -> anyhow::Result<Option<WorkerMetadataDto>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -903,7 +903,7 @@ impl TestDsl for TestWorkerExecutor {
         count: u64,
         precise: bool,
     ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
-        let latest_version = self.get_latest_component_version(component_id).await?;
+        let latest_version = self.get_latest_component_revision(component_id).await?;
 
         let response = self
             .client
@@ -944,7 +944,7 @@ impl TestDsl for TestWorkerExecutor {
         idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -974,7 +974,7 @@ impl TestDsl for TestWorkerExecutor {
         path: &str,
     ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let response = self
@@ -1025,7 +1025,7 @@ impl TestDsl for TestWorkerExecutor {
 
     async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes> {
         let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
+            .get_latest_component_revision(&worker_id.component_id)
             .await?;
 
         let mut stream = self
@@ -1077,7 +1077,7 @@ impl TestDsl for TestWorkerExecutor {
         oplog_index: OplogIndex,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_version(&source_worker_id.component_id)
+            .get_latest_component_revision(&source_worker_id.component_id)
             .await?;
 
         let target_worker_id = WorkerId {

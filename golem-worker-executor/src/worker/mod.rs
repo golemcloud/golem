@@ -162,7 +162,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<ComponentRevision>,
+        component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -175,7 +175,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_worker_id,
             worker_env,
             worker_wasi_config_vars,
-            component_version,
+            component_revision,
             parent,
             invocation_context_stack,
         )
@@ -218,7 +218,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<ComponentRevision>,
+        component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
@@ -232,7 +232,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             account_id,
             &owned_worker_id,
-            component_version,
+            component_revision,
             worker_env,
             worker_config,
             parent,
@@ -1943,12 +1943,12 @@ impl RunningWorker {
                 .front()
                 .cloned();
 
-            let component_version = pending_update.as_ref().map_or(
+            let component_revision = pending_update.as_ref().map_or(
                 worker_metadata.last_known_status.component_revision,
                 |update| {
                     let target_revision = *update.description.target_revision();
                     info!(
-                        "Attempting {} update from {} to version {target_revision}",
+                        "Attempting {} update from {} to revision {target_revision}",
                         match update.description {
                             UpdateDescription::Automatic { .. } => "automatic",
                             UpdateDescription::SnapshotBased { .. } => "snapshot based",
@@ -1961,22 +1961,22 @@ impl RunningWorker {
 
             match parent
                 .component_service()
-                .get(&parent.engine(), component_id, component_version)
+                .get(&parent.engine(), component_id, component_revision)
                 .await
             {
                 Ok((component, component_metadata)) => {
                     Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
-                    if component_version != worker_metadata.last_known_status.component_revision {
+                    if component_revision != worker_metadata.last_known_status.component_revision {
                         // An update was attempted but the targeted version does not exist
                         warn!(
-                            "Attempting update to version {component_version} failed with {error}"
+                            "Attempting update to revision {component_revision} failed with {error}"
                         );
 
                         parent
                             .add_and_commit_oplog(OplogEntry::failed_update(
-                                component_version,
+                                component_revision,
                                 Some(error.to_string()),
                             ))
                             .await;

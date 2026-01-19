@@ -343,11 +343,11 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         details: Option<String>,
     ) {
         self.durable_ctx
-            .on_worker_update_failed(target_version, details)
+            .on_worker_update_failed(target_revision, details)
             .await
     }
 

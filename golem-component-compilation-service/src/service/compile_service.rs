@@ -55,19 +55,19 @@ impl ComponentCompilationService {
     pub async fn enqueue_compilation(
         &self,
         component_id: ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
         environment_id: EnvironmentId,
         sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
             component_id = component_id.to_string(),
-            component_version = component_version.to_string(),
+            component_revision = component_revision.to_string(),
             "Enqueueing compilation for component",
         );
         let request = CompilationRequest {
             component: ComponentIdAndRevision {
                 id: component_id,
-                version: component_version,
+                revision: component_revision,
             },
             environment_id,
             sender,

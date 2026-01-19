@@ -418,7 +418,7 @@ impl RegistryService for GrpcRegistryService {
             .call("download_component", move |client| {
                 let request = DownloadComponentRequest {
                     component_id: Some(component_id.into()),
-                    version: component_revision.into(),
+                    revision: component_revision.into(),
                 };
 
                 Box::pin(client.download_component(request))
@@ -451,7 +451,7 @@ impl RegistryService for GrpcRegistryService {
             .call("get_component_metadata", move |client| {
                 let request = GetComponentMetadataRequest {
                     component_id: Some(component_id.into()),
-                    version: component_revision.into(),
+                    revision: component_revision.into(),
                 };
 
                 Box::pin(client.get_component_metadata(request))
