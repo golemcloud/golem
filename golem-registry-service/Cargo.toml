@@ -42,7 +42,7 @@ darling = { workspace = true }
 desert_rust.workspace = true
 figment = { workspace = true }
 futures = { workspace = true }
-goldenfile.workspace = true
+goldenfile = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }

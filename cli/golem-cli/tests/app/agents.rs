@@ -1,7 +1,12 @@
 use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
+use crate::stubgen::test_data_path;
 use crate::Tracing;
+use anyhow::Context;
+use goldenfile::Mint;
 use golem_cli::fs;
+use golem_templates::model::GuestLanguage;
 use indoc::indoc;
+use std::io::Write;
 use std::path::Path;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
@@ -111,6 +116,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
+
+    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::Rust).unwrap();
 
     let outputs = ctx.cli([cmd::DEPLOY]).await;
     assert!(outputs.success());
@@ -554,6 +561,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success());
+
+    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::TypeScript).unwrap();
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
@@ -1338,4 +1347,36 @@ async fn test_naming_extremes() {
         ])
         .await;
     assert!(outputs.success());
+}
+
+// Use UPDATE_GOLDENFILES=1 or `makers cli-integration-tests-update-golden-files` to update files
+fn check_agent_types_golden_file(
+    application_path: &Path,
+    language: GuestLanguage,
+) -> anyhow::Result<()> {
+    let mut mint = Mint::new(test_data_path().join("goldenfiles/extracted-agent-types"));
+    let mut mint_file = mint.new_goldenfile(format!("extracted-agent-types_{}.json", language.id()))?;
+
+    let extract_dir = application_path.join("golem-temp/extracted-agent-types");
+    let entries = std::fs::read_dir(&extract_dir)
+        .with_context(|| format!("Failed to read directory {}", extract_dir.display()))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    if entries.len() != 1 {
+        anyhow::bail!(
+            "Expected exactly one entry in {}, got: {:?}",
+            extract_dir.display(),
+            entries
+        );
+    }
+    let agent_types_source = entries[0].path();
+
+    let formatted_agent_types_json =
+        serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(&agent_types_source)?,
+        )?)?;
+
+    mint_file.write_all(formatted_agent_types_json.as_bytes())?;
+
+    Ok(())
 }

@@ -344,6 +344,13 @@ pnpm run build
 pnpm run build-agent-template
 '''
 
+[tasks.clean-sdk-ts]
+description = "Cleans the TypeScript SDK"
+cwd = "./sdks/ts"
+script = '''
+pnpm clean
+'''
+
 ## ** CHECK **
 
 [tasks.check]
@@ -527,6 +534,15 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_RUS
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-update-golden-files]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration app::agents::test_ts_code_first_with_rpc_and_all_types -- --nocapture
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration app::agents::test_rust_code_first_with_rpc_and_all_types -- --nocapture
 '''
 
 [tasks.sharding-tests-debug]

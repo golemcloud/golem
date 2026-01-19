@@ -490,6 +490,10 @@ impl TestContext {
         self.working_dir = self.working_dir.join(path.as_ref());
     }
 
+    fn cwd_path(&self) -> &Path {
+        &self.working_dir
+    }
+
     fn cwd_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         self.working_dir.join(path)
     }

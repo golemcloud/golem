@@ -768,6 +768,7 @@ mod tests {
         NamedElementSchemas, TextDescriptor,
     };
     use golem_common::model::component::ComponentName;
+    use golem_templates::model::GuestLanguage;
     use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };
@@ -1473,7 +1474,7 @@ mod tests {
     #[test]
     pub fn ts_code_first_snippets() {
         let component_name = "test:agent".try_into().unwrap();
-        let agent_types = test::ts_code_first_snippets();
+        let agent_types = test::code_first_snippets_agent_types(GuestLanguage::TypeScript);
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()

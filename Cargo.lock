@@ -4170,6 +4170,7 @@ dependencies = [
  "futures-util",
  "fuzzy-matcher",
  "gag",
+ "goldenfile",
  "golem-client",
  "golem-common",
  "golem-rib",
