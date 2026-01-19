@@ -48,7 +48,6 @@ import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
 import {
   validateHttpEndpoint,
-  validateHttpMountWithConstructor,
 } from './http/validation';
 
 const MULTIMODAL_TYPE_NAMES = [
