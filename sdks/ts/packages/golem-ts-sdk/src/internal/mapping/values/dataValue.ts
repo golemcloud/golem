@@ -27,14 +27,13 @@ import {
   serializeTsValueToTextReference,
   matchesType,
 } from './serializer';
-import { getLanguageCodes, getMimeTypes } from '../../schema';
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
 import * as Option from '../../../newTypes/option';
 
 import * as Value from '../values/Value';
-import { record } from '../types/AnalysedType';
+import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 
 export type ParameterDetail = {
   name: string;

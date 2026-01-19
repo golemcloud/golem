@@ -29,10 +29,6 @@ import {
 import { BaseAgent } from '../baseAgent';
 import { AgentTypeRegistry } from '../internal/registry/agentTypeRegistry';
 import * as Either from '../newTypes/either';
-import {
-  getAgentMethodSchema,
-  getConstructorDataSchema,
-} from '../internal/schema';
 import * as Option from '../newTypes/option';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegistry';
@@ -46,6 +42,8 @@ import {
 import { getRawSelfAgentId } from '../host/hostapi';
 import { getHttpMountDetails } from '../internal/http/mount';
 import { validateHttpMountWithConstructor } from '../internal/http/validation';
+import { getConstructorDataSchema } from '../internal/schema/constructor';
+import { getAgentMethodSchema } from '../internal/schema/method';
 
 export type AgentDecoratorOptions = {
   name?: string;
