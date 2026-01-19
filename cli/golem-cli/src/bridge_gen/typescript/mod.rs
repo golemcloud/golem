@@ -840,7 +840,7 @@ impl TypeScriptBridgeGenerator {
                     }
                     None => "{ err: null }".to_string(),
                 };
-                writer.write_line(format!("{})", err_expr));
+                writer.write_line(format!("{}", err_expr));
                 writer.unindent();
                 writer.write_line(");");
             }
