@@ -55,6 +55,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // agent
             (
+                "JsonComponentModelValue",
+                "golem_common::model::agent::JsonComponentModelValue",
+            ),
+            (
                 "RegisteredAgentType",
                 "golem_common::model::agent::RegisteredAgentType",
             ),
@@ -63,8 +67,12 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::agent::RegisteredAgentTypeImplementer",
             ),
             (
-                "JsonComponentModelValue",
-                "golem_common::model::agent::JsonComponentModelValue",
+                "UntypedJsonDataValue",
+                "golem_common::model::agent::UntypedJsonDataValue",
+            ),
+            (
+                "UntypedDataValue",
+                "golem_common::model::agent::UntypedDataValue",
             ),
             // application
             (

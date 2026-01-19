@@ -12,27 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::environment::EnvironmentId;
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
-use derive_more::Display;
-use desert_rust::BinaryCodec;
-
-newtype_uuid!(DomainRegistrationId);
-
-declare_transparent_newtypes! {
-    #[derive(Display, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
-    #[desert(transparent)]
-    pub struct Domain(pub String);
-}
-
-declare_structs! {
-    pub struct DomainRegistrationCreation {
-        pub domain: Domain
-    }
-
-    pub struct DomainRegistration {
-        pub id: DomainRegistrationId,
-        pub environment_id: EnvironmentId,
-        pub domain: Domain
-    }
-}
+pub use crate::base_model::domain_registration::*;

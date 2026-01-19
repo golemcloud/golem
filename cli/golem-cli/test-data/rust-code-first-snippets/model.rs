@@ -2,7 +2,7 @@ use std::collections::Bound;
 
 use std::collections::HashMap;
 
-use golem_rust::{MultimodalSchema, Schema, AllowedLanguages, AllowedMimeTypes};
+use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema, Schema};
 
 #[derive(Schema)]
 pub struct AllPrimitives {
@@ -128,21 +128,20 @@ pub enum TextImageData {
     Data(Data),
 }
 
-
 #[derive(Schema)]
 pub struct Data {
     pub id: u32,
     pub name: String,
 }
 
-#[derive(AllowedLanguages)]
+#[derive(Debug, Clone, AllowedLanguages)]
 pub enum MyLang {
     #[code("en")]
     En,
-    De
+    De,
 }
 
-#[derive(AllowedMimeTypes)]
+#[derive(Debug, Clone, AllowedMimeTypes)]
 pub enum MyMimeType {
     #[mime_type("text/plain")]
     PlainText,

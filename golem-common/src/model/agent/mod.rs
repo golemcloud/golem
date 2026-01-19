@@ -36,24 +36,19 @@ pub mod bindings {
     });
 }
 
-use super::Empty;
 use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
-use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::component_metadata::ComponentMetadata;
-use crate::model::AccountId;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{
     parse_value_and_type, print_value_and_type, FromValue, IntoValue, IntoValueAndType, Value,
     ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
-use poem_openapi::NewType;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -61,25 +56,7 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Enum,
-)]
-#[repr(i32)]
-pub enum AgentMode {
-    Durable = 0,
-    Ephemeral = 1,
-}
+pub use crate::base_model::agent::*;
 
 impl TryFrom<i32> for AgentMode {
     type Error = String;
@@ -111,62 +88,6 @@ impl FromStr for AgentMode {
             "Durable" => Ok(AgentMode::Durable),
             "Ephemeral" => Ok(AgentMode::Ephemeral),
             _ => Err(format!("Unknown AgentMode: {s}")),
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AgentConstructor {
-    pub name: Option<String>,
-    pub description: String,
-    pub prompt_hint: Option<String>,
-    pub input_schema: DataSchema,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AgentDependency {
-    pub type_name: String,
-    pub description: Option<String>,
-    pub constructor: AgentConstructor,
-    pub methods: Vec<AgentMethod>,
-}
-
-impl AgentDependency {
-    pub fn normalized(mut self) -> Self {
-        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
-        Self {
-            type_name: self.type_name,
-            description: self.description,
-            constructor: self.constructor,
-            methods: self.methods,
         }
     }
 }
@@ -206,162 +127,10 @@ impl Display for AgentError {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AgentMethod {
-    pub name: String,
-    pub description: String,
-    pub prompt_hint: Option<String>,
-    pub input_schema: DataSchema,
-    pub output_schema: DataSchema,
-    pub http_endpoint: Vec<HttpEndpointDetails>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Deserialize,
-    Serialize,
-    NewType,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-)]
-#[repr(transparent)]
-#[desert(transparent)]
-#[desert(evolution())]
-pub struct AgentTypeName(pub String);
-
-impl Display for AgentTypeName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl FromStr for AgentTypeName {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.to_string()))
-    }
-}
-
-impl AgentTypeName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AgentType {
-    pub type_name: AgentTypeName,
-    pub description: String,
-    pub constructor: AgentConstructor,
-    pub methods: Vec<AgentMethod>,
-    pub dependencies: Vec<AgentDependency>,
-    pub mode: AgentMode,
-    pub http_mount: Option<HttpMountDetails>,
-}
-
 impl AgentType {
     pub fn wrapper_type_name(&self) -> String {
         self.type_name.0.to_wit_naming()
     }
-
-    pub fn normalized(mut self) -> Self {
-        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
-        self.dependencies
-            .sort_by(|a, b| a.type_name.cmp(&b.type_name));
-
-        Self {
-            type_name: self.type_name,
-            description: self.description,
-            constructor: self.constructor,
-            methods: self.methods,
-            dependencies: self
-                .dependencies
-                .into_iter()
-                .map(AgentDependency::normalized)
-                .collect(),
-            mode: self.mode,
-            http_mount: self.http_mount,
-        }
-    }
-
-    pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
-        agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
-        agent_types.into_iter().map(Self::normalized).collect()
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct BinaryDescriptor {
-    pub restrictions: Option<Vec<BinaryType>>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum BinaryReference {
-    Url(Url),
-    Inline(BinarySource),
 }
 
 impl Display for BinaryReference {
@@ -371,25 +140,6 @@ impl Display for BinaryReference {
             BinaryReference::Inline(binary_source) => write!(f, "{binary_source}"),
         }
     }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct BinarySource {
-    pub data: Vec<u8>,
-    pub binary_type: BinaryType,
 }
 
 impl Display for BinarySource {
@@ -403,90 +153,12 @@ impl Display for BinarySource {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct BinaryType {
-    pub mime_type: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct NamedElementSchema {
-    pub name: String,
-    pub schema: ElementSchema,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct NamedElementSchemas {
-    pub elements: Vec<NamedElementSchema>,
-}
-
 impl NamedElementSchemas {
     pub fn empty() -> Self {
         Self {
             elements: Vec::new(),
         }
     }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum DataSchema {
-    Tuple(NamedElementSchemas),
-    Multimodal(NamedElementSchemas),
 }
 
 impl DataSchema {
@@ -496,38 +168,6 @@ impl DataSchema {
             DataSchema::Multimodal(element_schemas) => element_schemas.elements.is_empty(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub enum UntypedDataValue {
-    Tuple(Vec<UntypedElementValue>),
-    Multimodal(Vec<UntypedNamedElementValue>),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-pub enum UntypedJsonDataValue {
-    Tuple(UntypedJsonElementValues),
-    Multimodal(UntypedJsonNamedElementValues),
-}
-
-impl From<DataValue> for UntypedJsonDataValue {
-    fn from(value: DataValue) -> Self {
-        match value {
-            DataValue::Tuple(elements) => UntypedJsonDataValue::Tuple(elements.into()),
-            DataValue::Multimodal(elements) => UntypedJsonDataValue::Multimodal(elements.into()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum DataValue {
-    Tuple(ElementValues),
-    Multimodal(NamedElementValues),
 }
 
 impl DataValue {
@@ -666,35 +306,6 @@ impl IntoValue for DataValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonElementValues {
-    pub elements: Vec<UntypedJsonElementValue>,
-}
-
-impl From<ElementValues> for UntypedJsonElementValues {
-    fn from(value: ElementValues) -> Self {
-        Self {
-            elements: value
-                .elements
-                .into_iter()
-                .map(UntypedJsonElementValue::from)
-                .collect(),
-        }
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ElementValues {
-    pub elements: Vec<ElementValue>,
-}
-
 impl Display for ElementValues {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -709,35 +320,6 @@ impl Display for ElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonNamedElementValues {
-    pub elements: Vec<UntypedJsonNamedElementValue>,
-}
-
-impl From<NamedElementValues> for UntypedJsonNamedElementValues {
-    fn from(value: NamedElementValues) -> Self {
-        Self {
-            elements: value
-                .elements
-                .into_iter()
-                .map(UntypedJsonNamedElementValue::from)
-                .collect(),
-        }
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct NamedElementValues {
-    pub elements: Vec<NamedElementValue>,
-}
-
 impl Display for NamedElementValues {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -750,38 +332,6 @@ impl Display for NamedElementValues {
                 .join(",")
         )
     }
-}
-
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub struct UntypedNamedElementValue {
-    pub name: String,
-    pub value: UntypedElementValue,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonNamedElementValue {
-    pub name: String,
-    pub value: UntypedJsonElementValue,
-}
-
-impl From<NamedElementValue> for UntypedJsonNamedElementValue {
-    fn from(value: NamedElementValue) -> Self {
-        Self {
-            name: value.name,
-            value: value.value.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct NamedElementValue {
-    pub name: String,
-    pub value: ElementValue,
 }
 
 impl Display for NamedElementValue {
@@ -800,14 +350,6 @@ impl IntoValue for NamedElementValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct TextReferenceValue {
-    pub value: TextReference,
-}
-
 impl IntoValue for TextReferenceValue {
     fn into_value(self) -> Value {
         self.value.into_value()
@@ -824,14 +366,6 @@ impl FromValue for TextReferenceValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct BinaryReferenceValue {
-    pub value: BinaryReference,
-}
-
 impl IntoValue for BinaryReferenceValue {
     fn into_value(self) -> Value {
         self.value.into_value()
@@ -846,65 +380,6 @@ impl FromValue for BinaryReferenceValue {
     fn from_value(value: Value) -> Result<Self, String> {
         BinaryReference::from_value(value).map(|value| Self { value })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
-pub enum UntypedElementValue {
-    ComponentModel(Value),
-    UnstructuredText(TextReferenceValue),
-    UnstructuredBinary(BinaryReferenceValue),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-pub enum UntypedJsonElementValue {
-    ComponentModel(JsonComponentModelValue),
-    UnstructuredText(TextReferenceValue),
-    UnstructuredBinary(BinaryReferenceValue),
-}
-
-impl From<ElementValue> for UntypedJsonElementValue {
-    fn from(value: ElementValue) -> Self {
-        match value {
-            ElementValue::ComponentModel(value) => {
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: value
-                        .to_json_value()
-                        .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
-                })
-            }
-            ElementValue::UnstructuredText(text_reference) => {
-                UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
-                    value: text_reference,
-                })
-            }
-            ElementValue::UnstructuredBinary(binary_reference) => {
-                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue {
-                    value: binary_reference,
-                })
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct JsonComponentModelValue {
-    pub value: serde_json::Value,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum ElementValue {
-    ComponentModel(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
-    UnstructuredText(TextReference),
-    UnstructuredBinary(BinaryReference),
 }
 
 impl ElementValue {
@@ -1010,84 +485,6 @@ impl Display for ElementValue {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum ElementSchema {
-    ComponentModel(ComponentModelElementSchema),
-    UnstructuredText(TextDescriptor),
-    UnstructuredBinary(BinaryDescriptor),
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentModelElementSchema {
-    pub element_type: AnalysedType,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct TextDescriptor {
-    pub restrictions: Option<Vec<TextType>>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum TextReference {
-    Url(Url),
-    Inline(TextSource),
-}
-
 impl Display for TextReference {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1099,48 +496,10 @@ impl Display for TextReference {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
-pub struct Url {
-    pub value: String,
-}
-
 impl Display for Url {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.value)
     }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct TextSource {
-    pub data: String,
-    pub text_type: Option<TextType>,
 }
 
 impl Display for TextSource {
@@ -1169,77 +528,8 @@ impl Display for TextSource {
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
-pub struct TextType {
-    pub language_code: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
 pub struct AgentTypes {
     pub types: Vec<AgentType>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct RegisteredAgentTypeImplementer {
-    pub component_id: ComponentId,
-    pub component_revision: ComponentRevision,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct RegisteredAgentType {
-    pub agent_type: AgentType,
-    pub implemented_by: RegisteredAgentTypeImplementer,
-}
-
-/// Identifies a deployed, instantiated agent.
-///
-/// AgentId is convertible to and from string, and is used as _worker names_.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentId {
-    pub agent_type: AgentTypeName,
-    pub parameters: DataValue,
-    pub phantom_id: Option<Uuid>,
-    wrapper_agent_type: String,
-    as_string: String,
 }
 
 impl AgentId {
@@ -1341,14 +631,6 @@ impl Display for AgentId {
 }
 
 #[async_trait]
-pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_wrapper_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String>;
-}
-
-#[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
     fn resolve_agent_type_by_wrapper_name(
         &self,
@@ -1359,449 +641,4 @@ impl AgentTypeResolver for &ComponentMetadata {
             .to_wit_naming();
         result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AgentIdWithComponent {
-    pub component_id: ComponentId,
-    pub agent_id: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct HttpMountDetails {
-    pub path_prefix: Vec<PathSegment>,
-    pub header_vars: Vec<HeaderVariable>,
-    pub query_vars: Vec<QueryVariable>,
-    pub auth_details: Option<AgentHttpAuthDetails>,
-    pub phantom_agent: bool,
-    pub cors_options: CorsOptions,
-    pub webhook_suffix: Vec<PathSegment>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct HttpEndpointDetails {
-    pub http_method: HttpMethod,
-    pub path_suffix: Vec<PathSegment>,
-    pub header_vars: Vec<HeaderVariable>,
-    pub query_vars: Vec<QueryVariable>,
-    pub auth_details: Option<AgentHttpAuthDetails>,
-    pub cors_options: CorsOptions,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[desert(evolution())]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-pub enum HttpMethod {
-    #[unit_case]
-    Get(Empty),
-    #[unit_case]
-    Head(Empty),
-    #[unit_case]
-    Post(Empty),
-    #[unit_case]
-    Put(Empty),
-    #[unit_case]
-    Delete(Empty),
-    #[unit_case]
-    Connect(Empty),
-    #[unit_case]
-    Options(Empty),
-    #[unit_case]
-    Trace(Empty),
-    #[unit_case]
-    Patch(Empty),
-    Custom(CustomHttpMethod),
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
-pub struct CustomHttpMethod {
-    pub value: String,
-}
-
-impl From<HttpMethod> for http::Method {
-    fn from(value: HttpMethod) -> Self {
-        match value {
-            HttpMethod::Get(_) => Self::GET,
-            HttpMethod::Head(_) => Self::HEAD,
-            HttpMethod::Post(_) => Self::POST,
-            HttpMethod::Put(_) => Self::PUT,
-            HttpMethod::Delete(_) => Self::DELETE,
-            HttpMethod::Connect(_) => Self::CONNECT,
-            HttpMethod::Options(_) => Self::OPTIONS,
-            HttpMethod::Trace(_) => Self::TRACE,
-            HttpMethod::Patch(_) => Self::PATCH,
-            HttpMethod::Custom(_) => unimplemented!(),
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct CorsOptions {
-    pub allowed_patterns: Vec<String>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct PathSegment {
-    pub concat: Vec<PathSegmentNode>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum PathSegmentNode {
-    Literal(LiteralSegment),
-    SystemVariable(SystemVariableSegment),
-    PathVariable(PathVariable),
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
-pub struct LiteralSegment {
-    pub value: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[desert(transparent)]
-#[wit_transparent]
-pub struct SystemVariableSegment {
-    pub value: SystemVariable,
-}
-
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-    poem_openapi::Enum,
-)]
-pub enum SystemVariable {
-    AgentType,
-    AgentVersion,
-}
-
-impl Display for SystemVariable {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            SystemVariable::AgentType => "AgentType",
-            SystemVariable::AgentVersion => "AgentVersion",
-        };
-        write!(f, "{s}")
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct PathVariable {
-    pub variable_name: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct HeaderVariable {
-    pub header_name: String,
-    pub variable_name: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct QueryVariable {
-    pub query_param_name: String,
-    pub variable_name: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AgentHttpAuthDetails {
-    pub required: bool,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Union,
-)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum Principal {
-    Oidc(OidcPrincipal),
-    Agent(AgentPrincipal),
-    GolemUser(GolemUserPrincipal),
-    #[unit_case]
-    Anonymous(Empty),
-}
-
-impl Principal {
-    pub fn anonymous() -> Self {
-        Self::Anonymous(Empty {})
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-// Meaning of the various claims: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
-pub struct OidcPrincipal {
-    pub sub: String,
-    pub issuer: String,
-    pub email: Option<String>,
-    pub name: Option<String>,
-    pub email_verified: Option<bool>,
-    pub given_name: Option<String>,
-    pub family_name: Option<String>,
-    pub picture: Option<String>,
-    pub preferred_username: Option<String>,
-    pub claims: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct AgentPrincipal {
-    pub agent_id: AgentIdWithComponent,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct GolemUserPrincipal {
-    pub account_id: AccountId,
 }

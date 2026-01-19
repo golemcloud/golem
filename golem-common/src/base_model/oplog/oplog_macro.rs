@@ -25,6 +25,7 @@ macro_rules! oplog_entry {
           }
       }),* $(,)?
     ) => {
+        #[cfg(feature = "full")]
         #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
         pub enum OplogEntry {
             $($(#[$casemeta])*    $case {
@@ -34,6 +35,7 @@ macro_rules! oplog_entry {
             }),*
         }
 
+        #[cfg(feature = "full")]
         impl OplogEntry {
             $(ident_mash::mash! {
                 constructor_name = :snake_case($case) =>
@@ -72,8 +74,9 @@ macro_rules! oplog_entry {
             $(ident_mash::mash! {
                 params_name = $case + Params =>
 
-                #[derive(Clone, Debug, serde::Serialize, PartialEq, serde::Deserialize, golem_wasm::derive::IntoValue, poem_openapi::Object)]
-                #[oai(rename_all = "camelCase")]
+                #[derive(Clone, Debug, serde::Serialize, PartialEq, serde::Deserialize)]
+                #[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm::derive::IntoValue))]
+                #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
                 #[serde(rename_all = "camelCase")]
                 pub struct $params_name {
                     pub timestamp: Timestamp,
@@ -82,8 +85,9 @@ macro_rules! oplog_entry {
             })*
         }
 
-        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, golem_wasm::derive::IntoValue, poem_openapi::Union)]
-        #[oai(discriminator_name = "type", one_of = true)]
+        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "full", derive(poem_openapi::Union, golem_wasm::derive::IntoValue))]
+        #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
         #[serde(tag = "type")]
         pub enum PublicOplogEntry {
             $($case(
@@ -105,7 +109,7 @@ macro_rules! oplog_payload {
                 }),* $(,)?
         }) => {
 
-        #[derive(Clone, Debug, PartialEq, BinaryCodec)]
+        #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
         pub enum $typename {
             Custom(golem_wasm::ValueAndType),
             $($(#[$casemeta])* $case(
@@ -144,7 +148,7 @@ macro_rules! oplog_payload {
         $(ident_mash::mash! {
             inner_name = $typename + $case =>
 
-            #[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+            #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec, IntoValue, FromValue)]
             pub struct $inner_name {
                 $( $(#[$meta])* pub $field: $typ ),*
             }

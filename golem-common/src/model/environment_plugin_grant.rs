@@ -12,31 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::account::AccountSummary;
-use super::environment::EnvironmentId;
-use super::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
-use crate::{declare_structs, newtype_uuid};
-
-newtype_uuid!(
-    EnvironmentPluginGrantId,
-    golem_api_grpc::proto::golem::component::EnvironmentPluginGrantId
-);
-
-declare_structs! {
-    pub struct EnvironmentPluginGrant {
-        pub id: EnvironmentPluginGrantId,
-        pub environment_id: EnvironmentId,
-        pub plugin_id: PluginRegistrationId
-    }
-
-    pub struct EnvironmentPluginGrantWithDetails {
-        pub id: EnvironmentPluginGrantId,
-        pub environment_id: EnvironmentId,
-        pub plugin: PluginRegistrationDto,
-        pub plugin_account: AccountSummary,
-    }
-
-    pub struct EnvironmentPluginGrantCreation {
-        pub plugin_registration_id: PluginRegistrationId,
-    }
-}
+pub use crate::base_model::environment_plugin_grant::*;

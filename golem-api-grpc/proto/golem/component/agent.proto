@@ -5,6 +5,7 @@ import "wasm/rpc/type.proto";
 import "wasm/rpc/value_and_type.proto";
 import "golem/common/account_id.proto";
 import "golem/component/component_id.proto";
+import "golem/worker/worker_id.proto";
 
 package golem.component;
 
@@ -255,14 +256,9 @@ message OidcPrincipal {
 }
 
 message AgentPrincipal {
-  AgentIdWithComponent agent_id = 1;
+  golem.worker.WorkerId agent_id = 1;
 }
 
 message GolemUserPrincipal {
   golem.common.AccountId account_id = 1;
-}
-
-message AgentIdWithComponent {
-  string agent_id = 1;
-  ComponentId component_id = 2;
 }
