@@ -413,7 +413,7 @@ impl FromStr for WorkerFilter {
                     comparator.parse()?,
                     value.to_string(),
                 )),
-                "version" => Ok(WorkerFilter::new_revision(
+                "revision" => Ok(WorkerFilter::new_revision(
                     comparator.parse()?,
                     value
                         .parse()
