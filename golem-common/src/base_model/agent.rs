@@ -714,8 +714,6 @@ impl ElementValue {
 #[serde(rename_all = "camelCase")]
 pub struct HttpMountDetails {
     pub path_prefix: Vec<PathSegment>,
-    pub header_vars: Vec<HeaderVariable>,
-    pub query_vars: Vec<QueryVariable>,
     pub auth_details: Option<AgentHttpAuthDetails>,
     pub phantom_agent: bool,
     pub cors_options: CorsOptions,
@@ -797,27 +795,16 @@ pub struct CorsOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PathSegment {
-    pub concat: Vec<PathSegmentNode>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(
-    feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
 )]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub enum PathSegmentNode {
+pub enum PathSegment {
     Literal(LiteralSegment),
     SystemVariable(SystemVariableSegment),
     PathVariable(PathVariable),
+    RemainingPathVariable(PathVariable),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]

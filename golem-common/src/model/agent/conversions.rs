@@ -14,8 +14,8 @@
 
 use super::{
     AgentHttpAuthDetails, AgentPrincipal, CorsOptions, CustomHttpMethod, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment,
-    PathSegmentNode, PathVariable, QueryVariable, SystemVariable, SystemVariableSegment,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, PathVariable,
+    QueryVariable, SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
 use crate::model::agent::bindings::golem::agent::host;
@@ -637,8 +637,6 @@ impl From<HttpMountDetails> for super::bindings::golem::agent::common::HttpMount
     fn from(value: HttpMountDetails) -> Self {
         Self {
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
-            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
-            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
             cors_options: value.cors_options.into(),
@@ -651,8 +649,6 @@ impl From<super::bindings::golem::agent::common::HttpMountDetails> for HttpMount
     fn from(value: super::bindings::golem::agent::common::HttpMountDetails) -> Self {
         Self {
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
-            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
-            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
             cors_options: value.cors_options.into(),
@@ -741,43 +737,31 @@ impl From<super::bindings::golem::agent::common::CorsOptions> for CorsOptions {
 
 impl From<PathSegment> for super::bindings::golem::agent::common::PathSegment {
     fn from(value: PathSegment) -> Self {
-        Self {
-            concat: value.concat.into_iter().map(Into::into).collect(),
+        match value {
+            PathSegment::Literal(v) => Self::Literal(v.value),
+            PathSegment::SystemVariable(v) => Self::SystemVariable(v.value.into()),
+            PathSegment::PathVariable(v) => Self::PathVariable(v.into()),
+            PathSegment::RemainingPathVariable(v) => Self::RemainingPathVariable(v.into()),
         }
     }
 }
 
 impl From<super::bindings::golem::agent::common::PathSegment> for PathSegment {
     fn from(value: super::bindings::golem::agent::common::PathSegment) -> Self {
-        Self {
-            concat: value.concat.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<PathSegmentNode> for super::bindings::golem::agent::common::PathSegmentNode {
-    fn from(value: PathSegmentNode) -> Self {
         match value {
-            PathSegmentNode::Literal(v) => Self::Literal(v.value),
-            PathSegmentNode::SystemVariable(v) => Self::SystemVariable(v.value.into()),
-            PathSegmentNode::PathVariable(v) => Self::PathVariable(v.into()),
-        }
-    }
-}
-
-impl From<super::bindings::golem::agent::common::PathSegmentNode> for PathSegmentNode {
-    fn from(value: super::bindings::golem::agent::common::PathSegmentNode) -> Self {
-        match value {
-            super::bindings::golem::agent::common::PathSegmentNode::Literal(value) => {
+            super::bindings::golem::agent::common::PathSegment::Literal(value) => {
                 Self::Literal(LiteralSegment { value })
             }
-            super::bindings::golem::agent::common::PathSegmentNode::SystemVariable(value) => {
+            super::bindings::golem::agent::common::PathSegment::SystemVariable(value) => {
                 Self::SystemVariable(SystemVariableSegment {
                     value: value.into(),
                 })
             }
-            super::bindings::golem::agent::common::PathSegmentNode::PathVariable(v) => {
+            super::bindings::golem::agent::common::PathSegment::PathVariable(v) => {
                 Self::PathVariable(v.into())
+            }
+            super::bindings::golem::agent::common::PathSegment::RemainingPathVariable(v) => {
+                Self::RemainingPathVariable(v.into())
             }
         }
     }
