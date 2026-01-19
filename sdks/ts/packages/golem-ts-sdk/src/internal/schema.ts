@@ -283,7 +283,7 @@ export function buildMethodInputSchema(
     const result = Either.all(
       paramTypesArray.map((parameterInfo) =>
         Either.mapBoth(
-          convertToElementSchema(
+          convertMethodParameterToElementSchema(
             agentClassName,
             methodName,
             parameterInfo[0],
@@ -641,7 +641,7 @@ function handleUnstructuredType(
   return undefined;
 }
 
-export function convertToElementSchema(
+export function convertMethodParameterToElementSchema(
   agentClassName: string,
   methodName: string,
   parameterName: string,
