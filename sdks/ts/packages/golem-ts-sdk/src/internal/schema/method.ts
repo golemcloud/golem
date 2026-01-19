@@ -14,43 +14,13 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import * as Option from '../../newTypes/option';
-import {
-  AgentMethod,
-  BinaryDescriptor,
-  DataSchema,
-  ElementSchema,
-  HttpMountDetails,
-  TextDescriptor,
-} from 'golem:agent/common';
-import * as WitType from '../mapping/types/WitType';
+import { AgentMethod, HttpMountDetails } from 'golem:agent/common';
 import { AgentMethodRegistry } from './../registry/agentMethodRegistry';
+import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
 import {
-  ClassMetadata,
-  ConstructorArg,
-  MethodParams,
-} from '@golemcloud/golem-ts-types-core';
-import { TypeMappingScope } from '../mapping/types/scope';
-import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
-import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
-import {
-  AnalysedType,
-  EmptyType,
-  result,
-  tuple,
-} from '../mapping/types/AnalysedType';
-import {
-  convertTypeInfoToElementSchema,
-  getMultimodalDataSchema,
   getReturnTypeDataSchema,
   TypeInfoInternal,
 } from '../registry/typeInfoInternal';
-import {
-  convertAgentMethodNameToKebab,
-  convertVariantTypeNameToKebab,
-} from '../mapping/types/stringFormat';
-import { ParameterDetail } from '../mapping/values/dataValue';
-import { getTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
 import { validateHttpEndpoint } from '../http/validation';
 import { validateMethodName } from './helpers';
 import { buildMethodInputSchema } from './methodInput';
