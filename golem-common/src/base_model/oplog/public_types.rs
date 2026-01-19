@@ -31,7 +31,7 @@ use std::time::Duration;
 #[serde(rename_all = "camelCase")]
 pub struct OplogCursor {
     pub next_oplog_index: u64,
-    pub current_component_version: u64,
+    pub current_component_revision: u64,
 }
 
 impl Display for OplogCursor {
@@ -39,7 +39,7 @@ impl Display for OplogCursor {
         write!(
             f,
             "{}-{}",
-            self.next_oplog_index, self.current_component_version
+            self.next_oplog_index, self.current_component_revision
         )
     }
 }

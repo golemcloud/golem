@@ -205,7 +205,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         worker_id: &WorkerId,
         update_mode: WorkerUpdateMode,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
@@ -1064,7 +1064,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         worker_id: &WorkerId,
         update_mode: WorkerUpdateMode,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
@@ -1078,7 +1078,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     worker_id: Some(worker_id.into()),
                     mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode)
                         as i32,
-                    target_version: target_version.into(),
+                    target_revision: target_revision.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))

@@ -71,12 +71,12 @@ impl poem_openapi::types::ParseFromParameter for OplogCursor {
         let next_oplog_index = parts[0]
             .parse()
             .map_err(|_| "Invalid index in the oplog cursor")?;
-        let current_component_version = parts[1]
+        let current_component_revision = parts[1]
             .parse()
-            .map_err(|_| "Invalid component version in the oplog cursor")?;
+            .map_err(|_| "Invalid component revision in the oplog cursor")?;
         Ok(OplogCursor {
             next_oplog_index,
-            current_component_version,
+            current_component_revision,
         })
     }
 }

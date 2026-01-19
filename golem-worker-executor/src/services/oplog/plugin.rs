@@ -81,7 +81,7 @@ struct RunningPlugin {
     pub account_id: AccountId,
     pub owned_worker_id: OwnedWorkerId,
     pub configuration: BTreeMap<String, String>,
-    pub component_version: ComponentRevision,
+    pub component_revision: ComponentRevision,
 }
 
 impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
@@ -133,7 +133,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             account_id: plugin_component.account_id,
                             owned_worker_id: owned_worker_id.clone(),
                             configuration: plugin.parameters.clone(),
-                            component_version: plugin_component_revision,
+                            component_revision: plugin_component_revision,
                         };
                         workers.insert(key, running_plugin.clone());
                         Ok(running_plugin)
@@ -212,7 +212,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 &running_plugin.owned_worker_id,
                 None,
                 None,
-                Some(running_plugin.component_version),
+                Some(running_plugin.component_revision),
                 None,
                 &InvocationContextStack::fresh(),
             )
@@ -745,7 +745,7 @@ impl ForwardingOplogState {
                 self.oplog_service.clone(),
                 self.components.clone(),
                 &metadata.owned_worker_id(),
-                metadata.last_known_status.component_revision, // NOTE: this is only safe if the component version is not changing within one batch
+                metadata.last_known_status.component_revision, // NOTE: this is only safe if the component revision is not changing within one batch
             )
             .await
             .map_err(|err| {

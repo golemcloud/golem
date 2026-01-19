@@ -900,7 +900,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             &entry.owned_worker_id,
-            entry.current_component_version,
+            entry.current_component_revision,
             entry.next_oplog_index,
             entry.page_size,
         )
@@ -1025,7 +1025,7 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
 pub struct GetOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentRevision,
+    pub current_component_revision: ComponentRevision,
     pub page_size: usize,
 }
 
@@ -1033,13 +1033,13 @@ impl GetOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentRevision,
+        initial_component_revision: ComponentRevision,
         page_size: usize,
     ) -> Self {
         Self {
             owned_worker_id,
             next_oplog_index: initial_oplog_index,
-            current_component_version: initial_component_version,
+            current_component_revision: initial_component_revision,
             page_size,
         }
     }
@@ -1047,10 +1047,10 @@ impl GetOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentRevision,
+        current_component_revision: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
-        self.current_component_version = current_component_version;
+        self.current_component_revision = current_component_revision;
     }
 }
 
@@ -1097,7 +1097,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             &entry.owned_worker_id,
-            entry.current_component_version,
+            entry.current_component_revision,
             entry.next_oplog_index,
             entry.page_size,
             &entry.query,
@@ -1175,7 +1175,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 pub struct SearchOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentRevision,
+    pub current_component_revision: ComponentRevision,
     pub page_size: usize,
     pub query: String,
 }
@@ -1184,14 +1184,14 @@ impl SearchOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentRevision,
+        initial_component_revision: ComponentRevision,
         page_size: usize,
         query: String,
     ) -> Self {
         Self {
             owned_worker_id,
             next_oplog_index: initial_oplog_index,
-            current_component_version: initial_component_version,
+            current_component_revision: initial_component_revision,
             page_size,
             query,
         }
@@ -1200,10 +1200,10 @@ impl SearchOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentRevision,
+        current_component_revision: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
-        self.current_component_version = current_component_version;
+        self.current_component_revision = current_component_revision;
     }
 }
 
@@ -1372,7 +1372,7 @@ impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::
                 golem_common::model::WorkerFilter::new_name(filter.comparator.into(), filter.value)
             }
             golem_api_1_x::host::AgentPropertyFilter::Version(filter) => {
-                golem_common::model::WorkerFilter::new_version(
+                golem_common::model::WorkerFilter::new_revision(
                     filter.comparator.into(),
                     filter.value.try_into()?,
                 )

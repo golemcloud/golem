@@ -125,17 +125,17 @@ declare_unions! {
 declare_structs! {
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
-        pub target_version: ComponentRevision,
+        pub target_revision: ComponentRevision,
     }
 
     pub struct SuccessfulUpdate {
         pub timestamp: Timestamp,
-        pub target_version: ComponentRevision,
+        pub target_revision: ComponentRevision,
     }
 
     pub struct FailedUpdate {
         pub timestamp: Timestamp,
-        pub target_version: ComponentRevision,
+        pub target_revision: ComponentRevision,
         pub details: Option<String>,
     }
 
@@ -151,7 +151,7 @@ declare_structs! {
         pub env: HashMap<String, String>,
         pub wasi_config_vars: WasiConfigVars,
         pub status: WorkerStatus,
-        pub component_version: ComponentRevision,
+        pub component_revision: ComponentRevision,
         pub retry_count: u32,
         pub pending_invocation_count: u64,
         pub updates: Vec<UpdateRecord>,

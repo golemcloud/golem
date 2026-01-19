@@ -324,7 +324,7 @@ message GetWorkersMetadataSuccessResponse {
 
 message UpdateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   golem.worker.UpdateMode mode = 3;
   golem.common.EnvironmentId environment_id = 4;
   golem.auth.AuthCtx auth_ctx = 5;
