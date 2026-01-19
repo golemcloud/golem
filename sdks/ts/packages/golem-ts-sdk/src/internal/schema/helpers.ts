@@ -17,7 +17,7 @@ import * as Either from '../../newTypes/either';
 import * as Option from '../../newTypes/option';
 import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common';
 import * as WitType from '../mapping/types/WitType';
-import { TypeInfoInternal } from '../registry/typeInfoInternal';
+import { TypeInfoInternal } from '../typeInfoInternal';
 import {
   convertAgentMethodNameToKebab,
   convertVariantTypeNameToKebab,

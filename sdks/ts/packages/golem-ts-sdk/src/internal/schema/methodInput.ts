@@ -20,10 +20,7 @@ import * as WitType from '../mapping/types/WitType';
 import { MethodParams } from '@golemcloud/golem-ts-types-core';
 import { TypeMappingScope } from '../mapping/types/scope';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
-import {
-  getMultimodalDataSchema,
-  TypeInfoInternal,
-} from '../registry/typeInfoInternal';
+import { getMultimodalDataSchema, TypeInfoInternal } from '../typeInfoInternal';
 import {
   getBinaryDescriptor,
   getMultimodalDetails,

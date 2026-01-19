@@ -37,7 +37,7 @@ import {
   invalidMethod,
   invalidType,
 } from './agentError';
-import { TypeInfoInternal } from './registry/typeInfoInternal';
+import { TypeInfoInternal } from './typeInfoInternal';
 import { Uuid } from 'golem:agent/host';
 
 /**

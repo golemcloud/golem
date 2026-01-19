@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { AgentClassName } from '../../newTypes/agentClassName';
-import { TypeInfoInternal } from './typeInfoInternal';
+import { TypeInfoInternal } from '../typeInfoInternal';
 
 export interface AgentMethodParamMetadata {
   typeInfo?: TypeInfoInternal;

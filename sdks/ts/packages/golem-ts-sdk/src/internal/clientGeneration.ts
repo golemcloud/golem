@@ -44,7 +44,7 @@ import {
   serializeTsValueToBinaryReference,
   serializeTsValueToTextReference,
 } from './mapping/values/serializer';
-import { TypeInfoInternal } from './registry/typeInfoInternal';
+import { TypeInfoInternal } from './typeInfoInternal';
 import {
   createSingleElementTupleDataValue,
   deserializeDataValue,

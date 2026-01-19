@@ -17,10 +17,7 @@ import * as Either from '../../newTypes/either';
 import { AgentMethod, HttpMountDetails } from 'golem:agent/common';
 import { AgentMethodRegistry } from './../registry/agentMethodRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
-import {
-  getReturnTypeDataSchema,
-  TypeInfoInternal,
-} from '../registry/typeInfoInternal';
+import { getReturnTypeDataSchema, TypeInfoInternal } from '../typeInfoInternal';
 import { validateHttpEndpoint } from '../http/validation';
 import { validateMethodName } from './helpers';
 import { buildMethodInputSchema } from './methodInput';

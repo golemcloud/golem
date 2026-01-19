@@ -24,10 +24,7 @@ import {
   getTextDescriptor,
   isNamedMultimodal,
 } from './helpers';
-import {
-  getMultimodalDataSchema,
-  TypeInfoInternal,
-} from '../registry/typeInfoInternal';
+import { getMultimodalDataSchema, TypeInfoInternal } from '../typeInfoInternal';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 import { TypeMappingScope } from '../mapping/types/scope';
 

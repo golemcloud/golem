@@ -29,7 +29,7 @@ import {
   getTextDescriptor,
   isNamedMultimodal,
 } from './helpers';
-import { TypeInfoInternal } from '../registry/typeInfoInternal';
+import { TypeInfoInternal } from '../typeInfoInternal';
 
 export function buildOutputSchema(
   returnType: Type.Type,
