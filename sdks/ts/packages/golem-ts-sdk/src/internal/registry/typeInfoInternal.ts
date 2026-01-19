@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { BinaryDescriptor, DataSchema, ElementSchema, TextDescriptor, WitType } from 'golem:agent/common';
+import {
+  BinaryDescriptor,
+  DataSchema,
+  ElementSchema,
+  TextDescriptor,
+  WitType,
+} from 'golem:agent/common';
 import { AnalysedType } from '../mapping/types/AnalysedType';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { ParameterDetail } from '../mapping/values/dataValue';
@@ -21,7 +27,7 @@ import * as Either from '../../newTypes/either';
 // For all types except unstructured-*, `AnalysedType` has the max details.
 // There is no AnalysedType for unstructured-text/binary
 export type TypeInfoInternal =
-  | { tag: 'analysed'; val: AnalysedType; witType: WitType,  tsType: Type.Type }
+  | { tag: 'analysed'; val: AnalysedType; witType: WitType; tsType: Type.Type }
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
   | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
   | {
@@ -30,51 +36,58 @@ export type TypeInfoInternal =
       tsType: Type.Type;
     };
 
-
 // Except for multimodal, all types can be converted to ElementSchema
-export function convertTypeInfoToElementSchema(typeInfoInternal: TypeInfoInternal): Either.Either<ElementSchema, string> {
-  switch(typeInfoInternal.tag) {
-    case "unstructured-text":
-     return  Either.right({
+export function convertTypeInfoToElementSchema(
+  typeInfoInternal: TypeInfoInternal,
+): Either.Either<ElementSchema, string> {
+  switch (typeInfoInternal.tag) {
+    case 'unstructured-text':
+      return Either.right({
         tag: 'unstructured-text',
         val: typeInfoInternal.val,
-      })
-    case "analysed":
+      });
+    case 'analysed':
       return Either.right({
-        tag: "component-model",
-        val: typeInfoInternal.witType
-      })
-    case "unstructured-binary":
+        tag: 'component-model',
+        val: typeInfoInternal.witType,
+      });
+    case 'unstructured-binary':
       return Either.right({
         tag: 'unstructured-binary',
         val: typeInfoInternal.val,
-      })
-    case "multimodal":
-      return Either.left("Cannot convert multimodal type information to ElementSchema");
+      });
+    case 'multimodal':
+      return Either.left(
+        'Cannot convert multimodal type information to ElementSchema',
+      );
   }
 }
 
-export function getMultimodalDataSchema(typeInfoInternal: TypeInfoInternal): Either.Either<DataSchema, string> {
+export function getMultimodalDataSchema(
+  typeInfoInternal: TypeInfoInternal,
+): Either.Either<DataSchema, string> {
   switch (typeInfoInternal.tag) {
-    case "unstructured-text":
+    case 'unstructured-text':
       return {
         tag: 'left',
-        val: "cannot get multimodal DataSchema from unstructured-text type info",
-      }
-    case "analysed":
+        val: 'cannot get multimodal DataSchema from unstructured-text type info',
+      };
+    case 'analysed':
       return Either.left(
-        "cannot get multimodal DataSchema from analysed type info",
-      )
-    case "unstructured-binary":
+        'cannot get multimodal DataSchema from analysed type info',
+      );
+    case 'unstructured-binary':
       return Either.left(
-        "cannot get multimodal DataSchema from unstructured-binary type info",
-      )
-    case "multimodal":
+        'cannot get multimodal DataSchema from unstructured-binary type info',
+      );
+    case 'multimodal':
       const parameterDetails = typeInfoInternal.types;
 
-      const schemaDetails = Either.all(parameterDetails.map(
-        (parameterDetail) => {
-          const elementSchema = convertTypeInfoToElementSchema(parameterDetail.type);
+      const schemaDetails = Either.all(
+        parameterDetails.map((parameterDetail) => {
+          const elementSchema = convertTypeInfoToElementSchema(
+            parameterDetail.type,
+          );
 
           if (Either.isLeft(elementSchema)) {
             return Either.left(
@@ -82,45 +95,64 @@ export function getMultimodalDataSchema(typeInfoInternal: TypeInfoInternal): Eit
             );
           }
 
-          return Either.right([parameterDetail.name, elementSchema.val] as [string, ElementSchema]);
-        },
-      ));
+          return Either.right([parameterDetail.name, elementSchema.val] as [
+            string,
+            ElementSchema,
+          ]);
+        }),
+      );
 
       return Either.map(schemaDetails, (details) => ({
         tag: 'multimodal',
         val: details,
-      }))
+      }));
   }
 }
 
-
-export function getReturnTypeDataSchema(typeInfoInternal: TypeInfoInternal): Either.Either<DataSchema, string> {
+export function getReturnTypeDataSchema(
+  typeInfoInternal: TypeInfoInternal,
+): Either.Either<DataSchema, string> {
   switch (typeInfoInternal.tag) {
-    case "unstructured-text":
+    case 'unstructured-text':
       return Either.right({
         tag: 'tuple',
-        val: [['return-type', {
-          tag: 'unstructured-text',
-          val: typeInfoInternal.val,
-        }]],
+        val: [
+          [
+            'return-type',
+            {
+              tag: 'unstructured-text',
+              val: typeInfoInternal.val,
+            },
+          ],
+        ],
       });
-    case "analysed":
+    case 'analysed':
       return Either.right({
         tag: 'tuple',
-        val: [['return-type', {
-          tag: 'component-model',
-          val: typeInfoInternal.witType,
-        }]],
+        val: [
+          [
+            'return-type',
+            {
+              tag: 'component-model',
+              val: typeInfoInternal.witType,
+            },
+          ],
+        ],
       });
-    case "unstructured-binary":
+    case 'unstructured-binary':
       return Either.right({
         tag: 'tuple',
-        val: [['return-type', {
-          tag: 'unstructured-binary',
-          val: typeInfoInternal.val,
-        }]],
+        val: [
+          [
+            'return-type',
+            {
+              tag: 'unstructured-binary',
+              val: typeInfoInternal.val,
+            },
+          ],
+        ],
       });
-    case "multimodal":
+    case 'multimodal':
       return getMultimodalDataSchema(typeInfoInternal);
   }
 }

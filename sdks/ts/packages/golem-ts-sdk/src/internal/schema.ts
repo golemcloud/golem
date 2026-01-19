@@ -41,7 +41,8 @@ import {
 } from './mapping/types/AnalysedType';
 import {
   convertTypeInfoToElementSchema,
-  getMultimodalDataSchema, getReturnTypeDataSchema,
+  getMultimodalDataSchema,
+  getReturnTypeDataSchema,
   TypeInfoInternal,
 } from './registry/typeInfoInternal';
 import {
@@ -50,9 +51,7 @@ import {
 } from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
-import {
-  validateHttpEndpoint,
-} from './http/validation';
+import { validateHttpEndpoint } from './http/validation';
 
 const MULTIMODAL_TYPE_NAMES = [
   'Multimodal',
@@ -88,21 +87,27 @@ export function getConstructorDataSchema(
         tag: 'multimodal',
         tsType: paramType,
         types: multiModalDetails.val,
-      }
+      };
 
-      const schemaDetails: Either.Either<[string, ElementSchema][], string> = Either.all(multiModalDetails.val.map(
-        (parameterDetail) => {
-          const elementSchema = convertTypeInfoToElementSchema(parameterDetail.type);
-
-          if (Either.isLeft(elementSchema)) {
-            return Either.left(
-              `Nested multimodal types are not supported. ${parameterDetail.name}: ${elementSchema.val}`,
+      const schemaDetails: Either.Either<[string, ElementSchema][], string> =
+        Either.all(
+          multiModalDetails.val.map((parameterDetail) => {
+            const elementSchema = convertTypeInfoToElementSchema(
+              parameterDetail.type,
             );
-          }
 
-          return Either.right([parameterDetail.name, elementSchema.val] as [string, ElementSchema]);
-        }
-      ));
+            if (Either.isLeft(elementSchema)) {
+              return Either.left(
+                `Nested multimodal types are not supported. ${parameterDetail.name}: ${elementSchema.val}`,
+              );
+            }
+
+            return Either.right([parameterDetail.name, elementSchema.val] as [
+              string,
+              ElementSchema,
+            ]);
+          }),
+        );
 
       if (Either.isLeft(schemaDetails)) {
         return Either.left(schemaDetails.val);
@@ -111,7 +116,7 @@ export function getConstructorDataSchema(
       AgentConstructorParamRegistry.setType(
         agentClassName,
         constructorParamInfos[0].name,
-        typeInfoInternal
+        typeInfoInternal,
       );
 
       return Either.right({
@@ -173,10 +178,8 @@ export function getAgentMethodSchema(
 
       const inputSchema = inputSchemaEither.val;
 
-      const outputTypeInfoEither: Either.Either<
-        TypeInfoInternal,
-        string
-      > = buildOutputSchema(returnType);
+      const outputTypeInfoEither: Either.Either<TypeInfoInternal, string> =
+        buildOutputSchema(returnType);
 
       if (Either.isLeft(outputTypeInfoEither)) {
         return Either.left(
@@ -186,9 +189,15 @@ export function getAgentMethodSchema(
 
       const outputTypeInfoInternal = outputTypeInfoEither.val;
 
-      AgentMethodRegistry.setReturnType(agentClassName, methodName, outputTypeInfoInternal);
+      AgentMethodRegistry.setReturnType(
+        agentClassName,
+        methodName,
+        outputTypeInfoInternal,
+      );
 
-      const outputSchemaEither = getReturnTypeDataSchema(outputTypeInfoInternal);
+      const outputSchemaEither = getReturnTypeDataSchema(
+        outputTypeInfoInternal,
+      );
       if (Either.isLeft(outputSchemaEither)) {
         return Either.left(
           `Failed to get output data schema for method ${methodName}: ${outputSchemaEither.val}`,
@@ -196,7 +205,7 @@ export function getAgentMethodSchema(
       }
 
       const outputSchema = outputSchemaEither.val;
-      
+
       const agentMethod: AgentMethod = {
         name: methodName,
         description: baseMeta.description ?? '',
@@ -247,10 +256,9 @@ export function buildMethodInputSchema(
         tag: 'multimodal',
         tsType: paramType,
         types: multiModalDetails.val,
-      }
+      };
 
-      const multimodalDataSchema =
-        getMultimodalDataSchema(typeInfoInternal);
+      const multimodalDataSchema = getMultimodalDataSchema(typeInfoInternal);
 
       if (Either.isLeft(multimodalDataSchema)) {
         return Either.left(multimodalDataSchema.val);
@@ -329,14 +337,13 @@ export function buildOutputSchema(
       );
     }
 
-    const typeInfoInternal : TypeInfoInternal = {
+    const typeInfoInternal: TypeInfoInternal = {
       tag: 'multimodal',
       tsType: multiModalTarget,
       types: multiModalDetails.val,
-    }
+    };
 
     return Either.right(typeInfoInternal);
-
   }
 
   const undefinedSchema = handleVoidReturnType(returnType);
@@ -355,33 +362,46 @@ export function buildOutputSchema(
         const voidAnalysedType = tuple(undefined, 'undefined', []);
         const witType = WitType.fromAnalysedType(voidAnalysedType);
 
-        return Either.right(
-          { tag: 'analysed',  val: voidAnalysedType, tsType: returnType, witType: witType },
-        );
+        return Either.right({
+          tag: 'analysed',
+          val: voidAnalysedType,
+          tsType: returnType,
+          witType: witType,
+        });
       case 'result-with-void':
-        const resultWithVoidWitType =
-          WitType.fromAnalysedType(undefinedSchemaVal.analysedType);
-
-        return Either.right(
-          { tag: 'analysed', val: undefinedSchemaVal.analysedType, witType: resultWithVoidWitType, tsType: returnType }
+        const resultWithVoidWitType = WitType.fromAnalysedType(
+          undefinedSchemaVal.analysedType,
         );
+
+        return Either.right({
+          tag: 'analysed',
+          val: undefinedSchemaVal.analysedType,
+          witType: resultWithVoidWitType,
+          tsType: returnType,
+        });
     }
   }
 
-  const unstructured = handleUnstructuredType(
-    returnType,
-  );
+  const unstructured = handleUnstructuredType(returnType);
 
   if (unstructured) {
     return unstructured;
   }
 
-   return Either.map(WitType.fromTsType(returnType, Option.none()), (typeInfo) => {
+  return Either.map(
+    WitType.fromTsType(returnType, Option.none()),
+    (typeInfo) => {
       const witType = typeInfo[0];
       const analysedType = typeInfo[1];
 
-      return { tag: 'analysed', val: analysedType, witType: witType, tsType: returnType };
-    });
+      return {
+        tag: 'analysed',
+        val: analysedType,
+        witType: witType,
+        tsType: returnType,
+      };
+    },
+  );
 }
 
 function getMultimodalDetails(
@@ -588,74 +608,37 @@ function getParameterNameAndElementSchema(
 function handleUnstructuredType(
   returnType: Type.Type,
 ): Either.Either<TypeInfoInternal, string> | undefined {
-
   const unstructuredTarget =
-    returnType.kind === 'promise' && (returnType.element.name === 'UnstructuredText' || returnType.element.name === 'UnstructuredBinary')
+    returnType.kind === 'promise' &&
+    (returnType.element.name === 'UnstructuredText' ||
+      returnType.element.name === 'UnstructuredBinary')
       ? returnType.element
-      : (returnType.name === 'UnstructuredText' || returnType.name === 'UnstructuredBinary')
+      : returnType.name === 'UnstructuredText' ||
+          returnType.name === 'UnstructuredBinary'
         ? returnType
         : null;
 
   if (!unstructuredTarget) {
-    return undefined
+    return undefined;
   }
 
   if (unstructuredTarget.name === 'UnstructuredText') {
     return Either.map(getTextDescriptor(unstructuredTarget), (desc) => ({
       tag: 'unstructured-text',
       val: desc,
-      tsType: unstructuredTarget
-    }))
+      tsType: unstructuredTarget,
+    }));
   }
-
 
   if (unstructuredTarget.name === 'UnstructuredBinary') {
     return Either.map(getBinaryDescriptor(unstructuredTarget), (desc) => ({
       tag: 'unstructured-binary',
       val: desc,
-      tsType: unstructuredTarget
-    }))
+      tsType: unstructuredTarget,
+    }));
   }
 
   return undefined;
-}
-
-function checkUnstructuredType(
-  returnType: Type.Type,
-  typeName: string,
-  getTypeInfoInternal: (t: Type.Type) => Either.Either<TypeInfoInternal, string>,
-): Either.Either<[TypeInfoInternal, DataSchema], string> {
-  const target =
-    returnType.kind === 'promise' && returnType.element.name === typeName
-      ? returnType.element
-      : returnType.name === typeName
-        ? returnType
-        : null;
-
-  if (!target) {
-    return Either.left('not-special-case');
-  }
-
-
-  const typeInfoInternalEither = getTypeInfoInternal(target);
-
-  if (typeName === 'UnstructuredText') {
-    return Either.right([
-      { tag: 'unstructured-text', val:  },
-      {
-        tag: 'tuple',
-        val: [['return-value', elementSchema.val]],
-      },
-    ]);
-  }
-
-  return Either.right([
-    { tag: 'unstructured-binary' },
-    {
-      tag: 'tuple',
-      val: [['return-value', elementSchema.val]],
-    },
-  ]);
 }
 
 export function convertToElementSchema(
@@ -731,7 +714,12 @@ export function convertToElementSchema(
       agentClassName,
       methodName,
       parameterName,
-      { tag: 'analysed', val: analysedType, tsType: parameterType },
+      {
+        tag: 'analysed',
+        val: analysedType,
+        tsType: parameterType,
+        witType: witType,
+      },
     );
 
     return {
