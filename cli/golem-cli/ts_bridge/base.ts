@@ -166,7 +166,7 @@ export async function invokeAgent(
 }
 
 /// The Result type representation in Golem's JSON type mapping
-export type JsonResult<Ok, Err> = { ok: Ok, err: undefined } | { ok: undefined, err: Err };
+export type JsonResult<Ok, Err> = { ok: Ok, err?: undefined } | { ok?: undefined, err: Err };
 
 export type RemoteMethod<Args extends any[], R> = {
     (...args: Args): Promise<R>;
