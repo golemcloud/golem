@@ -33,6 +33,7 @@ export type TypeInfoInternal =
   | { tag: 'analysed'; val: AnalysedType; witType: WitType; tsType: Type.Type }
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
   | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
+  | {tag: 'principal', tsType: Type.Type }
   | {
       tag: 'multimodal';
       types: ParameterDetail[];
@@ -59,6 +60,10 @@ export function convertTypeInfoToElementSchema(
         tag: 'unstructured-binary',
         val: typeInfoInternal.val,
       });
+    case 'principal':
+      return Either.left(
+        'Cannot convert `Principal` type information to ElementSchema',
+      )
     case 'multimodal':
       return Either.left(
         'Cannot convert multimodal type information to ElementSchema',
@@ -85,6 +90,10 @@ export function getMultimodalDataSchema(
     case 'unstructured-binary':
       return Either.left(
         'cannot get multimodal DataSchema from unstructured-binary type info',
+      );
+    case 'principal':
+      return Either.left(
+        'cannot get multimodal DataSchema from principal type info',
       );
     case 'multimodal':
       const parameterDetails = typeInfoInternal.types;
@@ -160,6 +169,10 @@ export function getReturnTypeDataSchema(
           ],
         ],
       });
+    case 'principal':
+      return Either.left(
+        'Principal cannot be used as a method return type',
+      )
     case 'multimodal':
       return getMultimodalDataSchema(typeInfoInternal);
   }
