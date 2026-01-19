@@ -24,8 +24,11 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 import { ParameterDetail } from '../mapping/values/dataValue';
 import * as Either from '../../newTypes/either';
 
-// For all types except unstructured-*, `AnalysedType` has the max details.
-// There is no AnalysedType for unstructured-text/binary
+// An internal representation of a type
+// This type can represent the type of a constructor parameter,
+// or a method parameter or a method output. Note that `TypeInfoInternal`
+// cannot represent an entire `DataSchema`, only individual elements that can be part of a `DataSchema`.
+// However, `TypeInfoInternal` is enough to retrieve the `DataSchema` for method output, or a multimodal constructor/method parameter.
 export type TypeInfoInternal =
   | { tag: 'analysed'; val: AnalysedType; witType: WitType; tsType: Type.Type }
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
