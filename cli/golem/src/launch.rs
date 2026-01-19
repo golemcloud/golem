@@ -52,7 +52,7 @@ use tokio::task::JoinSet;
 use tracing::Instrument;
 use uuid::uuid;
 
-const ADMIN_TOKEN: &str = golem_cli::config::LOCAL_WELL_KNOWN_TOKEN;
+const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
 
 pub struct LaunchArgs {
     pub router_addr: String,

@@ -12,39 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::agent::AgentTypeName;
-use super::domain_registration::Domain;
-use super::environment::EnvironmentId;
 use crate::model::diff;
-use crate::{declare_revision, declare_structs, newtype_uuid};
-use chrono::DateTime;
-use std::collections::BTreeSet;
 
-newtype_uuid!(HttpApiDeploymentId);
-
-declare_revision!(HttpApiDeploymentRevision);
-
-declare_structs! {
-    pub struct HttpApiDeploymentCreation {
-        pub domain: Domain,
-        pub agent_types: BTreeSet<AgentTypeName>
-    }
-
-    pub struct HttpApiDeploymentUpdate {
-        pub current_revision: HttpApiDeploymentRevision,
-        pub agent_types: Option<BTreeSet<AgentTypeName>>
-    }
-
-    pub struct HttpApiDeployment {
-        pub id: HttpApiDeploymentId,
-        pub revision: HttpApiDeploymentRevision,
-        pub environment_id: EnvironmentId,
-        pub domain: Domain,
-        pub hash: diff::Hash,
-        pub agent_types: BTreeSet<AgentTypeName>,
-        pub created_at: DateTime<chrono::Utc>,
-    }
-}
+pub use crate::base_model::http_api_deployment::*;
 
 impl HttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {

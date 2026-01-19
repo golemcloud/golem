@@ -23,7 +23,6 @@ use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
 };
-use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
@@ -37,8 +36,8 @@ use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseI
 use crate::oplog_payload;
 use crate::serialization::serialize;
 use desert_rust::{
-    BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
+    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
+    DeserializationContext, SerializationContext,
 };
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_wasm::{IntoValueAndType, ValueAndType};

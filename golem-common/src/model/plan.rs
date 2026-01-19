@@ -12,26 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
-
-newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
-
-declare_transparent_newtypes! {
-    pub struct PlanName(pub String);
-}
-
-declare_structs! {
-    pub struct Plan {
-        pub plan_id: PlanId,
-        pub name: PlanName,
-        pub app_limit: u64,
-        pub env_limit: u64,
-        pub component_limit: u64,
-        pub worker_limit: u64,
-        pub worker_connection_limit: u64,
-        pub storage_limit: u64,
-        pub monthly_gas_limit: u64,
-        pub monthly_upload_limit: u64,
-        pub max_memory_per_worker: u64,
-    }
-}
+pub use crate::base_model::plan::*;
