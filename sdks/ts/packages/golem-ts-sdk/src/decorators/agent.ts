@@ -30,7 +30,7 @@ import { BaseAgent } from '../baseAgent';
 import { AgentTypeRegistry } from '../internal/registry/agentTypeRegistry';
 import * as Either from '../newTypes/either';
 import * as Option from '../newTypes/option';
-import { AgentClassName } from '../newTypes/agentClassName';
+import { AgentClassName } from '../agentClassName';
 import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegistry';
 import { createCustomError } from '../internal/agentError';
 import { AgentConstructorParamRegistry } from '../internal/registry/agentConstructorParamRegistry';

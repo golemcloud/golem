@@ -15,7 +15,7 @@
 import { Result } from 'golem:rpc/types@0.2.2';
 import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { AgentId } from '../agentId';
-import { AgentClassName } from '../newTypes/agentClassName';
+import { AgentClassName } from '../agentClassName';
 import { BaseAgent } from '../baseAgent';
 import {
   AgentMethodParamMetadata,

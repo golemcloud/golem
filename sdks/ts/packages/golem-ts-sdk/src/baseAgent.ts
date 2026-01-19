@@ -16,7 +16,7 @@ import { AgentType } from 'golem:agent/common';
 import { AgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
-import { AgentClassName } from './newTypes/agentClassName';
+import { AgentClassName } from './agentClassName';
 import { Datetime } from 'golem:rpc/types@0.2.2';
 import { Uuid } from 'golem:agent/host';
 

@@ -28,15 +28,14 @@ export { agent, AgentDecoratorOptions } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 
-export * from './newTypes/either';
-export * from './newTypes/agentClassName';
+export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
 export { Principal } from 'golem:agent/common';
 
 export { Client } from './baseAgent';
-export { AgentClassName } from './newTypes/agentClassName';
+export { AgentClassName } from './agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 
 export * from './host/hostapi';

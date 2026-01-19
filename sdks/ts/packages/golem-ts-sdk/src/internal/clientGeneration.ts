@@ -23,7 +23,7 @@ import {
   RegisteredAgentType,
   Uuid,
 } from 'golem:agent/host';
-import { AgentClassName } from '../newTypes/agentClassName';
+import { AgentClassName } from '../agentClassName';
 import {
   AgentType,
   BinaryReference,
