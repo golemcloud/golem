@@ -1355,7 +1355,7 @@ fn check_agent_types_golden_file(
     language: GuestLanguage,
 ) -> anyhow::Result<()> {
     let mut mint = Mint::new(test_data_path().join("goldenfiles/extracted-agent-types"));
-    let mut mint_file = mint.new_goldenfile(format!("extracted-agent-types_{}.json", language.id()))?;
+    let mut mint_file = mint.new_goldenfile(format!("code_first_snippets_{}.json", language.id()))?;
 
     let extract_dir = application_path.join("golem-temp/extracted-agent-types");
     let entries = std::fs::read_dir(&extract_dir)
