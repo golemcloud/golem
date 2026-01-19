@@ -44,8 +44,8 @@ import {
   ParameterDetail,
 } from '../internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from '../host/hostapi';
-import { getHttpMountDetails } from '../http/mount';
-import { validateHttpMountWithConstructor } from '../http/validation';
+import { getHttpMountDetails } from '../internal/http/mount';
+import { validateHttpMountWithConstructor } from '../internal/http/validation';
 
 export type AgentDecoratorOptions = {
   name?: string;

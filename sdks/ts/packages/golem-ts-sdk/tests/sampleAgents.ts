@@ -21,6 +21,7 @@ import {
   Result,
   Multimodal,
   endpoint,
+  Principal,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -547,6 +548,28 @@ class ComplexHttpAgent extends BaseAgent {
   })
   async greetCustom2(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent()
+class Bllll extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  async bar(principal: Principal): Promise<void> {
+    return;
+  }
+}
+
+@agent()
+class Fllll extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  async baz(principal: Principal): Promise<void> {
+    return;
   }
 }
 

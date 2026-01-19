@@ -49,7 +49,7 @@ import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
 import {
   validateHttpEndpoint,
   validateHttpMountWithConstructor,
-} from '../http/validation';
+} from './http/validation';
 
 const MULTIMODAL_TYPE_NAMES = [
   'Multimodal',

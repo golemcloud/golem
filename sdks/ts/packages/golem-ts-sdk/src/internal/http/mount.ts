@@ -19,7 +19,7 @@ import {
 } from 'golem:agent/common';
 import { parsePath } from './path';
 import { rejectEmptyString, rejectQueryParamsInPath } from './validation';
-import { AgentDecoratorOptions } from '../decorators/agent';
+import { AgentDecoratorOptions } from '../../decorators/agent';
 
 export type HeaderVariables = Record<string, string>;
 

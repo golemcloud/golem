@@ -33,6 +33,7 @@ export * from './newTypes/agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
+export { Principal } from 'golem:agent/common';
 
 export { Client } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';

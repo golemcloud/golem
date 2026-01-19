@@ -62,6 +62,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
 ) {
   const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
+
   if (Option.isNone(metadataOpt)) {
     throw new Error(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
