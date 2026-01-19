@@ -60,6 +60,7 @@ protox = { workspace = true, optional = true }
 default = ["host", "derive"]
 
 host = [
+    "client",
     "dep:arbitrary",
     "dep:async-recursion",
     "dep:async-trait",
@@ -88,6 +89,8 @@ host = [
 derive = ["dep:golem-wasm-derive"]
 
 stub = ["dep:wit-bindgen-rt", "dep:wstd", "dep:wasi"]
+
+client = ["derive", "dep:serde", "dep:serde_json", "dep:bigdecimal", "dep:bit-vec", "dep:url"]
 
 [package.metadata.component]
 package = "golem:rpc"

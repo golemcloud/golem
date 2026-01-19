@@ -16,8 +16,11 @@ use crate::analysis::AnalysisResult;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", serde(tag = "type"))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(any(feature = "host", feature = "client"), serde(tag = "type"))]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
@@ -27,7 +30,10 @@ pub enum AnalysedExport {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunction {
@@ -67,7 +73,10 @@ impl AnalysedFunction {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedInstance {
@@ -76,7 +85,10 @@ pub struct AnalysedInstance {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeResult {
@@ -89,7 +101,10 @@ pub struct TypeResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct NameTypePair {
@@ -98,7 +113,10 @@ pub struct NameTypePair {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct NameOptionTypePair {
@@ -107,7 +125,10 @@ pub struct NameOptionTypePair {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeVariant {
@@ -119,7 +140,10 @@ pub struct TypeVariant {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeOption {
@@ -131,7 +155,10 @@ pub struct TypeOption {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeEnum {
@@ -143,7 +170,10 @@ pub struct TypeEnum {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeFlags {
@@ -155,7 +185,10 @@ pub struct TypeFlags {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeRecord {
@@ -167,7 +200,10 @@ pub struct TypeRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeTuple {
@@ -179,7 +215,10 @@ pub struct TypeTuple {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeList {
@@ -191,85 +230,127 @@ pub struct TypeList {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeStr;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeChr;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeF64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeF32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU16;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS16;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU8;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS8;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeBool;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeHandle {
@@ -282,8 +363,11 @@ pub struct TypeHandle {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", serde(tag = "type"))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(any(feature = "host", feature = "client"), serde(tag = "type"))]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
@@ -641,7 +725,10 @@ pub mod analysed_type {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Enum))]
 pub enum AnalysedResourceMode {
@@ -650,14 +737,20 @@ pub enum AnalysedResourceMode {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", desert(transparent))]
 #[cfg_attr(feature = "host", derive(poem_openapi::NewType))]
 pub struct AnalysedResourceId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunctionParameter {
@@ -666,7 +759,10 @@ pub struct AnalysedFunctionParameter {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunctionResult {
@@ -674,7 +770,10 @@ pub struct AnalysedFunctionResult {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct InterfaceCouldNotBeAnalyzedWarning {
@@ -683,8 +782,11 @@ pub struct InterfaceCouldNotBeAnalyzedWarning {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", serde(tag = "type"))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(any(feature = "host", feature = "client"), serde(tag = "type"))]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
@@ -707,7 +809,10 @@ impl Display for AnalysisWarning {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "host", feature = "client"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysisFailure {

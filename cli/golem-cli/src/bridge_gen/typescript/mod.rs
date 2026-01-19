@@ -27,14 +27,14 @@ use crate::bridge_gen::typescript::ts_writer::{
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
+use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use golem_common::model::agent::{
-    AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema, TextDescriptor,
+    AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
+    NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use indoc::formatdoc;
-
-use crate::config::LOCAL_WELL_KNOWN_TOKEN;
 use serde_json::json;
 
 pub struct TypeScriptBridgeGenerator {
@@ -52,7 +52,7 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         }
     }
 
-    fn generate(&self) -> anyhow::Result<()> {
+    fn generate(&mut self) -> anyhow::Result<()> {
         let library_name = self.library_name();
 
         let ts_path = self.target_path.join(format!("{library_name}.ts"));
@@ -617,8 +617,8 @@ impl TypeScriptBridgeGenerator {
             &method_def.name,
             &format!(
                 "base.RemoteMethod<[{}], {}>",
-                Self::schema_as_type_list(&method_def.input_schema),
-                Self::schemas_as_result_type(&method_def.output_schema)
+                Self::data_schema_as_type_list(&method_def.input_schema)?,
+                Self::data_schema_as_result_type(&method_def.output_schema)?
             ),
             Some(&formatdoc!(
                 "
@@ -673,7 +673,10 @@ impl TypeScriptBridgeGenerator {
         let mut encode_args = TsAnonymousFunctionWriter::new();
         encode_args.param(
             "args",
-            &format!("[{}]", Self::schema_as_type_list(&method_def.input_schema)),
+            &format!(
+                "[{}]",
+                Self::data_schema_as_type_list(&method_def.input_schema)?
+            ),
         );
         Self::destructure_args_tuple(&mut encode_args, "args", &method_def.input_schema)?;
         encode_args.write_line("const methodParameters: base.DataValue = ");
@@ -1768,49 +1771,55 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
-    fn schema_as_type_list(schema: &DataSchema) -> String {
-        match schema {
+    fn data_schema_as_type_list(schema: &DataSchema) -> anyhow::Result<String> {
+        Ok(match schema {
             DataSchema::Tuple(params) => params
                 .elements
                 .iter()
-                .map(|param| match &param.schema {
-                    ElementSchema::ComponentModel(component_model) => {
-                        Self::type_reference(&component_model.element_type)
-                            .unwrap_or("any".to_string())
-                    }
-                    ElementSchema::UnstructuredText(descriptor) => {
-                        Self::unstructured_text_type(descriptor)
-                    }
-                    ElementSchema::UnstructuredBinary(descriptor) => {
-                        Self::unstructured_binary_type(descriptor)
-                    }
-                })
-                .collect::<Vec<_>>()
+                .map(Self::named_element_schema_as_type)
+                .collect::<Result<Vec<_>, _>>()?
                 .join(", "),
             DataSchema::Multimodal(multimodal) => {
                 let union_types = multimodal
                     .elements
                     .iter()
-                    .map(|element| {
-                        let type_str = match &element.schema {
-                            ElementSchema::ComponentModel(component_model) => {
-                                Self::type_reference(&component_model.element_type)
-                                    .unwrap_or("any".to_string())
-                            }
-                            ElementSchema::UnstructuredText(descriptor) => {
-                                Self::unstructured_text_type(descriptor)
-                            }
-                            ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(descriptor)
-                            }
-                        };
-                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
-                    })
-                    .collect::<Vec<_>>()
+                    .map(Self::named_element_schema_as_type)
+                    .collect::<Result<Vec<_>, _>>()?
                     .join(" | ");
                 format!("({})[]", union_types)
             }
-        }
+        })
+    }
+
+    fn named_element_schema_as_type(schema: &NamedElementSchema) -> anyhow::Result<String> {
+        Self::element_schema_as_type(&schema.schema)
+    }
+
+    fn named_element_schemas_as_type(schemas: &NamedElementSchemas) -> anyhow::Result<String> {
+        Ok(schemas
+            .elements
+            .iter()
+            .map(|element| {
+                Ok::<String, anyhow::Error>(format!(
+                    "{{ type: '{}', value: {} }}",
+                    element.name,
+                    Self::named_element_schema_as_type(element)?
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join(" | "))
+    }
+
+    fn element_schema_as_type(schema: &ElementSchema) -> anyhow::Result<String> {
+        Ok(match schema {
+            ElementSchema::ComponentModel(component_model) => {
+                Self::type_reference(&component_model.element_type)?
+            }
+            ElementSchema::UnstructuredText(descriptor) => Self::unstructured_text_type(descriptor),
+            ElementSchema::UnstructuredBinary(descriptor) => {
+                Self::unstructured_binary_type(descriptor)
+            }
+        })
     }
 
     fn write_parameter_name_list(writer: &mut TsFunctionWriter<'_>, schema: &DataSchema) {
@@ -1853,95 +1862,36 @@ impl TypeScriptBridgeGenerator {
                 Ok(())
             }
             DataSchema::Multimodal(multimodal) => {
-                let union_types = multimodal
-                    .elements
-                    .iter()
-                    .map(|element| {
-                        let type_str = match &element.schema {
-                            ElementSchema::ComponentModel(component_model) => {
-                                Self::type_reference(&component_model.element_type)
-                                    .unwrap_or("any".to_string())
-                            }
-                            ElementSchema::UnstructuredText(descriptor) => {
-                                Self::unstructured_text_type(descriptor)
-                            }
-                            ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(descriptor)
-                            }
-                        };
-                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                writer.param("multimodalInput", &format!("({})[]", union_types));
+                writer.param(
+                    "multimodalInput",
+                    &format!("({})[]", Self::named_element_schemas_as_type(multimodal)?),
+                );
                 Ok(())
             }
         }
     }
 
-    fn schemas_as_result_type(schema: &DataSchema) -> String {
-        match schema {
+    fn data_schema_as_result_type(schema: &DataSchema) -> anyhow::Result<String> {
+        Ok(match schema {
             DataSchema::Tuple(params) => {
                 if params.elements.is_empty() {
                     "void".to_string()
                 } else if params.elements.len() == 1 {
-                    match &params.elements[0].schema {
-                        ElementSchema::ComponentModel(component_model) => {
-                            Self::type_reference(&component_model.element_type)
-                                .unwrap_or("any".to_string())
-                        }
-                        ElementSchema::UnstructuredText(descriptor) => {
-                            Self::unstructured_text_type(descriptor)
-                        }
-                        ElementSchema::UnstructuredBinary(descriptor) => {
-                            Self::unstructured_binary_type(descriptor)
-                        }
-                    }
+                    Self::named_element_schema_as_type(&params.elements[0])?
                 } else {
                     let types = params
                         .elements
                         .iter()
-                        .map(|param| match &param.schema {
-                            ElementSchema::ComponentModel(component_model) => {
-                                Self::type_reference(&component_model.element_type)
-                                    .unwrap_or("any".to_string())
-                            }
-                            ElementSchema::UnstructuredText(descriptor) => {
-                                Self::unstructured_text_type(descriptor)
-                            }
-                            ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(descriptor)
-                            }
-                        })
-                        .collect::<Vec<_>>()
+                        .map(Self::named_element_schema_as_type)
+                        .collect::<Result<Vec<_>, _>>()?
                         .join(", ");
                     format!("[{}]", types)
                 }
             }
             DataSchema::Multimodal(multimodal) => {
-                let union_types = multimodal
-                    .elements
-                    .iter()
-                    .map(|element| {
-                        let type_str = match &element.schema {
-                            ElementSchema::ComponentModel(component_model) => {
-                                Self::type_reference(&component_model.element_type)
-                                    .unwrap_or("any".to_string())
-                            }
-                            ElementSchema::UnstructuredText(descriptor) => {
-                                Self::unstructured_text_type(descriptor)
-                            }
-                            ElementSchema::UnstructuredBinary(descriptor) => {
-                                Self::unstructured_binary_type(descriptor)
-                            }
-                        };
-                        format!("{{ type: '{}', value: {} }}", element.name, type_str)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                format!("({})[]", union_types)
+                format!("({})[]", Self::named_element_schemas_as_type(multimodal)?)
             }
-        }
+        })
     }
 
     fn type_reference(typ: &AnalysedType) -> anyhow::Result<String> {
@@ -1997,7 +1947,7 @@ impl TypeScriptBridgeGenerator {
             AnalysedType::Handle(_) => Err(anyhow!("Handle types are not supported")),
             _ => match typ.name() {
                 Some(name) => Ok(name.to_upper_camel_case()), // TODO: use owner too?
-                None => Err(anyhow!("Complex type reference with no type name: {typ:?}")),
+                None => Self::type_definition(typ),
             },
         }
     }

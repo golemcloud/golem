@@ -86,6 +86,11 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             components:
               rust:agent:
                 templates: rust
+
+            # We also test that we can generate the bridge SDKs during the build process
+            bridge:
+              ts:
+                agents: "*"
         "# },
     )
     .unwrap();
@@ -522,6 +527,11 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             components:
               ts:agent:
                 templates: ts
+
+            # We also test that we can generate the bridge SDKs during the build process
+            bridge:
+              ts:
+                agents: "*"
         "# },
     )
     .unwrap();

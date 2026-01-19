@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::delete_path_logged;
-use crate::app::build::extract_agent_type::extract_and_cache_agent_types;
+use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::{
     AgentWrapperCommandMarkerHash, ComposeAgentWrapperCommandMarkerHash,
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
@@ -22,6 +22,7 @@ use crate::app::build::task_result_marker::{
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::{ApplicationContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
+use crate::error::NonSuccessfulExit;
 use crate::fs::compile_and_collect_globs;
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
@@ -31,9 +32,10 @@ use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
+use crate::model::text::fmt::log_error;
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::{anyhow, bail, Context as AnyhowContext};
 use camino::Utf8Path;
 use colored::Colorize;
 use gag::BufferRedirect;
@@ -106,12 +108,7 @@ async fn execute_agent_wrapper(
                 );
                 let _indent = LogIndent::new();
 
-                let agent_types = extract_and_cache_agent_types(
-                    ctx,
-                    component_name,
-                    Some(compiled_wasm_path.as_std_path()),
-                )
-                .await?;
+                let agent_types = extract_and_store_agent_types(ctx, component_name).await?;
 
                 log_action(
                     "Generating",
@@ -180,7 +177,7 @@ async fn execute_compose_agent_wrapper(
                 );
                 let _indent = LogIndent::new();
 
-                commands::composition::compose(
+                let unused_plugs = commands::composition::compose(
                     wrapper_wasm_path.as_std_path(),
                     vec![Plug {
                         name: user_component.to_string(),
@@ -188,7 +185,23 @@ async fn execute_compose_agent_wrapper(
                     }],
                     target_component.as_std_path(),
                 )
-                .await
+                .await?;
+
+                if !unused_plugs.is_empty() {
+                    let _ident = LogIndent::stash();
+
+                    logln("");
+                    log_error(format!(
+                        "Failed to compose agent wrapper, unused plugs: {}",
+                        unused_plugs.join(", ")
+                    ));
+                    logln("");
+                    logln("Confirm that you are using the most recent golem CLI and SDKs!");
+
+                    bail!(NonSuccessfulExit)
+                }
+
+                Ok(())
             },
             || {
                 log_skipping_up_to_date(format!(
