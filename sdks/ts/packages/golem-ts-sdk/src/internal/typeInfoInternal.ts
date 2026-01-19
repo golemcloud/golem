@@ -33,7 +33,7 @@ export type TypeInfoInternal =
   | { tag: 'analysed'; val: AnalysedType; witType: WitType; tsType: Type.Type }
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
   | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
-  | {tag: 'principal', tsType: Type.Type }
+  | { tag: 'principal'; tsType: Type.Type }
   | {
       tag: 'multimodal';
       types: ParameterDetail[];
@@ -63,7 +63,7 @@ export function convertTypeInfoToElementSchema(
     case 'principal':
       return Either.left(
         'Cannot convert `Principal` type information to ElementSchema',
-      )
+      );
     case 'multimodal':
       return Either.left(
         'Cannot convert multimodal type information to ElementSchema',
@@ -74,7 +74,7 @@ export function convertTypeInfoToElementSchema(
 // It is possible to get an entire `DataSchema` if the typeInfoInternal is `Multimodal`.
 // In other cases, it is not possible to get a full DataSchema from a single TypeInfoInternal, because
 // DataSchema can represent tuples and other composite types, while TypeInfoInternal represents only individual elements
-export function getMultimodalDataSchema(
+export function getMultimodalDataSchemaFromTypeInternal(
   typeInfoInternal: TypeInfoInternal,
 ): Either.Either<DataSchema, string> {
   switch (typeInfoInternal.tag) {
@@ -126,7 +126,7 @@ export function getMultimodalDataSchema(
 
 // It is possible to get an entire `DataSchema` for method return type from a single TypeInfoInternal
 // because method return type is always a single element. The DataSchema for the return type is always a tuple with a single element
-export function getReturnTypeDataSchema(
+export function getReturnTypeDataSchemaFromTypeInternal(
   typeInfoInternal: TypeInfoInternal,
 ): Either.Either<DataSchema, string> {
   switch (typeInfoInternal.tag) {
@@ -170,10 +170,8 @@ export function getReturnTypeDataSchema(
         ],
       });
     case 'principal':
-      return Either.left(
-        'Principal cannot be used as a method return type',
-      )
+      return Either.left('Principal cannot be used as a method return type');
     case 'multimodal':
-      return getMultimodalDataSchema(typeInfoInternal);
+      return getMultimodalDataSchemaFromTypeInternal(typeInfoInternal);
   }
 }

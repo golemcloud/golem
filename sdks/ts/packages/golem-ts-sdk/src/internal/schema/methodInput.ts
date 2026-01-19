@@ -20,10 +20,13 @@ import * as WitType from '../mapping/types/WitType';
 import { MethodParams } from '@golemcloud/golem-ts-types-core';
 import { TypeMappingScope } from '../mapping/types/scope';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
-import { getMultimodalDataSchema, TypeInfoInternal } from '../typeInfoInternal';
+import {
+  getMultimodalDataSchemaFromTypeInternal,
+  TypeInfoInternal,
+} from '../typeInfoInternal';
 import {
   getBinaryDescriptor,
-  getMultimodalDetails,
+  getMultimodalParamDetails,
   getTextDescriptor,
   isNamedMultimodal,
 } from './helpers';
@@ -42,7 +45,7 @@ export function buildMethodInputSchema(
     const paramType = paramTypesArray[0][1];
 
     if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
-      const multiModalDetails = getMultimodalDetails(paramType.element);
+      const multiModalDetails = getMultimodalParamDetails(paramType.element);
 
       if (Either.isLeft(multiModalDetails)) {
         return Either.left(
@@ -56,7 +59,8 @@ export function buildMethodInputSchema(
         types: multiModalDetails.val,
       };
 
-      const multimodalDataSchema = getMultimodalDataSchema(typeInfoInternal);
+      const multimodalDataSchema =
+        getMultimodalDataSchemaFromTypeInternal(typeInfoInternal);
 
       if (Either.isLeft(multimodalDataSchema)) {
         return Either.left(multimodalDataSchema.val);

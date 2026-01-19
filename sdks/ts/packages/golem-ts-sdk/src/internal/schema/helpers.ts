@@ -38,7 +38,7 @@ export function isNamedMultimodal(type: Type.Type): boolean {
   return false;
 }
 
-export function getMultimodalDetails(
+export function getMultimodalParamDetails(
   type: Type.Type,
 ): Either.Either<ParameterDetail[], string> {
   const multimodalTypes =

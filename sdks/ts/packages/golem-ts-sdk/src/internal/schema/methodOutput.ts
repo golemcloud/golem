@@ -25,7 +25,7 @@ import {
 } from '../mapping/types/AnalysedType';
 import {
   getBinaryDescriptor,
-  getMultimodalDetails,
+  getMultimodalParamDetails,
   getTextDescriptor,
   isNamedMultimodal,
 } from './helpers';
@@ -46,7 +46,9 @@ export function buildOutputSchema(
     isNamedMultimodal(multiModalTarget) &&
     multiModalTarget.kind === 'array'
   ) {
-    const multiModalDetails = getMultimodalDetails(multiModalTarget.element);
+    const multiModalDetails = getMultimodalParamDetails(
+      multiModalTarget.element,
+    );
 
     if (Either.isLeft(multiModalDetails)) {
       return Either.left(

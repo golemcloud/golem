@@ -264,6 +264,11 @@ export function serializeToDataValue(
         },
       );
 
+    case 'principal':
+      return Either.left(
+        `Internal Error: Serialization of principal type is not supported`,
+      );
+
     case 'unstructured-text':
       return Either.right(serializeTextReferenceToDataValue(tsValue));
 

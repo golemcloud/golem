@@ -494,6 +494,11 @@ function convertToValue(
     case 'unstructured-binary':
       return Either.right(serializeBinaryReferenceTsValue(arg));
 
+    case 'principal':
+      return Either.left(
+        'Internal error: Value of `Principal` should not be serialized at any point during RPC call',
+      );
+
     case 'multimodal':
       const types = typeInfoInternal.types;
 
@@ -697,6 +702,11 @@ function convertNonMultimodalValueToElementValue(
         tag: 'unstructured-text',
         val: textReference,
       };
+
+    case 'principal':
+      throw new Error(
+        `Internal error: Value of 'Principal' should not appear in RPC calls`,
+      );
 
     case 'unstructured-binary':
       const binaryReference = convertValueToBinaryReference(rpcValueUnwrapped);
