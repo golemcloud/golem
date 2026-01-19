@@ -252,7 +252,7 @@ where
         sources: FS,
         targets: FT,
     ) -> bool {
-        task_result_marker.map_or(true, |marker| marker.is_up_to_date())
+        task_result_marker.is_none_or(|marker| marker.is_up_to_date())
             && is_up_to_date(skip_check, sources, targets)
     }
 }

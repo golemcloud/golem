@@ -609,7 +609,7 @@ pub fn unit_result_type() -> Vec<AgentType> {
     }]
 }
 
-// Use `makers cli-integration-tests-update-golden-files` to update the reference extracted types
+// Use `cargo make cli-integration-tests-update-golden-files` to update the reference extracted types
 pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentType> {
     let goldenfile = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("test-data/goldenfiles/extracted-agent-types")

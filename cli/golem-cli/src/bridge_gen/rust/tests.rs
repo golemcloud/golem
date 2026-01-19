@@ -29,6 +29,7 @@ use tempfile::TempDir;
 use test_r::{test, test_dep};
 
 struct GeneratedPackage {
+    #[allow(dead_code)]
     pub dir: TempDir,
 }
 

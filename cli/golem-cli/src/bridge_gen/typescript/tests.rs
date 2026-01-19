@@ -55,6 +55,7 @@ impl GeneratedPackage {
     }
 }
 
+#[allow(dead_code)]
 struct TestTypes {
     object_type: AnalysedType,
     union_type: AnalysedType,
