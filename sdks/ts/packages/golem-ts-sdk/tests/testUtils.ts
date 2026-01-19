@@ -26,6 +26,8 @@ export const FooAgentClassName = new AgentClassName('FooAgent');
 export const BarAgentClassName = new AgentClassName('BarAgent');
 export const BarAgentCustomClassName = new AgentClassName('my-complex-agent');
 export const EphemeralAgentClassName = new AgentClassName('EphemeralAgent');
+export const SimpleHttpAgentClassName = new AgentClassName('SimpleHttpAgent');
+export const ComplexHttpAgentClassName = new AgentClassName('ComplexHttpAgent');
 
 export function getTestInterfaceType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('TestInterfaceType');
