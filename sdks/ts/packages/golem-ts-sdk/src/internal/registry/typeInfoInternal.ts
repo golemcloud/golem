@@ -66,6 +66,9 @@ export function convertTypeInfoToElementSchema(
   }
 }
 
+// It is possible to get an entire `DataSchema` if the typeInfoInternal is `Multimodal`.
+// In other cases, it is not possible to get a full DataSchema from a single TypeInfoInternal, because
+// DataSchema can represent tuples and other composite types, while TypeInfoInternal represents only individual elements
 export function getMultimodalDataSchema(
   typeInfoInternal: TypeInfoInternal,
 ): Either.Either<DataSchema, string> {
@@ -112,6 +115,8 @@ export function getMultimodalDataSchema(
   }
 }
 
+// It is possible to get an entire `DataSchema` for method return type from a single TypeInfoInternal
+// because method return type is always a single element. The DataSchema for the return type is always a tuple with a single element
 export function getReturnTypeDataSchema(
   typeInfoInternal: TypeInfoInternal,
 ): Either.Either<DataSchema, string> {
