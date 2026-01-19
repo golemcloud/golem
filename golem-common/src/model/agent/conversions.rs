@@ -20,8 +20,8 @@ use super::{
 use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentError, AgentIdWithComponent, AgentMethod, AgentMode,
-    AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
+    AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
+    AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
     ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
     RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
@@ -629,24 +629,6 @@ impl From<RegisteredAgentType> for host::RegisteredAgentType {
         host::RegisteredAgentType {
             agent_type: value.agent_type.into(),
             implemented_by: value.implemented_by.component_id.into(),
-        }
-    }
-}
-
-impl From<AgentIdWithComponent> for super::bindings::golem::rpc::types::AgentId {
-    fn from(value: AgentIdWithComponent) -> Self {
-        Self {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
-        }
-    }
-}
-
-impl From<super::bindings::golem::rpc::types::AgentId> for AgentIdWithComponent {
-    fn from(value: super::bindings::golem::rpc::types::AgentId) -> Self {
-        Self {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
         }
     }
 }
