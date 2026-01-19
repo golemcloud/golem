@@ -26,7 +26,7 @@ export type HeaderVariables = Record<string, string>;
 export function getHttpMountDetails(
   agentDecoratorOptions?: AgentDecoratorOptions,
 ): HttpMountDetails | undefined {
-  if (!agentDecoratorOptions?.mount!) return undefined;
+  if (!agentDecoratorOptions?.mount) return undefined;
 
   rejectQueryParamsInPath(agentDecoratorOptions.mount, 'mount');
   rejectEmptyString(agentDecoratorOptions.mount, 'mount');
