@@ -217,14 +217,9 @@ export function agent(options?: AgentDecoratorOptions) {
       },
     );
 
-    const constructorDataSchema = Either.getOrElse(
-      getConstructorDataSchema(agentClassName.value, classMetadata),
-      (err) => {
-        throw new Error(
-          `Schema generation failed for agent class ${agentClassName.value} due to unsupported types in constructor. ` +
-            err,
-        );
-      },
+    const constructorDataSchema = getConstructorDataSchema(
+      agentClassName.value,
+      classMetadata,
     );
 
     const httpMount = getHttpMountDetails(options);

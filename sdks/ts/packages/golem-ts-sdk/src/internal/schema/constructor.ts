@@ -25,7 +25,7 @@ import {
   isNamedMultimodal,
 } from './helpers';
 import {
-  convertTypeInfoToElementSchema,
+  getMultimodalDataSchema,
   TypeInfoInternal,
 } from '../registry/typeInfoInternal';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
@@ -34,9 +34,11 @@ import { TypeMappingScope } from '../mapping/types/scope';
 export function getConstructorDataSchema(
   agentClassName: string,
   classType: ClassMetadata,
-): Either.Either<DataSchema, string> {
+): DataSchema {
   const constructorParamInfos: readonly ConstructorArg[] =
     classType.constructorArgs;
+
+  const baseError = `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor. `;
 
   if (
     constructorParamInfos.length === 1 &&
@@ -47,43 +49,29 @@ export function getConstructorDataSchema(
     if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
       const elementType = paramType.element;
 
-      const multiModalDetails = getMultimodalDetails(elementType);
-
-      if (Either.isLeft(multiModalDetails)) {
-        return Either.left(
-          `Failed to get multimodal details: ${multiModalDetails.val}`,
-        );
-      }
+      const multimodalParameters = Either.getOrThrowWith(
+        getMultimodalDetails(elementType),
+        (err) => {
+          return new Error(
+            `${baseError}. Failed to get multimodal details for constructor parameter ${constructorParamInfos[0].name}: ${err}`,
+          );
+        },
+      );
 
       const typeInfoInternal: TypeInfoInternal = {
         tag: 'multimodal',
         tsType: paramType,
-        types: multiModalDetails.val,
+        types: multimodalParameters,
       };
 
-      const schemaDetails: Either.Either<[string, ElementSchema][], string> =
-        Either.all(
-          multiModalDetails.val.map((parameterDetail) => {
-            const elementSchema = convertTypeInfoToElementSchema(
-              parameterDetail.type,
-            );
-
-            if (Either.isLeft(elementSchema)) {
-              return Either.left(
-                `Nested multimodal types are not supported. ${parameterDetail.name}: ${elementSchema.val}`,
-              );
-            }
-
-            return Either.right([parameterDetail.name, elementSchema.val] as [
-              string,
-              ElementSchema,
-            ]);
-          }),
-        );
-
-      if (Either.isLeft(schemaDetails)) {
-        return Either.left(schemaDetails.val);
-      }
+      const schemaDetails = Either.getOrThrowWith(
+        getMultimodalDataSchema(typeInfoInternal),
+        (err) => {
+          return new Error(
+            `${baseError}. Failed to get multimodal data schema for constructor parameter ${constructorParamInfos[0].name}: ${err}`,
+          );
+        },
+      );
 
       AgentConstructorParamRegistry.setType(
         agentClassName,
@@ -91,28 +79,21 @@ export function getConstructorDataSchema(
         typeInfoInternal,
       );
 
-      return Either.right({
-        tag: 'multimodal',
-        val: schemaDetails.val,
-      });
+      return schemaDetails;
     }
   }
 
-  // For other type other than multimodal
-  const constructDataSchemaResult: Either.Either<
-    [string, ElementSchema][],
-    string
-  > = getConstructorParamsAndElementSchema(
-    agentClassName,
-    constructorParamInfos,
+  const nameAndElementSchema: [string, ElementSchema][] = Either.getOrThrowWith(
+    getConstructorParamsAndElementSchema(agentClassName, constructorParamInfos),
+    (err) => {
+      return new Error(`${baseError}. ${err}`);
+    },
   );
 
-  return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
-    return {
-      tag: 'tuple',
-      val: nameAndElementSchema,
-    };
-  });
+  return {
+    tag: 'tuple',
+    val: nameAndElementSchema,
+  };
 }
 
 function getConstructorParamsAndElementSchema(
