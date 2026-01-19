@@ -87,11 +87,6 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
     // Checking bridge SDKs for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
     for language in GuestLanguage::iter() {
-        // TODO: enable
-        if language == GuestLanguage::Rust {
-            continue;
-        }
-
         for agent_meta in &agent_metas {
             let output = ctx
                 .cli([
