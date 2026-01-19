@@ -14,6 +14,7 @@
 
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
+use crate::model::agent::test::ts_code_first_snippets_agent_type;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_client::model::ValueAndType;
 use golem_common::model::agent::{
@@ -242,9 +243,21 @@ fn ts_counter_agent() -> GeneratedPackage {
     GeneratedPackage { dir }
 }
 
-#[test_dep(tagged_as = "code_first_snippets")]
-fn ts_ts_code_first_snippets() -> GeneratedPackage {
-    let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
+#[test_dep(tagged_as = "code_first_snippets_foo_agent")]
+fn ts_ts_code_first_snippets_foo_agent() -> GeneratedPackage {
+    let agent_type = ts_code_first_snippets_agent_type("FooAgent");
+    let dir = TempDir::new().unwrap();
+
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
+}
+
+#[test_dep(tagged_as = "code_first_snippets_bar_agent")]
+fn ts_ts_code_first_snippets_bar_agent() -> GeneratedPackage {
+    let agent_type = ts_code_first_snippets_agent_type("BarAgent");
     let dir = TempDir::new().unwrap();
 
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -276,10 +289,21 @@ fn multi_agent_wrapper_2_types_2_compiles(
 fn counter_agent_compiles(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {}
 
 #[test]
-fn code_first_snippets_compiles(#[tagged_as("code_first_snippets")] _pkg: &GeneratedPackage) {}
+fn code_first_snippets_foo_agent_compiles(
+    #[tagged_as("code_first_snippets_foo_agent")] _pkg: &GeneratedPackage,
+) {
+}
 
 #[test]
-fn bridge_tests_optional_q_mark(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn code_first_snippets_bar_agent_compiles(
+    #[tagged_as("code_first_snippets_bar_agent")] _pkg: &GeneratedPackage,
+) {
+}
+
+#[test]
+fn bridge_tests_optional_q_mark(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -309,7 +333,7 @@ fn bridge_tests_optional_q_mark(#[tagged_as("code_first_snippets")] pkg: &Genera
 }
 
 #[test]
-fn bridge_tests_optional(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_optional(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -383,7 +407,7 @@ fn bridge_tests_optional(#[tagged_as("code_first_snippets")] pkg: &GeneratedPack
 }
 
 #[test]
-fn bridge_tests_number(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_number(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -401,7 +425,7 @@ fn bridge_tests_number(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackag
 }
 
 #[test]
-fn bridge_tests_string(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_string(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -419,7 +443,7 @@ fn bridge_tests_string(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackag
 }
 
 #[test]
-fn bridge_tests_boolean(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_boolean(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -437,7 +461,7 @@ fn bridge_tests_boolean(#[tagged_as("code_first_snippets")] pkg: &GeneratedPacka
 }
 
 #[test]
-fn bridge_tests_void_return(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_void_return(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -456,7 +480,7 @@ fn bridge_tests_void_return(#[tagged_as("code_first_snippets")] pkg: &GeneratedP
 
 #[test]
 fn bridge_tests_tuple_complex_type_output(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
@@ -494,7 +518,9 @@ fn bridge_tests_tuple_complex_type_output(
 }
 
 #[test]
-fn bridge_tests_optionalqmark(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_optionalqmark(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -524,7 +550,9 @@ fn bridge_tests_optionalqmark(#[tagged_as("code_first_snippets")] pkg: &Generate
 }
 
 #[test]
-fn bridge_tests_objectcomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_objectcomplextype(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -598,7 +626,7 @@ fn bridge_tests_objectcomplextype(#[tagged_as("code_first_snippets")] pkg: &Gene
 }
 
 #[test]
-fn bridge_tests_uniontype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_uniontype(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -625,7 +653,9 @@ fn bridge_tests_uniontype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPac
 }
 
 #[test]
-fn bridge_tests_unioncomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_unioncomplextype(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -652,7 +682,7 @@ fn bridge_tests_unioncomplextype(#[tagged_as("code_first_snippets")] pkg: &Gener
 }
 
 #[test]
-fn bridge_tests_map(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_map(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -675,7 +705,7 @@ fn bridge_tests_map(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) 
 }
 
 #[test]
-fn bridge_tests_taggedunion(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_taggedunion(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -706,7 +736,9 @@ fn bridge_tests_taggedunion(#[tagged_as("code_first_snippets")] pkg: &GeneratedP
 }
 
 #[test]
-fn bridge_tests_tuplecomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_tuplecomplextype(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -738,7 +770,7 @@ fn bridge_tests_tuplecomplextype(#[tagged_as("code_first_snippets")] pkg: &Gener
 }
 
 #[test]
-fn bridge_tests_tupletype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_tupletype(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -759,7 +791,9 @@ fn bridge_tests_tupletype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPac
 }
 
 #[test]
-fn bridge_tests_listcomplextype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_listcomplextype(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -794,7 +828,7 @@ fn bridge_tests_listcomplextype(#[tagged_as("code_first_snippets")] pkg: &Genera
 }
 
 #[test]
-fn bridge_tests_objecttype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_objecttype(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -822,7 +856,9 @@ fn bridge_tests_objecttype(#[tagged_as("code_first_snippets")] pkg: &GeneratedPa
 }
 
 #[test]
-fn bridge_tests_unionwithliterals(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_unionwithliterals(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -850,7 +886,7 @@ fn bridge_tests_unionwithliterals(#[tagged_as("code_first_snippets")] pkg: &Gene
 
 #[test]
 fn bridge_tests_unionwithliterals_with_value(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
@@ -878,7 +914,9 @@ fn bridge_tests_unionwithliterals_with_value(
 }
 
 #[test]
-fn bridge_tests_unionwithonlyliterals(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_unionwithonlyliterals(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -903,7 +941,7 @@ fn bridge_tests_unionwithonlyliterals(#[tagged_as("code_first_snippets")] pkg: &
 
 #[test]
 fn bridge_tests_anyonymousunionwithonlyliterals(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
@@ -928,7 +966,7 @@ fn bridge_tests_anyonymousunionwithonlyliterals(
 }
 
 #[test]
-fn bridge_tests_voidreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_voidreturn(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -946,7 +984,7 @@ fn bridge_tests_voidreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPa
 }
 
 #[test]
-fn bridge_tests_nullreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_nullreturn(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -964,7 +1002,9 @@ fn bridge_tests_nullreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPa
 }
 
 #[test]
-fn bridge_tests_undefinedreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_undefinedreturn(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -982,7 +1022,9 @@ fn bridge_tests_undefinedreturn(#[tagged_as("code_first_snippets")] pkg: &Genera
 }
 
 #[test]
-fn bridge_tests_unstructuredtext(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_unstructuredtext(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1003,7 +1045,9 @@ fn bridge_tests_unstructuredtext(#[tagged_as("code_first_snippets")] pkg: &Gener
 }
 
 #[test]
-fn bridge_tests_unstructuredbinary(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_unstructuredbinary(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1026,7 +1070,7 @@ fn bridge_tests_unstructuredbinary(#[tagged_as("code_first_snippets")] pkg: &Gen
 }
 
 #[test]
-fn bridge_tests_multimodal(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_multimodal(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1048,7 +1092,9 @@ fn bridge_tests_multimodal(#[tagged_as("code_first_snippets")] pkg: &GeneratedPa
 }
 
 #[test]
-fn bridge_tests_multimodaladvanced(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_multimodaladvanced(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1067,7 +1113,9 @@ fn bridge_tests_multimodaladvanced(#[tagged_as("code_first_snippets")] pkg: &Gen
 }
 
 #[test]
-fn bridge_tests_eitheroptional(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_eitheroptional(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1085,7 +1133,7 @@ fn bridge_tests_eitheroptional(#[tagged_as("code_first_snippets")] pkg: &Generat
 }
 
 #[test]
-fn bridge_tests_resultexact(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_resultexact(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1103,7 +1151,7 @@ fn bridge_tests_resultexact(#[tagged_as("code_first_snippets")] pkg: &GeneratedP
 }
 
 #[test]
-fn bridge_tests_resultlike(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_resultlike(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1121,7 +1169,9 @@ fn bridge_tests_resultlike(#[tagged_as("code_first_snippets")] pkg: &GeneratedPa
 }
 
 #[test]
-fn bridge_tests_resultlikewithvoid(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_resultlikewithvoid(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1139,7 +1189,9 @@ fn bridge_tests_resultlikewithvoid(#[tagged_as("code_first_snippets")] pkg: &Gen
 }
 
 #[test]
-fn bridge_tests_builtinresultvs(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_builtinresultvs(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1157,7 +1209,9 @@ fn bridge_tests_builtinresultvs(#[tagged_as("code_first_snippets")] pkg: &Genera
 }
 
 #[test]
-fn bridge_tests_builtinresultsv(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_builtinresultsv(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1175,7 +1229,9 @@ fn bridge_tests_builtinresultsv(#[tagged_as("code_first_snippets")] pkg: &Genera
 }
 
 #[test]
-fn bridge_tests_builtinresultsn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_builtinresultsn(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1193,7 +1249,7 @@ fn bridge_tests_builtinresultsn(#[tagged_as("code_first_snippets")] pkg: &Genera
 }
 
 #[test]
-fn bridge_tests_noreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_noreturn(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1211,7 +1267,7 @@ fn bridge_tests_noreturn(#[tagged_as("code_first_snippets")] pkg: &GeneratedPack
 }
 
 #[test]
-fn bridge_tests_arrowsync(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_arrowsync(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_input_encoding(
@@ -1230,7 +1286,7 @@ fn bridge_tests_arrowsync(#[tagged_as("code_first_snippets")] pkg: &GeneratedPac
 
 #[test]
 fn bridge_tests_tuplecomplextype_output(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
@@ -1269,7 +1325,9 @@ fn bridge_tests_tuplecomplextype_output(
 }
 
 #[test]
-fn bridge_tests_tupletype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_tupletype_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let bool_val: bool = false;
 
@@ -1294,7 +1352,9 @@ fn bridge_tests_tupletype_output(#[tagged_as("code_first_snippets")] pkg: &Gener
 }
 
 #[test]
-fn bridge_tests_listcomplextype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_listcomplextype_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -1329,7 +1389,9 @@ fn bridge_tests_listcomplextype_output(#[tagged_as("code_first_snippets")] pkg: 
 }
 
 #[test]
-fn bridge_tests_objecttype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_objecttype_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -1358,7 +1420,7 @@ fn bridge_tests_objecttype_output(#[tagged_as("code_first_snippets")] pkg: &Gene
 
 #[test]
 fn bridge_tests_objectcomplextype_output(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
@@ -1436,7 +1498,9 @@ fn bridge_tests_objectcomplextype_output(
 }
 
 #[test]
-fn bridge_tests_uniontype_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_uniontype_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -1464,7 +1528,7 @@ fn bridge_tests_uniontype_output(#[tagged_as("code_first_snippets")] pkg: &Gener
 
 #[test]
 fn bridge_tests_unioncomplextype_output(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
@@ -1495,7 +1559,9 @@ fn bridge_tests_unioncomplextype_output(
 }
 
 #[test]
-fn bridge_tests_taggedunion_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_taggedunion_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
 
@@ -1527,7 +1593,7 @@ fn bridge_tests_taggedunion_output(#[tagged_as("code_first_snippets")] pkg: &Gen
 
 #[test]
 fn bridge_tests_unionwithliterals_output(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
@@ -1556,7 +1622,7 @@ fn bridge_tests_unionwithliterals_output(
 
 #[test]
 fn bridge_tests_unionwithonlyliterals_output(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
@@ -1582,7 +1648,7 @@ fn bridge_tests_unionwithonlyliterals_output(
 
 #[test]
 fn bridge_tests_anyonmousunionwithonlyliterals_output(
-    #[tagged_as("code_first_snippets")] pkg: &GeneratedPackage,
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
     let types = TestTypes::default();
@@ -1607,7 +1673,9 @@ fn bridge_tests_anyonmousunionwithonlyliterals_output(
 }
 
 #[test]
-fn bridge_tests_number_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_number_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_output_decoding(
@@ -1625,7 +1693,9 @@ fn bridge_tests_number_output(#[tagged_as("code_first_snippets")] pkg: &Generate
 }
 
 #[test]
-fn bridge_tests_string_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_string_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_output_decoding(
@@ -1647,7 +1717,9 @@ fn bridge_tests_string_output(#[tagged_as("code_first_snippets")] pkg: &Generate
 }
 
 #[test]
-fn bridge_tests_boolean_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_boolean_output(
+    #[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_output_decoding(
@@ -1665,7 +1737,7 @@ fn bridge_tests_boolean_output(#[tagged_as("code_first_snippets")] pkg: &Generat
 }
 
 #[test]
-fn bridge_tests_map_output(#[tagged_as("code_first_snippets")] pkg: &GeneratedPackage) {
+fn bridge_tests_map_output(#[tagged_as("code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
 
     assert_function_output_decoding(

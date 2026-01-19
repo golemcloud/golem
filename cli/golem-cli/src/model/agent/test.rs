@@ -18,8 +18,8 @@ use golem_common::model::agent::{
     NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, case, chr, field, list, option, r#enum, record, result, s32, str, tuple, u32, u8,
-    unit_case, unit_result, variant,
+    bool, case, chr, f64, field, list, option, r#enum, record, result, result_err, result_ok, s32,
+    str, tuple, u32, u8, unit_case, unit_result, variant,
 };
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
@@ -606,6 +606,20 @@ pub fn unit_result_type() -> Vec<AgentType> {
     }]
 }
 
+pub fn ts_code_first_snippets_agent_type(agent_name: &str) -> AgentType {
+    ts_code_first_snippets()
+        .into_iter()
+        .find(|t| t.type_name.0 == agent_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "Agent type {} not found in ts_code_first_snippets",
+                agent_name
+            )
+        })
+}
+
+// TODO: we should use "golden" JSON files for these, which could be regenerated from the current state
+//       of the extraction, when needed
 pub fn ts_code_first_snippets() -> Vec<AgentType> {
     // Define reusable types with names
     let object_type = record(vec![
@@ -671,10 +685,16 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
     let result_like =
         variant(vec![case("okay", str()), case("error", option(str()))]).named("ResultLike");
 
-    let result_exact = variant(vec![case("ok", str()), case("err", str())]).named("ResultExact");
+    let result_exact = result(str(), str()).named("ResultExact");
 
     let result_like_with_void =
         variant(vec![unit_case("ok"), unit_case("err")]).named("ResultLikeWithVoid");
+
+    let result_void_string = result_err(str());
+
+    let result_string_void = result_ok(str());
+
+    let result_string_number = result(str(), f64());
 
     let object_with_union_undefined_1 =
         record(vec![field("a", option(str()))]).named("ObjectWithUnionWithUndefined1");
@@ -1646,7 +1666,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "result".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultVoidString"),
+                                element_type: result_void_string.clone(),
                             }),
                         }],
                     }),
@@ -1654,7 +1674,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultVoidString"),
+                                element_type: result_void_string.clone(),
                             }),
                         }],
                     }),
@@ -1668,7 +1688,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "result".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringVoid"),
+                                element_type: result_string_void.clone(),
                             }),
                         }],
                     }),
@@ -1676,7 +1696,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringVoid"),
+                                element_type: result_string_void.clone(),
                             }),
                         }],
                     }),
@@ -1690,7 +1710,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "result".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringNumber"),
+                                element_type: result_string_number.clone(),
                             }),
                         }],
                     }),
@@ -1698,7 +1718,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringNumber"),
+                                element_type: result_string_number.clone(),
                             }),
                         }],
                     }),
@@ -2639,7 +2659,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "result".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultVoidString"),
+                                element_type: result_void_string.clone(),
                             }),
                         }],
                     }),
@@ -2647,7 +2667,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultVoidString"),
+                                element_type: result_void_string.clone(),
                             }),
                         }],
                     }),
@@ -2661,7 +2681,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "result".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringVoid"),
+                                element_type: result_string_void.clone(),
                             }),
                         }],
                     }),
@@ -2669,7 +2689,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringVoid"),
+                                element_type: result_string_void.clone(),
                             }),
                         }],
                     }),
@@ -2683,7 +2703,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "result".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringNumber"),
+                                element_type: result_string_number.clone(),
                             }),
                         }],
                     }),
@@ -2691,7 +2711,7 @@ pub fn ts_code_first_snippets() -> Vec<AgentType> {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str().named("ResultStringNumber"),
+                                element_type: result_string_number.clone(),
                             }),
                         }],
                     }),

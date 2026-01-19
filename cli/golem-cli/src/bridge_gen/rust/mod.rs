@@ -26,6 +26,7 @@ use quote::quote;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
+use tracing::debug;
 
 #[allow(clippy::module_inception)]
 mod rust;
@@ -142,6 +143,7 @@ impl RustBridgeGenerator {
     /// Generates the lib.rs source file
     fn generate_lib_rs(&mut self, path: &Utf8Path) -> anyhow::Result<()> {
         let tokens = self.generate_lib_rs_tokens()?;
+        debug!("raw lib.rs:\n {}", tokens);
         let formatted = prettyplease::unparse(&syn::parse2(tokens)?);
 
         std::fs::write(path, formatted).map_err(|e| anyhow!("Failed to write lib.rs file: {e}"))?;

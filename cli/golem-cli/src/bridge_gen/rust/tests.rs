@@ -14,6 +14,7 @@
 
 use crate::bridge_gen::rust::RustBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
+use crate::model::agent::test::ts_code_first_snippets_agent_type;
 use camino::Utf8Path;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
@@ -71,9 +72,22 @@ fn rust_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
     GeneratedPackage { dir }
 }
 
-#[test_dep(tagged_as = "code_first_snippets")]
-fn rust_code_first_snippets() -> GeneratedPackage {
-    let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
+#[test_dep(tagged_as = "code_first_snippets_foo_agent")]
+fn rust_code_first_snippets_foo_agent() -> GeneratedPackage {
+    let agent_type = ts_code_first_snippets_agent_type("FooAgent");
+    let dir = TempDir::new().unwrap();
+
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+
+    std::fs::remove_dir_all(target_dir).ok();
+    generate_and_compile(agent_type, target_dir);
+
+    GeneratedPackage { dir }
+}
+
+#[test_dep(tagged_as = "code_first_snippets_bar_agent")]
+fn rust_code_first_snippets_bar_agent() -> GeneratedPackage {
+    let agent_type = ts_code_first_snippets_agent_type("BarAgent");
     let dir = TempDir::new().unwrap();
 
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -157,8 +171,15 @@ fn bridge_rust_compiles_counter_agent(#[tagged_as("counter_agent")] _pkg: &Gener
 }
 
 #[test]
-fn bridge_rust_compiles_code_first_snippets(
-    #[tagged_as("code_first_snippets")] _pkg: &GeneratedPackage,
+fn bridge_rust_compiles_code_first_snippets_foo_agent(
+    #[tagged_as("code_first_snippets_foo_agent")] _pkg: &GeneratedPackage,
+) {
+    // The test_dep ensures it was compiled successfully in generate_and_compile
+}
+
+#[test]
+fn bridge_rust_compiles_code_first_snippets_bar_agent(
+    #[tagged_as("code_first_snippets_bar_agent")] _pkg: &GeneratedPackage,
 ) {
     // The test_dep ensures it was compiled successfully in generate_and_compile
 }
