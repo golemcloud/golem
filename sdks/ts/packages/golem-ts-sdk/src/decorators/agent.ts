@@ -198,7 +198,6 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    // Decorator-time validation of the class name
     const agentClassName = new AgentClassName(ctor.name);
 
     if (AgentTypeRegistry.exists(agentClassName)) {
@@ -224,19 +223,11 @@ export function agent(options?: AgentDecoratorOptions) {
 
     const httpMount = getHttpMountDetails(options);
 
-    const methodSchemaEither = getAgentMethodSchema(
+    const methods = getAgentMethodSchema(
       classMetadata,
       agentClassName.value,
       httpMount,
     );
-
-    // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
-    if (Either.isLeft(methodSchemaEither)) {
-      throw new Error(
-        `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.val}`,
-      );
-    }
-    const methods: AgentMethod[] = methodSchemaEither.val;
 
     const agentTypeName = new AgentClassName(
       options?.name || agentClassName.value,

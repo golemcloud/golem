@@ -49,29 +49,27 @@ export function getConstructorDataSchema(
     if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
       const elementType = paramType.element;
 
-      const multimodalParameters = Either.getOrThrowWith(
-        getMultimodalDetails(elementType),
-        (err) => {
-          return new Error(
-            `${baseError}. Failed to get multimodal details for constructor parameter ${constructorParamInfos[0].name}: ${err}`,
-          );
-        },
-      );
+      const multiModalParameters = getMultimodalDetails(elementType);
+
+      if (Either.isLeft(multiModalParameters)) {
+        throw new Error(
+          `${baseError}. Failed to get multimodal details for constructor parameter ${constructorParamInfos[0].name}: ${multiModalParameters.val}`,
+        );
+      }
 
       const typeInfoInternal: TypeInfoInternal = {
         tag: 'multimodal',
         tsType: paramType,
-        types: multimodalParameters,
+        types: multiModalParameters.val,
       };
 
-      const schemaDetails = Either.getOrThrowWith(
-        getMultimodalDataSchema(typeInfoInternal),
-        (err) => {
-          return new Error(
-            `${baseError}. Failed to get multimodal data schema for constructor parameter ${constructorParamInfos[0].name}: ${err}`,
-          );
-        },
-      );
+      const schemaDetailsEither = getMultimodalDataSchema(typeInfoInternal);
+
+      if (Either.isLeft(schemaDetailsEither)) {
+        throw new Error(
+          `${baseError}. Failed to get multimodal data schema for constructor parameter ${constructorParamInfos[0].name}: ${schemaDetailsEither.val}`,
+        );
+      }
 
       AgentConstructorParamRegistry.setType(
         agentClassName,
@@ -79,20 +77,22 @@ export function getConstructorDataSchema(
         typeInfoInternal,
       );
 
-      return schemaDetails;
+      return schemaDetailsEither.val;
     }
   }
 
-  const nameAndElementSchema: [string, ElementSchema][] = Either.getOrThrowWith(
-    getConstructorParamsAndElementSchema(agentClassName, constructorParamInfos),
-    (err) => {
-      return new Error(`${baseError}. ${err}`);
-    },
+  const nameAndElementSchemaEither = getConstructorParamsAndElementSchema(
+    agentClassName,
+    constructorParamInfos,
   );
+
+  if (Either.isLeft(nameAndElementSchemaEither)) {
+    throw new Error(`${baseError}. ${nameAndElementSchemaEither.val}`);
+  }
 
   return {
     tag: 'tuple',
-    val: nameAndElementSchema,
+    val: nameAndElementSchemaEither.val,
   };
 }
 

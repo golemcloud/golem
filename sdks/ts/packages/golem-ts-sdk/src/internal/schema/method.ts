@@ -30,88 +30,88 @@ export function getAgentMethodSchema(
   classMetadata: ClassMetadata,
   agentClassName: string,
   httpMountDetails: HttpMountDetails | undefined,
-): Either.Either<AgentMethod[], string> {
+): AgentMethod[] {
+  const baseError = `Schema generation failed for agent class ${agentClassName}`;
+
   if (!classMetadata) {
-    return Either.left(`No metadata found for agent class ${agentClassName}`);
+    throw new Error(
+      `${baseError}. No metadata found for agent class ${agentClassName}`,
+    );
   }
 
   const methodMetadata = Array.from(classMetadata.methods.entries());
+  return methodMetadata.map((methodInfo) => {
+    const methodName = methodInfo[0];
+    const signature = methodInfo[1];
+    const parameters: MethodParams = signature.methodParams;
+    const returnType: Type.Type = signature.returnType;
 
-  return Either.all(
-    methodMetadata.map((methodInfo) => {
-      const methodName = methodInfo[0];
-      const signature = methodInfo[1];
-      const parameters: MethodParams = signature.methodParams;
-      const returnType: Type.Type = signature.returnType;
+    const methodNameValidation = validateMethodName(methodName);
+    if (Either.isLeft(methodNameValidation)) {
+      throw new Error(`${baseError}. ${methodNameValidation.val}`);
+    }
 
-      const methodNameValidation = validateMethodName(methodName);
-      if (Either.isLeft(methodNameValidation)) {
-        return Either.left(methodNameValidation.val);
-      }
+    const baseMeta =
+      AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
 
-      const baseMeta =
-        AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
+    const inputSchemaEither = buildMethodInputSchema(
+      agentClassName,
+      methodName,
+      parameters,
+    );
 
-      const inputSchemaEither = buildMethodInputSchema(
-        agentClassName,
-        methodName,
-        parameters,
+    if (Either.isLeft(inputSchemaEither)) {
+      throw new Error(`${baseError}. ${inputSchemaEither.val}`);
+    }
+
+    const inputSchema = inputSchemaEither.val;
+
+    const outputTypeInfoEither: Either.Either<TypeInfoInternal, string> =
+      buildOutputSchema(returnType);
+
+    if (Either.isLeft(outputTypeInfoEither)) {
+      throw new Error(
+        `${baseError}. Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${outputTypeInfoEither.val}.`,
       );
+    }
 
-      if (Either.isLeft(inputSchemaEither)) {
-        return Either.left(inputSchemaEither.val);
-      }
+    const outputTypeInfoInternal = outputTypeInfoEither.val;
 
-      const inputSchema = inputSchemaEither.val;
+    AgentMethodRegistry.setReturnType(
+      agentClassName,
+      methodName,
+      outputTypeInfoInternal,
+    );
 
-      const outputTypeInfoEither: Either.Either<TypeInfoInternal, string> =
-        buildOutputSchema(returnType);
+    const outputSchemaEither = getReturnTypeDataSchema(outputTypeInfoInternal);
 
-      if (Either.isLeft(outputTypeInfoEither)) {
-        return Either.left(
-          `Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${outputTypeInfoEither.val}.`,
-        );
-      }
-
-      const outputTypeInfoInternal = outputTypeInfoEither.val;
-
-      AgentMethodRegistry.setReturnType(
-        agentClassName,
-        methodName,
-        outputTypeInfoInternal,
+    if (Either.isLeft(outputSchemaEither)) {
+      throw new Error(
+        `${baseError}. Failed to get output data schema for method ${methodName}: ${outputSchemaEither.val}`,
       );
+    }
 
-      const outputSchemaEither = getReturnTypeDataSchema(
-        outputTypeInfoInternal,
-      );
-      if (Either.isLeft(outputSchemaEither)) {
-        return Either.left(
-          `Failed to get output data schema for method ${methodName}: ${outputSchemaEither.val}`,
-        );
-      }
+    const outputSchema = outputSchemaEither.val;
 
-      const outputSchema = outputSchemaEither.val;
+    const agentMethod: AgentMethod = {
+      name: methodName,
+      description: baseMeta.description ?? '',
+      promptHint: baseMeta.prompt ?? '',
+      inputSchema: inputSchema,
+      outputSchema: outputSchema,
+      httpEndpoint: baseMeta.httpEndpoint ?? [],
+    };
 
-      const agentMethod: AgentMethod = {
-        name: methodName,
-        description: baseMeta.description ?? '',
-        promptHint: baseMeta.prompt ?? '',
-        inputSchema: inputSchema,
-        outputSchema: outputSchema,
-        httpEndpoint: baseMeta.httpEndpoint ?? [],
-      };
+    // validateHttpEndpoint surely runs as part of building the agent
+    validateHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
 
-      // validateHttpEndpoint surely runs as part of building the agent
-      validateHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
-
-      return Either.right({
-        name: methodName,
-        description: baseMeta.description ?? '',
-        promptHint: baseMeta.prompt ?? '',
-        inputSchema: inputSchema,
-        outputSchema: outputSchema,
-        httpEndpoint: baseMeta.httpEndpoint ?? [],
-      });
-    }),
-  );
+    return {
+      name: methodName,
+      description: baseMeta.description ?? '',
+      promptHint: baseMeta.prompt ?? '',
+      inputSchema: inputSchema,
+      outputSchema: outputSchema,
+      httpEndpoint: baseMeta.httpEndpoint ?? [],
+    };
+  });
 }
