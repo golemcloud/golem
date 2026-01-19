@@ -191,6 +191,11 @@ fn bridge_rust_compiles_rust_code_first_snippets_bar_agent(
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
+    println!(
+        "Generating Rust bridge SDK for {} into: {}",
+        agent_type.type_name, target_dir
+    );
+
     let mut gen = RustBridgeGenerator::new(agent_type, target_dir, false);
     gen.generate().expect("Failed to generate Rust bridge");
 

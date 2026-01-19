@@ -1787,7 +1787,10 @@ fn bridge_tests_map_output(
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
-    println!("Generating into: {}", target_dir);
+    println!(
+        "Generating TS bridge SDK for {} into: {}",
+        agent_type.type_name, target_dir
+    );
 
     let mut gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true);
     gen.generate().unwrap();
