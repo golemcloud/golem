@@ -274,7 +274,7 @@ message ComponentDependencyKey {
   UUID value = 2;
   optional string root_package_name = 3;
   optional string root_package_version = 4;
-  uint64 component_version = 5;
+  uint64 component_revision = 5;
 }
 
 message InstanceCreationType {

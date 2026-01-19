@@ -61,7 +61,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         account_id: AccountId,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<ComponentRevision>,
+        component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
@@ -83,7 +83,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             owned_worker_id,
                             worker_env,
                             worker_wasi_config_vars,
-                            component_version,
+                            component_revision,
                             parent,
                             &invocation_context_stack,
                         )

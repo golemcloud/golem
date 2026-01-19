@@ -174,7 +174,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(component)
     }
 
-    async fn get_latest_component_version(
+    async fn get_latest_component_revision(
         &self,
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
@@ -186,7 +186,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn update_component_with(
         &self,
         component_id: &ComponentId,
-        previous_version: ComponentRevision,
+        previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
@@ -238,7 +238,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .update_component(
                 &component_id.0,
                 &ComponentUpdate {
-                    current_revision: previous_version,
+                    current_revision: previous_revision,
                     new_file_options,
                     removed_files,
                     dynamic_linking,

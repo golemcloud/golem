@@ -104,13 +104,13 @@ impl CompileGrpcService {
         sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
-        let component_version = request
-            .component_version
+        let component_revision = request
+            .component_revision
             .try_into()
             .map_err(|e| bad_request_error(format!("missing component version: {e}")))?;
         let environment_id = make_environment_id(request.environment_id)?;
         self.service
-            .enqueue_compilation(component_id, component_version, environment_id, sender)
+            .enqueue_compilation(component_id, component_revision, environment_id, sender)
             .await?;
         Ok(())
     }

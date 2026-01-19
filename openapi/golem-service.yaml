@@ -9825,14 +9825,14 @@ components:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
         details:
           type: string
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
     FilterComparator:
       type: string
       enum:
@@ -9990,12 +9990,12 @@ components:
         nextOplogIndex:
           type: integer
           format: uint64
-        currentComponentVersion:
+        currentComponentRevision:
           type: integer
           format: uint64
       required:
       - nextOplogIndex
-      - currentComponentVersion
+      - currentComponentRevision
     OplogRegion:
       title: OplogRegion
       type: object
@@ -10016,12 +10016,12 @@ components:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
     PersistenceLevel:
       type: string
       enum:
@@ -10936,12 +10936,12 @@ components:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
     TextReference:
       discriminator:
         propertyName: type
@@ -11469,7 +11469,7 @@ components:
         mapping:
           Name: '#/components/schemas/WorkerFilter_WorkerNameFilter'
           Status: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-          Version: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+          Revision: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
           CreatedAt: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
           Env: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
@@ -11480,7 +11480,7 @@ components:
       oneOf:
       - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
@@ -11559,6 +11559,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerOrFilter'
+    WorkerFilter_WorkerRevisionFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revision
+            type: string
+            enum:
+            - Revision
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerRevisionFilter'
     WorkerFilter_WorkerStatusFilter:
       allOf:
       - type: object
@@ -11571,18 +11583,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerStatusFilter'
-    WorkerFilter_WorkerVersionFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Version
-            type: string
-            enum:
-            - Version
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerVersionFilter'
     WorkerFilter_WorkerWasiConfigVarsFilter:
       allOf:
       - type: object
@@ -11629,7 +11629,7 @@ components:
             $ref: '#/components/schemas/WasiConfigVarsEntry'
         status:
           $ref: '#/components/schemas/WorkerStatus'
-        componentVersion:
+        componentRevision:
           type: integer
           format: uint64
         retryCount:
@@ -11685,7 +11685,7 @@ components:
       - env
       - wasiConfigVars
       - status
-      - componentVersion
+      - componentRevision
       - retryCount
       - pendingInvocationCount
       - updates
@@ -11740,6 +11740,18 @@ components:
       - createdAt
       - resourceOwner
       - resourceName
+    WorkerRevisionFilter:
+      title: WorkerRevisionFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: integer
+          format: uint64
+      required:
+      - comparator
+      - value
     WorkerStatus:
       description: |-
         Represents last known status of a worker
@@ -11771,18 +11783,6 @@ components:
       enum:
       - automatic
       - manual
-    WorkerVersionFilter:
-      title: WorkerVersionFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          type: integer
-          format: uint64
-      required:
-      - comparator
-      - value
     WorkerWasiConfigVarsFilter:
       title: WorkerWasiConfigVarsFilter
       type: object
