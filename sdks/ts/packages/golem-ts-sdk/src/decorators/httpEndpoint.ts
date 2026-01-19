@@ -147,7 +147,7 @@ export function endpoint(opts: EndpointDecoratorOptions) {
     const methods = ['get', 'post', 'put', 'delete', 'custom'] as const;
 
     const providedMethods = methods.filter((m) =>
-      m === 'custom' ? !!opts.custom : !!opts[m],
+      m === 'custom' ? opts.custom != null : opts[m] != null,
     );
 
     if (providedMethods.length === 0) {
