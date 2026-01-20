@@ -13953,14 +13953,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
-        headerVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/HeaderVariable'
-        queryVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/QueryVariable'
         authDetails:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
@@ -13973,8 +13965,6 @@ components:
             $ref: '#/components/schemas/PathSegment'
       required:
       - pathPrefix
-      - headerVars
-      - queryVars
       - phantomAgent
       - corsOptions
       - webhookSuffix
@@ -14352,28 +14342,20 @@ components:
       required:
       - values
     PathSegment:
-      title: PathSegment
-      type: object
-      properties:
-        concat:
-          type: array
-          items:
-            $ref: '#/components/schemas/PathSegmentNode'
-      required:
-      - concat
-    PathSegmentNode:
       discriminator:
         propertyName: type
         mapping:
-          Literal: '#/components/schemas/PathSegmentNode_LiteralSegment'
-          SystemVariable: '#/components/schemas/PathSegmentNode_SystemVariableSegment'
-          PathVariable: '#/components/schemas/PathSegmentNode_PathVariable'
+          Literal: '#/components/schemas/PathSegment_LiteralSegment'
+          SystemVariable: '#/components/schemas/PathSegment_SystemVariableSegment'
+          PathVariable: '#/components/schemas/PathSegment_PathVariable'
+          RemainingPathVariable: '#/components/schemas/PathSegment_PathVariable'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PathSegmentNode_LiteralSegment'
-      - $ref: '#/components/schemas/PathSegmentNode_SystemVariableSegment'
-      - $ref: '#/components/schemas/PathSegmentNode_PathVariable'
-    PathSegmentNode_LiteralSegment:
+      - $ref: '#/components/schemas/PathSegment_LiteralSegment'
+      - $ref: '#/components/schemas/PathSegment_SystemVariableSegment'
+      - $ref: '#/components/schemas/PathSegment_PathVariable'
+      - $ref: '#/components/schemas/PathSegment_PathVariable'
+    PathSegment_LiteralSegment:
       allOf:
       - type: object
         properties:
@@ -14385,19 +14367,19 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/LiteralSegment'
-    PathSegmentNode_PathVariable:
+    PathSegment_PathVariable:
       allOf:
       - type: object
         properties:
           type:
-            example: PathVariable
+            example: RemainingPathVariable
             type: string
             enum:
-            - PathVariable
+            - RemainingPathVariable
         required:
         - type
       - $ref: '#/components/schemas/PathVariable'
-    PathSegmentNode_SystemVariableSegment:
+    PathSegment_SystemVariableSegment:
       allOf:
       - type: object
         properties:

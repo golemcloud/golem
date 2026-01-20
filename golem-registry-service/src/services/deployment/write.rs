@@ -496,12 +496,6 @@ impl DeploymentContext {
                     http_mount.cors_options.clone()
                 };
 
-                let mut header_vars = http_mount.header_vars.clone();
-                header_vars.extend(http_endpoint.header_vars.iter().cloned());
-
-                let mut query_vars = http_mount.query_vars.clone();
-                query_vars.extend(http_endpoint.query_vars.iter().cloned());
-
                 let route_id = *current_route_id;
                 *current_route_id += 1;
 
@@ -515,8 +509,8 @@ impl DeploymentContext {
                         .cloned()
                         .chain(http_endpoint.path_suffix.iter().cloned())
                         .collect(),
-                    header_vars,
-                    query_vars,
+                    header_vars: http_endpoint.header_vars.clone(),
+                    query_vars: http_endpoint.query_vars.clone(),
                     behaviour: RouteBehaviour::CallAgent {
                         component_id: implementer.component_id,
                         component_revision: implementer.component_revision,

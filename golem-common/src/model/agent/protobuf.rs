@@ -5,9 +5,9 @@ use super::{
     ElementSchema, ElementValue, ElementValues, GolemUserPrincipal, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
     NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
-    PathSegmentNode, PathVariable, Principal, QueryVariable, RegisteredAgentType,
-    RegisteredAgentTypeImplementer, SystemVariable, SystemVariableSegment, TextDescriptor,
-    TextReference, TextSource, TextType, Url,
+    PathVariable, Principal, QueryVariable, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    SystemVariable, SystemVariableSegment, TextDescriptor, TextReference, TextSource, TextType,
+    Url,
 };
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
@@ -742,16 +742,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
-            header_vars: value
-                .header_vars
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            query_vars: value
-                .query_vars
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             phantom_agent: value.phantom_agent,
             cors_options: value
@@ -771,8 +761,6 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
     fn from(value: HttpMountDetails) -> Self {
         Self {
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
-            header_vars: value.header_vars.into_iter().map(Into::into).collect(),
-            query_vars: value.query_vars.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
             cors_options: Some(value.cors_options.into()),
@@ -914,31 +902,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PathSegment> for PathSegme
     fn try_from(
         value: golem_api_grpc::proto::golem::component::PathSegment,
     ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            concat: value
-                .concat
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-        })
-    }
-}
-
-impl From<PathSegment> for golem_api_grpc::proto::golem::component::PathSegment {
-    fn from(value: PathSegment) -> Self {
-        Self {
-            concat: value.concat.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::PathSegmentNode> for PathSegmentNode {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::PathSegmentNode,
-    ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::path_segment_node::Value;
+        use golem_api_grpc::proto::golem::component::path_segment::Value;
 
         match value
             .value
@@ -947,19 +911,21 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PathSegmentNode> for PathS
             Value::Literal(v) => Ok(Self::Literal(v.try_into()?)),
             Value::SystemVariable(v) => Ok(Self::SystemVariable(v.try_into()?)),
             Value::PathVariable(v) => Ok(Self::PathVariable(v.try_into()?)),
+            Value::RemainingPathVariable(v) => Ok(Self::RemainingPathVariable(v.try_into()?)),
         }
     }
 }
 
-impl From<PathSegmentNode> for golem_api_grpc::proto::golem::component::PathSegmentNode {
-    fn from(value: PathSegmentNode) -> Self {
-        use golem_api_grpc::proto::golem::component::path_segment_node::Value;
+impl From<PathSegment> for golem_api_grpc::proto::golem::component::PathSegment {
+    fn from(value: PathSegment) -> Self {
+        use golem_api_grpc::proto::golem::component::path_segment::Value;
 
         Self {
             value: Some(match value {
-                PathSegmentNode::Literal(v) => Value::Literal(v.into()),
-                PathSegmentNode::SystemVariable(v) => Value::SystemVariable(v.into()),
-                PathSegmentNode::PathVariable(v) => Value::PathVariable(v.into()),
+                PathSegment::Literal(v) => Value::Literal(v.into()),
+                PathSegment::SystemVariable(v) => Value::SystemVariable(v.into()),
+                PathSegment::PathVariable(v) => Value::PathVariable(v.into()),
+                PathSegment::RemainingPathVariable(v) => Value::RemainingPathVariable(v.into()),
             }),
         }
     }

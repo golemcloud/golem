@@ -145,12 +145,10 @@ message BinarySource {
 
 message HttpMountDetails {
   repeated PathSegment path_prefix = 1;
-  repeated HeaderVariable header_vars = 2;
-  repeated QueryVariable query_vars = 3;
-  optional AgentHttpAuthDetails auth_details = 4;
-  bool phantom_agent = 5;
-  CorsOptions cors_options = 6;
-  repeated PathSegment webhook_suffix = 7;
+  optional AgentHttpAuthDetails auth_details = 2;
+  bool phantom_agent = 3;
+  CorsOptions cors_options = 4;
+  repeated PathSegment webhook_suffix = 5;
 }
 
 message HttpEndpointDetails {
@@ -187,14 +185,11 @@ message CorsOptions {
 }
 
 message PathSegment {
-  repeated PathSegmentNode concat = 1;
-}
-
-message PathSegmentNode {
   oneof value {
     LiteralSegment literal = 1;
     SystemVariableSegment system_variable = 2;
     PathVariable path_variable = 3;
+    PathVariable remaining_path_variable = 4;
   }
 }
 
