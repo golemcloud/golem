@@ -2,7 +2,6 @@ import { agent, BaseAgent } from '../src';
 
 @agent({
   mount: '/chats/{agent-type}/{foo}',
-  headers: { 'X-Foo': 'foo', 'X-Bar': 'bar' },
 })
 class AgentWithInvalidHttpMount extends BaseAgent {
   constructor(

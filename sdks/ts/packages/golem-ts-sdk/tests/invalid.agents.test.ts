@@ -286,7 +286,7 @@ test('Agent with with invalid http mount is rejected', async () => {
   await expect(async () => {
     await import('./agentWithInvalidHttpMount');
   }).rejects.toThrowError(
-    'Agent constructor variable "baz" is not provided by the HTTP mount (path or headers).',
+    'Agent constructor variable "bar" is not provided by the HTTP mount path.',
   );
 });
 
