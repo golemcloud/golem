@@ -67,12 +67,21 @@ export function deserializeDataValue(
   switch (dataValue.tag) {
     case 'tuple':
       const elements = dataValue.val;
+      const elementsCount = elements.length;
 
       let dataValueElementIdx = 0;
 
       return Either.all(
         paramTypes.map((parameterDetail) => {
           const parameterType = parameterDetail.type;
+
+          if (dataValueElementIdx >= elementsCount) {
+            throw new Error(
+              `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
+            );
+          }
+
+          const elementValue = elements[dataValueElementIdx];
 
           switch (parameterType.tag) {
             case 'multimodal':
@@ -87,12 +96,11 @@ export function deserializeDataValue(
 
             case 'unstructured-text':
               const unstructuredTextParamName = parameterDetail.name;
+              // console.log(unstructuredTextParamName);
 
-              const textRefElementValue = elements[dataValueElementIdx];
-
-              if (textRefElementValue.tag !== 'unstructured-text') {
+              if (elementValue.tag !== 'unstructured-text') {
                 throw new Error(
-                  `Internal error: Expected unstructured-text element for parameter ${unstructuredTextParamName}, got ${util.format(textRefElementValue)}`,
+                  `Internal error: Expected unstructured-text element for parameter ${unstructuredTextParamName}, got ${util.format(elementValue)}`,
                 );
               }
 
@@ -109,18 +117,16 @@ export function deserializeDataValue(
 
               return UnstructuredText.fromDataValue(
                 unstructuredTextParamName,
-                textRefElementValue.val,
+                elementValue.val,
                 languageCodes.val,
               );
 
             case 'unstructured-binary':
               const binaryParameterDetail = paramTypes[dataValueElementIdx];
 
-              const binaryElementValue = elements[dataValueElementIdx];
-
-              if (binaryElementValue.tag !== 'unstructured-binary') {
+              if (elementValue.tag !== 'unstructured-binary') {
                 throw new Error(
-                  `Internal error: Expected unstructured-binary element for parameter ${binaryParameterDetail.name}, got ${util.format(binaryElementValue)}`,
+                  `Internal error: Expected unstructured-binary element for parameter ${binaryParameterDetail.name}, got ${util.format(elementValue)}`,
                 );
               }
 
@@ -138,23 +144,21 @@ export function deserializeDataValue(
 
               return UnstructuredBinary.fromDataValue(
                 binaryParameterDetail.name,
-                binaryElementValue.val,
+                elementValue.val,
                 mimeTypes.val,
               );
 
             case 'analysed':
-              const witValueElementValue = elements[dataValueElementIdx];
-
-              if (witValueElementValue.tag !== 'component-model') {
+              if (elementValue.tag !== 'component-model') {
                 throw new Error(
-                  `Internal error: Expected component-model element for parameter ${parameterDetail.name}, got ${util.format(witValueElementValue)}`,
+                  `Internal error: Expected component-model element for parameter ${parameterDetail.name}, got ${util.format(elementValue)}`,
                 );
               }
 
               dataValueElementIdx += 1;
 
               return Either.right(
-                WitValue.toTsValue(witValueElementValue.val, parameterType.val),
+                WitValue.toTsValue(elementValue.val, parameterType.val),
               );
           }
         }),

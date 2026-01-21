@@ -55,7 +55,12 @@ import {
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
-import { DataValue, ElementValue } from 'golem:agent/common';
+import {
+  BinaryReference,
+  DataValue,
+  ElementValue,
+  TextReference,
+} from 'golem:agent/common';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
@@ -114,13 +119,37 @@ test('BarAgent can be successfully initiated', () => {
           typeRegistry.constructorArgs[2].name,
         );
 
+        // UnstructuredText,
+        const arg3 = AgentConstructorParamRegistry.getParamType(
+          'BarAgent',
+          typeRegistry.constructorArgs[3].name,
+        );
+
+        // UnstructuredText<['en', 'de']>
+        const arg4 = AgentConstructorParamRegistry.getParamType(
+          'BarAgent',
+          typeRegistry.constructorArgs[4].name,
+        );
+
+        // UnstructuredBinary<['application/json']>
+        const arg5 = AgentConstructorParamRegistry.getParamType(
+          'BarAgent',
+          typeRegistry.constructorArgs[5].name,
+        );
+
         if (
           !arg0 ||
           !arg1 ||
           !arg2 ||
+          !arg3 ||
+          !arg4 ||
+          !arg5 ||
           arg0.tag !== 'analysed' ||
           arg1.tag !== 'analysed' ||
-          arg2.tag !== 'analysed'
+          arg2.tag !== 'analysed' ||
+          arg3.tag !== 'unstructured-text' ||
+          arg4.tag !== 'unstructured-text' ||
+          arg5.tag !== 'unstructured-binary'
         ) {
           throw new Error(
             'Test failure: unresolved type in BarAgent constructor',
@@ -146,6 +175,16 @@ test('BarAgent can be successfully initiated', () => {
 
         expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
 
+        const textReference: TextReference = {
+          tag: 'url',
+          val: 'https://example.com/sample.txt',
+        };
+
+        const binaryReference: BinaryReference = {
+          tag: 'url',
+          val: 'https://example.com/binary',
+        };
+
         const dataValue: DataValue = {
           tag: 'tuple',
           val: [
@@ -160,6 +199,18 @@ test('BarAgent can be successfully initiated', () => {
             {
               tag: 'component-model',
               val: optionalUnionWit,
+            },
+            {
+              tag: 'unstructured-text',
+              val: textReference,
+            },
+            {
+              tag: 'unstructured-text',
+              val: textReference,
+            },
+            {
+              tag: 'unstructured-binary',
+              val: binaryReference,
             },
           ],
         };

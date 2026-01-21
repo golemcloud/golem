@@ -326,9 +326,6 @@ class BarAgent extends BaseAgent {
     readonly unstructuredBinary: UnstructuredBinary<['application/json']>,
   ) {
     super();
-    this.testInterfaceType = testInterfaceType;
-    this.optionalStringType = optionalStringType;
-    this.optionalUnionType = optionalUnionType;
   }
 
   async fun0(

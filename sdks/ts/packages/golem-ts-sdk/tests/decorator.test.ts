@@ -825,10 +825,13 @@ describe('Annotated FooAgent class', () => {
     (globalThis as any).currentAgentId =
       `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
 
-    const fooResult = initiator.initiate({
-      tag: 'tuple',
-      val: [{ tag: 'component-model', val: toWitValue(value) }],
-    });
+    const fooResult = initiator.initiate(
+      {
+        tag: 'tuple',
+        val: [{ tag: 'component-model', val: toWitValue(value) }],
+      },
+      { tag: 'anonymous' },
+    );
     expect(fooResult.tag).toEqual('ok');
     const foo = fooResult.val as ResolvedAgent;
     expect(foo.phantomId()).toEqual(uuid);
@@ -1085,15 +1088,19 @@ describe('Annotated SingletonAgent class', () => {
     (globalThis as any).currentAgentId =
       `singleton-agent(${JSON.stringify(params)})`;
 
-    const singleton = initiator.initiate(params);
+    const singleton = initiator.initiate(params, { tag: 'anonymous' });
     expect(singleton.tag).toEqual('ok');
     const foo = singleton.val as ResolvedAgent;
     expect(foo.phantomId()).toBeUndefined();
 
-    const result = await foo.invoke('test', {
-      tag: 'tuple',
-      val: [],
-    });
+    const result = await foo.invoke(
+      'test',
+      {
+        tag: 'tuple',
+        val: [],
+      },
+      { tag: 'anonymous' },
+    );
 
     expect(result.tag).toEqual('ok');
     expect(result.val).toEqual({
