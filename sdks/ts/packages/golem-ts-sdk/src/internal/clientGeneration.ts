@@ -578,12 +578,20 @@ function deserializeRpcResult(
       });
 
       return Either.getOrThrowWith(
-        deserializeDataValue(dataValue, [
-          {
-            name: 'return-value',
-            type: typeInfoInternal,
-          },
-        ]),
+        deserializeDataValue(
+          dataValue,
+          [
+            {
+              name: 'return-value',
+              type: typeInfoInternal,
+            },
+            // Deserializing rpc result doesn't require principal context
+            // i.e, return type of a method is never conceived to be 'Principal' anywhere in SDK,
+            // but the type is normalized to be simple component-model type
+          ],
+          { tag: 'anonymous' },
+        ),
+
         (err) =>
           new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
@@ -597,12 +605,18 @@ function deserializeRpcResult(
       });
 
       return Either.getOrThrowWith(
-        deserializeDataValue(dataValueText, [
-          {
-            name: 'return-value',
-            type: typeInfoInternal,
-          },
-        ]),
+        deserializeDataValue(
+          dataValueText,
+          [
+            {
+              name: 'return-value',
+              type: typeInfoInternal,
+            },
+            // Deserializing rpc result doesn't require principal context,
+            // In this case typeInfoInternal is 'unstructured-text', so Principal type cannot appear here
+          ],
+          { tag: 'anonymous' },
+        ),
         (err) =>
           new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
@@ -616,12 +630,18 @@ function deserializeRpcResult(
       });
 
       return Either.getOrThrowWith(
-        deserializeDataValue(dataValueBinary, [
-          {
-            name: 'return-value',
-            type: typeInfoInternal,
-          },
-        ]),
+        deserializeDataValue(
+          dataValueBinary,
+          [
+            {
+              name: 'return-value',
+              type: typeInfoInternal,
+            },
+            // Deserializing rpc result doesn't require principal context,
+            // In this case typeInfoInternal is 'unstructured-binary', so Principal type cannot appear here
+          ],
+          { tag: 'anonymous' },
+        ),
         (err) =>
           new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
@@ -669,12 +689,17 @@ function deserializeRpcResult(
           };
 
           return Either.getOrThrowWith(
-            deserializeDataValue(dataValue, [
-              {
-                name: 'return-value',
-                type: typeInfoInternal,
-              },
-            ]),
+            deserializeDataValue(
+              dataValue,
+              [
+                {
+                  name: 'return-value',
+                  type: typeInfoInternal,
+                },
+              ], // Deserializing rpc result doesn't require principal context,
+              // and multimodal cannot contain Principal type inside
+              { tag: 'anonymous' },
+            ),
             (err) =>
               new Error(
                 `Failed to deserialize multimodal return value: ${err}`,

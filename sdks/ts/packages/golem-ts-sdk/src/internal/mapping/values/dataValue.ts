@@ -20,6 +20,7 @@ import {
   BinaryReference,
   DataValue,
   ElementValue,
+  Principal,
   TextReference,
 } from 'golem:agent/common';
 import {
@@ -51,6 +52,9 @@ export type ParameterDetail = {
  * @param paramTypes A data value is ever need to be deserialized only for method parameters or constructor parameters
  * (incoming values to dynamic invoke). Hence, it always expects a list of proper parameter names and its type info
  *
+ * @param principal The principal of the caller - needed for deserializing principal types. Note that dataValue may not correspond to the paramTypes
+ *  since principal values are not represented in dataValue. It is forbidden to have principal types in DataValue
+ *
  * Implementation detail: The same functionality can be used to deserialize the result of the dynamic invoke - mainly
  * for testing purpose. In this case a fake parameter name can be provided when `dataValue.tag` is `tuple`.
  * And a proper list of `ParameterDetail` is required `dataValue.tag` is multi-modal - and it cannnot be fake.
@@ -58,23 +62,42 @@ export type ParameterDetail = {
 export function deserializeDataValue(
   dataValue: DataValue,
   paramTypes: ParameterDetail[],
+  principal: Principal,
 ): Either.Either<any[], string> {
   switch (dataValue.tag) {
     case 'tuple':
       const elements = dataValue.val;
 
-      return Either.all(
-        elements.map((elem, idx) => {
-          switch (elem.tag) {
-            case 'unstructured-text':
-              const parameterDetail = paramTypes[idx];
+      let dataValueElementIdx = 0;
 
+      return Either.all(
+        paramTypes.map((parameterDetail) => {
+          const parameterType = parameterDetail.type;
+
+          switch (parameterType.tag) {
+            case 'multimodal':
+              return Either.left(
+                `Internal error: Unexpected multimodal type for parameter ${parameterDetail.name} in tuple data value`,
+              );
+
+            case 'principal':
+              // If principal, we do not increment the data value elemnt index,
+              // because principal is not represented in data value
+              return Either.right(principal);
+
+            case 'unstructured-text':
               const unstructuredTextParamName = parameterDetail.name;
 
-              const textRef = elem.val;
+              const textRefElementValue = elements[dataValueElementIdx];
+
+              if (textRefElementValue.tag !== 'unstructured-text') {
+                throw new Error(
+                  `Internal error: Expected unstructured-text element for parameter ${unstructuredTextParamName}, got ${util.format(textRefElementValue)}`,
+                );
+              }
 
               const languageCodes: Either.Either<string[], string> =
-                getLanguageCodes(parameterDetail.type.tsType);
+                getLanguageCodes(parameterType.tsType);
 
               if (Either.isLeft(languageCodes)) {
                 throw new Error(
@@ -82,16 +105,24 @@ export function deserializeDataValue(
                 );
               }
 
+              dataValueElementIdx += 1;
+
               return UnstructuredText.fromDataValue(
                 unstructuredTextParamName,
-                textRef,
+                textRefElementValue.val,
                 languageCodes.val,
               );
 
             case 'unstructured-binary':
-              const binaryParameterDetail = paramTypes[idx];
+              const binaryParameterDetail = paramTypes[dataValueElementIdx];
 
-              const binaryRef = elem.val;
+              const binaryElementValue = elements[dataValueElementIdx];
+
+              if (binaryElementValue.tag !== 'unstructured-binary') {
+                throw new Error(
+                  `Internal error: Expected unstructured-binary element for parameter ${binaryParameterDetail.name}, got ${util.format(binaryElementValue)}`,
+                );
+              }
 
               const mimeTypes: Either.Either<string[], string> = getMimeTypes(
                 binaryParameterDetail.type.tsType,
@@ -103,24 +134,28 @@ export function deserializeDataValue(
                 );
               }
 
+              dataValueElementIdx += 1;
+
               return UnstructuredBinary.fromDataValue(
                 binaryParameterDetail.name,
-                binaryRef,
+                binaryElementValue.val,
                 mimeTypes.val,
               );
 
-            case 'component-model':
-              const componentModelParameterDetail = paramTypes[idx];
-              const type = componentModelParameterDetail.type;
+            case 'analysed':
+              const witValueElementValue = elements[dataValueElementIdx];
 
-              if (type.tag !== 'analysed') {
+              if (witValueElementValue.tag !== 'component-model') {
                 throw new Error(
-                  `Internal error: Unknown parameter type for ${componentModelParameterDetail.name}`,
+                  `Internal error: Expected component-model element for parameter ${parameterDetail.name}, got ${util.format(witValueElementValue)}`,
                 );
               }
 
-              const witValue = elem.val;
-              return Either.right(WitValue.toTsValue(witValue, type.val));
+              dataValueElementIdx += 1;
+
+              return Either.right(
+                WitValue.toTsValue(witValueElementValue.val, parameterType.val),
+              );
           }
         }),
       );

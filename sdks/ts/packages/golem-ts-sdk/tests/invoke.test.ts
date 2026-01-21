@@ -169,7 +169,7 @@ test('BarAgent can be successfully initiated', () => {
           () => new Error('BarAgent not found in AgentInitiatorRegistry'),
         );
 
-        const result = agentInitiator.initiate(dataValue);
+        const result = agentInitiator.initiate(dataValue, { tag: 'anonymous' });
 
         expect(result.tag).toEqual('ok');
       },
@@ -849,15 +849,17 @@ test('Invoke function that takes unstructured-text and returns unstructured-text
     false,
   );
 
-  resolvedAgent.invoke('fun16', dataValue).then((invokeResult) => {
-    if (invokeResult.tag === 'ok') {
-      throw new Error('Test failure: invocation should have failed');
-    } else {
-      expect(invokeResult.val.val).toContain(
-        'Failed to deserialize arguments for method fun16 in agent FooAgent: Invalid value for parameter param. Language code `pl` is not allowed. Allowed codes: en, de',
-      );
-    }
-  });
+  resolvedAgent
+    .invoke('fun16', dataValue, { tag: 'anonymous' })
+    .then((invokeResult) => {
+      if (invokeResult.tag === 'ok') {
+        throw new Error('Test failure: invocation should have failed');
+      } else {
+        expect(invokeResult.val.val).toContain(
+          'Failed to deserialize arguments for method fun16 in agent FooAgent: Invalid value for parameter param. Language code `pl` is not allowed. Allowed codes: en, de',
+        );
+      }
+    });
 });
 
 function initiateFooAgent(
@@ -888,7 +890,9 @@ function initiateFooAgent(
     () => new Error('FooAgent not found in AgentInitiatorRegistry'),
   );
 
-  const result = agentInitiator.initiate(constructorParams);
+  const result = agentInitiator.initiate(constructorParams, {
+    tag: 'anonymous',
+  });
 
   if (result.tag !== 'ok') {
     throw new Error(
@@ -915,23 +919,25 @@ function testInvoke(
     multimodal,
   );
 
-  resolvedAgent.invoke(methodName, dataValue).then((invokeResult) => {
-    const resultDataValue =
-      invokeResult.tag === 'ok'
-        ? invokeResult.val
-        : (() => {
-            throw new Error(
-              'Test failure: ' + JSON.stringify(invokeResult.val),
-            );
-          })();
+  resolvedAgent
+    .invoke(methodName, dataValue, { tag: 'anonymous' })
+    .then((invokeResult) => {
+      const resultDataValue =
+        invokeResult.tag === 'ok'
+          ? invokeResult.val
+          : (() => {
+              throw new Error(
+                'Test failure: ' + JSON.stringify(invokeResult.val),
+              );
+            })();
 
-    // Unless it is an RPC call, we don't really need to deserialize the result
-    // But to ensure the data-value returned above corresponds to the original input
-    // we deserialize and assert if the input is same as output.
-    const result = deserializeReturnValue(methodName, resultDataValue);
+      // Unless it is an RPC call, we don't really need to deserialize the result
+      // But to ensure the data-value returned above corresponds to the original input
+      // we deserialize and assert if the input is same as output.
+      const result = deserializeReturnValue(methodName, resultDataValue);
 
-    expect(result).toEqual(Either.right(expectedOutput));
-  });
+      expect(result).toEqual(Either.right(expectedOutput));
+    });
 }
 
 function createInputDataValue(
@@ -1050,12 +1056,18 @@ function deserializeReturnValue(
     throw new Error(`Unsupported return type for method ${methodName}`);
   }
 
-  const result = deserializeDataValue(returnValue, [
+  const result = deserializeDataValue(
+    returnValue,
+    [
+      {
+        name: 'return-value',
+        type: returnTypeAnalysedType,
+      },
+    ],
     {
-      name: 'return-value',
-      type: returnTypeAnalysedType,
+      tag: 'anonymous',
     },
-  ]);
+  );
 
   // typescript compiles even if you don't index it by 0
   // any[] === any

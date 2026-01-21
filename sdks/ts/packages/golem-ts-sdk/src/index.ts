@@ -65,7 +65,7 @@ async function initialize(
     );
   }
 
-  const initiateResult = initiator.val.initiate(input);
+  const initiateResult = initiator.val.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = Option.some(initiateResult.val);
@@ -85,7 +85,7 @@ async function invoke(
     );
   }
 
-  const result = await resolvedAgent.val.invoke(methodName, input);
+  const result = await resolvedAgent.val.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
     return result.val;
@@ -152,7 +152,10 @@ async function load(bytes: Uint8Array): Promise<void> {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = initiator.val.initiate(agentParameters);
+  // TODO; pass principal?
+  const initiateResult = initiator.val.initiate(agentParameters, {
+    tag: 'anonymous',
+  });
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;

@@ -18,6 +18,7 @@ import {
   AgentConstructor,
   AgentMethod,
   AgentMode,
+  Principal,
 } from 'golem:agent/common';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
@@ -311,10 +312,11 @@ export function agent(options?: AgentDecoratorOptions) {
     );
 
     AgentInitiatorRegistry.register(agentTypeName, {
-      initiate: (constructorInput: DataValue) => {
+      initiate: (constructorInput: DataValue, principal: Principal) => {
         const deserializedConstructorArgs = deserializeDataValue(
           constructorInput,
           constructorParamTypes,
+          principal,
         );
 
         if (Either.isLeft(deserializedConstructorArgs)) {
