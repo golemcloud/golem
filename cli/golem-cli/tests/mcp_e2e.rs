@@ -399,7 +399,7 @@ mod tests {
 
             let result = client
                 .read_resource(uri)
-                .expect(&format!("Failed to read resource: {}", uri));
+                .unwrap_or_else(|e| panic!("Failed to read resource {}: {}", uri, e));
 
             // Should return contents
             let contents = result.get("contents");
