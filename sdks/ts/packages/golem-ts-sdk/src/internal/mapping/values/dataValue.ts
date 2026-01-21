@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TypeInfoInternal } from '../../typeInfoInternal';
+import {
+  isOptionalWithQuestionMark,
+  TypeInfoInternal,
+} from '../../typeInfoInternal';
 
 import * as Either from '../../../newTypes/either';
 import * as WitValue from '../../mapping/values/WitValue';
@@ -76,6 +79,10 @@ export function deserializeDataValue(
           const parameterType = parameterDetail.type;
 
           if (dataValueElementIdx >= elementsCount) {
+            if (isOptionalWithQuestionMark(parameterType)) {
+              return Either.right(undefined);
+            }
+
             throw new Error(
               `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
             );

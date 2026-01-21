@@ -23,6 +23,7 @@ import { AnalysedType } from './mapping/types/AnalysedType';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { ParameterDetail } from './mapping/values/dataValue';
 import * as Either from '../newTypes/either';
+import { TaggedUnion } from './mapping/types/taggedUnion';
 
 // An internal representation of a type
 // This type can represent the type of a constructor parameter,
@@ -39,6 +40,18 @@ export type TypeInfoInternal =
       types: ParameterDetail[];
       tsType: Type.Type;
     };
+
+export function isOptionalWithQuestionMark(
+  typeInfoInternal: TypeInfoInternal,
+): boolean {
+  if (typeInfoInternal.tsType.kind === 'union') {
+    return typeInfoInternal.tsType.unionTypes.some(
+      (t) => t.kind === 'undefined' || t.kind === 'null',
+    );
+  }
+
+  return false;
+}
 
 // Except for multimodal, all types can be converted to ElementSchema
 export function convertTypeInfoToElementSchema(
