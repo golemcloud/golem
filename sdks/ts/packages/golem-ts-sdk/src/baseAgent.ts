@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType } from 'golem:agent/common';
+import { AgentType, Principal } from 'golem:agent/common';
 import { AgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
@@ -141,7 +141,7 @@ export class BaseAgent {
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
-    ...args: ConstructorParameters<T>
+    ...args: RemovePrincipal<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -205,3 +205,12 @@ export type RemoteMethod<Args extends any[], R> = {
   trigger: (...args: Args) => void;
   schedule: (ts: Datetime, ...args: Args) => void;
 };
+
+type RemovePrincipal<T extends readonly unknown[]> = T extends readonly [
+  infer H,
+  ...infer R,
+]
+  ? [H] extends [Principal]
+    ? RemovePrincipal<R>
+    : [H, ...RemovePrincipal<R>]
+  : [];
