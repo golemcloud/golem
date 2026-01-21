@@ -467,7 +467,7 @@ pub async fn run_mcp_server(port: u16) -> Result<()> {
     let server = GolemMcpServer::new()?;
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
 
-    eprintln!("{} running MCP Server at port {}", command_name(), port);
+    info!("{} running MCP Server at port {}", command_name(), port);
 
     // Create HTTP transport with session manager
     let session_manager: Arc<LocalSessionManager> = Arc::new(LocalSessionManager::default());
