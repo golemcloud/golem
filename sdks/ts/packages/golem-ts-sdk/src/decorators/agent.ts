@@ -53,7 +53,6 @@ export type AgentDecoratorOptions = {
   mount?: string;
   cors?: string[];
   auth?: boolean;
-  headers?: Record<string, string>;
   webhookSuffix?: string;
 };
 

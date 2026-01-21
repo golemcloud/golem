@@ -20,7 +20,6 @@ use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
-use golem_registry_service::repo::http_api_definition::DbHttpApiDefinitionRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -86,7 +85,6 @@ async fn deps(db: &SqliteDb) -> Deps {
         environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
-        http_api_definition_repo: Box::new(DbHttpApiDefinitionRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
         deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
@@ -140,11 +138,6 @@ async fn test_environment_update_concurrently(deps: &Deps) {
 #[test]
 async fn test_component_stage(deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
-}
-
-#[test]
-async fn test_http_api_definition_stage(deps: &Deps) {
-    crate::repo::common::test_http_api_definition_stage(deps).await;
 }
 
 #[test]

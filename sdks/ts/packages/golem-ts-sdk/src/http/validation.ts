@@ -106,10 +106,8 @@ function collectHttpEndpointVariables(
   }
 
   for (const segment of endpoint.pathSuffix) {
-    for (const node of segment.concat) {
-      if (node.tag === 'path-variable') {
-        vars.add(node.val.variableName);
-      }
+    if (segment.tag === 'path-variable') {
+      vars.add(segment.val.variableName);
     }
   }
 
@@ -137,14 +135,12 @@ function validateNoForeignEndpointVariables(
   }
 
   for (const segment of endpoint.pathSuffix) {
-    for (const node of segment.concat) {
-      if (node.tag === 'path-variable') {
-        const name = node.val.variableName;
-        if (!methodVars.has(name)) {
-          throw new Error(
-            `HTTP endpoint path variable "${name}" is not defined in method input parameters.`,
-          );
-        }
+    if (segment.tag === 'path-variable') {
+      const name = segment.val.variableName;
+      if (!methodVars.has(name)) {
+        throw new Error(
+          `HTTP endpoint path variable "${name}" is not defined in method input parameters.`,
+        );
       }
     }
   }
@@ -160,27 +156,16 @@ function validateMountVariablesExistInConstructor(
   agentMount: HttpMountDetails,
   constructorVars: Set<string>,
 ) {
-  for (const { headerName, variableName } of agentMount.headerVars) {
-    if (!constructorVars.has(variableName)) {
-      throw new Error(
-        `HTTP mount header variable "${variableName}" (from header "${headerName}") ` +
-          `is not defined in the agent constructor.`,
-      );
-    }
-  }
-
   for (const [segmentIndex, segment] of agentMount.pathPrefix.entries()) {
-    for (const node of segment.concat) {
-      if (node.tag === 'path-variable') {
-        const variableName = node.val.variableName;
+    if (segment.tag === 'path-variable') {
+      const variableName = segment.val.variableName;
 
-        if (!constructorVars.has(variableName)) {
-          throw new Error(
-            `HTTP mount path variable "${variableName}" ` +
-              `(in path segment ${segmentIndex}) ` +
-              `is not defined in the agent constructor.`,
-          );
-        }
+      if (!constructorVars.has(variableName)) {
+        throw new Error(
+          `HTTP mount path variable "${variableName}" ` +
+            `(in path segment ${segmentIndex}) ` +
+            `is not defined in the agent constructor.`,
+        );
       }
     }
   }
@@ -196,7 +181,7 @@ function validateConstructorVarsAreSatisfied(
     if (!providedVars.has(constructorVar)) {
       throw new Error(
         `Agent constructor variable "${constructorVar}" ` +
-          `is not provided by the HTTP mount (path or headers).`,
+          `is not provided by the HTTP mount path.`,
       );
     }
   }
@@ -205,15 +190,9 @@ function validateConstructorVarsAreSatisfied(
 function collectHttpMountVariables(agentMount: HttpMountDetails): Set<string> {
   const vars = new Set<string>();
 
-  for (const { variableName } of agentMount.headerVars) {
-    vars.add(variableName);
-  }
-
   for (const segment of agentMount.pathPrefix) {
-    for (const node of segment.concat) {
-      if (node.tag === 'path-variable') {
-        vars.add(node.val.variableName);
-      }
+    if (segment.tag === 'path-variable') {
+      vars.add(segment.val.variableName);
     }
   }
 

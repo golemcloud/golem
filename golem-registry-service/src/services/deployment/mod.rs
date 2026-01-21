@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod rib;
 mod routes;
 mod write;
 
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};
 
-use super::http_api_definition::HttpApiDefinitionError;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
@@ -73,7 +71,6 @@ error_forwarding!(
     RepoError,
     EnvironmentError,
     ApplicationError,
-    HttpApiDefinitionError,
 );
 
 pub struct DeploymentService {

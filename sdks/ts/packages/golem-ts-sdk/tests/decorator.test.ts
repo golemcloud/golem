@@ -861,20 +861,12 @@ describe('Http Agent class', () => {
     expect(simpleHttpAgent.httpMount).toBeDefined();
     expect(simpleHttpAgent.httpMount?.pathPrefix).toEqual([
       {
-        concat: [
-          {
-            tag: 'literal',
-            val: 'chats',
-          },
-        ],
+        tag: 'literal',
+        val: 'chats',
       },
       {
-        concat: [
-          {
-            tag: 'system-variable',
-            val: 'agent-type',
-          },
-        ],
+        tag: 'system-variable',
+        val: 'agent-type',
       },
     ]);
   });
@@ -902,22 +894,14 @@ describe('Http Agent class', () => {
         headerVars: [],
         pathSuffix: [
           {
-            concat: [
-              {
-                tag: 'literal',
-                val: 'greet',
-              },
-            ],
+            tag: 'literal',
+            val: 'greet',
           },
           {
-            concat: [
-              {
-                tag: 'path-variable',
-                val: {
-                  variableName: 'name',
-                },
-              },
-            ],
+            tag: 'path-variable',
+            val: {
+              variableName: 'name',
+            },
           },
         ],
       },
@@ -932,90 +916,53 @@ describe('Http Agent class', () => {
 
     const expectedPathPrefix = [
       {
-        concat: [
-          {
-            tag: 'literal',
-            val: 'chats',
-          },
-        ],
+        tag: 'literal',
+        val: 'chats',
       },
       {
-        concat: [
-          {
-            tag: 'system-variable',
-            val: 'agent-type',
-          },
-        ],
+        tag: 'system-variable',
+        val: 'agent-type',
       },
       {
-        concat: [
-          {
-            tag: 'path-variable',
-            val: {
-              variableName: 'foo',
-            },
-          },
-        ],
+        tag: 'path-variable',
+        val: {
+          variableName: 'foo',
+        },
       },
       {
-        concat: [
-          {
-            tag: 'path-variable',
-            val: {
-              variableName: 'bar',
-            },
-          },
-        ],
+        tag: 'path-variable',
+        val: {
+          variableName: 'bar',
+        },
       },
     ];
 
     const expectedWebhookSuffix = [
       {
-        concat: [
-          {
-            tag: 'system-variable',
-            val: 'agent-type',
-          },
-        ],
+        tag: 'system-variable',
+        val: 'agent-type',
       },
       {
-        concat: [
-          {
-            tag: 'literal',
-            val: 'events',
-          },
-        ],
+        tag: 'literal',
+        val: 'events',
       },
       {
-        concat: [
-          {
-            tag: 'path-variable',
-            val: {
-              variableName: 'foo',
-            },
-          },
-        ],
+        tag: 'path-variable',
+        val: {
+          variableName: 'foo',
+        },
       },
       {
-        concat: [
-          {
-            tag: 'path-variable',
-            val: {
-              variableName: 'bar',
-            },
-          },
-        ],
+        tag: 'path-variable',
+        val: {
+          variableName: 'bar',
+        },
       },
     ];
 
     expect(simpleHttpAgent.httpMount).toBeDefined();
     expect(simpleHttpAgent.httpMount).toEqual({
       pathPrefix: expectedPathPrefix,
-      queryVars: [],
-      headerVars: [
-        { headerName: 'X-Foo', variableName: 'foo' },
-        { headerName: 'X-Bar', variableName: 'bar' },
-      ],
       authDetails: { required: true },
       phantomAgent: false,
       corsOptions: {
@@ -1057,12 +1004,8 @@ describe('Http Agent class', () => {
         headerVars: [],
         pathSuffix: [
           {
-            concat: [
-              {
-                tag: 'literal',
-                val: 'greet',
-              },
-            ],
+            tag: 'literal',
+            val: 'greet',
           },
         ],
       },
@@ -1094,12 +1037,8 @@ describe('Http Agent class', () => {
         ],
         pathSuffix: [
           {
-            concat: [
-              {
-                tag: 'literal',
-                val: 'greet',
-              },
-            ],
+            tag: 'literal',
+            val: 'greet',
           },
         ],
       },
@@ -1122,12 +1061,8 @@ describe('Http Agent class', () => {
         headerVars: [],
         pathSuffix: [
           {
-            concat: [
-              {
-                tag: 'literal',
-                val: 'greet',
-              },
-            ],
+            tag: 'literal',
+            val: 'greet',
           },
         ],
       },
