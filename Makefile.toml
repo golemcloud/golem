@@ -334,9 +334,9 @@ args = [
 ]
 
 [tasks.build-sdk-ts]
-description = "Builds the TypeScript SDK if agent_guest.wasm doesn't exist"
+description = "Builds the TypeScript SDK if dist or agent_guest.wasm doesn't exist"
 cwd = "./sdks/ts"
-condition_script = ["test ! -f packages/golem-ts-sdk/wasm/agent_guest.wasm"]
+condition_script = ["test ! -d packages/golem-ts-sdk/dist || test ! -f packages/golem-ts-sdk/wasm/agent_guest.wasm"]
 script = '''
 pnpm clean
 pnpm install

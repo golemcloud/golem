@@ -23,7 +23,7 @@
       "promptHint": null
     },
     "dependencies": [],
-    "description": "",
+    "description": "Rust Code First BarAgent",
     "httpMount": null,
     "methods": [
       {
@@ -6222,7 +6222,7 @@
       "promptHint": null
     },
     "dependencies": [],
-    "description": "",
+    "description": "Rust Code First FooAgent",
     "httpMount": null,
     "methods": [
       {

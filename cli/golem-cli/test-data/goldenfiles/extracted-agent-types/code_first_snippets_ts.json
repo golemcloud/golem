@@ -1,7 +1,7 @@
 [
   {
     "constructor": {
-      "description": "Constructs the agent BarAgent",
+      "description": "TS Code First BarAgent",
       "inputSchema": {
         "elements": [
           {
@@ -82,7 +82,7 @@
       "promptHint": "Enter the following parameters: optionalStringType, optionalUnionType"
     },
     "dependencies": [],
-    "description": "Constructs the agent BarAgent",
+    "description": "TS Code First BarAgent",
     "httpMount": null,
     "methods": [
       {
@@ -5011,7 +5011,7 @@
   },
   {
     "constructor": {
-      "description": "Constructs the agent FooAgent",
+      "description": "TS Code First FooAgent",
       "inputSchema": {
         "elements": [
           {
@@ -5030,7 +5030,7 @@
       "promptHint": "Enter the following parameters: input"
     },
     "dependencies": [],
-    "description": "Constructs the agent FooAgent",
+    "description": "TS Code First FooAgent",
     "httpMount": null,
     "methods": [
       {
