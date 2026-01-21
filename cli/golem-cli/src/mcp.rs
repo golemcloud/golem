@@ -442,20 +442,33 @@ impl ServerHandler for GolemMcpServer {
     }
 }
 
-/// Start the MCP server on the specified port
+/// Start the MCP server on the specified port.
 ///
-/// This function blocks until the server is shut down (Ctrl+C).
+/// This is a **library entrypoint** used by callers that want to expose the
+/// Golem CLI via the MCP protocol. Calling this function does **not** add any
+/// command-line flags (such as `--serve` or `--serve-port`) on its own; it is
+/// up to the embedding binary or CLI layer to define such flags and call
+/// `run_mcp_server` with the appropriate port value.
+///
+/// This function blocks until the server is shut down (Ctrl+C or SIGTERM).
 ///
 /// # Arguments
 /// * `port` - Port to listen on
 ///
-/// # Example
+/// # Examples
+///
+/// Programmatic use from Rust:
+///
 /// ```no_run
 /// # use golem_cli::mcp::run_mcp_server;
 /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
 /// run_mcp_server(1232).await.unwrap();
 /// # });
 /// ```
+///
+/// A CLI wrapper (defined elsewhere) can parse flags such as `--serve` and
+/// `--serve-port` and delegate to this function. This module does not define
+/// or register those flags directly; it only provides the server runner.
 pub async fn run_mcp_server(port: u16) -> Result<()> {
     // Check if we're running as a child process (prevent recursion)
     if env::var(MCP_CHILD_ENV).is_ok() {
