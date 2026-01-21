@@ -83,7 +83,6 @@ fn default_timeout() -> u64 {
 
 /// Output from CLI tool execution
 ///
-/// # HUMAN-VALIDATED 2025-01-15
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutput {
     /// Standard output from the command
