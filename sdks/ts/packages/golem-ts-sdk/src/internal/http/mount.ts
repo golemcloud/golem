@@ -21,8 +21,6 @@ import { parsePath } from './path';
 import { rejectEmptyString, rejectQueryParamsInPath } from './validation';
 import { AgentDecoratorOptions } from '../../decorators/agent';
 
-export type HeaderVariables = Record<string, string>;
-
 export function getHttpMountDetails(
   agentDecoratorOptions?: AgentDecoratorOptions,
 ): HttpMountDetails | undefined {
@@ -32,12 +30,9 @@ export function getHttpMountDetails(
   rejectEmptyString(agentDecoratorOptions.mount, 'mount');
 
   const pathPrefix = parsePath(agentDecoratorOptions.mount);
-  const headerVars = parseHeaderVars(agentDecoratorOptions.headers);
 
   return {
     pathPrefix,
-    queryVars: [],
-    headerVars,
     authDetails: agentDecoratorOptions.auth
       ? { required: true }
       : { required: false },
@@ -57,18 +52,4 @@ function parseWebhook(webhook?: string): PathSegment[] {
   rejectEmptyString(webhook, 'webhook suffix');
 
   return parsePath(webhook);
-}
-
-function parseHeaderVars(headers?: HeaderVariables): HeaderVariable[] {
-  if (!headers) return [];
-
-  return Object.entries(headers).map(([headerName, variableName]) => {
-    rejectEmptyString(variableName, 'header value name');
-    rejectEmptyString(headerName, 'header variable name');
-
-    return {
-      headerName,
-      variableName,
-    };
-  });
 }
