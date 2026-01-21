@@ -35,10 +35,10 @@ curl -X POST http://127.0.0.1:1232/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 
-# Call a tool (e.g., get help)
+# Call a tool (e.g., get help for the `component` command)
 curl -X POST http://127.0.0.1:1232/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"component","arguments":{"args":["--help"]}}}'
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"golem-cli.component","arguments":{"args":["--help"]}}}'
 ```
 
 ## Developing Golem
