@@ -33,14 +33,14 @@ pub trait CompiledComponentService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError>;
     async fn put(
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError>;
 }
@@ -106,8 +106,8 @@ impl DefaultCompiledComponentService {
         Self { blob_storage }
     }
 
-    fn key(component_id: ComponentId, component_version: ComponentRevision) -> PathBuf {
-        Path::new(&component_id.to_string()).join(format!("{component_version}.cwasm"))
+    fn key(component_id: ComponentId, component_revision: ComponentRevision) -> PathBuf {
+        Path::new(&component_id.to_string()).join(format!("{component_revision}.cwasm"))
     }
 }
 
@@ -117,7 +117,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
         match self
@@ -126,7 +126,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 "compiled_component",
                 "get",
                 BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_version),
+                &Self::key(component_id, component_revision),
             )
             .await
         {
@@ -141,7 +141,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                         Component::deserialize(engine, &bytes).map_err(|err| {
                             WorkerExecutorError::component_download_failed(
                                 component_id,
-                                component_version,
+                                component_revision,
                                 format!("Could not deserialize compiled component: {err}"),
                             )
                         })?
@@ -161,7 +161,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             }
             Err(err) => Err(WorkerExecutorError::component_download_failed(
                 component_id,
-                component_version,
+                component_revision,
                 format!("Could not download compiled component: {err}"),
             )),
         }
@@ -171,7 +171,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError> {
         let bytes = component
@@ -182,14 +182,14 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 "compiled_component",
                 "put",
                 BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_version),
+                &Self::key(component_id, component_revision),
                 &bytes,
             )
             .await
             .map_err(|err| {
                 WorkerExecutorError::component_download_failed(
                     component_id,
-                    component_version,
+                    component_revision,
                     format!("Could not store compiled component: {err}"),
                 )
             })
@@ -216,7 +216,7 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
         &self,
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
-        _component_version: ComponentRevision,
+        _component_revision: ComponentRevision,
         _engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
         Ok(None)
@@ -226,7 +226,7 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
         &self,
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
-        _component_version: ComponentRevision,
+        _component_revision: ComponentRevision,
         _component: &Component,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())

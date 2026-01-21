@@ -794,7 +794,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Level::INFO,
             "manual_update",
             worker_id = %self.owned_worker_id.worker_id,
-            target_version = %target_revision,
+            target_revision = %target_revision,
             agent_type = self.parent
                 .agent_id
                 .as_ref()
@@ -974,12 +974,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Records an attempted worker update as failed
     async fn fail_update(
         &self,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         error: String,
     ) -> CommandOutcome {
         self.store
             .data()
-            .on_worker_update_failed(target_version, Some(error))
+            .on_worker_update_failed(target_revision, Some(error))
             .await;
         CommandOutcome::Continue
     }

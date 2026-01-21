@@ -240,22 +240,22 @@ impl UpdateManagement for DebugContext {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         details: Option<String>,
     ) {
         self.durable_ctx
-            .on_worker_update_failed(target_version, details)
+            .on_worker_update_failed(target_revision, details)
             .await
     }
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginPriority>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
             .await
     }
 }
