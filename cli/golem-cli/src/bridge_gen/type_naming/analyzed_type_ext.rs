@@ -47,12 +47,12 @@ fn can_be_named(typ: &AnalysedType) -> bool {
         | AnalysedType::Result(_)
         | AnalysedType::Option(_)
         | AnalysedType::Enum(_)
+        | AnalysedType::Flags(_)
         | AnalysedType::Record(_)
         | AnalysedType::Tuple(_)
         | AnalysedType::List(_)
         | AnalysedType::Handle(_) => true,
-        AnalysedType::Flags(_)
-        | AnalysedType::Str(_)
+        AnalysedType::Str(_)
         | AnalysedType::Chr(_)
         | AnalysedType::F64(_)
         | AnalysedType::F32(_)
@@ -71,7 +71,7 @@ fn can_be_named(typ: &AnalysedType) -> bool {
 pub(super) trait AnalysedTypeExt {
     fn is_path_leaf_type(&self) -> bool;
 
-    fn path_elem_type(&self) -> Option<&AnalysedType>;
+    fn as_path_elem_type(&self) -> Option<&AnalysedType>;
 
     fn can_be_named(&self) -> bool;
 }
@@ -81,7 +81,7 @@ impl AnalysedTypeExt for AnalysedType {
         is_path_leaf_type(self)
     }
 
-    fn path_elem_type(&self) -> Option<&AnalysedType> {
+    fn as_path_elem_type(&self) -> Option<&AnalysedType> {
         (!self.is_path_leaf_type()).then_some(self)
     }
 
@@ -95,8 +95,8 @@ impl AnalysedTypeExt for Option<AnalysedType> {
         self.as_ref().map_or(true, AnalysedType::is_path_leaf_type)
     }
 
-    fn path_elem_type(&self) -> Option<&AnalysedType> {
-        self.as_ref().and_then(AnalysedType::path_elem_type)
+    fn as_path_elem_type(&self) -> Option<&AnalysedType> {
+        self.as_ref().and_then(AnalysedType::as_path_elem_type)
     }
 
     fn can_be_named(&self) -> bool {
@@ -109,8 +109,8 @@ impl AnalysedTypeExt for Option<Box<AnalysedType>> {
         self.as_ref().map_or(true, |typ| typ.is_path_leaf_type())
     }
 
-    fn path_elem_type(&self) -> Option<&AnalysedType> {
-        self.as_ref().and_then(|typ| typ.path_elem_type())
+    fn as_path_elem_type(&self) -> Option<&AnalysedType> {
+        self.as_ref().and_then(|typ| typ.as_path_elem_type())
     }
 
     fn can_be_named(&self) -> bool {

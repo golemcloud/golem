@@ -32,8 +32,8 @@ mod tests;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeName {
-    name: String,
-    owner: Option<String>,
+    pub name: String,
+    pub owner: Option<String>,
 }
 
 impl Display for TypeName {
@@ -70,15 +70,25 @@ impl TypeNaming {
         type_naming
     }
 
+    pub fn type_name(&self, typ: &AnalysedType) -> Option<&TypeName> {
+        self.types.get(typ)
+    }
+
+    pub fn types(&self) -> impl Iterator<Item = (&AnalysedType, &TypeName)> {
+        self.types.iter()
+    }
+
     fn collect_all_wit_types(&mut self, agent_type: &AgentType) {
         let mut builder = Builder::new();
 
         self.collect_wit_types_in_data_schema(&mut builder, &agent_type.constructor.input_schema);
+
         for method in &agent_type.methods {
             builder.set_root_owner(RootOwner::MethodInput {
                 method_name: method.name.clone(),
             });
             self.collect_wit_types_in_data_schema(&mut builder, &method.input_schema);
+
             builder.set_root_owner(RootOwner::MethodOutput {
                 method_name: method.name.clone(),
             });
@@ -119,7 +129,7 @@ impl TypeNaming {
         match typ {
             AnalysedType::Variant(variant) => {
                 for case in &variant.cases {
-                    if let Some(typ) = case.typ.path_elem_type() {
+                    if let Some(typ) = case.typ.as_path_elem_type() {
                         builder.push(TypeLocationPath::VariantCase {
                             name: variant.name.clone(),
                             owner: variant.owner.clone(),
@@ -128,11 +138,13 @@ impl TypeNaming {
                         });
                         self.collect_analysed_type(builder, typ);
                         builder.pop();
+                    } else if let Some(typ) = &case.typ {
+                        self.collect_analysed_type(builder, typ);
                     }
                 }
             }
             AnalysedType::Result(result) => {
-                if let Some(ok) = result.ok.path_elem_type() {
+                if let Some(ok) = result.ok.as_path_elem_type() {
                     builder.push(TypeLocationPath::ResultOk {
                         name: result.name.clone(),
                         owner: result.owner.clone(),
@@ -140,8 +152,11 @@ impl TypeNaming {
                     });
                     self.collect_analysed_type(builder, ok);
                     builder.pop()
+                } else if let Some(ok) = &result.ok {
+                    self.collect_analysed_type(builder, ok);
                 }
-                if let Some(err) = result.err.path_elem_type() {
+
+                if let Some(err) = result.err.as_path_elem_type() {
                     builder.push(TypeLocationPath::ResultErr {
                         name: result.name.clone(),
                         owner: result.owner.clone(),
@@ -149,10 +164,12 @@ impl TypeNaming {
                     });
                     self.collect_analysed_type(builder, err);
                     builder.pop()
+                } else if let Some(err) = &result.err {
+                    self.collect_analysed_type(builder, err);
                 }
             }
             AnalysedType::Option(option) => {
-                if let Some(inner) = option.inner.path_elem_type() {
+                if let Some(inner) = option.inner.as_path_elem_type() {
                     builder.push(TypeLocationPath::Option {
                         name: option.name.clone(),
                         owner: option.owner.clone(),
@@ -160,11 +177,13 @@ impl TypeNaming {
                     });
                     self.collect_analysed_type(builder, inner);
                     builder.pop();
+                } else {
+                    self.collect_analysed_type(builder, &option.inner);
                 }
             }
             AnalysedType::Record(record) => {
                 for field in &record.fields {
-                    if let Some(typ) = field.typ.path_elem_type() {
+                    if let Some(typ) = field.typ.as_path_elem_type() {
                         builder.push(TypeLocationPath::RecordField {
                             name: record.name.clone(),
                             owner: record.owner.clone(),
@@ -173,12 +192,14 @@ impl TypeNaming {
                         });
                         self.collect_analysed_type(builder, &typ);
                         builder.pop();
+                    } else {
+                        self.collect_analysed_type(builder, &field.typ);
                     }
                 }
             }
             AnalysedType::Tuple(tuple) => {
                 for (idx, item) in tuple.items.iter().enumerate() {
-                    if let Some(typ) = item.path_elem_type() {
+                    if let Some(typ) = item.as_path_elem_type() {
                         builder.push(TypeLocationPath::TupleItem {
                             name: tuple.name.clone(),
                             owner: tuple.owner.clone(),
@@ -187,11 +208,13 @@ impl TypeNaming {
                         });
                         self.collect_analysed_type(builder, typ);
                         builder.pop();
+                    } else {
+                        self.collect_analysed_type(builder, item);
                     }
                 }
             }
             AnalysedType::List(list) => {
-                if let Some(inner) = list.inner.path_elem_type() {
+                if let Some(inner) = list.inner.as_path_elem_type() {
                     builder.push(TypeLocationPath::List {
                         name: list.name.clone(),
                         owner: list.owner.clone(),
@@ -199,6 +222,8 @@ impl TypeNaming {
                     });
                     self.collect_analysed_type(builder, inner);
                     builder.pop();
+                } else {
+                    self.collect_analysed_type(builder, &list.inner);
                 }
             }
             AnalysedType::Enum(_)
@@ -307,9 +332,13 @@ impl TypeNaming {
                 None => "".to_string(),
             };
             for i in (0..len).rev() {
+                let subsegments = &segments[i];
+                if subsegments.is_empty() {
+                    continue;
+                }
                 candidate = format!(
                     "{}{}",
-                    segments[i].iter().map(|s| s.to_pascal_case()).join(""),
+                    subsegments.iter().map(|s| s.to_pascal_case()).join(""),
                     candidate
                 );
                 let type_name = TypeName {

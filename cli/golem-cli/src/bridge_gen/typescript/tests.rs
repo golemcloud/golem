@@ -223,13 +223,8 @@ fn ts_counter_agent() -> GeneratedPackage {
         mode: AgentMode::Durable,
         http_mount: None,
     };
-    let dir = TempDir::new().unwrap();
 
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
-
-    GeneratedPackage { dir }
+    GeneratedPackage::new(agent_type)
 }
 
 #[test_dep(tagged_as = "ts_code_first_snippets_foo_agent")]
