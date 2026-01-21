@@ -55,8 +55,7 @@ export type ParameterDetail = {
  * @param paramTypes A data value is ever need to be deserialized only for method parameters or constructor parameters
  * (incoming values to dynamic invoke). Hence, it always expects a list of proper parameter names and its type info
  *
- * @param principal The principal of the caller - needed for deserializing principal types. Note that dataValue may not correspond to the paramTypes
- *  since principal values are not represented in dataValue. It is forbidden to have principal types in DataValue
+ * @param principal The principal of the caller - required to pass through whenever the required parameter is a Principal, as this will not exist in DataValue
  *
  * Implementation detail: The same functionality can be used to deserialize the result of the dynamic invoke - mainly
  * for testing purpose. In this case a fake parameter name can be provided when `dataValue.tag` is `tuple`.
