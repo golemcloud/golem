@@ -16,7 +16,7 @@ message WorkerMetadata {
   golem.common.AccountId created_by = 2;
   map<string, string> env = 4;
   WorkerStatus status = 5;
-  uint64 component_version = 6;
+  uint64 component_revision = 6;
   uint32 retry_count = 7;
   uint64 pending_invocation_count = 8;
   repeated UpdateRecord updates = 9;
@@ -34,7 +34,7 @@ message WorkerMetadata {
 
 message UpdateRecord {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   oneof update {
     PendingUpdate pending = 3;
     FailedUpdate failed = 4;

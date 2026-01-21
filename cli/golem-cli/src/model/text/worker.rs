@@ -115,7 +115,7 @@ impl MessageWithFields for WorkerGetView {
                         "{}",
                         format!(
                             "{}: Pending update to {}",
-                            update.timestamp, update.target_version
+                            update.timestamp, update.target_revision
                         )
                         .bright_black()
                     );
@@ -126,7 +126,7 @@ impl MessageWithFields for WorkerGetView {
                         "{}",
                         format!(
                             "{}: Successful update to {}",
-                            update.timestamp, update.target_version
+                            update.timestamp, update.target_revision
                         )
                         .green()
                         .bold()
@@ -139,7 +139,7 @@ impl MessageWithFields for WorkerGetView {
                         format!(
                             "{}: Failed update to {}{}",
                             update.timestamp,
-                            update.target_version,
+                            update.target_revision,
                             update
                                 .details
                                 .as_ref()

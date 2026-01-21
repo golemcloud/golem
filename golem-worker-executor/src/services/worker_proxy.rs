@@ -83,7 +83,7 @@ pub trait WorkerProxy: Send + Sync {
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         mode: UpdateMode,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
@@ -405,11 +405,11 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         mode: UpdateMode,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
-        debug!("Updating remote worker to version {target_version} in {mode:?} mode");
+        debug!("Updating remote worker to revision {target_revision} in {mode:?} mode");
 
         let auth_ctx = self.get_auth_ctx(caller_account_id);
 
@@ -418,7 +418,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("update_worker", move |client| {
                 Box::pin(client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(owned_worker_id.worker_id().into()),
-                    target_version: target_version.into(),
+                    target_revision: target_revision.into(),
                     mode: mode as i32,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))

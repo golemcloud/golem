@@ -116,7 +116,7 @@ impl WorkerProxy for TestWorkerProxy {
     async fn update(
         &self,
         _owned_worker_id: &OwnedWorkerId,
-        _target_version: ComponentRevision,
+        _target_revision: ComponentRevision,
         _mode: UpdateMode,
         _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {

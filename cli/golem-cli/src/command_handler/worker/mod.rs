@@ -861,7 +861,7 @@ impl WorkerCommandHandler {
             .await?;
 
         let target_revision = match target_revision {
-            Some(target_version) => target_version,
+            Some(target_revision) => target_revision,
             None => {
                 let Some(current_deployed_revision) = self
                     .ctx
@@ -1379,7 +1379,7 @@ impl WorkerCommandHandler {
         &self,
         component_id: &ComponentId,
         worker_name: &str,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
         loop {
@@ -1393,12 +1393,12 @@ impl WorkerCommandHandler {
                 let mut pending_count = 0;
                 match update_record {
                     UpdateRecord::PendingUpdate(details)
-                        if details.target_version == target_version =>
+                        if details.target_revision == target_revision =>
                     {
                         pending_count += 1;
                     }
                     UpdateRecord::SuccessfulUpdate(details)
-                        if details.target_version == target_version =>
+                        if details.target_revision == target_revision =>
                     {
                         match latest_success {
                             None => latest_success = Some(details),
@@ -1411,7 +1411,7 @@ impl WorkerCommandHandler {
                         }
                     }
                     UpdateRecord::FailedUpdate(details)
-                        if details.target_version == target_version =>
+                        if details.target_revision == target_revision =>
                     {
                         match latest_failure {
                             None => latest_failure = Some(details),
@@ -1433,8 +1433,8 @@ impl WorkerCommandHandler {
                     log_action(
                         "Agent update",
                         format!(
-                            "to version {} succeeded at {}",
-                            success.target_version.to_string().log_color_highlight(),
+                            "to revision {} succeeded at {}",
+                            success.target_revision.to_string().log_color_highlight(),
                             success.timestamp.to_string().log_color_highlight()
                         ),
                     );
@@ -1444,8 +1444,8 @@ impl WorkerCommandHandler {
                     log_error_action(
                         "Agent update",
                         format!(
-                            "to version {} succeeded at {}: {}",
-                            failure.target_version.to_string().log_color_highlight(),
+                            "to revision {} succeeded at {}: {}",
+                            failure.target_revision.to_string().log_color_highlight(),
                             failure.timestamp.to_string().log_color_highlight(),
                             error
                         ),

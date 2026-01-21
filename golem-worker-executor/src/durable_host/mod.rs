@@ -186,14 +186,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
 
         debug!(
-            "Worker {} starting replay from component version {}",
-            owned_worker_id.worker_id, worker_config.component_version_for_replay
+            "Worker {} starting replay from component revision {}",
+            owned_worker_id.worker_id, worker_config.component_revision_for_replay
         );
 
         let component_metadata = component_service
             .get_metadata(
                 owned_worker_id.component_id(),
-                Some(worker_config.component_version_for_replay),
+                Some(worker_config.component_revision_for_replay),
             )
             .await?;
 
@@ -1129,11 +1129,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         for event in replay_events {
             match event {
-                ReplayEvent::UpdateReplayed {
-                    new_revision: new_version,
-                } => {
-                    debug!("Updating worker state to component metadata version {new_version}");
-                    self.update_state_to_new_component_version(new_version)
+                ReplayEvent::UpdateReplayed { new_revision } => {
+                    debug!("Updating worker state to component metadata revision {new_revision}");
+                    self.update_state_to_new_component_revision(new_revision)
                         .await?;
                 }
                 ReplayEvent::ForkReplayed { new_phantom_id } => {
@@ -1156,7 +1154,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             debug!("Finalizing pending automatic update");
 
                             if let Err(error) = self
-                                .update_state_to_new_component_version(target_revision)
+                                .update_state_to_new_component_revision(target_revision)
                                 .await
                             {
                                 let stringified_error =
@@ -1206,20 +1204,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    pub async fn update_state_to_new_component_version(
+    pub async fn update_state_to_new_component_revision(
         &mut self,
-        new_version: ComponentRevision,
+        new_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
         let current_metadata = &self.state.component_metadata;
 
-        if new_version <= current_metadata.revision {
-            debug!("Update {new_version} was already applied, skipping");
+        if new_revision <= current_metadata.revision {
+            debug!("Update {new_revision} was already applied, skipping");
             return Ok(());
         };
 
         let new_metadata = self
             .component_service()
-            .get_metadata(self.owned_worker_id.component_id(), Some(new_version))
+            .get_metadata(self.owned_worker_id.component_id(), Some(new_revision))
             .await?;
 
         let mut current_files = self.state.files.write().await;
