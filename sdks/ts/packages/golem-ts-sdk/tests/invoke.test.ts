@@ -795,7 +795,7 @@ test('Invoke function that takes json unstructured-binary and returns json unstr
 
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
-test('Invoke method with optional parameter using ? syntax', () => {
+test('Invoke method with optional parameter using question syntax', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
