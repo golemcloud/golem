@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use super::GatewayBindingCompiled;
+use super::RouteBehaviour;
 use super::path_pattern::AllPathPatterns;
 use super::{CompiledRoute, SecuritySchemeDetails};
 use golem_common::model::http_api_definition::{
@@ -31,7 +31,7 @@ pub trait HttpApiRoute {
     fn security_scheme(&self) -> Option<SecuritySchemeId>;
     fn method(&self) -> &RouteMethod;
     fn path(&self) -> &AllPathPatterns;
-    fn binding(&self) -> &GatewayBindingCompiled;
+    fn binding(&self) -> &RouteBehaviour;
 }
 
 impl HttpApiRoute for CompiledRoute {
@@ -47,7 +47,7 @@ impl HttpApiRoute for CompiledRoute {
     fn path(&self) -> &AllPathPatterns {
         &self.path
     }
-    fn binding(&self) -> &GatewayBindingCompiled {
+    fn binding(&self) -> &RouteBehaviour {
         &self.binding
     }
 }
@@ -198,7 +198,7 @@ fn get_parameters<T: HttpApiRoute + ?Sized>(
     let mut header_params = Vec::new();
 
     match route.binding() {
-        GatewayBindingCompiled::Worker(worker) => {
+        RouteBehaviour::Worker(worker) => {
             if let Some(request) = worker
                 .idempotency_key_compiled
                 .as_ref()
@@ -232,7 +232,7 @@ fn get_parameters<T: HttpApiRoute + ?Sized>(
                 );
             }
         }
-        GatewayBindingCompiled::FileServer(file_server) => {
+        RouteBehaviour::FileServer(file_server) => {
             if let Some(request) = file_server
                 .worker_name_compiled
                 .rib_input
@@ -255,7 +255,7 @@ fn get_parameters<T: HttpApiRoute + ?Sized>(
                 );
             }
         }
-        GatewayBindingCompiled::HttpHandler(handler) => {
+        RouteBehaviour::HttpHandler(handler) => {
             if let Some(request) = handler.worker_name_compiled.rib_input.types.get("request") {
                 extract_parameters_from_record(
                     request,
@@ -289,8 +289,8 @@ fn get_parameters<T: HttpApiRoute + ?Sized>(
                 );
             }
         }
-        GatewayBindingCompiled::HttpCorsPreflight(_) => {}
-        GatewayBindingCompiled::SwaggerUi(_) => {}
+        RouteBehaviour::HttpCorsPreflight(_) => {}
+        RouteBehaviour::SwaggerUi(_) => {}
     }
 
     (path_params, query_params, header_params)
@@ -384,19 +384,19 @@ fn create_header_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::
 
 fn add_request_body<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
     match route.binding() {
-        GatewayBindingCompiled::Worker(worker) => {
+        RouteBehaviour::Worker(worker) => {
             if let Some(rb) = create_request_body(&worker.response_compiled.rib_input) {
                 operation.request_body = Some(openapiv3::ReferenceOr::Item(rb));
             }
         }
-        GatewayBindingCompiled::FileServer(file_server) => {
+        RouteBehaviour::FileServer(file_server) => {
             if let Some(rb) = create_request_body(&file_server.response_compiled.rib_input) {
                 operation.request_body = Some(openapiv3::ReferenceOr::Item(rb));
             }
         }
-        GatewayBindingCompiled::HttpHandler(_) => {}
-        GatewayBindingCompiled::HttpCorsPreflight(_) => {}
-        GatewayBindingCompiled::SwaggerUi(_) => {}
+        RouteBehaviour::HttpHandler(_) => {}
+        RouteBehaviour::HttpCorsPreflight(_) => {}
+        RouteBehaviour::SwaggerUi(_) => {}
     }
 }
 
@@ -523,7 +523,7 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
     Option<u16>,
 ) {
     match route.binding() {
-        GatewayBindingCompiled::Worker(worker) => {
+        RouteBehaviour::Worker(worker) => {
             if let Some(output_info) = &worker.response_compiled.rib_output
                 && let AnalysedType::Record(record) = &output_info.analysed_type
             {
@@ -549,7 +549,7 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
             }
             (DeterminedResponseBodySchema::Unknown, None, None)
         }
-        GatewayBindingCompiled::SwaggerUi(_) => {
+        RouteBehaviour::SwaggerUi(_) => {
             let schema = create_schema_from_analysed_type(&AnalysedType::Str(
                 golem_wasm::analysis::TypeStr {},
             ));
@@ -562,7 +562,7 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
                 Some(200),
             )
         }
-        GatewayBindingCompiled::HttpCorsPreflight(_) => {
+        RouteBehaviour::HttpCorsPreflight(_) => {
             let mut headers = IndexMap::new();
             let string_schema = openapiv3::Schema {
                 schema_data: Default::default(),

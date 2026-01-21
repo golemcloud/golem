@@ -515,7 +515,6 @@ class SimpleHttpAgent extends BaseAgent {
   mount: '/chats/{agent-type}/{foo}/{bar}',
   cors: ['https://app.acme.com', 'https://staging.acme.com'],
   auth: true,
-  headers: { 'X-Foo': 'foo', 'X-Bar': 'bar' },
   webhookSuffix: '/{agent-type}/events/{foo}/{bar}',
 })
 class ComplexHttpAgent extends BaseAgent {

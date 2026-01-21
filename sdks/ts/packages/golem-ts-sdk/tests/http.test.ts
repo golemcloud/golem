@@ -35,12 +35,8 @@ describe('getHttpMountDetails – basic behavior', () => {
 
     const result = getHttpMountDetails(opts)!;
 
-    expect(result.pathPrefix).toEqual([
-      { concat: [{ tag: 'literal', val: 'chats' }] },
-    ]);
+    expect(result.pathPrefix).toEqual([{ tag: 'literal', val: 'chats' }]);
 
-    expect(result.queryVars).toEqual([]);
-    expect(result.headerVars).toEqual([]);
     expect(result.authDetails).toEqual({ required: false });
     expect(result.phantomAgent).toBe(false);
     expect(result.corsOptions.allowedPatterns).toEqual([]);
@@ -51,48 +47,17 @@ describe('getHttpMountDetails – basic behavior', () => {
 describe('getHttpMountDetails – path variables', () => {
   it('parses system and user path variables', () => {
     const opts: AgentDecoratorOptions = {
-      mount: '/v{agent-version}/chats/{chatId}',
+      mount: '/{agent-version}/chats/{chatId}',
     };
 
     const result = getHttpMountDetails(opts)!;
 
     expect(result.pathPrefix).toEqual([
+      { tag: 'system-variable', val: 'agent-version' },
+      { tag: 'literal', val: 'chats' },
       {
-        concat: [
-          { tag: 'literal', val: 'v' },
-          { tag: 'system-variable', val: 'agent-version' },
-        ],
-      },
-      {
-        concat: [{ tag: 'literal', val: 'chats' }],
-      },
-      {
-        concat: [
-          {
-            tag: 'path-variable',
-            val: { variableName: 'chatId' },
-          },
-        ],
-      },
-    ]);
-  });
-
-  it('parses mixed path segment with variable and literal', () => {
-    const opts: AgentDecoratorOptions = {
-      mount: '/bar/{baz}abc',
-    };
-
-    const result = getHttpMountDetails(opts)!;
-
-    expect(result.pathPrefix).toEqual([
-      {
-        concat: [{ tag: 'literal', val: 'bar' }],
-      },
-      {
-        concat: [
-          { tag: 'path-variable', val: { variableName: 'baz' } },
-          { tag: 'literal', val: 'abc' },
-        ],
+        tag: 'path-variable',
+        val: { variableName: 'chatId' },
       },
     ]);
   });
@@ -102,18 +67,9 @@ describe('getHttpMountDetails – header variables', () => {
   it('parses header variables', () => {
     const opts: AgentDecoratorOptions = {
       mount: '/chats',
-      headers: {
-        'X-Request-Id': 'requestId',
-        'X-Tenant': 'tenant',
-      },
     };
 
     const result = getHttpMountDetails(opts)!;
-
-    expect(result.headerVars).toEqual([
-      { headerName: 'X-Request-Id', variableName: 'requestId' },
-      { headerName: 'X-Tenant', variableName: 'tenant' },
-    ]);
   });
 });
 
@@ -144,33 +100,10 @@ describe('getHttpMountDetails – webhook suffix', () => {
     const result = getHttpMountDetails(opts)!;
 
     expect(result.webhookSuffix).toEqual([
-      { concat: [{ tag: 'literal', val: 'webhook' }] },
+      { tag: 'literal', val: 'webhook' },
       {
-        concat: [
-          {
-            tag: 'path-variable',
-            val: { variableName: 'event' },
-          },
-        ],
-      },
-    ]);
-  });
-
-  it('parses webhook suffix with mixed literal and variable segment', () => {
-    const opts: AgentDecoratorOptions = {
-      mount: '/chats/{id}',
-      webhookSuffix: '/webhook/{event}Callback',
-    };
-
-    const result = getHttpMountDetails(opts)!;
-
-    expect(result.webhookSuffix).toEqual([
-      { concat: [{ tag: 'literal', val: 'webhook' }] },
-      {
-        concat: [
-          { tag: 'path-variable', val: { variableName: 'event' } },
-          { tag: 'literal', val: 'Callback' },
-        ],
+        tag: 'path-variable',
+        val: { variableName: 'event' },
       },
     ]);
   });
@@ -206,7 +139,7 @@ describe('getHttpMountDetails – validation errors', () => {
 
   it('rejects unclosed path variable', () => {
     expect(() => getHttpMountDetails({ mount: '/chats/{id' })).toThrow(
-      'Unclosed "{"',
+      'Path segment "{id" must be a whole variable like "{id}" and cannot mix literals and variables',
     );
   });
 });
@@ -223,19 +156,12 @@ describe('parseQuery', () => {
 });
 
 describe('validateHttpMountWithConstructor', () => {
-  function mount(
-    pathVars: string[] = [],
-    headerVars: string[] = [],
-  ): HttpMountDetails {
+  function mount(pathVars: string[] = []): HttpMountDetails {
     return {
       pathPrefix: pathVars.map((v) => ({
-        concat: [{ tag: 'path-variable', val: { variableName: v } }],
+        tag: 'path-variable',
+        val: { variableName: v },
       })),
-      headerVars: headerVars.map((v) => ({
-        headerName: `X-${v}`,
-        variableName: v,
-      })),
-      queryVars: [],
       authDetails: { required: false },
       phantomAgent: false,
       corsOptions: { allowedPatterns: [] },
@@ -260,32 +186,14 @@ describe('validateHttpMountWithConstructor', () => {
     ).not.toThrow();
   });
 
-  it('passes when all constructor variables are provided via header variables', () => {
-    const agentMount = mount([], ['tenant', 'requestId']);
-    const agentConstructor = constructorVars('tenant', 'requestId');
-
-    expect(() =>
-      validateHttpMountWithConstructor(agentMount, agentConstructor),
-    ).not.toThrow();
-  });
-
-  it('passes when constructor variables are split across path and headers', () => {
-    const agentMount = mount(['chatId'], ['tenant']);
+  it('fails when a constructor variable is not provided by the mount', () => {
+    const agentMount = mount(['chatId']);
     const agentConstructor = constructorVars('chatId', 'tenant');
 
     expect(() =>
       validateHttpMountWithConstructor(agentMount, agentConstructor),
-    ).not.toThrow();
-  });
-
-  it('fails when a constructor variable is not provided by the mount', () => {
-    const agentMount = mount(['chatId'], ['tenant']);
-    const agentConstructor = constructorVars('chatId', 'tenant', 'userId');
-
-    expect(() =>
-      validateHttpMountWithConstructor(agentMount, agentConstructor),
     ).toThrow(
-      'Agent constructor variable "userId" is not provided by the HTTP mount (path or headers).',
+      'Agent constructor variable "tenant" is not provided by the HTTP mount path.',
     );
   });
 
@@ -299,17 +207,6 @@ describe('validateHttpMountWithConstructor', () => {
       'HTTP mount path variable "chatId" (in path segment 0) is not defined in the agent constructor.',
     );
   });
-
-  it('fails when the mount refers to the header variables that are not part of the constructor', () => {
-    const agentMount = mount([], ['tenant']);
-    const agentConstructor = constructorVars();
-
-    expect(() =>
-      validateHttpMountWithConstructor(agentMount, agentConstructor),
-    ).toThrow(
-      'HTTP mount header variable "tenant" (from header "X-tenant") is not defined in the agent constructor.',
-    );
-  });
 });
 
 describe('validateHttpEndpoint', () => {
@@ -320,7 +217,8 @@ describe('validateHttpEndpoint', () => {
   ): HttpEndpointDetails {
     return {
       pathSuffix: pathVars.map((v) => ({
-        concat: [{ tag: 'path-variable', val: { variableName: v } }],
+        tag: 'path-variable',
+        val: { variableName: v },
       })),
       queryVars: queryVars.map((v) => ({
         queryParamName: v,
@@ -346,9 +244,7 @@ describe('validateHttpEndpoint', () => {
   const agentName = 'TestAgent';
 
   const httpMountDetails: HttpMountDetails = {
-    pathPrefix: [{ concat: [{ tag: 'literal', val: 'test' }] }],
-    headerVars: [],
-    queryVars: [],
+    pathPrefix: [{ tag: 'literal', val: 'test' }],
     authDetails: { required: false },
     phantomAgent: false,
     corsOptions: { allowedPatterns: [] },

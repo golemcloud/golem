@@ -15,7 +15,6 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
-use golem_common::model::Page;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
@@ -24,6 +23,7 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeploymentCreation, HttpApiDeploymentRevision, HttpApiDeploymentUpdate,
 };
 use golem_common::model::poem::NoContentResponse;
+use golem_common::model::{Page, UntypedJsonBody};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme};
@@ -316,43 +316,60 @@ impl HttpApiDeploymentsApi {
         domain: Path<Domain>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDeployment>> {
-        unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "get_http_api_deployment_in_deployment",
-        //     environment_id = environment_id.0.to_string(),
-        //     deployment_revision = deployment_revision.0.to_string(),
-        //     domain = domain.0.to_string(),
-        // );
+        let record = recorded_http_api_request!(
+            "get_http_api_deployment_in_deployment",
+            environment_id = environment_id.0.to_string(),
+            deployment_revision = deployment_revision.0.to_string(),
+            domain = domain.0.to_string(),
+        );
 
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        // let response = self
-        //     .get_http_api_deployment_in_deployment_internal(
-        //         environment_id.0,
-        //         deployment_revision.0,
-        //         domain.0,
-        //         auth,
-        //     )
-        //     .instrument(record.span.clone())
-        //     .await;
+        let response = self
+            .get_http_api_deployment_in_deployment_internal(
+                environment_id.0,
+                deployment_revision.0,
+                domain.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
 
-        // record.result(response)
+        record.result(response)
     }
 
-    // async fn get_http_api_deployment_in_deployment_internal(
-    //     &self,
-    //     environment_id: EnvironmentId,
-    //     deployment_revision: DeploymentRevision,
-    //     domain: Domain,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<HttpApiDeployment>> {
-    //     let http_api_definition = self
-    //         .http_api_deployment_service
-    //         .get_in_deployment_by_domain(environment_id, deployment_revision, &domain, &auth)
-    //         .await?;
+    async fn get_http_api_deployment_in_deployment_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        domain: Domain,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<HttpApiDeployment>> {
+        let http_api_definition = self
+            .http_api_deployment_service
+            .get_in_deployment_by_domain(environment_id, deployment_revision, &domain, &auth)
+            .await?;
 
-    //     Ok(Json(http_api_definition))
-    // }
+        Ok(Json(http_api_definition))
+    }
+
+    /// Get openapi spec of http api definition in the deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_revision/http-api-deployments/:domain/openapi",
+        method = "get",
+        operation_id = "get_openapi_of_http_api_deployment_in_deployment",
+        tag = ApiTags::Environment,
+        tag = ApiTags::Deployment,
+    )]
+    async fn get_openapi_of_http_api_deployment_in_deployment(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_revision: Path<DeploymentRevision>,
+        domain: Path<Domain>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<UntypedJsonBody>> {
+        unimplemented!()
+    }
 
     /// List http api deployment by domain in the environment
     #[oai(
@@ -408,38 +425,37 @@ impl HttpApiDeploymentsApi {
         deployment_revision: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
-        unimplemented!()
-        // let record = recorded_http_api_request!(
-        //     "list_http_api_deployments_in_deployment",
-        //     environment_id = environment_id.0.to_string(),
-        //     deployment_revision = deployment_revision.0.to_string(),
-        // );
+        let record = recorded_http_api_request!(
+            "list_http_api_deployments_in_deployment",
+            environment_id = environment_id.0.to_string(),
+            deployment_revision = deployment_revision.0.to_string(),
+        );
 
-        // let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        // let response = self
-        //     .list_http_api_deployments_in_deployment_internal(
-        //         environment_id.0,
-        //         deployment_revision.0,
-        //         auth,
-        //     )
-        //     .instrument(record.span.clone())
-        //     .await;
+        let response = self
+            .list_http_api_deployments_in_deployment_internal(
+                environment_id.0,
+                deployment_revision.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
 
-        // record.result(response)
+        record.result(response)
     }
 
-    // async fn list_http_api_deployments_in_deployment_internal(
-    //     &self,
-    //     environment_id: EnvironmentId,
-    //     deployment_revision: DeploymentRevision,
-    //     auth: AuthCtx,
-    // ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
-    //     let values = self
-    //         .http_api_deployment_service
-    //         .list_in_deployment(environment_id, deployment_revision, &auth)
-    //         .await?;
+    async fn list_http_api_deployments_in_deployment_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
+        let values = self
+            .http_api_deployment_service
+            .list_in_deployment(environment_id, deployment_revision, &auth)
+            .await?;
 
-    //     Ok(Json(Page { values }))
-    // }
+        Ok(Json(Page { values }))
+    }
 }

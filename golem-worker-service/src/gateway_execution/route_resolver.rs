@@ -30,7 +30,7 @@ use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::HttpCors;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
-use golem_service_base::custom_api::{GatewayBindingCompiled, SwaggerUiBindingCompiled};
+use golem_service_base::custom_api::{RouteBehaviour, SwaggerUiBindingCompiled};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -144,7 +144,7 @@ impl RouteResolver {
             .routes
             .iter()
             .filter_map(|r| match &r.binding {
-                GatewayBindingCompiled::HttpCorsPreflight(inner) => {
+                RouteBehaviour::HttpCorsPreflight(inner) => {
                     Some((r.path.clone(), inner.http_cors.clone()))
                 }
                 _ => None,
@@ -212,7 +212,7 @@ impl RouteResolver {
             compiled_routes
                 .iter()
                 .filter_map(|r| match &r.binding {
-                    GatewayBindingCompiled::SwaggerUi(inner) => {
+                    RouteBehaviour::SwaggerUi(inner) => {
                         Some((inner.http_api_definition_id, *inner.clone()))
                     }
                     _ => None,

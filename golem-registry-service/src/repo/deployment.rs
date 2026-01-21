@@ -14,12 +14,11 @@
 
 use super::model::BindFields;
 use super::model::deployment::{
-    CurrentDeploymentExtRevisionRecord, DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord,
+    CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord,
     DeploymentRevisionCreationRecord,
 };
 use super::model::deployment::{
-    DeploymentCompiledHttpApiDefinitionRouteRecord, DeploymentComponentRevisionRecord,
-    DeploymentDomainHttpApiDefinitionRecord, DeploymentHttpApiDefinitionRevisionRecord,
+    DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
 };
 use crate::repo::model::audit::RevisionAuditFields;
@@ -29,7 +28,6 @@ use crate::repo::model::deployment::{
     DeploymentIdentity, DeploymentRevisionRecord,
 };
 use crate::repo::model::hash::SqlBlake3Hash;
-use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -91,17 +89,17 @@ pub trait DeploymentRepo: Send + Sync {
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
 
-    async fn list_active_compiled_http_api_routes_for_domain(
+    async fn list_active_compiled_routes_for_domain(
         &self,
         domain: &str,
-    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
+    ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
 
-    async fn list_compiled_http_api_routes_for_http_api_definition(
+    async fn list_compiled_routes_for_domain_and_deployment(
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        http_api_definition_name: &str,
-    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
+        domain: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
 
     async fn get_deployment_agent_type(
         &self,
@@ -288,33 +286,33 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn list_active_compiled_http_api_routes_for_domain(
+    async fn list_active_compiled_routes_for_domain(
         &self,
         domain: &str,
-    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
+    ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>> {
         self.repo
-            .list_active_compiled_http_api_routes_for_domain(domain)
+            .list_active_compiled_routes_for_domain(domain)
             .instrument(Self::span_domain(domain))
             .await
     }
 
-    async fn list_compiled_http_api_routes_for_http_api_definition(
+    async fn list_compiled_routes_for_domain_and_deployment(
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        http_api_definition_name: &str,
-    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
+        domain: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>> {
         self.repo
-            .list_compiled_http_api_routes_for_http_api_definition(
+            .list_compiled_routes_for_domain_and_deployment(
                 environment_id,
                 deployment_revision_id,
-                http_api_definition_name,
+                domain,
             )
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
                 deployment_revision_id,
-                http_api_definition_name
+                domain
             ))
             .await
     }
@@ -624,9 +622,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 components: self
                     .get_deployed_components(environment_id, revision_id)
                     .await?,
-                http_api_definitions: self
-                    .get_deployed_http_api_definitions(environment_id, revision_id)
-                    .await?,
                 http_api_deployments: self
                     .get_deployed_http_api_deployments(environment_id, revision_id)
                     .await?,
@@ -678,25 +673,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     .await?
                 }
 
-                for definition in &deployment_creation.http_api_definitions {
-                    Self::create_deployment_http_api_definition_revision(tx, definition).await?
-                }
-
                 for deployment in &deployment_creation.http_api_deployments {
                     Self::create_deployment_http_api_deployment_revision(tx, deployment).await?
                 }
 
-                for domain_http_api_definition in &deployment_creation.domain_http_api_definitions {
-                    Self::create_deployment_domain_http_api_definition(
-                        tx,
-                        domain_http_api_definition,
-                    )
-                    .await?
-                }
-
-                for compiled_route in &deployment_creation.compiled_http_api_definition_routes {
-                    Self::create_deployment_compiled_http_api_definition_route(tx, compiled_route)
-                        .await?
+                for compiled_route in &deployment_creation.compiled_routes {
+                    Self::create_deployment_compiled_route(tx, compiled_route).await?
                 }
 
                 for registered_agent_type in &deployment_creation.registered_agent_types {
@@ -725,10 +707,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         .await
     }
 
-    async fn list_active_compiled_http_api_routes_for_domain(
+    async fn list_active_compiled_routes_for_domain(
         &self,
         domain: &str,
-    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
+    ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>> {
         self.with_ro("list_active_compiled_http_api_routes_for_domain")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -736,7 +718,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ac.account_id,
                         e.environment_id,
                         d.deployment_revision_id,
-                        r.http_api_definition_id,
+                        r.route_id,
                         FALSE as security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
@@ -746,60 +728,56 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.redirect_url AS security_scheme_redirect_url,
                         sr.scopes AS security_scheme_scopes,
                         r.compiled_route
-                    FROM deployment_domain_http_api_definitions d
 
-                    JOIN deployment_compiled_http_api_definition_routes r
-                      ON r.environment_id = d.environment_id
-                     AND r.deployment_revision_id = d.deployment_revision_id
-                     AND r.http_api_definition_id = d.http_api_definition_id
+                    FROM deployment_compiled_routes r
 
                     -- active deployment
                     JOIN current_deployment_revisions cdr
-                      ON d.environment_id = cdr.environment_id
-                     AND d.deployment_revision_id = cdr.deployment_revision_id
+                      ON cdr.environment_id = r.environment_id
+                      AND cdr.deployment_revision_id = r.deployment_revision_id
 
                     -- parent objects not deleted
                     JOIN environments e
-                      ON d.environment_id = e.environment_id
-                     AND e.deleted_at IS NULL
+                      ON e.environment_id = r.environment_id
+                      AND e.deleted_at IS NULL
                     JOIN applications a
-                      ON e.application_id = a.application_id
-                     AND a.deleted_at IS NULL
+                      ON a.application_id = e.application_id
+                      AND a.deleted_at IS NULL
                     JOIN accounts ac
-                      ON a.account_id = ac.account_id
-                     AND ac.deleted_at IS NULL
+                      ON ac.account_id = a.account_id
+                      AND ac.deleted_at IS NULL
 
                     -- registered domains
                     JOIN domain_registrations dr
-                      ON d.environment_id = dr.environment_id
-                     AND d.domain = dr.domain
-                     AND dr.deleted_at IS NULL
+                      ON dr.environment_id = r.environment_id
+                      AND dr.domain = r.domain
+                      AND dr.deleted_at IS NULL
 
                     -- route-level optional security scheme
                     LEFT JOIN security_schemes s
-                      ON r.environment_id = s.environment_id
-                     AND r.security_scheme = s.name
-                     AND s.deleted_at IS NULL
+                      ON s.environment_id = r.environment_id
+                      AND s.name = r.security_scheme
+                      AND s.deleted_at IS NULL
 
                     LEFT JOIN security_scheme_revisions sr
                       ON sr.security_scheme_id = s.security_scheme_id
-                     AND sr.revision_id = s.current_revision_id
+                      AND sr.revision_id = s.current_revision_id
 
-                    WHERE d.domain = $1 AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL)
+                    WHERE r.domain = $1 AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL)
 
-                    ORDER BY r.http_api_definition_id, r.id
+                    ORDER BY r.route_id
                 "#})
                 .bind(domain),
             )
             .await
     }
 
-    async fn list_compiled_http_api_routes_for_http_api_definition(
+    async fn list_compiled_routes_for_domain_and_deployment(
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        http_api_definition_name: &str,
-    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
+        domain: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>> {
         self.with_ro("list_compiled_http_api_routes_for_http_api_definition")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -807,7 +785,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ac.account_id,
                         e.environment_id,
                         r.deployment_revision_id,
-                        r.http_api_definition_id,
+                        r.route_id,
                         (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
@@ -818,42 +796,38 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.scopes AS security_scheme_scopes,
                         r.compiled_route
 
-                    FROM deployment_compiled_http_api_definition_routes r
-
-                    JOIN http_api_definitions d
-                        ON r.environment_id = d.environment_id
-                        AND r.http_api_definition_id = d.http_api_definition_id
+                    FROM deployment_compiled_routes r
 
                     -- parent objects not deleted
                     JOIN environments e
-                      ON d.environment_id = e.environment_id
-                     AND e.deleted_at IS NULL
+                      ON e.environment_id = d.environment_id
+                      AND e.deleted_at IS NULL
                     JOIN applications a
-                      ON e.application_id = a.application_id
-                     AND a.deleted_at IS NULL
+                      ON a.application_id = e.application_id
+                      AND a.deleted_at IS NULL
                     JOIN accounts ac
-                      ON a.account_id = ac.account_id
-                     AND ac.deleted_at IS NULL
+                      ON ac.account_id = a.account_id
+                      AND ac.deleted_at IS NULL
 
                     -- route-level optional security scheme
                     LEFT JOIN security_schemes s
-                      ON r.environment_id = s.environment_id
-                     AND r.security_scheme = s.name
-                     AND s.deleted_at IS NULL
+                      ON s.environment_id = r.environment_id
+                      AND s.name = r.security_scheme
+                      AND s.deleted_at IS NULL
 
                     LEFT JOIN security_scheme_revisions sr
                       ON sr.security_scheme_id = s.security_scheme_id
-                     AND sr.revision_id = s.current_revision_id
+                      AND sr.revision_id = s.current_revision_id
 
                      WHERE r.environment_id = $1
                        AND r.deployment_revision_id = $2
-                       AND d.name = $3
+                       AND r.domain = $3
 
-                    ORDER BY r.http_api_definition_id, r.id
+                    ORDER BY r.route_id
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id)
-                .bind(http_api_definition_name),
+                .bind(domain),
             )
             .await
     }
@@ -1085,11 +1059,6 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>>;
 
-    async fn get_staged_http_api_definitions(
-        tx: &mut Self::Tx,
-        environment_id: Uuid,
-    ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
-
     async fn get_staged_http_api_deployments(
         tx: &mut Self::Tx,
         environment_id: Uuid,
@@ -1102,24 +1071,14 @@ trait DeploymentRepoInternal: DeploymentRepo {
         component: &DeploymentComponentRevisionRecord,
     ) -> RepoResult<()>;
 
-    async fn create_deployment_http_api_definition_revision(
-        tx: &mut Self::Tx,
-        http_api_definition: &DeploymentHttpApiDefinitionRevisionRecord,
-    ) -> RepoResult<()>;
-
     async fn create_deployment_http_api_deployment_revision(
         tx: &mut Self::Tx,
         http_api_deployment: &DeploymentHttpApiDeploymentRevisionRecord,
     ) -> RepoResult<()>;
 
-    async fn create_deployment_domain_http_api_definition(
+    async fn create_deployment_compiled_route(
         tx: &mut Self::Tx,
-        domain_http_api_defintion: &DeploymentDomainHttpApiDefinitionRecord,
-    ) -> RepoResult<()>;
-
-    async fn create_deployment_compiled_http_api_definition_route(
-        tx: &mut Self::Tx,
-        compiled_route: &DeploymentCompiledHttpApiDefinitionRouteRecord,
+        compiled_route: &DeploymentCompiledRouteRecord,
     ) -> RepoResult<()>;
 
     async fn create_deployment_registered_agent_type(
@@ -1139,12 +1098,6 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>>;
-
-    async fn get_deployed_http_api_definitions(
-        &self,
-        environment_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
 
     async fn get_deployed_http_api_deployments(
         &self,
@@ -1200,7 +1153,6 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> RepoResult<DeploymentIdentity> {
         Ok(DeploymentIdentity {
             components: Self::get_staged_components(tx, environment_id).await?,
-            http_api_definitions: Self::get_staged_http_api_definitions(tx, environment_id).await?,
             http_api_deployments: Self::get_staged_http_api_deployments(tx, environment_id).await?,
         })
     }
@@ -1217,24 +1169,6 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     ON cr.component_id = c.component_id
                     AND cr.revision_id = c.current_revision_id
                 WHERE c.environment_id = $1 AND c.deleted_at IS NULL
-            "#})
-            .bind(environment_id),
-        )
-        .await
-    }
-
-    async fn get_staged_http_api_definitions(
-        tx: &mut Self::Tx,
-        environment_id: Uuid,
-    ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
-        tx.fetch_all_as(
-            sqlx::query_as(indoc! { r#"
-                SELECT d.http_api_definition_id, d.name, dr.revision_id, dr.version, dr.hash
-                FROM http_api_definitions d
-                JOIN http_api_definition_revisions dr
-                    ON d.http_api_definition_id = dr.http_api_definition_id
-                    AND d.current_revision_id = dr.revision_id
-                WHERE d.environment_id = $1 AND d.deleted_at IS NULL
             "#})
             .bind(environment_id),
         )
@@ -1280,25 +1214,6 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         .map(|_| ())
     }
 
-    async fn create_deployment_http_api_definition_revision(
-        tx: &mut Self::Tx,
-        http_api_definition: &DeploymentHttpApiDefinitionRevisionRecord,
-    ) -> RepoResult<()> {
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                INSERT INTO deployment_http_api_definition_revisions
-                    (environment_id, deployment_revision_id, http_api_definition_id, http_api_definition_revision_id)
-                VALUES ($1, $2, $3, $4)
-            "#})
-                .bind(http_api_definition.environment_id)
-                .bind(http_api_definition.deployment_revision_id)
-                .bind(http_api_definition.http_api_definition_id)
-                .bind(http_api_definition.http_api_definition_revision_id),
-        )
-            .await
-            .map(|_| ())
-    }
-
     async fn create_deployment_http_api_deployment_revision(
         tx: &mut Self::Tx,
         http_api_deployment: &DeploymentHttpApiDeploymentRevisionRecord,
@@ -1319,40 +1234,20 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         Ok(())
     }
 
-    async fn create_deployment_domain_http_api_definition(
+    async fn create_deployment_compiled_route(
         tx: &mut Self::Tx,
-        domain_http_api_defintion: &DeploymentDomainHttpApiDefinitionRecord,
+        compiled_route: &DeploymentCompiledRouteRecord,
     ) -> RepoResult<()> {
         tx.execute(
             sqlx::query(indoc! { r#"
-                INSERT INTO deployment_domain_http_api_definitions
-                    (environment_id, deployment_revision_id, domain, http_api_definition_id)
-                VALUES ($1, $2, $3, $4)
-            "#})
-            .bind(domain_http_api_defintion.environment_id)
-            .bind(domain_http_api_defintion.deployment_revision_id)
-            .bind(&domain_http_api_defintion.domain)
-            .bind(domain_http_api_defintion.http_api_definition_id),
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    async fn create_deployment_compiled_http_api_definition_route(
-        tx: &mut Self::Tx,
-        compiled_route: &DeploymentCompiledHttpApiDefinitionRouteRecord,
-    ) -> RepoResult<()> {
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                INSERT INTO deployment_compiled_http_api_definition_routes
-                    (environment_id, deployment_revision_id, http_api_definition_id, id, security_scheme, compiled_route)
+                INSERT INTO deployment_compiled_routes
+                    (environment_id, deployment_revision_id, domain, route_id, security_scheme, compiled_route)
                 VALUES ($1, $2, $3, $4, $5, $6)
             "#})
                 .bind(compiled_route.environment_id)
                 .bind(compiled_route.deployment_revision_id)
-                .bind(compiled_route.http_api_definition_id)
-                .bind(compiled_route.id)
+                .bind(&compiled_route.domain)
+                .bind(compiled_route.route_id)
                 .bind(&compiled_route.security_scheme)
                 .bind(&compiled_route.compiled_route)
         )
@@ -1456,29 +1351,6 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                         ON dcr.component_id = c.component_id AND dcr.component_revision_id = cr.revision_id
                     WHERE dcr.environment_id = $1 AND dcr.deployment_revision_id = $2
                     ORDER BY c.name
-                "#})
-                    .bind(environment_id)
-                    .bind(revision_id),
-            )
-            .await
-    }
-
-    async fn get_deployed_http_api_definitions(
-        &self,
-        environment_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
-        self.with_ro("get_deployed_http_api_definitions")
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT had.http_api_definition_id, had.name, hadr.revision_id, hadr.version, hadr.hash
-                    FROM http_api_definitions had
-                    JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
-                    JOIN deployment_http_api_definition_revisions dhadr
-                        ON dhadr.http_api_definition_id = hadr.http_api_definition_id
-                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
-                    ORDER BY had.name
                 "#})
                     .bind(environment_id)
                     .bind(revision_id),
