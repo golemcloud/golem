@@ -20,6 +20,8 @@ newtype_uuid!(DomainRegistrationId);
 
 declare_transparent_newtypes! {
     #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(transparent))]
     pub struct Domain(pub String);
 }
 

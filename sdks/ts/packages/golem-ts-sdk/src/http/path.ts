@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { PathSegment, PathSegmentNode } from 'golem:agent/common';
+import { PathSegment } from 'golem:agent/common';
 import { rejectEmptyString } from './validation';
 
 export function parsePath(path: string): PathSegment[] {
@@ -34,56 +34,38 @@ function parseSegment(segment: string): PathSegment {
     throw new Error(`Whitespace is not allowed in path segments`);
   }
 
-  const nodes: PathSegmentNode[] = [];
+  if (segment.startsWith('{') && segment.endsWith('}')) {
+    const name = segment.slice(1, -1);
 
-  let i = 0;
-  while (i < segment.length) {
-    if (segment[i] === '{') {
-      const end = segment.indexOf('}', i);
-      if (end === -1) {
-        throw new Error(`Unclosed "{" in path segment "${segment}"`);
-      }
-
-      const name = segment.slice(i + 1, end);
-
-      if (!name) {
-        throw new Error(`Empty path variable "{}" is not allowed`);
-      }
-
-      if (name === 'agent-type' || name === 'agent-version') {
-        nodes.push({
-          tag: 'system-variable',
-          val: name,
-        });
-      } else {
-        rejectEmptyString(name, 'path variable');
-
-        nodes.push({
-          tag: 'path-variable',
-          val: { variableName: name },
-        });
-      }
-
-      i = end + 1;
-      continue;
+    if (!name) {
+      throw new Error(`Empty path variable "{}" is not allowed`);
     }
 
-    let start = i;
-    while (i < segment.length && segment[i] !== '{') {
-      i++;
+    if (name === 'agent-type' || name === 'agent-version') {
+      return {
+        tag: 'system-variable',
+        val: name,
+      };
     }
 
-    const literal = segment.slice(start, i);
-    rejectEmptyString(
-      literal,
-      `Literal path segment cannot be an empty string`,
-    );
+    rejectEmptyString(name, 'path variable');
 
-    nodes.push({
-      tag: 'literal',
-      val: literal,
-    });
+    return {
+      tag: 'path-variable',
+      val: { variableName: name },
+    };
   }
 
-  return { concat: nodes };
+  if (segment.includes('{') || segment.includes('}')) {
+    throw new Error(
+      `Path segment "${segment}" must be a whole variable like "{id}" and cannot mix literals and variables`,
+    );
+  }
+
+  rejectEmptyString(segment, `Literal path segment cannot be an empty string`);
+
+  return {
+    tag: 'literal',
+    val: segment,
+  };
 }

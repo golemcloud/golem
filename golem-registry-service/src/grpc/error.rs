@@ -206,7 +206,9 @@ impl From<DeployedRoutesError> for GrpcApiError {
         let error: String = value.to_string();
         match value {
             DeployedRoutesError::NoActiveRoutesForDomain(_)
-            | DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
+            | DeployedRoutesError::ParentEnvironmentNotFound(_)
+            | DeployedRoutesError::DeploymentRevisionNotFound(_)
+            | DeployedRoutesError::DomainNotFoundInDeployment(_) => {
                 Self::NotFound(ErrorBody { error, cause: None })
             }
             DeployedRoutesError::InternalError(_) => Self::InternalError(ErrorBody {

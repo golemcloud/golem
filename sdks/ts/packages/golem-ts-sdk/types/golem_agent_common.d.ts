@@ -15,13 +15,28 @@ declare module 'golem:agent/common' {
     tag: 'get'
   } |
   {
-    tag: 'put'
+    tag: 'head'
   } |
   {
     tag: 'post'
   } |
   {
+    tag: 'put'
+  } |
+  {
     tag: 'delete'
+  } |
+  {
+    tag: 'connect'
+  } |
+  {
+    tag: 'options'
+  } |
+  {
+    tag: 'trace'
+  } |
+  {
+    tag: 'patch'
   } |
   {
     tag: 'custom'
@@ -31,7 +46,7 @@ declare module 'golem:agent/common' {
   export type PathVariable = {
     variableName: string;
   };
-  export type PathSegmentNode = 
+  export type PathSegment = 
   {
     tag: 'literal'
     val: string
@@ -43,9 +58,11 @@ declare module 'golem:agent/common' {
   {
     tag: 'path-variable'
     val: PathVariable
-  };
-  export type PathSegment = {
-    concat: PathSegmentNode[];
+  } |
+  /** only allowed as the last segment */
+  {
+    tag: 'remaining-path-variable'
+    val: PathVariable
   };
   export type HeaderVariable = {
     headerName: string;
@@ -60,8 +77,6 @@ declare module 'golem:agent/common' {
   };
   export type HttpMountDetails = {
     pathPrefix: PathSegment[];
-    headerVars: HeaderVariable[];
-    queryVars: QueryVariable[];
     authDetails?: AuthDetails;
     phantomAgent: boolean;
     corsOptions: CorsOptions;
