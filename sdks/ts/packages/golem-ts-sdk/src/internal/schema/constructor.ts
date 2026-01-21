@@ -31,6 +31,7 @@ import {
 } from '../typeInfoInternal';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 import { TypeMappingScope } from '../mapping/types/scope';
+import { getComponentModelSchema, ParameterSchema } from './paramSchema';
 
 export function getConstructorDataSchema(
   agentClassName: string,
@@ -57,17 +58,13 @@ export function getConstructorDataSchema(
     );
   }
 
-  const paramAndSchemaCollection: [string, ElementSchema][] =
-    getParamAndSchemaCollection(
-      agentClassName,
-      constructorParamInfos,
-      baseError,
-    );
+  const paramAndSchemaCollection: ParameterSchema[] = getParamSchemaCollection(
+    agentClassName,
+    constructorParamInfos,
+    baseError,
+  );
 
-  return {
-    tag: 'tuple',
-    val: paramAndSchemaCollection,
-  };
+  return getComponentModelSchema(paramAndSchemaCollection);
 }
 
 function getMultimodalDataSchema(
@@ -120,16 +117,11 @@ function getMultimodalTypeInConstructor(
   }
 }
 
-// For a principal, we don't track any ElementSchema
-type ConstructorArgElementSchema =
-  | { tag: 'principal' }
-  | { tag: 'component-model'; name: string; schema: ElementSchema };
-
-function getParamAndSchemaCollection(
+export function getParamSchemaCollection(
   agentClassName: string,
   constructorParamInfos: readonly ConstructorArg[],
   baseError: string,
-): ConstructorArgElementSchema[] {
+): ParameterSchema[] {
   return constructorParamInfos.map((paramInfo) => {
     const paramType = paramInfo.type;
 
@@ -141,7 +133,7 @@ function getParamAndSchemaCollection(
         tsType: paramType,
       });
 
-      return { tag: 'principal' };
+      return { tag: 'principal', name: paramInfo.name };
     }
 
     if (paramTypeName && paramTypeName === 'UnstructuredText') {
