@@ -145,12 +145,10 @@ message BinarySource {
 
 message HttpMountDetails {
   repeated PathSegment path_prefix = 1;
-  repeated HeaderVariable header_vars = 2;
-  repeated QueryVariable query_vars = 3;
-  optional AgentHttpAuthDetails auth_details = 4;
-  bool phantom_agent = 5;
-  CorsOptions cors_options = 6;
-  repeated PathSegment webhook_suffix = 7;
+  optional AgentHttpAuthDetails auth_details = 2;
+  bool phantom_agent = 3;
+  CorsOptions cors_options = 4;
+  repeated PathSegment webhook_suffix = 5;
 }
 
 message HttpEndpointDetails {
@@ -162,18 +160,24 @@ message HttpEndpointDetails {
   CorsOptions cors_options = 6;
 }
 
-message HttpMethod {
-  oneof value {
-    golem.common.Empty get = 1;
-    golem.common.Empty put = 2;
-    golem.common.Empty post = 3;
-    golem.common.Empty delete = 4;
-    CustomHttpMethod custom = 5;
-  }
+enum StandardHttpMethod {
+  STANDARD_HTTP_METHOD_UNSPECIFIED = 0;
+  STANDARD_HTTP_METHOD_GET = 1;
+  STANDARD_HTTP_METHOD_HEAD = 2;
+  STANDARD_HTTP_METHOD_POST = 3;
+  STANDARD_HTTP_METHOD_PUT = 4;
+  STANDARD_HTTP_METHOD_DELETE = 5;
+  STANDARD_HTTP_METHOD_CONNECT = 6;
+  STANDARD_HTTP_METHOD_OPTIONS = 7;
+  STANDARD_HTTP_METHOD_TRACE = 8;
+  STANDARD_HTTP_METHOD_PATCH = 9;
 }
 
-message CustomHttpMethod {
-  string value = 1;
+message HttpMethod {
+  oneof value {
+    StandardHttpMethod standard = 1;
+    string custom = 2;
+  }
 }
 
 message CorsOptions {
@@ -181,14 +185,11 @@ message CorsOptions {
 }
 
 message PathSegment {
-  repeated PathSegmentNode concat = 1;
-}
-
-message PathSegmentNode {
   oneof value {
     LiteralSegment literal = 1;
     SystemVariableSegment system_variable = 2;
     PathVariable path_variable = 3;
+    PathVariable remaining_path_variable = 4;
   }
 }
 

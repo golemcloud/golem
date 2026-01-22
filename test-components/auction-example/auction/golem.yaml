@@ -8,12 +8,12 @@ components:
     templates: rust
     presets:
       debug:
-        componentWasm: ../target/wasm32-wasip1/debug/auction.wasm
+        componentWasm: ../target/wasm32-wasip1/debug/auction_auction.wasm
         customCommands:
           copy:
-          - command: cp ../target/wasm32-wasip1/debug/auction.wasm ../..
+          - command: cp ../target/wasm32-wasip1/debug/auction_auction.wasm ../../auction.wasm
       release:
-        componentWasm: ../target/wasm32-wasip1/release/auction.wasm
+        componentWasm: ../target/wasm32-wasip1/release/auction_auction.wasm
         customCommands:
           copy:
-          - command: cp ../target/wasm32-wasip1/release/auction.wasm ../..
+          - command: cp ../target/wasm32-wasip1/release/auction_auction.wasm ../../auction.wasm

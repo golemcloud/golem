@@ -24,10 +24,7 @@ use derive_more::Display;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-newtype_uuid!(
-    HttpApiDefinitionId,
-    golem_api_grpc::proto::golem::apidefinition::HttpApiDefinitionId
-);
+newtype_uuid!(HttpApiDefinitionId);
 
 declare_revision!(HttpApiDefinitionRevision);
 

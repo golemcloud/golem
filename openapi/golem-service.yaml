@@ -7151,6 +7151,94 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}/openapi:
+    get:
+      tags:
+      - RegistryService
+      - ApiDeployment
+      - Environment
+      - Deployment
+      summary: Get openapi spec of http api definition in the deployment
+      operationId: get_openapi_of_http_api_deployment_in_deployment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: domain
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UntypedJsonBody'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
@@ -13812,12 +13900,22 @@ components:
         propertyName: type
         mapping:
           Get: '#/components/schemas/HttpMethod_Empty'
-          Put: '#/components/schemas/HttpMethod_Empty'
+          Head: '#/components/schemas/HttpMethod_Empty'
           Post: '#/components/schemas/HttpMethod_Empty'
+          Put: '#/components/schemas/HttpMethod_Empty'
           Delete: '#/components/schemas/HttpMethod_Empty'
+          Connect: '#/components/schemas/HttpMethod_Empty'
+          Options: '#/components/schemas/HttpMethod_Empty'
+          Trace: '#/components/schemas/HttpMethod_Empty'
+          Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
       type: object
       oneOf:
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
@@ -13840,10 +13938,10 @@ components:
       - type: object
         properties:
           type:
-            example: Delete
+            example: Patch
             type: string
             enum:
-            - Delete
+            - Patch
         required:
         - type
       - $ref: '#/components/schemas/Empty'
@@ -13855,14 +13953,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
-        headerVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/HeaderVariable'
-        queryVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/QueryVariable'
         authDetails:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
@@ -13875,8 +13965,6 @@ components:
             $ref: '#/components/schemas/PathSegment'
       required:
       - pathPrefix
-      - headerVars
-      - queryVars
       - phantomAgent
       - corsOptions
       - webhookSuffix
@@ -14254,28 +14342,20 @@ components:
       required:
       - values
     PathSegment:
-      title: PathSegment
-      type: object
-      properties:
-        concat:
-          type: array
-          items:
-            $ref: '#/components/schemas/PathSegmentNode'
-      required:
-      - concat
-    PathSegmentNode:
       discriminator:
         propertyName: type
         mapping:
-          Literal: '#/components/schemas/PathSegmentNode_LiteralSegment'
-          SystemVariable: '#/components/schemas/PathSegmentNode_SystemVariableSegment'
-          PathVariable: '#/components/schemas/PathSegmentNode_PathVariable'
+          Literal: '#/components/schemas/PathSegment_LiteralSegment'
+          SystemVariable: '#/components/schemas/PathSegment_SystemVariableSegment'
+          PathVariable: '#/components/schemas/PathSegment_PathVariable'
+          RemainingPathVariable: '#/components/schemas/PathSegment_PathVariable'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PathSegmentNode_LiteralSegment'
-      - $ref: '#/components/schemas/PathSegmentNode_SystemVariableSegment'
-      - $ref: '#/components/schemas/PathSegmentNode_PathVariable'
-    PathSegmentNode_LiteralSegment:
+      - $ref: '#/components/schemas/PathSegment_LiteralSegment'
+      - $ref: '#/components/schemas/PathSegment_SystemVariableSegment'
+      - $ref: '#/components/schemas/PathSegment_PathVariable'
+      - $ref: '#/components/schemas/PathSegment_PathVariable'
+    PathSegment_LiteralSegment:
       allOf:
       - type: object
         properties:
@@ -14287,19 +14367,19 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/LiteralSegment'
-    PathSegmentNode_PathVariable:
+    PathSegment_PathVariable:
       allOf:
       - type: object
         properties:
           type:
-            example: PathVariable
+            example: RemainingPathVariable
             type: string
             enum:
-            - PathVariable
+            - RemainingPathVariable
         required:
         - type
       - $ref: '#/components/schemas/PathVariable'
-    PathSegmentNode_SystemVariableSegment:
+    PathSegment_SystemVariableSegment:
       allOf:
       - type: object
         properties:
