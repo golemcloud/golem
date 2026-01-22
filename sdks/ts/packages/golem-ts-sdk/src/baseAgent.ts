@@ -231,13 +231,13 @@ type SplitOnPrincipal<
 // and mainly to exclude Principal while still allowing other trailing optional parameters
 type GetArgs<T extends readonly unknown[]> =
   SplitOnPrincipal<T> extends {
-      found: infer F extends boolean;
-      before: infer B extends unknown[];
-      after: infer A extends unknown[];
-    }
+    found: infer F extends boolean;
+    before: infer B extends unknown[];
+    after: infer A extends unknown[];
+  }
     ? F extends true
       ? AllOptional<A> extends true
-        ? B | [...B, ...A]   // Principal removed → optional tail logic
+        ? B | [...B, ...A] // Principal removed → optional tail logic
         : [...B, ...A]
-      : T                   // 🚀 NO Principal → return original args untouched
+      : T // 🚀 NO Principal → return original args untouched
     : never;
