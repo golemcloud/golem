@@ -399,6 +399,12 @@ args = [
 
 ## ** TEST **
 
+# NOTE: when we reach a stable phase during a release cycle,
+#      then these env vars should be commented
+[tasks.test-sdk-overrides.env]
+"GOLEM_RUST_PATH" = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust"
+"GOLEM_TS_PACKAGES_PATH" = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages"
+
 [tasks.test]
 description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
@@ -409,6 +415,7 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
+extend = "test-sdk-overrides"
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
@@ -509,9 +516,9 @@ dependencies = [
 ]
 
 [tasks.cli-integration-tests-group1]
+extend = "test-sdk-overrides"
 dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (1/3)"
-env = { GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
@@ -519,26 +526,29 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 '''
 
 [tasks.cli-integration-tests-group2]
+extend = "test-sdk-overrides"
 dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (2/3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-group3]
+extend = "test-sdk-overrides"
 dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (3/3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-update-golden-files]
+extend = "test-sdk-overrides"
 dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1", GOLEM_RUST_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust", GOLEM_TS_PACKAGES_PATH = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli --test integration app::agents::test_ts_code_first_with_rpc_and_all_types -- --nocapture
