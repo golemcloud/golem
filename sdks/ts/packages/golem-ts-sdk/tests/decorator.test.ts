@@ -1073,6 +1073,12 @@ describe('Http Agent class', () => {
   });
 });
 
+test('Agent with principal auto injected', async () => {
+  expect(async () => {
+    await import('./agentsWithPrincipalAutoInjection');
+  }).to.not.throw();
+});
+
 describe('Annotated SingletonAgent class', () => {
   it('can be constructed', async () => {
     const initiator = Option.getOrThrowWith(
