@@ -98,8 +98,43 @@ export class AgentWithPrincipalAutoInjection5 extends BaseAgent {
     return Promise.resolve(name);
   }
 
-  async funOptionalQMark(param1: string, param2?: number) {
-    return { param1, param2 };
+  // RPC calls to these functions are tested ensure
+  // elimination of Principal doesn't affect other methods with and without optional/union-with-undefined parameters
+  fooWithoutPrincipal1(name: string, num: number): Promise<string> {
+    return Promise.resolve(name);
+  }
+
+  fooWithoutPrincipal2(
+    name: string,
+    num: number,
+    text: string,
+  ): Promise<string> {
+    return Promise.resolve(name);
+  }
+
+  fooWithoutPrincipal3(
+    name: string,
+    num: number,
+    text?: string,
+  ): Promise<string> {
+    return Promise.resolve(name);
+  }
+
+  fooWithoutPrincipal4(
+    name: string,
+    num: number,
+    text1?: string,
+    text2?: string,
+  ): Promise<string> {
+    return Promise.resolve(name);
+  }
+
+  fooWithoutPrincipal5(
+    name: string,
+    num: number,
+    text: string | undefined,
+  ): Promise<string> {
+    return Promise.resolve(name);
   }
 }
 
@@ -159,7 +194,43 @@ export class RemoteAgentWithPrincipal extends BaseAgent {
       name,
       1,
       'not-undefined',
-    ).funOptionalQMark('name', 1);
+    ).fooWithoutPrincipal1('name', 1);
+
+    await AgentWithPrincipalAutoInjection5.get(
+      name,
+      1,
+      'not-undefined',
+    ).fooWithoutPrincipal2('foo', 1, 'bar');
+
+    await AgentWithPrincipalAutoInjection5.get(
+      name,
+      1,
+      'not-undefined',
+    ).fooWithoutPrincipal3('foo', 1);
+
+    await AgentWithPrincipalAutoInjection5.get(
+      name,
+      1,
+      'not-undefined',
+    ).fooWithoutPrincipal3('foo', 1, 'bar');
+
+    await AgentWithPrincipalAutoInjection5.get(
+      name,
+      1,
+      'not-undefined',
+    ).fooWithoutPrincipal4('foo', 1, undefined);
+
+    await AgentWithPrincipalAutoInjection5.get(
+      name,
+      1,
+      'not-undefined',
+    ).fooWithoutPrincipal4('foo', 1, 'bar', 'baz');
+
+    await AgentWithPrincipalAutoInjection5.get(
+      name,
+      1,
+      'not-undefined',
+    ).fooWithoutPrincipal5('foo', 1, 'bar');
 
     return 'finished';
   }
