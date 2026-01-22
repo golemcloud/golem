@@ -196,7 +196,7 @@ export type Client<T> = {
   [K in keyof T as T[K] extends (...args: any[]) => any
     ? K
     : never]: T[K] extends (...args: infer A) => infer R
-    ? RemoteMethod<A, Awaited<R>>
+    ? RemoteMethod<GetArgs<A>, Awaited<R>>
     : never;
 };
 

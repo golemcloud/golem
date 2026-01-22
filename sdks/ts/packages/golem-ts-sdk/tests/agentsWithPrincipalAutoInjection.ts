@@ -11,7 +11,7 @@ export class AgentWithPrincipalAutoInjection1 extends BaseAgent {
     super();
   }
 
-  foo(name: string): Promise<string> {
+  foo(name: string, principal: Principal): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -28,7 +28,12 @@ export class AgentWithPrincipalAutoInjection2 extends BaseAgent {
     super();
   }
 
-  foo(name: string): Promise<string> {
+  foo(
+    name: string,
+    num: number,
+    principal: Principal,
+    text: string,
+  ): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -45,7 +50,12 @@ export class AgentWithPrincipalAutoInjection3 extends BaseAgent {
     super();
   }
 
-  foo(name: string): Promise<string> {
+  foo(
+    name: string,
+    num: number,
+    principal: Principal,
+    text?: string,
+  ): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -55,14 +65,19 @@ export class AgentWithPrincipalAutoInjection4 extends BaseAgent {
   // Principal in between other parameters in constructor
   constructor(
     readonly name: string,
-    readonly text1: number,
+    readonly num: number,
     readonly principal: Principal,
     readonly text: string | null,
   ) {
     super();
   }
 
-  foo(name: string): Promise<string> {
+  foo(
+    name: string,
+    num: number,
+    principal: Principal,
+    text: string | null,
+  ): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -79,7 +94,12 @@ export class AgentWithPrincipalAutoInjection5 extends BaseAgent {
     super();
   }
 
-  foo(name: string): Promise<string> {
+  foo(
+    name: string,
+    text1: number,
+    principal: Principal,
+    text: string | undefined,
+  ): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -94,26 +114,46 @@ export class RemoteAgentWithPrincipal extends BaseAgent {
   }
 
   async foo(name: string): Promise<string> {
-    // Handles constructor with `Principal` as the last parameter
+    // Handles constructor and method with `Principal` as the last parameter
     await AgentWithPrincipalAutoInjection1.get(name).foo(name);
 
-    // Handles constructor with `Principal` in between other parameters
-    await AgentWithPrincipalAutoInjection2.get(name, 1, 'required').foo(name);
+    // Handles constructor and method with `Principal` in between other parameters
+    await AgentWithPrincipalAutoInjection2.get(name, 1, 'required').foo(
+      name,
+      1,
+      'required',
+    );
 
-    // Handles constructor with `Principal` in between other parameters that are optional with `?`
-    await AgentWithPrincipalAutoInjection3.get(name, 1, 'optional').foo(name);
-    await AgentWithPrincipalAutoInjection3.get(name, 1).foo(name);
+    // Handles constructor and method with `Principal` in between other parameters that are optional with `?`
+    await AgentWithPrincipalAutoInjection3.get(name, 1, 'optional').foo(
+      name,
+      1,
+      'optional',
+    );
+    await AgentWithPrincipalAutoInjection3.get(name, 1).foo(name, 1);
 
-    // Handles constructor with `Principal` in between other parameters that can be null
-    await AgentWithPrincipalAutoInjection4.get(name, 1, null).foo(name);
-    await AgentWithPrincipalAutoInjection4.get(name, 1, 'not-null').foo(name);
+    // Handles constructor and method with `Principal` in between other parameters that can be null
+    await AgentWithPrincipalAutoInjection4.get(name, 1, null).foo(
+      name,
+      1,
+      null,
+    );
+    await AgentWithPrincipalAutoInjection4.get(name, 1, 'not-null').foo(
+      name,
+      1,
+      'no-null',
+    );
 
-    // Handles constructor with `Principal` in between other parameters that can be undefined
-    await AgentWithPrincipalAutoInjection5.get(name, 1, undefined).foo(name);
+    // Handles constructor and method with `Principal` in between other parameters that can be undefined
+    await AgentWithPrincipalAutoInjection5.get(name, 1, undefined).foo(
+      name,
+      1,
+      undefined,
+    );
     return await AgentWithPrincipalAutoInjection5.get(
       name,
       1,
       'not-undefined',
-    ).foo(name);
+    ).foo(name, 1, 'not-undefined');
   }
 }
