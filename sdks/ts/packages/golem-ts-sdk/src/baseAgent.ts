@@ -223,18 +223,21 @@ type SplitOnPrincipal<
   Before extends unknown[] = [],
 > = T extends readonly [infer H, ...infer R]
   ? [H] extends [Principal]
-    ? { before: Before; after: R }
+    ? { found: true; before: Before; after: R }
     : SplitOnPrincipal<R, [...Before, H]>
-  : { before: Before; after: [] };
+  : { found: false; before: Before; after: [] };
 
 // Utility type to split constructor parameters on Principal
 // and mainly to exclude Principal while still allowing other trailing optional parameters
 type GetArgs<T extends readonly unknown[]> =
   SplitOnPrincipal<T> extends {
-    before: infer B extends unknown[];
-    after: infer A extends unknown[];
-  }
-    ? AllOptional<A> extends true
-      ? B | [...B, ...A] // optional tail → union allowed
-      : [...B, ...A] // required tail → full args only
+      found: infer F extends boolean;
+      before: infer B extends unknown[];
+      after: infer A extends unknown[];
+    }
+    ? F extends true
+      ? AllOptional<A> extends true
+        ? B | [...B, ...A]   // Principal removed → optional tail logic
+        : [...B, ...A]
+      : T                   // 🚀 NO Principal → return original args untouched
     : never;

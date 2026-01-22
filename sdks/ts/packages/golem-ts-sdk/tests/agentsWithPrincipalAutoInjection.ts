@@ -53,7 +53,6 @@ export class AgentWithPrincipalAutoInjection3 extends BaseAgent {
   foo(
     name: string,
     num: number,
-    principal: Principal,
     text?: string,
   ): Promise<string> {
     return Promise.resolve(name);
@@ -101,6 +100,10 @@ export class AgentWithPrincipalAutoInjection5 extends BaseAgent {
     text: string | undefined,
   ): Promise<string> {
     return Promise.resolve(name);
+  }
+
+  async funOptionalQMark(param1: string, param2?: number) {
+    return {param1, param2}
   }
 }
 
@@ -150,10 +153,18 @@ export class RemoteAgentWithPrincipal extends BaseAgent {
       1,
       undefined,
     );
-    return await AgentWithPrincipalAutoInjection5.get(
+    await AgentWithPrincipalAutoInjection5.get(
       name,
       1,
       'not-undefined',
     ).foo(name, 1, 'not-undefined');
+
+    await AgentWithPrincipalAutoInjection5.get(
+      name,
+      1,
+      'not-undefined',
+    ).funOptionalQMark("name", 1)
+
+    return "finished";
   }
 }
