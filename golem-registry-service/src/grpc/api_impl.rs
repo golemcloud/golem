@@ -230,11 +230,11 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing component_id field")?
             .try_into()?;
 
-        let version: ComponentRevision = request.version.try_into()?;
+        let revision: ComponentRevision = request.revision.try_into()?;
 
         let result = self
             .component_service
-            .download_component_wasm(component_id, version, true, &AuthCtx::System)
+            .download_component_wasm(component_id, revision, true, &AuthCtx::System)
             .await?;
         Ok(result)
     }
@@ -248,11 +248,11 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing component_id field")?
             .try_into()?;
 
-        let version: ComponentRevision = request.version.try_into()?;
+        let revision: ComponentRevision = request.revision.try_into()?;
 
         let component = self
             .component_service
-            .get_component_revision(component_id, version, true, &AuthCtx::System)
+            .get_component_revision(component_id, revision, true, &AuthCtx::System)
             .await?;
 
         Ok(GetComponentMetadataSuccessResponse {
@@ -390,7 +390,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetActiveRoutesForDomainSuccessResponse {
-            compiled_routes: Some(compiled_routes.try_into()?),
+            compiled_routes: Some(compiled_routes.into()),
         })
     }
 
@@ -621,7 +621,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let record = recorded_grpc_api_request!(
             "get_component_metadata",
             component_id = proto_component_id_string(&request.component_id),
-            version = request.version
+            revision = request.revision
         );
 
         let response = match self

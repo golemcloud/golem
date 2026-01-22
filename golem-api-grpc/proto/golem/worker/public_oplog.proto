@@ -80,7 +80,7 @@ message PluginInstallationDescription {
 message CreateParameters {
   google.protobuf.Timestamp timestamp = 1;
   WorkerId worker_id = 2;
-  uint64 component_version = 3;
+  uint64 component_revision = 3;
   map<string, string> env = 5;
   golem.common.AccountId created_by = 6;
   optional WorkerId parent = 7;
@@ -196,20 +196,20 @@ message UpdateDescription {
 
 message PendingUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   UpdateDescription update_description = 3;
 }
 
 message SuccessfulUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   uint64 new_component_size = 3;
   repeated PluginInstallationDescription new_active_plugins = 10;
 }
 
 message FailedUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   optional string details = 3;
 }
 

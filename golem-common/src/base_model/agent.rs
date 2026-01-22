@@ -14,6 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::base_model::WorkerId;
 use crate::model::Empty;
 use async_trait::async_trait;
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
@@ -713,8 +714,6 @@ impl ElementValue {
 #[serde(rename_all = "camelCase")]
 pub struct HttpMountDetails {
     pub path_prefix: Vec<PathSegment>,
-    pub header_vars: Vec<HeaderVariable>,
-    pub query_vars: Vec<QueryVariable>,
     pub auth_details: Option<AgentHttpAuthDetails>,
     pub phantom_agent: bool,
     pub cors_options: CorsOptions,
@@ -750,11 +749,21 @@ pub enum HttpMethod {
     #[unit_case]
     Get(Empty),
     #[unit_case]
-    Put(Empty),
+    Head(Empty),
     #[unit_case]
     Post(Empty),
     #[unit_case]
+    Put(Empty),
+    #[unit_case]
     Delete(Empty),
+    #[unit_case]
+    Connect(Empty),
+    #[unit_case]
+    Options(Empty),
+    #[unit_case]
+    Trace(Empty),
+    #[unit_case]
+    Patch(Empty),
     Custom(CustomHttpMethod),
 }
 
@@ -786,27 +795,16 @@ pub struct CorsOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PathSegment {
-    pub concat: Vec<PathSegmentNode>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(
-    feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
 )]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub enum PathSegmentNode {
+pub enum PathSegment {
     Literal(LiteralSegment),
     SystemVariable(SystemVariableSegment),
     PathVariable(PathVariable),
+    RemainingPathVariable(PathVariable),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
@@ -954,7 +952,7 @@ pub struct OidcPrincipal {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPrincipal {
-    pub agent_id: AgentIdWithComponent,
+    pub agent_id: WorkerId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
@@ -967,20 +965,6 @@ pub struct AgentPrincipal {
 #[serde(rename_all = "camelCase")]
 pub struct GolemUserPrincipal {
     pub account_id: AccountId,
-}
-
-// TODO: this is the same as WorkerId, to be removed
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentIdWithComponent {
-    pub component_id: ComponentId,
-    pub agent_id: String,
 }
 
 pub trait UnstructuredTextExtensions {

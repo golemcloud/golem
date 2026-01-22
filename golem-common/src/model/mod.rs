@@ -14,7 +14,6 @@
 
 pub mod account;
 pub mod agent;
-pub mod api_domain;
 pub mod application;
 pub mod auth;
 pub mod base64;
@@ -486,7 +485,7 @@ impl WorkerFilter {
             WorkerFilter::Name(WorkerNameFilter { comparator, value }) => {
                 comparator.matches(&metadata.worker_id.worker_name, &value)
             }
-            WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
+            WorkerFilter::Revision(WorkerRevisionFilter { comparator, value }) => {
                 let revision: ComponentRevision = metadata.last_known_status.component_revision;
                 comparator.matches(&revision, &value)
             }

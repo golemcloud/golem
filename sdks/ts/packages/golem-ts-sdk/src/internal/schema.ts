@@ -20,6 +20,7 @@ import {
   BinaryDescriptor,
   DataSchema,
   ElementSchema,
+  HttpMountDetails,
   TextDescriptor,
 } from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
@@ -45,6 +46,10 @@ import {
 } from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
+import {
+  validateHttpEndpoint,
+  validateHttpMountWithConstructor,
+} from '../http/validation';
 
 const MULTIMODAL_TYPE_NAMES = [
   'Multimodal',
@@ -123,6 +128,7 @@ export function getConstructorDataSchema(
 export function getAgentMethodSchema(
   classMetadata: ClassMetadata,
   agentClassName: string,
+  httpMountDetails: HttpMountDetails | undefined,
 ): Either.Either<AgentMethod[], string> {
   if (!classMetadata) {
     return Either.left(`No metadata found for agent class ${agentClassName}`);
@@ -239,14 +245,24 @@ export function getAgentMethodSchema(
           break;
       }
 
+      const agentMethod: AgentMethod = {
+        name: methodName,
+        description: baseMeta.description ?? '',
+        promptHint: baseMeta.prompt ?? '',
+        inputSchema: inputSchema,
+        outputSchema: outputSchema,
+        httpEndpoint: baseMeta.httpEndpoint ?? [],
+      };
+
+      validateHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
+
       return Either.right({
         name: methodName,
         description: baseMeta.description ?? '',
         promptHint: baseMeta.prompt ?? '',
         inputSchema: inputSchema,
         outputSchema: outputSchema,
-        // TODO
-        httpEndpoint: [],
+        httpEndpoint: baseMeta.httpEndpoint ?? [],
       });
     }),
   );

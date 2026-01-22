@@ -124,17 +124,11 @@ impl RustBridgeGenerator {
         doc["dependencies"] = Item::Table(Table::default());
         doc["dependencies"]["chrono"] = dep("0.4", &[]);
         doc["dependencies"]["golem-client"] =
-            git_dep("https://github.com/golemcloud/golem", "rust-bridge", &[]); // TODO: use published version when available
-        doc["dependencies"]["golem-common"] = git_dep(
-            "https://github.com/golemcloud/golem",
-            "rust-bridge",
-            &["client"],
-        ); // TODO: use published version when available
-        doc["dependencies"]["golem-wasm"] = git_dep(
-            "https://github.com/golemcloud/golem",
-            "rust-bridge",
-            &["client"],
-        ); // TODO: use published version when available
+            git_dep("https://github.com/golemcloud/golem", "main", &[]); // TODO: use published version when available
+        doc["dependencies"]["golem-common"] =
+            git_dep("https://github.com/golemcloud/golem", "main", &["client"]); // TODO: use published version when available
+        doc["dependencies"]["golem-wasm"] =
+            git_dep("https://github.com/golemcloud/golem", "main", &["client"]); // TODO: use published version when available
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
         doc["dependencies"]["reqwest"] = dep("0.12", &["default-tls"]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);

@@ -63,7 +63,7 @@ impl ShardAssignmentCheck for ShardAssignment {
 pub struct WorkerConfig {
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
-    pub component_version_for_replay: ComponentRevision,
+    pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub initial_wasi_config_vars: BTreeMap<String, String>,
 }
@@ -72,14 +72,14 @@ impl WorkerConfig {
     pub fn new(
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
-        component_version_for_replay: ComponentRevision,
+        component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
         WorkerConfig {
             deleted_regions,
             total_linear_memory_size,
-            component_version_for_replay,
+            component_revision_for_replay,
             created_by,
             initial_wasi_config_vars,
         }

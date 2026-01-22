@@ -282,6 +282,14 @@ test('Agent method with empty tuple return type is rejected', async () => {
   );
 });
 
+test('Agent with with invalid http mount is rejected', async () => {
+  await expect(async () => {
+    await import('./agentWithInvalidHttpMount');
+  }).rejects.toThrowError(
+    'Agent constructor variable "bar" is not provided by the HTTP mount path.',
+  );
+});
+
 function getAnalysedTypeInFun1(
   parameterName: string,
 ): Either.Either<AnalysedType.AnalysedType, string> {

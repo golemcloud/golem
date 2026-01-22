@@ -1,5 +1,0 @@
-DELETE FROM deployment_http_api_deployment_revisions;
-DELETE FROM http_api_deployment_revisions;
-DELETE FROM http_api_deployments;
-
-ALTER TABLE http_api_deployment_revisions RENAME COLUMN http_api_definitions TO agent_types;

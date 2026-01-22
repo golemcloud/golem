@@ -38,8 +38,6 @@ interface common {
 
   record http-mount-details {
     path-prefix:    list<path-segment>,
-    header-vars:    list<header-variable>,
-    query-vars:     list<query-variable>,
     auth-details:   option<auth-details>,
     phantom-agent:  bool,
     cors-options:   cors-options,
@@ -61,20 +59,23 @@ interface common {
 
   variant http-method {
     get,
-    put,
+    head,
     post,
+    put,
     delete,
+    connect,
+    options,
+    trace,
+    patch,
     custom(string),
   }
 
-  record path-segment {
-    concat: list<path-segment-node>,
-  }
-
-  variant path-segment-node {
+  variant path-segment {
     literal(string),
     system-variable(system-variable),
     path-variable(path-variable),
+    // only allowed as the last segment
+    remaining-path-variable(path-variable)
   }
 
   enum system-variable {

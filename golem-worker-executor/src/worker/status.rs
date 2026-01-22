@@ -517,9 +517,9 @@ fn calculate_update_fields(
     initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
-    initial_version: ComponentRevision,
+    initial_revision: ComponentRevision,
     initial_component_size: u64,
-    initial_component_version_for_replay: ComponentRevision,
+    initial_component_revision_for_replay: ComponentRevision,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -533,9 +533,9 @@ fn calculate_update_fields(
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
-    let mut revision = initial_version;
+    let mut revision = initial_revision;
     let mut size = initial_component_size;
-    let mut component_revision_for_replay = initial_component_version_for_replay;
+    let mut component_revision_for_replay = initial_component_revision_for_replay;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)

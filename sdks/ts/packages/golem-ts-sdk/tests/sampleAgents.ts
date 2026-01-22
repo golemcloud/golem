@@ -20,6 +20,7 @@ import {
   UnstructuredText,
   Result,
   Multimodal,
+  endpoint,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -491,6 +492,59 @@ class EphemeralAgent extends BaseAgent {
   }
 
   async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({
+  mount: '/chats/{agent-type}',
+})
+class SimpleHttpAgent extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  @endpoint({ get: '/greet/{name}' })
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({
+  mount: '/chats/{agent-type}/{foo}/{bar}',
+  cors: ['https://app.acme.com', 'https://staging.acme.com'],
+  auth: true,
+  webhookSuffix: '/{agent-type}/events/{foo}/{bar}',
+})
+class ComplexHttpAgent extends BaseAgent {
+  constructor(
+    readonly foo: string,
+    readonly bar: string,
+  ) {
+    super();
+  }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  async greet(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  async greetCustom(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  @endpoint({
+    get: '/greet?lx={location}&nm={name}',
+    cors: ['*'],
+    auth: true,
+    headers: { 'X-Foo': 'location', 'X-Bar': 'name' },
+  })
+  @endpoint({
+    custom: { method: 'patch', path: '/greet?l={location}&n={name}' },
+  })
+  async greetCustom2(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
 }
