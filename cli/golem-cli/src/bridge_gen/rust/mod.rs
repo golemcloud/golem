@@ -85,6 +85,11 @@ impl BridgeGenerator for RustBridgeGenerator {
 impl RustBridgeGenerator {
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
+        let golem_path = std::env::var("GOLEM_RUST_PATH").ok().and_then(|p| {
+            p.strip_suffix("/sdks/rust/golem-rust")
+                .map(|p| p.to_string())
+        });
+
         let _package_name = self.package_name();
 
         let mut doc = DocumentMut::new();
@@ -122,14 +127,28 @@ impl RustBridgeGenerator {
             entry
         }
 
+        fn path_dep(path: &str, features: &[&str]) -> Item {
+            let mut entry = Item::Table(Table::default());
+            entry["path"] = value(path);
+            add_features(&mut entry, features);
+            entry
+        }
+
+        let golem_dep = |path: &str, features: &[&str]| -> Item {
+            match golem_path.as_ref() {
+                Some(golem_path) => path_dep(&format!("{}/{}", golem_path, path), features),
+                None => {
+                    // TODO: use published version when available
+                    git_dep("https://github.com/golemcloud/golem", "main", features)
+                }
+            }
+        };
+
         doc["dependencies"] = Item::Table(Table::default());
         doc["dependencies"]["chrono"] = dep("0.4", &[]);
-        doc["dependencies"]["golem-client"] =
-            git_dep("https://github.com/golemcloud/golem", "main", &[]); // TODO: use published version when available
-        doc["dependencies"]["golem-common"] =
-            git_dep("https://github.com/golemcloud/golem", "main", &["client"]); // TODO: use published version when available
-        doc["dependencies"]["golem-wasm"] =
-            git_dep("https://github.com/golemcloud/golem", "main", &["client"]); // TODO: use published version when available
+        doc["dependencies"]["golem-client"] = golem_dep("golem-client", &[]);
+        doc["dependencies"]["golem-common"] = golem_dep("golem-common", &["client"]);
+        doc["dependencies"]["golem-wasm"] = golem_dep("golem-wasm", &["client"]);
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
         doc["dependencies"]["reqwest"] = dep("0.12", &["default-tls"]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
@@ -1879,10 +1898,12 @@ impl RustBridgeGenerator {
                     cases.push(quote! { #ident });
                     code_strings.push(quote! { #lit });
                     from_match_cases
-                        .push(quote! { #ident => golem_wasm::analysis::TextType::#ident });
-                    to_match_cases
-                        .push(quote! { golem_wasm::analysis::TextType::#ident => Ok(#ident) });
+                        .push(quote! { #lit => Some(Self::#ident) });
+                    to_match_cases.push(
+                        quote! { Self::#ident => #lit },
+                    );
                 }
+                from_match_cases.push(quote! { _ => None });
 
                 language_enums.push(quote! {
                     #[derive(Debug, Clone)]
