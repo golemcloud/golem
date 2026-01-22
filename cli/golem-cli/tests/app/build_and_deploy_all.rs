@@ -4,7 +4,6 @@ use assert2::assert;
 use assert2::let_assert;
 use golem_templates::model::GuestLanguage;
 use heck::ToKebabCase;
-use itertools::Itertools;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, tag, test};
 
