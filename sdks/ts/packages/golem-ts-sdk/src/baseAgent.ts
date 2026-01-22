@@ -141,7 +141,7 @@ export class BaseAgent {
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
-    ...args: RemovePrincipal<ConstructorParameters<T>>
+    ...args: GetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -206,11 +206,35 @@ export type RemoteMethod<Args extends any[], R> = {
   schedule: (ts: Datetime, ...args: Args) => void;
 };
 
-type RemovePrincipal<T extends readonly unknown[]> = T extends readonly [
-  infer H,
-  ...infer R,
-]
+type IsOptional<T extends readonly unknown[], K extends keyof T> =
+  {} extends Pick<T, K> ? true : false;
+
+type AllOptional<
+  T extends readonly unknown[],
+  I extends any[] = [],
+> = T extends readonly [any, ...infer R]
+  ? IsOptional<T, I['length']> extends true
+    ? AllOptional<R, [...I, 0]>
+    : false
+  : true;
+
+type SplitOnPrincipal<
+  T extends readonly unknown[],
+  Before extends unknown[] = [],
+> = T extends readonly [infer H, ...infer R]
   ? [H] extends [Principal]
-    ? RemovePrincipal<R>
-    : [H, ...RemovePrincipal<R>]
-  : [];
+    ? { before: Before; after: R }
+    : SplitOnPrincipal<R, [...Before, H]>
+  : { before: Before; after: [] };
+
+// Utility type to split constructor parameters on Principal
+// and mainly to exclude Principal while still allowing other trailing optional parameters
+type GetArgs<T extends readonly unknown[]> =
+  SplitOnPrincipal<T> extends {
+    before: infer B extends unknown[];
+    after: infer A extends unknown[];
+  }
+    ? AllOptional<A> extends true
+      ? B | [...B, ...A] // optional tail → union allowed
+      : [...B, ...A] // required tail → full args only
+    : never;
