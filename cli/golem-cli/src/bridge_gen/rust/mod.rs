@@ -1897,11 +1897,8 @@ impl RustBridgeGenerator {
 
                     cases.push(quote! { #ident });
                     code_strings.push(quote! { #lit });
-                    from_match_cases
-                        .push(quote! { #lit => Some(Self::#ident) });
-                    to_match_cases.push(
-                        quote! { Self::#ident => #lit },
-                    );
+                    from_match_cases.push(quote! { #lit => Some(Self::#ident) });
+                    to_match_cases.push(quote! { Self::#ident => #lit });
                 }
                 from_match_cases.push(quote! { _ => None });
 

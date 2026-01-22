@@ -65,6 +65,7 @@ impl Display for TypeLocation {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum TypeLocationRoot {
     AgentConstructorInput {
         input_name: String,

@@ -865,7 +865,7 @@ impl TypeScriptBridgeGenerator {
                     }
                     None => "{ err: undefined }".to_string(),
                 };
-                writer.write_line(format!("{}", err_expr));
+                writer.write_line(&err_expr);
                 writer.unindent();
                 writer.write_line(");");
             }
@@ -1121,7 +1121,7 @@ impl TypeScriptBridgeGenerator {
         typ: &AnalysedType,
     ) -> anyhow::Result<()> {
         let def = self.type_definition(typ)?;
-        writer.export_type(&ts_name, &def);
+        writer.export_type(ts_name, &def);
         Ok(())
     }
 

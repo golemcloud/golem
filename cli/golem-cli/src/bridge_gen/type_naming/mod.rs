@@ -190,7 +190,7 @@ impl TypeNaming {
                             field_name: field.name.clone(),
                             inner: None,
                         });
-                        self.collect_analysed_type(builder, &typ);
+                        self.collect_analysed_type(builder, typ);
                         builder.pop();
                     } else {
                         self.collect_analysed_type(builder, &field.typ);

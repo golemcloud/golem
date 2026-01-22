@@ -92,7 +92,7 @@ impl AnalysedTypeExt for AnalysedType {
 
 impl AnalysedTypeExt for Option<AnalysedType> {
     fn is_path_leaf_type(&self) -> bool {
-        self.as_ref().map_or(true, AnalysedType::is_path_leaf_type)
+        self.as_ref().is_none_or(AnalysedType::is_path_leaf_type)
     }
 
     fn as_path_elem_type(&self) -> Option<&AnalysedType> {
@@ -100,13 +100,13 @@ impl AnalysedTypeExt for Option<AnalysedType> {
     }
 
     fn can_be_named(&self) -> bool {
-        self.as_ref().map_or(false, AnalysedType::can_be_named)
+        self.as_ref().is_some_and(AnalysedType::can_be_named)
     }
 }
 
 impl AnalysedTypeExt for Option<Box<AnalysedType>> {
     fn is_path_leaf_type(&self) -> bool {
-        self.as_ref().map_or(true, |typ| typ.is_path_leaf_type())
+        self.as_ref().is_none_or(|typ| typ.is_path_leaf_type())
     }
 
     fn as_path_elem_type(&self) -> Option<&AnalysedType> {
@@ -114,6 +114,6 @@ impl AnalysedTypeExt for Option<Box<AnalysedType>> {
     }
 
     fn can_be_named(&self) -> bool {
-        self.as_ref().map_or(false, |typ| typ.can_be_named())
+        self.as_ref().is_some_and(|typ| typ.can_be_named())
     }
 }

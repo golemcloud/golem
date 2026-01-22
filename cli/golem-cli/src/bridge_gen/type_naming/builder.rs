@@ -22,7 +22,7 @@ pub(super) struct Builder {
     path: Option<TypeLocationPath>,
 }
 
-impl<'a> Builder {
+impl Builder {
     pub fn new() -> Self {
         Self {
             root_owner: RootOwner::ConstructorInput,
