@@ -311,7 +311,7 @@ export function serializeToDataValue(
 
     case 'principal':
       return Either.left(
-        `Internal Error: Serialization of principal type is not supported`,
+        `Internal Error: Serialization of 'Principal' data should have never happened`,
       );
 
     case 'unstructured-text':
