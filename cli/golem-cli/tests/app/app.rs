@@ -1,6 +1,6 @@
 use crate::app::{check_component_metadata, cmd, flag, pattern, TestContext};
 use crate::Tracing;
-use assert2::check;
+use assert2::{assert, check};
 use golem_cli::fs;
 use golem_templates::model::GuestLanguage;
 use indoc::indoc;
@@ -14,7 +14,7 @@ inherit_test_dep!(Tracing);
 async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli(cmd::NO_ARGS).await;
-    assert2::assert!(!outputs.success());
+    assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
     check!(!outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     check!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
@@ -26,22 +26,22 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
 
     let mut ctx = TestContext::new();
     let outputs = ctx.cli([cmd::NEW, app_name, "typescript", "rust"]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "typescript", "app:typescript"])
         .await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
         .await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx.cli(cmd::NO_ARGS).await;
-    assert2::assert!(!outputs.success());
+    assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
     check!(outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     check!(outputs.stderr_contains("app:rust"));
@@ -57,18 +57,18 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 
     let mut ctx = TestContext::new();
     let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
         .await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     // First build
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
@@ -81,35 +81,35 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 
     // Rebuild - 1
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 2
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
     let outputs = ctx.cli([cmd::BUILD, flag::FORCE_BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stdout_contains("Finished `dev` profile"));
 
     // Rebuild - 4
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Clean
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     // Rebuild - 5
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 }
@@ -118,14 +118,14 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([cmd::NEW, "dummy-app-name"]).await;
-    assert2::assert!(!outputs.success());
+    assert!(!outputs.success());
     check!(outputs.stdout_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
         .filter(|language| !outputs.stdout_contains(format!("- {language}")))
         .collect::<Vec<_>>();
 
-    assert2::assert!(
+    assert!(
         languages_without_templates.is_empty(),
         "{:?}",
         languages_without_templates
@@ -137,19 +137,19 @@ async fn completion(_tracing: &Tracing) {
     let ctx = TestContext::new();
 
     let outputs = ctx.cli([cmd::COMPLETION, "bash"]).await;
-    assert2::assert!(outputs.success(), "bash");
+    assert!(outputs.success(), "bash");
 
     let outputs = ctx.cli([cmd::COMPLETION, "elvish"]).await;
-    assert2::assert!(outputs.success(), "elvish");
+    assert!(outputs.success(), "elvish");
 
     let outputs = ctx.cli([cmd::COMPLETION, "fish"]).await;
-    assert2::assert!(outputs.success(), "fish");
+    assert!(outputs.success(), "fish");
 
     let outputs = ctx.cli([cmd::COMPLETION, "powershell"]).await;
-    assert2::assert!(outputs.success(), "powershell");
+    assert!(outputs.success(), "powershell");
 
     let outputs = ctx.cli([cmd::COMPLETION, "zsh"]).await;
-    assert2::assert!(outputs.success(), "zsh");
+    assert!(outputs.success(), "zsh");
 }
 
 #[test]
@@ -158,14 +158,14 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
         .await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     fs::write_str(
         ctx.cwd_path_join(
@@ -194,7 +194,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(outputs.stdout_contains_ordered([
         "+      /Cargo.toml:",
         "+        permissions: read-only",
@@ -229,7 +229,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     .unwrap();
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(outputs.stdout_contains_ordered([
         "     filesByPath:",
         "-      /Cargo.toml:",
@@ -248,10 +248,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     ]));
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert2::assert!(outputs.success());
-    assert2::assert!(
-        outputs.stdout_contains("Skipping deployment, no changes detected, UP-TO-DATE")
-    );
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Skipping deployment, no changes detected, UP-TO-DATE"));
 }
 
 // TODO: atomic: re-enable IF we will have any builtin subcommands for golem app
@@ -262,14 +260,14 @@ async fn custom_app_subcommand_with_builtin_name() {
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
         .await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     fs::append_str(
         ctx.cwd_path_join("golem.yaml"),
@@ -284,10 +282,10 @@ async fn custom_app_subcommand_with_builtin_name() {
     .unwrap();
 
     let outputs = ctx.cli(cmd::NO_ARGS).await;
-    assert2::assert!(!outputs.success());
+    assert!(!outputs.success());
     check!(outputs.stderr_contains(":new"));
 
     let outputs = ctx.cli([":new"]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     check!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }

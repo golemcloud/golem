@@ -94,15 +94,15 @@ mod pattern {
     pub static HELP_USAGE: &str = "Usage:";
 }
 
+#[derive(Debug, Clone)]
 enum CommandOutput {
     Stdout(String),
     Stderr(String),
 }
 
 pub struct Output {
-    pub status: ExitStatus,
-    pub stdout: Vec<String>,
-    pub stderr: Vec<String>,
+    status: ExitStatus,
+    output: Vec<CommandOutput>,
 }
 
 impl Output {
@@ -153,19 +153,28 @@ impl Output {
 
         drop(tx);
 
-        let mut stdout = vec![];
-        let mut stderr = vec![];
+        let mut output = vec![];
         while let Some(item) = rx.recv().await {
-            match item {
-                CommandOutput::Stdout(line) => stdout.push(line),
-                CommandOutput::Stderr(line) => stderr.push(line),
-            }
+            output.push(item);
         }
 
         Ok(Self {
             status: child.wait().await?,
-            stdout,
-            stderr,
+            output,
+        })
+    }
+
+    fn stdout(&self) -> impl Iterator<Item = &str> {
+        self.output.iter().filter_map(|output| match output {
+            CommandOutput::Stdout(line) => Some(line.as_str()),
+            CommandOutput::Stderr(_) => None,
+        })
+    }
+
+    fn stderr(&self) -> impl Iterator<Item = &str> {
+        self.output.iter().filter_map(|output| match output {
+            CommandOutput::Stdout(_) => None,
+            CommandOutput::Stderr(line) => Some(line.as_str()),
         })
     }
 
@@ -175,16 +184,34 @@ impl Output {
     }
 
     #[must_use]
+    fn success_or_dump(&self) -> bool {
+        let success = self.status.success();
+        if !success {
+            let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
+            let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
+            for output in &self.output {
+                match output {
+                    CommandOutput::Stdout(line) => {
+                        println!("{} {}", std_out_prefix, line);
+                    }
+                    CommandOutput::Stderr(line) => {
+                        println!("{} {}", std_err_prefix, line);
+                    }
+                }
+            }
+        }
+        success
+    }
+
+    #[must_use]
     fn stdout_contains<S: AsRef<str>>(&self, text: S) -> bool {
-        self.stdout
-            .iter()
+        self.stdout()
             .map(strip_ansi_escapes::strip_str)
             .any(|line| line.contains(text.as_ref()))
     }
 
     fn stdout_contains_row_with_cells(&self, expected_cells: &[&str]) -> bool {
-        self.stdout
-            .iter()
+        self.stdout()
             .map(strip_ansi_escapes::strip_str)
             .any(|line| {
                 let cells = line.split('|').map(str::trim).collect::<HashSet<_>>();
@@ -194,8 +221,7 @@ impl Output {
 
     #[must_use]
     fn stderr_contains<S: AsRef<str>>(&self, text: S) -> bool {
-        self.stderr
-            .iter()
+        self.stderr()
             .map(strip_ansi_escapes::strip_str)
             .any(|line| line.contains(text.as_ref()))
     }
@@ -205,7 +231,7 @@ impl Output {
         &self,
         patterns: I,
     ) -> bool {
-        contains_ordered(&self.stdout, patterns)
+        contains_ordered(self.stdout(), patterns)
     }
 
     #[must_use]
@@ -213,14 +239,13 @@ impl Output {
         &self,
         patterns: I,
     ) -> bool {
-        contains_ordered(&self.stderr, patterns)
+        contains_ordered(self.stderr(), patterns)
     }
 
     #[allow(dead_code)]
     #[must_use]
     fn stdout_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
-        self.stdout
-            .iter()
+        self.stdout()
             .filter(|line| line.contains(text.as_ref()))
             .count()
     }
@@ -228,28 +253,9 @@ impl Output {
     #[must_use]
     #[allow(dead_code)]
     fn stderr_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
-        self.stderr
-            .iter()
+        self.stderr()
             .filter(|line| line.contains(text.as_ref()))
             .count()
-    }
-}
-
-impl From<std::process::Output> for Output {
-    fn from(output: std::process::Output) -> Self {
-        fn to_lines(bytes: Vec<u8>) -> Vec<String> {
-            String::from_utf8(bytes)
-                .unwrap()
-                .lines()
-                .map(|s| s.to_string())
-                .collect()
-        }
-
-        Self {
-            status: output.status,
-            stdout: to_lines(output.stdout),
-            stderr: to_lines(output.stderr),
-        }
     }
 }
 
@@ -520,17 +526,20 @@ fn check_component_metadata(
 }
 
 #[must_use]
-fn contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
-    lines: &[String],
-    patterns: I,
-) -> bool {
+fn contains_ordered<LS, L, PS, P>(lines: L, patterns: P) -> bool
+where
+    LS: AsRef<str>,
+    L: IntoIterator<Item = LS>,
+    PS: AsRef<str>,
+    P: IntoIterator<Item = PS>,
+{
     let mut patterns = patterns.into_iter();
     let mut pattern = patterns.next();
     let mut pattern_str = pattern.as_ref().map(|s| s.as_ref());
     for line in lines {
         match pattern_str {
             Some(p) => {
-                if line.contains(p) {
+                if line.as_ref().contains(p) {
                     pattern = patterns.next();
                     pattern_str = pattern.as_ref().map(|s| s.as_ref());
                 }

@@ -4,6 +4,7 @@ use assert2::assert;
 use assert2::let_assert;
 use golem_templates::model::GuestLanguage;
 use heck::ToKebabCase;
+use itertools::Itertools;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, tag, test};
 
@@ -23,16 +24,15 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
     let app_name = "all-templates-app";
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let template_prefix = "  - ";
 
     let templates = outputs
-        .stdout
-        .iter()
+        .stdout()
         .filter(|line| line.starts_with(template_prefix) && line.contains(':'))
         .map(|line| {
-            let template_with_desc = line.as_str().strip_prefix(template_prefix);
+            let template_with_desc = line.strip_prefix(template_prefix);
             let_assert!(Some(template_with_desc) = template_with_desc, "{}", line);
             let separator_index = template_with_desc.find(":");
             let_assert!(
@@ -41,23 +41,23 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
                 template_with_desc
             );
 
-            &template_with_desc[..separator_index]
+            template_with_desc[..separator_index].to_string()
         })
         .collect::<Vec<_>>();
 
     println!("{templates:#?}");
 
     let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
-    for template in templates {
+    for template in &templates {
         let component_name = format!("app:{}", template.to_kebab_case(),);
         let outputs = ctx
             .cli([cmd::COMPONENT, cmd::NEW, template, &component_name])
             .await;
-        assert!(outputs.success());
+        assert!(outputs.success_or_dump());
     }
 
     let agent_metas = agent_metas();
@@ -77,12 +77,12 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
     }
 
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     // Checking bridge SDKs for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
@@ -101,7 +101,7 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
                 failed_bridge_sdks.push((
                     agent_meta.agent_test_name.to_string(),
                     language.id(),
-                    output.stderr,
+                    output.stderr().map(|s| s.to_string()).collect::<Vec<_>>(),
                 ));
             }
         }
