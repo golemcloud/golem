@@ -14,9 +14,9 @@
 
 pub mod api;
 pub mod config;
-// pub mod gateway_execution;
+pub mod gateway_execution;
 // pub mod gateway_middleware;
-// pub mod gateway_router;
+pub mod gateway_router;
 // pub mod gateway_security;
 pub mod getter;
 pub mod grpcapi;

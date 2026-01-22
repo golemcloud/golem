@@ -12,76 +12,111 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod core;
-mod pattern;
 pub mod tree;
 
-use crate::model::{HttpMiddleware, RichCompiledRoute, RichGatewayBindingCompiled};
-pub use core::*;
-use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::custom_api::path_pattern::{PathPattern, QueryInfo, VarInfo};
-pub use pattern::*;
+use self::tree::RadixNode;
+use crate::model::RichCompiledRoute;
+use golem_service_base::custom_api::PathSegment;
+use http::Method;
+use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub enum PathParamExtractor {
-    Single { var_info: VarInfo, index: usize },
-    AllFollowing { var_info: VarInfo, index: usize },
+#[derive(Clone, Debug, Default)]
+pub struct Router<T> {
+    tree: rustc_hash::FxHashMap<Method, RadixNode<T>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct RouteEntry {
-    // size is the index of all path patterns.
-    pub path_params: Vec<PathParamExtractor>,
-    pub query_params: Vec<QueryInfo>,
-    pub binding: RichGatewayBindingCompiled,
-    pub middlewares: Vec<HttpMiddleware>,
-    pub account_id: AccountId,
-    pub environment_id: EnvironmentId,
-}
-
-pub fn build_router(routes: Vec<RichCompiledRoute>) -> Router<RouteEntry> {
-    let mut router = Router::new();
-
-    for route in routes {
-        let method = route.method.into();
-        let path = route.path;
-        let binding = route.binding;
-
-        let path_params = path
-            .path_patterns
-            .iter()
-            .enumerate()
-            .filter_map(|(i, x)| match x {
-                PathPattern::Var(var_info) => Some(PathParamExtractor::Single {
-                    var_info: var_info.clone(),
-                    index: i,
-                }),
-                PathPattern::CatchAllVar(var_info) => Some(PathParamExtractor::AllFollowing {
-                    var_info: var_info.clone(),
-                    index: i,
-                }),
-                _ => None,
-            })
-            .collect();
-
-        let entry = RouteEntry {
-            path_params,
-            query_params: path.query_params,
-            binding,
-            middlewares: route.middlewares,
-            account_id: route.account_id,
-            environment_id: route.environment_id,
-        };
-
-        let path: Vec<RouterPattern> = path
-            .path_patterns
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
-
-        router.add_route(method, path, entry);
+impl<T> Router<T> {
+    pub fn new() -> Self {
+        Router {
+            tree: Default::default(),
+        }
     }
 
-    router
+    /// Add a route to the router.
+    /// Returns true if the route was added successfully.
+    /// False indicates that there is a conflict.
+    pub fn add_route(&mut self, method: Method, path: Vec<PathSegment>, data: T) -> bool {
+        let node = self.tree.entry(method).or_default();
+        node.add_path(&path, data).is_ok()
+    }
+
+    pub fn get_route(&self, method: &Method, path: &[PathSegment]) -> Option<&T> {
+        let node = self.tree.get(method)?;
+        node.get_by_path(path)
+    }
+
+    pub fn route(&self, method: &Method, path: &[&str]) -> Option<(&T, Vec<String>)> {
+        let node = self.tree.get(method)?;
+        node.matches(path)
+    }
+}
+
+impl Router<Arc<RichCompiledRoute>> {
+    pub fn build_router(routes: Vec<RichCompiledRoute>) -> Self {
+        let mut router = Self::new();
+
+        for route in routes {
+            let route_id = route.route_id;
+
+            if !router.add_route(route.method.clone(), route.path.clone(), Arc::new(route)) {
+                tracing::warn!("Failed to add route with index {route_id}");
+            }
+        }
+
+        router
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::gateway_router::Router;
+    use golem_service_base::custom_api::PathSegment;
+    use http::Method;
+    use test_r::test;
+
+    #[test]
+    fn test_router() {
+        let mut router = Router::new();
+
+        router.add_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "test".into(),
+            }],
+            1,
+        );
+        router.add_route(
+            Method::GET,
+            vec![
+                PathSegment::Literal {
+                    value: "test".into(),
+                },
+                PathSegment::Variable,
+            ],
+            2,
+        );
+
+        assert_eq!(
+            router.route(&Method::GET, &["test"]),
+            Some((&1, Vec::new()))
+        );
+        assert_eq!(
+            router.route(&Method::GET, &["test", "123"]),
+            Some((&2, vec![String::from("123")]))
+        );
+        assert_eq!(router.route(&Method::POST, &["api"]), None);
+
+        router.add_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "api".into(),
+            }],
+            1,
+        );
+
+        assert_eq!(
+            router.route(&Method::POST, &["api"]),
+            Some((&1, Vec::new()))
+        );
+    }
 }

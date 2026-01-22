@@ -18,7 +18,7 @@ import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
-import "golem/apidefinition/api_definition.proto";
+import "golem/customapi/core.proto";
 import "golem/auth/auth_details_for_environment.proto";
 
 service RegistryService {
@@ -277,5 +277,5 @@ message GetActiveRoutesForDomainResponse {
 }
 
 message GetActiveRoutesForDomainSuccessResponse {
-  golem.apidefinition.CompiledRoutes compiled_routes = 1;
+  golem.customapi.CompiledRoutes compiled_routes = 1;
 }

@@ -17,12 +17,11 @@ use crate::model::api_definition::{
 };
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
+use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
-// use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
-use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
@@ -153,9 +152,8 @@ impl DeployedRoutesService {
             let converted = MaybeDisabledCompiledRoute {
                 method: route.route.method,
                 path: route.route.path,
-                header_vars: route.route.header_vars,
-                query_vars: route.route.query_vars,
                 behavior: route.route.behaviour,
+                body: route.route.body,
                 security_scheme_missing: route.security_scheme_missing,
                 security_scheme: security_scheme_id,
                 cors: route.route.cors,
@@ -203,10 +201,10 @@ impl DeployedRoutesService {
                 security_schemes.insert(security_scheme.id, security_scheme);
             }
             let converted = CompiledRoute {
+                route_id: route.route.route_id,
                 method: route.route.method,
                 path: route.route.path,
-                header_vars: route.route.header_vars,
-                query_vars: route.route.query_vars,
+                body: route.route.body,
                 behavior: route.route.behaviour,
                 security_scheme: security_scheme_id,
                 cors: route.route.cors,

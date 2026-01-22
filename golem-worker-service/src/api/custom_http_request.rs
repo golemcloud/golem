@@ -15,25 +15,25 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInputExecutor;
+use crate::gateway_execution::request_handler::{RequestHandler, RequestHandlerError};
 use futures::FutureExt;
-use poem::{Endpoint, Request, Response};
+use http::StatusCode;
+use poem::{Body, Endpoint, Request, Response};
 
 pub struct CustomHttpRequestApi {
-    pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
+    pub request_handler: Arc<RequestHandler>,
 }
 
 impl CustomHttpRequestApi {
-    pub fn new(gateway_http_input_executor: Arc<GatewayHttpInputExecutor>) -> Self {
-        Self {
-            gateway_http_input_executor,
-        }
+    pub fn new(request_handler: Arc<RequestHandler>) -> Self {
+        Self { request_handler }
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        self.gateway_http_input_executor
-            .execute_http_request(request)
+        self.request_handler
+            .handle_request(request)
             .await
+            .unwrap_or_else(transform_request_handler_error)
     }
 }
 
@@ -43,4 +43,69 @@ impl Endpoint for CustomHttpRequestApi {
     fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {
         self.execute(req).map(Ok)
     }
+}
+
+fn transform_request_handler_error(error: RequestHandlerError) -> Response {
+    let status = match &error {
+        RequestHandlerError::ValueParsingFailed { .. }
+        | RequestHandlerError::MissingValue { .. }
+        | RequestHandlerError::TooManyValues { .. }
+        | RequestHandlerError::HeaderIsNotAscii { .. }
+        | RequestHandlerError::BodyIsNotValidJson { .. }
+        | RequestHandlerError::JsonBodyParsingFailed { .. } => StatusCode::BAD_REQUEST,
+
+        RequestHandlerError::ResolvingRouteFailed(_) => StatusCode::NOT_FOUND,
+
+        RequestHandlerError::AgentResponseTypeMismatch { .. }
+        | RequestHandlerError::InvariantViolated { .. }
+        | RequestHandlerError::AgentInvocationFailed(_)
+        | RequestHandlerError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+
+    let body = match &error {
+        RequestHandlerError::ValueParsingFailed { value, expected } => {
+            format!(
+                "Failed parsing value '{}', expected type: {}",
+                value, expected
+            )
+        }
+        RequestHandlerError::MissingValue { expected } => {
+            format!(
+                "Expected {} values to be provided, but found none",
+                expected
+            )
+        }
+        RequestHandlerError::TooManyValues { expected } => {
+            format!(
+                "Expected {} values to be provided, but found too many",
+                expected
+            )
+        }
+        RequestHandlerError::HeaderIsNotAscii { header_name } => {
+            format!("Header '{}' is not valid ASCII", header_name)
+        }
+        RequestHandlerError::BodyIsNotValidJson { error } => {
+            format!("Request body was not valid JSON: {}", error)
+        }
+        RequestHandlerError::JsonBodyParsingFailed { errors } => {
+            format!("Failed parsing JSON body: [{}]", errors.join(", "))
+        }
+        RequestHandlerError::AgentResponseTypeMismatch { error } => {
+            format!("Agent response did not match expected type: {}", error)
+        }
+        RequestHandlerError::InvariantViolated { msg } => {
+            format!("Invariant violated: {}", msg)
+        }
+        RequestHandlerError::ResolvingRouteFailed(inner) => {
+            format!("Resolving route failed: {}", inner)
+        }
+        RequestHandlerError::AgentInvocationFailed(inner) => {
+            format!("Agent invocation failed: {}", inner)
+        }
+        RequestHandlerError::InternalError(inner) => {
+            format!("Internal server error: {}", inner)
+        }
+    };
+
+    Response::builder().status(status).body(Body::from(body))
 }

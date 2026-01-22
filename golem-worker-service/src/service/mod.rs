@@ -38,6 +38,11 @@ use crate::config::WorkerServiceConfig;
 // use crate::gateway_execution::route_resolver::RouteResolver;
 // use crate::gateway_execution::GatewayWorkerRequestExecutor;
 // use crate::gateway_security::DefaultIdentityProvider;
+use crate::gateway_execution::api_definition_lookup::{
+    HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
+};
+use crate::gateway_execution::request_handler::RequestHandler;
+use crate::gateway_execution::route_resolver::RouteResolver;
 use crate::service::component::ComponentService;
 use crate::service::worker::{AgentsService, WorkerClient, WorkerExecutorWorkerClient};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -57,7 +62,7 @@ pub struct Services {
     pub limit_service: Arc<dyn LimitService>,
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
-    // pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
+    pub request_handler: Arc<RequestHandler>,
     pub agents_service: Arc<AgentsService>,
 }
 
@@ -185,25 +190,19 @@ impl Services {
         //     HttpHandlerBindingHandler::new(gateway_worker_request_executor.clone()),
         // );
 
-        // let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
-        //     RegistryServiceApiDefinitionsLookup::new(registry_service_client.clone()),
-        // );
+        let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
+            RegistryServiceApiDefinitionsLookup::new(registry_service_client.clone()),
+        );
 
-        // let route_resolver = Arc::new(RouteResolver::new(
-        //     &config.route_resolver,
-        //     api_definition_lookup_service.clone(),
-        // ));
+        let route_resolver = Arc::new(RouteResolver::new(
+            &config.route_resolver,
+            api_definition_lookup_service.clone(),
+        ));
 
-        // let gateway_http_input_executor: Arc<GatewayHttpInputExecutor> =
-        //     Arc::new(GatewayHttpInputExecutor::new(
-        //         route_resolver.clone(),
-        //         gateway_worker_request_executor.clone(),
-        //         file_server_binding_handler.clone(),
-        //         auth_call_back_binding_handler.clone(),
-        //         http_handler_binding_handler.clone(),
-        //         gateway_session_store.clone(),
-        //         identity_provider.clone(),
-        //     ));
+        let request_handler = Arc::new(RequestHandler::new(
+            route_resolver.clone(),
+            worker_service.clone(),
+        ));
 
         let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new(
             registry_service_client.clone(),
@@ -216,7 +215,7 @@ impl Services {
             limit_service,
             component_service,
             worker_service,
-            // gateway_http_input_executor,
+            request_handler,
             agents_service,
         })
     }
