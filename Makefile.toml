@@ -399,6 +399,8 @@ args = [
 
 ## ** TEST **
 
+[tasks.test-sdk-overrides]
+private = true
 # NOTE: when we reach a stable phase during a release cycle,
 #      then these env vars should be commented
 [tasks.test-sdk-overrides.env]
