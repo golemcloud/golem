@@ -22,6 +22,7 @@ use golem_common::model::agent::{
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, ValueAndType};
 use http::StatusCode;
+use tracing::debug;
 
 pub fn interpret_agent_response(
     invoke_result: Option<ValueAndType>,
@@ -30,13 +31,17 @@ pub fn interpret_agent_response(
     match invoke_result.map(|ir| ir.value) {
         Some(golem_wasm::Value::Result(Ok(Some(data_value_value)))) => {
             let untyped_data_value = UntypedDataValue::from_value(*data_value_value)
-                .map_err(|err| anyhow!("DataValue conversion error: {err}"))?;
+                .map_err(|err| anyhow!("UntypedDataValue conversion error: {err}"))?;
+            debug!("converted");
             let mapped_response = map_successful_agent_response(untyped_data_value, expected_type)?;
             Ok(mapped_response)
         }
         Some(golem_wasm::Value::Result(Err(Some(agent_error_value)))) => {
             let agent_error = AgentError::from_value(*agent_error_value)
                 .map_err(|err| anyhow!("AgentError conversion error: {err}"))?;
+
+            debug!("Received agent error: {agent_error}");
+
             let mapped_error = map_agent_error(agent_error)?;
             Ok(mapped_error)
         }
@@ -64,6 +69,8 @@ fn map_successful_agent_response(
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     let typed_value = DataValue::try_from_untyped(agent_response, expected_type.clone())
         .map_err(|error| RequestHandlerError::AgentResponseTypeMismatch { error })?;
+
+    debug!("Received successful agent response: {typed_value:?}");
 
     match typed_value {
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
@@ -106,12 +113,12 @@ fn map_component_model_agent_response(
 
     match value_and_type.value {
         Value::Option(None) => Ok(RouteExecutionResult::NoBody {
-            status: StatusCode::NO_CONTENT,
+            status: StatusCode::NOT_FOUND,
         }),
 
         Value::Option(Some(inner)) => {
             let inner_type = unwrap_option_type(value_and_type.typ)?;
-            Ok(ok_body(*inner, inner_type))
+            Ok(json_response_body(*inner, inner_type, StatusCode::OK))
         }
 
         Value::Result(Ok(None)) => Ok(RouteExecutionResult::NoBody {
@@ -119,8 +126,8 @@ fn map_component_model_agent_response(
         }),
 
         Value::Result(Ok(Some(inner))) => {
-            let inner_type = unwrap_result_ok_option_type(value_and_type.typ)?;
-            Ok(ok_body(*inner, inner_type))
+            let inner_type = unwrap_result_ok_type(value_and_type.typ)?;
+            Ok(json_response_body(*inner, inner_type, StatusCode::OK))
         }
 
         Value::Result(Err(None)) => Ok(RouteExecutionResult::NoBody {
@@ -128,8 +135,12 @@ fn map_component_model_agent_response(
         }),
 
         Value::Result(Err(Some(inner))) => {
-            let inner_type = unwrap_result_err_option_type(value_and_type.typ)?;
-            Ok(err_body(*inner, inner_type))
+            let inner_type = unwrap_result_err_type(value_and_type.typ)?;
+            Ok(json_response_body(
+                *inner,
+                inner_type,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ))
         }
 
         other => Ok(RouteExecutionResult::ComponentModelJsonBody {
@@ -151,44 +162,43 @@ fn unwrap_option_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerE
     }
 }
 
-fn unwrap_result_ok_option_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerError> {
+fn unwrap_result_ok_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerError> {
     use golem_wasm::analysis;
 
-    let ok = if let AnalysedType::Result(analysis::TypeResult { ok: Some(ok), .. }) = typ {
-        *ok
+    if let AnalysedType::Result(analysis::TypeResult {
+        ok: Some(inner), ..
+    }) = typ
+    {
+        Ok(*inner)
     } else {
-        return Err(RequestHandlerError::invariant_violated(
+        Err(RequestHandlerError::invariant_violated(
             "analysed type did not match value",
-        ));
-    };
-
-    unwrap_option_type(ok)
-}
-
-fn unwrap_result_err_option_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerError> {
-    use golem_wasm::analysis;
-
-    let err = if let AnalysedType::Result(analysis::TypeResult { err: Some(err), .. }) = typ {
-        *err
-    } else {
-        return Err(RequestHandlerError::invariant_violated(
-            "analysed type did not match value",
-        ));
-    };
-
-    unwrap_option_type(err)
-}
-
-fn ok_body(value: golem_wasm::Value, typ: AnalysedType) -> RouteExecutionResult {
-    RouteExecutionResult::ComponentModelJsonBody {
-        body: ValueAndType::new(value, typ),
-        status: StatusCode::OK,
+        ))
     }
 }
 
-fn err_body(value: golem_wasm::Value, typ: AnalysedType) -> RouteExecutionResult {
+fn unwrap_result_err_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerError> {
+    use golem_wasm::analysis;
+
+    if let AnalysedType::Result(analysis::TypeResult {
+        err: Some(inner), ..
+    }) = typ
+    {
+        Ok(*inner)
+    } else {
+        Err(RequestHandlerError::invariant_violated(
+            "analysed type did not match value",
+        ))
+    }
+}
+
+fn json_response_body(
+    value: golem_wasm::Value,
+    typ: AnalysedType,
+    status: StatusCode,
+) -> RouteExecutionResult {
     RouteExecutionResult::ComponentModelJsonBody {
         body: ValueAndType::new(value, typ),
-        status: StatusCode::INTERNAL_SERVER_ERROR,
+        status,
     }
 }

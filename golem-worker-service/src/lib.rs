@@ -180,7 +180,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let route = Route::new()
-            // .nest("/", api::custom_http_request_api(&self.services))
+            .nest("/", api::custom_http_request_api(&self.services))
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())

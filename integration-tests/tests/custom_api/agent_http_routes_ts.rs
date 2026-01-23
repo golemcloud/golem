@@ -1,0 +1,474 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use axum::http::{HeaderMap, HeaderValue};
+use golem_client::api::RegistryServiceClient;
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+use golem_test_framework::config::dsl_impl::TestUserContext;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_eq;
+use reqwest::Url;
+use serde_json::json;
+use std::collections::BTreeSet;
+use std::fmt::{Debug, Formatter};
+use test_r::test_dep;
+use test_r::{inherit_test_dep, test};
+
+inherit_test_dep!(EnvBasedTestDependencies);
+
+#[allow(dead_code)]
+pub struct TestContext {
+    pub user: TestUserContext<EnvBasedTestDependencies>,
+    pub env_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
+    pub client: reqwest::Client,
+    pub base_url: Url,
+}
+
+impl Debug for TestContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TestContext")
+    }
+}
+
+#[test_dep]
+async fn test_context(deps: &EnvBasedTestDependencies) -> TestContext {
+    test_context_internal(deps).await.unwrap()
+}
+
+async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<TestContext> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let domain = Domain(format!("{}.golem.cloud", env.id));
+
+    client
+        .create_domain_registration(
+            &env.id.0,
+            &DomainRegistrationCreation {
+                domain: domain.clone(),
+            },
+        )
+        .await?;
+
+    user.component(&env.id, "golem_it_agent_http_routes_ts")
+        .name("golem-it:agent-http-routes-ts")
+        .store()
+        .await?;
+
+    let http_api_deployment_creation = HttpApiDeploymentCreation {
+        domain: domain.clone(),
+        agent_types: BTreeSet::from_iter([AgentTypeName("http-agent".into())]),
+    };
+
+    client
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .await?;
+
+    let deployment = user.deploy_environment(&env.id).await?;
+
+    let client = {
+        let mut headers = HeaderMap::new();
+        headers.insert("Host", HeaderValue::from_str(&domain.0)?);
+        reqwest::Client::builder()
+            .default_headers(headers)
+            .build()?
+    };
+
+    let base_url = Url::parse(&format!("http://127.0.0.1:{}", user.custom_request_port()))?;
+
+    Ok(TestContext {
+        client,
+        base_url,
+        user,
+        env_id: env.id,
+        deployment_revision: deployment.revision,
+    })
+}
+
+#[test]
+#[tracing::instrument]
+async fn string_path_var(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/string-path-var/foo")?,
+        )
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body1: serde_json::Value = response.json().await?;
+    assert_eq!(body1, json!({ "value": "foo" }));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn multi_path_vars(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/multi-path-vars/foo/bar")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "joined": "foo:bar" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn path_and_query(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/path-and-query/item-123?limit=10")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(
+        body,
+        json!({
+            "id": "item-123",
+            "limit": 10.0
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn path_and_header(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/path-and-header/res-42")?,
+        )
+        .header("x-request-id", "req-abc")
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(
+        body,
+        json!({
+            "resourceId": "res-42",
+            "requestId": "req-abc"
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[ignore]
+// https://github.com/golemcloud/golem/issues/2615
+async fn response_no_content(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/agents/test-agent/resp/no-content")?)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    assert!(response.bytes().await?.is_empty());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_json(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/agents/test-agent/resp/json")?)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "value": "ok" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_optional_found(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/resp/optional/true")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "value": "yes" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_optional_not_found(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/resp/optional/false")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(response.bytes().await?.is_empty());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_result_ok(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/resp/result-json-json/true")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "value": "ok" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_result_err(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/resp/result-json-json/false")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    );
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "error": "boom" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_result_void_err(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/agents/test-agent/resp/result-void-json")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    );
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "error": "fail" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_result_json_void(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/resp/result-json-void")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "value": "ok" }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_binary(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/agents/test-agent/resp/binary")?)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()?;
+    assert_eq!(content_type, "application/octet-stream");
+
+    let body = response.bytes().await?;
+    assert_eq!(&body[..], &[1, 2, 3, 4]);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn negative_missing_path_var(agent: &TestContext) -> anyhow::Result<()> {
+    // second path variable missing
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/multi-path-vars/foo")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn negative_extra_path_segment(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/string-path-var/foo/bar")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn negative_missing_query_param(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/path-and-query/item-123")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn negative_invalid_query_param_type(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/path-and-query/item-123?limit=not-a-number")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn negative_missing_header(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/path-and-header/res-42")?,
+        )
+        // no x-request-id header
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}

@@ -15,6 +15,7 @@
 use golem_common::model::agent::BinarySource;
 use golem_wasm::ValueAndType;
 use http::StatusCode;
+use std::fmt;
 
 pub enum RouteExecutionResult {
     NoBody {
@@ -32,10 +33,41 @@ pub enum RouteExecutionResult {
     },
 }
 
-#[derive(Debug)]
+impl fmt::Debug for RouteExecutionResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RouteExecutionResult::NoBody { status } => {
+                f.debug_struct("NoBody").field("status", status).finish()
+            }
+            RouteExecutionResult::ComponentModelJsonBody { body, status } => f
+                .debug_struct("ComponentModelJsonBody")
+                .field("body", body)
+                .field("status", status)
+                .finish(),
+            RouteExecutionResult::UnstructuredBinaryBody { .. } => {
+                f.write_str("UnstructuredBinaryBody")
+            }
+            RouteExecutionResult::CustomAgentError { body } => f
+                .debug_struct("CustomAgentError")
+                .field("body", body)
+                .finish(),
+        }
+    }
+}
+
 pub enum ParsedRequestBody {
     Unused,
     JsonBody(golem_wasm::Value),
     // Always Some initially, will be None after being consumed by handler code
     UnstructuredBinary(Option<BinarySource>),
+}
+
+impl fmt::Debug for ParsedRequestBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParsedRequestBody::Unused => f.write_str("Unused"),
+            ParsedRequestBody::JsonBody(value) => f.debug_tuple("JsonBody").field(value).finish(),
+            ParsedRequestBody::UnstructuredBinary(_) => f.write_str("UnstructuredBinary"),
+        }
+    }
 }

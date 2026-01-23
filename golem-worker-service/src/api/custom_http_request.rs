@@ -17,8 +17,10 @@ use std::sync::Arc;
 
 use crate::gateway_execution::request_handler::{RequestHandler, RequestHandlerError};
 use futures::FutureExt;
+use golem_common::recorded_http_api_request;
 use http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
+use tracing::Instrument;
 
 pub struct CustomHttpRequestApi {
     pub request_handler: Arc<RequestHandler>,
@@ -30,10 +32,17 @@ impl CustomHttpRequestApi {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        self.request_handler
+        let record = recorded_http_api_request!("execute",);
+
+        let response = self
+            .request_handler
             .handle_request(request)
-            .await
-            .unwrap_or_else(transform_request_handler_error)
+            .instrument(record.span.clone())
+            .await;
+
+        // let response = record.result(response);
+
+        response.unwrap_or_else(transform_request_handler_error)
     }
 }
 

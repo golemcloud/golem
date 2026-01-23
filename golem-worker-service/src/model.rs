@@ -47,6 +47,7 @@ pub struct SwaggerUiBinding {
     pub swagger_html: Arc<SwaggerHtml>,
 }
 
+#[derive(Debug)]
 pub struct RichCompiledRoute {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,

@@ -27,6 +27,7 @@ use golem_service_base::custom_api::CompiledRoutes;
 use crate::model::RichCompiledRoute;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::debug;
 
 pub struct ResolvedRouteEntry {
     pub domain: Domain,
@@ -76,6 +77,7 @@ impl RouteResolver {
     ) -> Result<ResolvedRouteEntry, RouteResolverError> {
         let domain = authority_from_request(request)
             .map_err(RouteResolverError::CouldNotGetDomainFromRequest)?;
+        debug!("Resolving router for domain: {domain}");
 
         let router = self.get_or_build_router(&domain).await?;
 
@@ -87,6 +89,8 @@ impl RouteResolver {
         let (route_entry, captured_path_parameters) = router
             .route(request.method(), &path_segments)
             .ok_or(RouteResolverError::NoMatchingRoute)?;
+
+        debug!("Resolved route entry: {route_entry:?}");
 
         Ok(ResolvedRouteEntry {
             domain,

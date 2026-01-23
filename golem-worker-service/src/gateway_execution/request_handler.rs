@@ -22,12 +22,12 @@ use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverErro
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::{WorkerService, WorkerServiceError};
 use anyhow::anyhow;
+use golem_common::error_forwarding;
 use golem_common::model::agent::{
     AgentId, BinaryReference, BinaryReferenceValue, DataValue, ElementValue, ElementValues,
     UntypedDataValue, UntypedElementValue,
 };
 use golem_common::model::{IdempotencyKey, WorkerId};
-use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::custom_api::{ConstructorParameter, MethodParameter, RouteBehaviour};
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -36,6 +36,7 @@ use golem_wasm::ValueAndType;
 use http::StatusCode;
 use poem::{Request, Response};
 use std::sync::Arc;
+use tracing::debug;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -73,12 +74,6 @@ impl RequestHandlerError {
     }
 }
 
-impl SafeDisplay for RequestHandlerError {
-    fn to_safe_string(&self) -> String {
-        todo!()
-    }
-}
-
 error_forwarding!(RequestHandlerError);
 
 pub struct RequestHandler {
@@ -96,6 +91,8 @@ impl RequestHandler {
     }
 
     pub async fn handle_request(&self, request: Request) -> Result<Response, RequestHandlerError> {
+        debug!("Begin http request handling for request {request:?}");
+
         let matching_route = self.route_resolver.resolve_matching_route(&request).await?;
         let mut request = RichRequest::new(request);
         let execution_result = self.execute_route(&mut request, &matching_route).await?;
@@ -134,11 +131,22 @@ impl RequestHandler {
 
         let method_params = self.resolve_method_arguments(resolved_route, request, parsed_body)?;
 
+        debug!("Invoking agent {worker_id}");
+
         let agent_response = self
             .invoke_agent(&worker_id, resolved_route, method_params)
             .await?;
 
+        debug!("Received agent response: {agent_response:?}");
+
+        debug!(
+            "Json agent response: {}",
+            agent_response.clone().unwrap().to_json_value().unwrap()
+        );
+
         let mapped_result = interpret_agent_response(agent_response, expected_agent_response)?;
+
+        debug!("Returning mapped agent result: {mapped_result:?}");
 
         Ok(mapped_result)
     }
