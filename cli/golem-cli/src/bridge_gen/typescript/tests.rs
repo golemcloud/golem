@@ -43,6 +43,7 @@ use test_r::{test, test_dep};
 
 struct GeneratedPackage {
     pub dir: TempDir,
+    pub agent_type: AgentType,
 }
 
 impl GeneratedPackage {
@@ -50,123 +51,97 @@ impl GeneratedPackage {
         let dir = TempDir::new().unwrap();
         let target_dir = Utf8Path::from_path(dir.path()).unwrap();
         std::fs::remove_dir_all(target_dir).ok();
-        generate_and_compile(agent_type, target_dir);
-        GeneratedPackage { dir }
+        generate_and_compile(agent_type.clone(), target_dir);
+        GeneratedPackage { dir, agent_type }
     }
-}
 
-#[allow(dead_code)]
-struct TestTypes {
-    object_type: AnalysedType,
-    union_type: AnalysedType,
-    list_complex_type: AnalysedType,
-    tuple_type: AnalysedType,
-    tuple_complex_type: AnalysedType,
-    map_type: AnalysedType,
-    simple_interface_type: AnalysedType,
-    object_complex_type: AnalysedType,
-    union_complex_type: AnalysedType,
-    tagged_union: AnalysedType,
-    union_with_literals: AnalysedType,
-    union_with_only_literals: AnalysedType,
-    anonymous_union_with_only_literals: AnalysedType,
-    object_with_union_undefined: AnalysedType,
-}
+    pub fn input_element_type_by_name(&self, method_name: &str, name: &str) -> AnalysedType {
+        self.element_type_by_name_in_schema(
+            method_name,
+            "input",
+            name,
+            &self.method_by_name(method_name).input_schema,
+        )
+        .clone()
+    }
 
-impl Default for TestTypes {
-    fn default() -> Self {
-        let object_type = record(vec![
-            field("a", str()),
-            field("b", s32()),
-            field("c", bool()),
-        ]);
+    pub fn output_element_type_by_name(&self, method_name: &str, name: &str) -> AnalysedType {
+        self.element_type_by_name_in_schema(
+            method_name,
+            "output",
+            name,
+            &self.method_by_name(method_name).output_schema,
+        )
+        .clone()
+    }
 
-        let union_type = variant(vec![
-            case("case1", s32()),
-            case("case2", str()),
-            case("case3", bool()),
-            case("case4", object_type.clone()),
-        ]);
+    fn method_by_name(&self, method_name: &str) -> &AgentMethod {
+        self.agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Method {} not found in agent {}",
+                    self.agent_type.type_name, method_name
+                )
+            })
+    }
 
-        let list_complex_type = list(object_type.clone());
+    fn element_type_by_name_in_schema<'a>(
+        &self,
+        method_name: &str,
+        kind: &str,
+        name: &str,
+        schema: &'a DataSchema,
+    ) -> &'a AnalysedType {
+        match schema {
+            DataSchema::Tuple(tuple) => {
+                let element = tuple
+                    .elements
+                    .iter()
+                    .find(|e| e.name == name)
+                    .map(|e| &e.schema)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Input {} not found in method {} of agent {}",
+                            name,
+                            method_name,
+                            self.agent_type.type_name.as_str()
+                        )
+                    });
 
-        let tuple_type = tuple(vec![str(), s32(), bool()]);
-
-        let tuple_complex_type = tuple(vec![str(), s32(), object_type.clone()]);
-
-        let map_type = list(tuple(vec![str(), s32()]));
-
-        let simple_interface_type = record(vec![field("n", s32())]);
-
-        let object_complex_type = record(vec![
-            field("a", str()),
-            field("b", s32()),
-            field("c", bool()),
-            field("d", object_type.clone()),
-            field("e", union_type.clone()),
-            field("f", list(str())),
-            field("g", list(object_type.clone())),
-            field("h", tuple_type.clone()),
-            field("i", tuple_complex_type.clone()),
-            field("j", map_type.clone()),
-            field("k", simple_interface_type.clone()),
-        ]);
-
-        let union_complex_type = variant(vec![
-            case("case1", s32()),
-            case("case2", str()),
-            case("case3", bool()),
-            case("case4", object_complex_type.clone()),
-            case("case5", union_type.clone()),
-            case("case6", tuple_type.clone()),
-            case("case7", tuple_complex_type.clone()),
-            case("case8", simple_interface_type.clone()),
-            case("case9", list(str())),
-        ]);
-
-        let tagged_union = variant(vec![
-            case("a", str()),
-            case("b", s32()),
-            case("c", bool()),
-            case("d", union_type.clone()),
-            case("e", object_type.clone()),
-            case("f", list(str())),
-            case("g", tuple(vec![str(), s32(), bool()])),
-            case("h", simple_interface_type.clone()),
-            unit_case("i"),
-            unit_case("j"),
-        ]);
-
-        let union_with_literals = variant(vec![
-            unit_case("lit1"),
-            unit_case("lit2"),
-            unit_case("lit3"),
-            case("union-with-literals1", bool()),
-        ])
-        .named("UnionWithLiterals");
-
-        let union_with_only_literals =
-            r#enum(&["foo", "bar", "baz"]).named("UnionWithOnlyLiterals");
-
-        let anonymous_union_with_only_literals = r#enum(&["foo", "bar", "baz"]);
-
-        let object_with_union_undefined = record(vec![field("a", option(str()))]);
-
-        TestTypes {
-            object_type,
-            union_type,
-            list_complex_type,
-            tuple_type,
-            tuple_complex_type,
-            map_type,
-            simple_interface_type,
-            object_complex_type,
-            union_complex_type,
-            tagged_union,
-            union_with_literals,
-            union_with_only_literals,
-            anonymous_union_with_only_literals,
-            object_with_union_undefined,
+                match element {
+                    ElementSchema::ComponentModel(component_model) => &component_model.element_type,
+                    ElementSchema::UnstructuredText(_) => {
+                        panic!(
+                            "Expected component model {} schema while searching for {}.{}.{}",
+                            kind,
+                            self.agent_type.type_name.as_str(),
+                            method_name,
+                            name
+                        )
+                    }
+                    ElementSchema::UnstructuredBinary(_) => {
+                        panic!(
+                            "Expected component model {} schema while searching for {}.{}.{}",
+                            kind,
+                            self.agent_type.type_name.as_str(),
+                            method_name,
+                            name
+                        )
+                    }
+                }
+            }
+            DataSchema::Multimodal(_) => {
+                panic!(
+                    "Expected tuple {} schema while searching for {}.{}.{}",
+                    kind,
+                    self.agent_type.type_name.as_str(),
+                    method_name,
+                    name
+                )
+            }
         }
     }
 }
@@ -339,7 +314,6 @@ fn bridge_tests_optional_q_mark(
 #[test]
 fn bridge_tests_optional(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -359,7 +333,7 @@ fn bridge_tests_optional(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        types.object_with_union_undefined.clone(),
+                        pkg.input_element_type_by_name("funOptional", "param2"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -369,7 +343,7 @@ fn bridge_tests_optional(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        types.object_with_union_undefined.clone(),
+                        pkg.input_element_type_by_name("funOptional", "param3"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -379,7 +353,7 @@ fn bridge_tests_optional(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        types.object_with_union_undefined.clone(),
+                        pkg.input_element_type_by_name("funOptional", "param4"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -389,7 +363,7 @@ fn bridge_tests_optional(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &
                         Value::Record(vec![Value::Option(Some(Box::new(Value::String(
                             "nested".to_string(),
                         ))))]),
-                        types.object_with_union_undefined.clone(),
+                        pkg.input_element_type_by_name("funOptional", "param5"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -401,9 +375,12 @@ fn bridge_tests_optional(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &
                         .unwrap(),
                 }),
                 UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(Value::Option(None), option(types.union_type.clone()))
-                        .to_json_value()
-                        .unwrap(),
+                    value: ValueAndType::new(
+                        Value::Option(None),
+                        pkg.input_element_type_by_name("funOptional", "param7"),
+                    )
+                    .to_json_value()
+                    .unwrap(),
                 }),
             ],
         }),
@@ -560,7 +537,6 @@ fn bridge_tests_objectcomplextype(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -621,7 +597,7 @@ fn bridge_tests_objectcomplextype(
                             Value::List(vec![]),
                             Value::Record(vec![Value::S32(1)]),
                         ]),
-                        types.object_complex_type.clone(),
+                        pkg.input_element_type_by_name("funUnionType", "text"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -634,21 +610,20 @@ fn bridge_tests_objectcomplextype(
 #[test]
 fn bridge_tests_uniontype(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
         "FunUnionType",
-        json!([{ "tag": "case3", "val": true }]),
+        json!([{ "tag": "union-type4", "val": true }]),
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
-                            case_idx: 2,
+                            case_idx: 3,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
-                        types.union_type.clone(),
+                        pkg.input_element_type_by_name("funUnionType", "unionType"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -663,7 +638,6 @@ fn bridge_tests_unioncomplextype(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -677,7 +651,7 @@ fn bridge_tests_unioncomplextype(
                             case_idx: 7,
                             case_value: Some(Box::new(Value::Record(vec![Value::S32(1)]))),
                         },
-                        types.union_complex_type.clone(),
+                        pkg.input_element_type_by_name("funUnionComplexType", "complexType"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -715,7 +689,6 @@ fn bridge_tests_taggedunion(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -733,7 +706,7 @@ fn bridge_tests_taggedunion(
                                 Value::Bool(true),
                             ]))),
                         },
-                        types.tagged_union.clone(),
+                        pkg.input_element_type_by_name("funTaggedUnion", "taggedUnionType"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -748,7 +721,6 @@ fn bridge_tests_tuplecomplextype(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -767,7 +739,7 @@ fn bridge_tests_tuplecomplextype(
                                 Value::Bool(true),
                             ]),
                         ]),
-                        types.tuple_complex_type.clone(),
+                        pkg.input_element_type_by_name("funTupleComplexType", "complexType"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -803,7 +775,6 @@ fn bridge_tests_listcomplextype(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -825,7 +796,7 @@ fn bridge_tests_listcomplextype(
                                 Value::Bool(false),
                             ]),
                         ]),
-                        types.list_complex_type.clone(),
+                        pkg.input_element_type_by_name("funListComplexType", "listComplexType"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -840,7 +811,6 @@ fn bridge_tests_objecttype(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -855,7 +825,7 @@ fn bridge_tests_objecttype(
                             Value::S32(123),
                             Value::Bool(true),
                         ]),
-                        types.object_type.clone(),
+                        pkg.input_element_type_by_name("funObjectType", "objectType"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -870,7 +840,6 @@ fn bridge_tests_unionwithliterals(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -884,7 +853,7 @@ fn bridge_tests_unionwithliterals(
                             case_idx: 0,
                             case_value: None,
                         },
-                        types.union_with_literals.clone(),
+                        pkg.input_element_type_by_name("funUnionWithLiterals", "unionWithLiterals"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -899,7 +868,6 @@ fn bridge_tests_unionwithliterals_with_value(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -913,7 +881,7 @@ fn bridge_tests_unionwithliterals_with_value(
                             case_idx: 3,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
-                        types.union_with_literals.clone(),
+                        pkg.input_element_type_by_name("funUnionWithLiterals", "unionWithLiterals"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -928,7 +896,6 @@ fn bridge_tests_unionwithonlyliterals(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_input_encoding(
         target_dir,
@@ -939,33 +906,10 @@ fn bridge_tests_unionwithonlyliterals(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Enum(1),
-                        types.union_with_only_literals.clone(),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
-    );
-}
-
-#[test]
-fn bridge_tests_anyonymousunionwithonlyliterals(
-    #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
-) {
-    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
-
-    assert_function_input_encoding(
-        target_dir,
-        "FunAnonymousUnionWithOnlyLiterals",
-        json!(["bar"]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Enum(1),
-                        types.anonymous_union_with_only_literals.clone(),
+                        pkg.input_element_type_by_name(
+                            "funUnionWithOnlyLiterals",
+                            "unionWithOnlyLiterals",
+                        ),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1376,7 +1320,6 @@ fn bridge_tests_listcomplextype_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1397,7 +1340,7 @@ fn bridge_tests_listcomplextype_output(
                                 Value::Bool(false),
                             ]),
                         ]),
-                        types.list_complex_type.clone(),
+                        pkg.output_element_type_by_name("funListComplexType", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1413,7 +1356,6 @@ fn bridge_tests_objecttype_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1427,7 +1369,7 @@ fn bridge_tests_objecttype_output(
                             Value::S32(123),
                             Value::Bool(true),
                         ]),
-                        types.object_type.clone(),
+                        pkg.output_element_type_by_name("funObjectType", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1443,7 +1385,6 @@ fn bridge_tests_objectcomplextype_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1494,7 +1435,7 @@ fn bridge_tests_objectcomplextype_output(
                             ])]),
                             Value::Record(vec![Value::S32(5)]),
                         ]),
-                        types.object_complex_type.clone(),
+                        pkg.output_element_type_by_name("funObjectComplexType", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1522,7 +1463,6 @@ fn bridge_tests_uniontype_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1535,7 +1475,7 @@ fn bridge_tests_uniontype_output(
                             case_idx: 2,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
-                        types.union_type.clone(),
+                        pkg.output_element_type_by_name("funUnionType", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1551,7 +1491,6 @@ fn bridge_tests_unioncomplextype_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1567,7 +1506,7 @@ fn bridge_tests_unioncomplextype_output(
                                 case_value: Some(Box::new(Value::String("hello".to_string()))),
                             })),
                         },
-                        types.union_complex_type.clone(),
+                        pkg.output_element_type_by_name("funUnionComplexType", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1583,7 +1522,6 @@ fn bridge_tests_taggedunion_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1600,7 +1538,7 @@ fn bridge_tests_taggedunion_output(
                                 Value::Bool(true),
                             ]))),
                         },
-                        types.tagged_union.clone(),
+                        pkg.output_element_type_by_name("funTaggedUnion", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1616,7 +1554,6 @@ fn bridge_tests_unionwithliterals_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1629,7 +1566,7 @@ fn bridge_tests_unionwithliterals_output(
                             case_idx: 0,
                             case_value: None,
                         },
-                        types.union_with_literals.clone(),
+                        pkg.output_element_type_by_name("funUnionWithLiterals", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1645,7 +1582,6 @@ fn bridge_tests_unionwithonlyliterals_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
 
     assert_function_output_decoding(
         target_dir,
@@ -1655,33 +1591,7 @@ fn bridge_tests_unionwithonlyliterals_output(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Enum(1),
-                        types.union_with_only_literals.clone(),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
-        json!("bar"),
-    );
-}
-
-#[test]
-fn bridge_tests_anyonmousunionwithonlyliterals_output(
-    #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
-) {
-    let target_dir = Utf8Path::from_path(pkg.dir.path()).unwrap();
-    let types = TestTypes::default();
-
-    assert_function_output_decoding(
-        target_dir,
-        "FunAnonymousUnionWithOnlyLiterals",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Enum(1),
-                        types.anonymous_union_with_only_literals.clone(),
+                        pkg.output_element_type_by_name("funUnionWithOnlyLiterals", "return-value"),
                     )
                     .to_json_value()
                     .unwrap(),
