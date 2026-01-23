@@ -102,7 +102,6 @@ export function deserializeDataValue(
 
             case 'unstructured-text':
               const unstructuredTextParamName = parameterDetail.name;
-              // console.log(unstructuredTextParamName);
 
               if (elementValue.tag !== 'unstructured-text') {
                 throw new Error(

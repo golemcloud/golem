@@ -1087,8 +1087,6 @@ describe('Agent with principal auto injected', async () => {
         ),
     );
 
-    console.log(JSON.stringify(agentType));
-
     const constructorParamNames = agentType.constructor.inputSchema.val.map(
       ([name]) => name,
     );
