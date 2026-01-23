@@ -30,6 +30,7 @@ import {
   getTextDescriptor,
   isNamedMultimodal,
 } from './helpers';
+import { ParameterSchemaCollection } from './paramSchema';
 
 export function buildMethodInputSchema(
   agentClassName: string,
@@ -82,48 +83,70 @@ export function buildMethodInputSchema(
       return Either.left('Multimodal type is not an array');
     }
   } else {
-    const result = Either.all(
-      paramTypesArray.map((parameterInfo) =>
-        Either.mapBoth(
-          convertMethodParameterToElementSchema(
-            agentClassName,
-            methodName,
-            parameterInfo[0],
-            parameterInfo[1],
-            Option.some(
-              TypeMappingScope.method(
-                methodName,
-                parameterInfo[0],
-                parameterInfo[1].optional,
-              ),
-            ),
-          ),
-          (result) => {
-            return [parameterInfo[0], result] as [string, ElementSchema];
-          },
-          (err) =>
-            `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
-        ),
+    return Either.map(
+      getMethodParameterSchemaCollection(
+        agentClassName,
+        methodName,
+        paramTypes,
       ),
+      (paramSchemaCollection) => {
+        return paramSchemaCollection.getDataSchema();
+      },
     );
-
-    return Either.map(result, (res) => {
-      return {
-        tag: 'tuple',
-        val: res,
-      };
-    });
   }
 }
 
-function convertMethodParameterToElementSchema(
+function getMethodParameterSchemaCollection(
+  agentClassName: string,
+  methodName: string,
+  paramTypes: MethodParams,
+): Either.Either<ParameterSchemaCollection, string> {
+  const paramTypesArray = Array.from(paramTypes);
+  const parameterSchemaCollection = new ParameterSchemaCollection();
+
+  const result = Either.all(
+    paramTypesArray.map((parameterInfo) =>
+      Either.mapError(
+        accumulateParameterSchema(
+          agentClassName,
+          methodName,
+          parameterInfo[0],
+          parameterInfo[1],
+          parameterSchemaCollection,
+        ),
+        (err) =>
+          `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
+      ),
+    ),
+  );
+
+  return Either.map(result, (_) => parameterSchemaCollection);
+}
+
+function accumulateParameterSchema(
   agentClassName: string,
   methodName: string,
   parameterName: string,
   parameterType: Type.Type,
-  scope: Option.Option<TypeMappingScope>,
-): Either.Either<ElementSchema, string> {
+  accumulator: ParameterSchemaCollection,
+): Either.Either<void, string> {
   const paramTypeName = parameterType.name;
+
+  if (paramTypeName && paramTypeName === 'Principal') {
+    AgentMethodParamRegistry.setType(
+      agentClassName,
+      methodName,
+      parameterName,
+      {
+        tag: 'principal',
+        tsType: parameterType,
+      },
+    );
+
+    accumulator.addPrincipalParameter(parameterName);
+
+    return Either.right(undefined);
+  }
 
   if (paramTypeName && paramTypeName === 'UnstructuredText') {
     const textDescriptor = getTextDescriptor(parameterType);
@@ -150,7 +173,9 @@ function convertMethodParameterToElementSchema(
       val: textDescriptor.val,
     };
 
-    return Either.right(elementSchema);
+    accumulator.addComponentModelParameter(parameterName, elementSchema);
+
+    return Either.right(undefined);
   }
 
   if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
@@ -178,28 +203,46 @@ function convertMethodParameterToElementSchema(
       val: binaryDescriptor.val,
     };
 
-    return Either.right(elementSchema);
+    accumulator.addComponentModelParameter(parameterName, elementSchema);
+
+    return Either.right(undefined);
   }
 
-  return Either.map(WitType.fromTsType(parameterType, scope), (typeInfo) => {
-    const witType = typeInfo[0];
-    const analysedType = typeInfo[1];
+  return Either.map(
+    WitType.fromTsType(
+      parameterType,
+      Option.some(
+        TypeMappingScope.method(
+          methodName,
+          parameterName,
+          parameterType.optional,
+        ),
+      ),
+    ),
+    (typeInfo) => {
+      const witType = typeInfo[0];
+      const analysedType = typeInfo[1];
 
-    AgentMethodParamRegistry.setType(
-      agentClassName,
-      methodName,
-      parameterName,
-      {
-        tag: 'analysed',
-        val: analysedType,
-        tsType: parameterType,
-        witType: witType,
-      },
-    );
+      AgentMethodParamRegistry.setType(
+        agentClassName,
+        methodName,
+        parameterName,
+        {
+          tag: 'analysed',
+          val: analysedType,
+          tsType: parameterType,
+          witType: witType,
+        },
+      );
 
-    return {
-      tag: 'component-model',
-      val: witType,
-    };
-  });
+      const elementSchema: ElementSchema = {
+        tag: 'component-model',
+        val: witType,
+      };
+
+      accumulator.addComponentModelParameter(parameterName, elementSchema);
+
+      return undefined;
+    },
+  );
 }

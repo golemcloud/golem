@@ -1073,10 +1073,33 @@ describe('Http Agent class', () => {
   });
 });
 
-test('Agent with principal auto injected', async () => {
-  expect(async () => {
-    await import('./agentsWithPrincipalAutoInjection');
-  }).to.not.throw();
+describe('Agent with principal auto injected', async () => {
+  await import('./agentsWithPrincipalAutoInjection');
+
+  it("should never include anything about principal in the agent's constructor or method schemas", () => {
+    const agentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(
+        new AgentClassName('AgentWithPrincipalAutoInjection1'),
+      ),
+      () =>
+        new Error(
+          'AgentWithPrincipalAutoInjection not found in AgentTypeRegistry',
+        ),
+    );
+
+    console.log(JSON.stringify(agentType));
+
+    const constructorParamNames = agentType.constructor.inputSchema.val.map(
+      ([name]) => name,
+    );
+
+    expect(constructorParamNames).not.toContain('principal');
+
+    agentType.methods.forEach((method) => {
+      const methodParamNames = method.inputSchema.val.map(([name]) => name);
+      expect(methodParamNames).not.toContain('principal');
+    });
+  });
 });
 
 describe('Annotated SingletonAgent class', () => {

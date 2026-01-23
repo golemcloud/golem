@@ -31,7 +31,7 @@ import {
 } from '../typeInfoInternal';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 import { TypeMappingScope } from '../mapping/types/scope';
-import { getComponentModelSchema, ParameterSchema } from './paramSchema';
+import { ParameterSchemaCollection } from './paramSchema';
 
 export function getConstructorDataSchema(
   agentClassName: string,
@@ -40,7 +40,7 @@ export function getConstructorDataSchema(
   const constructorParamInfos: readonly ConstructorArg[] =
     classType.constructorArgs;
 
-  const baseError = `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor. `;
+  const baseError = `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor.`;
 
   const multimodalInputInConstructor: Type.Type | undefined =
     getMultimodalTypeInConstructor(constructorParamInfos);
@@ -58,13 +58,11 @@ export function getConstructorDataSchema(
     );
   }
 
-  const paramAndSchemaCollection: ParameterSchema[] = getParamSchemaCollection(
+  return getParamSchemaCollection(
     agentClassName,
     constructorParamInfos,
     baseError,
-  );
-
-  return getComponentModelSchema(paramAndSchemaCollection);
+  ).getDataSchema();
 }
 
 function getMultimodalDataSchema(
@@ -121,8 +119,11 @@ export function getParamSchemaCollection(
   agentClassName: string,
   constructorParamInfos: readonly ConstructorArg[],
   baseError: string,
-): ParameterSchema[] {
-  return constructorParamInfos.map((paramInfo) => {
+): ParameterSchemaCollection {
+  const parameterSchemaCollection: ParameterSchemaCollection =
+    new ParameterSchemaCollection();
+
+  constructorParamInfos.forEach((paramInfo) => {
     const paramType = paramInfo.type;
 
     const paramTypeName = paramType.name;
@@ -133,7 +134,9 @@ export function getParamSchemaCollection(
         tsType: paramType,
       });
 
-      return { tag: 'principal', name: paramInfo.name };
+      parameterSchemaCollection.addPrincipalParameter(paramInfo.name);
+
+      return;
     }
 
     if (paramTypeName && paramTypeName === 'UnstructuredText') {
@@ -156,11 +159,12 @@ export function getParamSchemaCollection(
         val: textDescriptor.val,
       };
 
-      return {
-        tag: 'component-model',
-        name: paramInfo.name,
-        schema: elementSchema,
-      };
+      parameterSchemaCollection.addComponentModelParameter(
+        paramInfo.name,
+        elementSchema,
+      );
+
+      return;
     }
 
     if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
@@ -183,11 +187,12 @@ export function getParamSchemaCollection(
         val: binaryDescriptor.val,
       };
 
-      return {
-        tag: 'component-model',
-        name: paramInfo.name,
-        schema: elementSchema,
-      };
+      parameterSchemaCollection.addComponentModelParameter(
+        paramInfo.name,
+        elementSchema,
+      );
+
+      return;
     }
 
     const typeInfoEither = WitType.fromTsType(
@@ -221,10 +226,12 @@ export function getParamSchemaCollection(
       tag: 'component-model',
       val: witType,
     };
-    return {
-      tag: 'component-model',
-      name: paramInfo.name,
-      schema: elementSchema,
-    };
+
+    parameterSchemaCollection.addComponentModelParameter(
+      paramInfo.name,
+      elementSchema,
+    );
   });
+
+  return parameterSchemaCollection;
 }

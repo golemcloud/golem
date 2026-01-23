@@ -12,15 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// For a principal, we don't track any ElementSchema
 import { DataSchema, ElementSchema } from 'golem:agent/common';
+
+// Collection of parameter schemas for agent constructor or method.
+// It can contain both principal and component model parameters.
+// Mainly to differentiate between them and generate DataSchema for component model parameters only.
+export class ParameterSchemaCollection {
+  private parameterSchemas: ParameterSchema[] = [];
+
+  addPrincipalParameter(name: string): void {
+    this.parameterSchemas.push({ tag: 'principal', name });
+  }
+
+  addComponentModelParameter(name: string, schema: ElementSchema): void {
+    this.parameterSchemas.push({
+      tag: 'component-model',
+      name,
+      schema,
+    });
+  }
+
+  getDataSchema(): DataSchema {
+    return getDataSchema(this.parameterSchemas);
+  }
+}
 
 export type ParameterSchema =
   | { tag: 'principal'; name: string }
   | { tag: 'component-model'; name: string; schema: ElementSchema };
 
 // Remove principal parameters
-export function getComponentModelSchema(
+function getDataSchema(
   parameterSchemaCollection: ParameterSchema[],
 ): DataSchema {
   let nameAndSchema: [string, ElementSchema][] = [];
