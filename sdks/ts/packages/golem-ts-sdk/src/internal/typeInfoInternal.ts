@@ -157,6 +157,15 @@ export function getReturnTypeDataSchemaFromTypeInternal(
         ],
       });
     case 'analysed':
+      const analysed = typeInfoInternal.val;
+      // If the return type is a void, then the data schema is an empty tuple
+      if (analysed.kind === 'tuple' && analysed.emptyType) {
+        return Either.right({
+          tag: 'tuple',
+          val: []
+        });
+      }
+
       return Either.right({
         tag: 'tuple',
         val: [
@@ -169,6 +178,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
           ],
         ],
       });
+
     case 'unstructured-binary':
       return Either.right({
         tag: 'tuple',
