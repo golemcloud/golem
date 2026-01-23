@@ -18,6 +18,7 @@ import {
   AgentConstructor,
   AgentMethod,
   AgentMode,
+  Principal,
 } from 'golem:agent/common';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
@@ -29,12 +30,8 @@ import {
 import { BaseAgent } from '../baseAgent';
 import { AgentTypeRegistry } from '../internal/registry/agentTypeRegistry';
 import * as Either from '../newTypes/either';
-import {
-  getAgentMethodSchema,
-  getConstructorDataSchema,
-} from '../internal/schema';
 import * as Option from '../newTypes/option';
-import { AgentClassName } from '../newTypes/agentClassName';
+import { AgentClassName } from '../agentClassName';
 import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegistry';
 import { createCustomError } from '../internal/agentError';
 import { AgentConstructorParamRegistry } from '../internal/registry/agentConstructorParamRegistry';
@@ -44,8 +41,10 @@ import {
   ParameterDetail,
 } from '../internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from '../host/hostapi';
-import { getHttpMountDetails } from '../http/mount';
-import { validateHttpMountWithConstructor } from '../http/validation';
+import { getHttpMountDetails } from '../internal/http/mount';
+import { validateHttpMountWithConstructor } from '../internal/http/validation';
+import { getConstructorDataSchema } from '../internal/schema/constructor';
+import { getAgentMethodSchema } from '../internal/schema/method';
 
 export type AgentDecoratorOptions = {
   name?: string;
@@ -199,7 +198,6 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    // Decorator-time validation of the class name
     const agentClassName = new AgentClassName(ctor.name);
 
     if (AgentTypeRegistry.exists(agentClassName)) {
@@ -218,31 +216,18 @@ export function agent(options?: AgentDecoratorOptions) {
       },
     );
 
-    const constructorDataSchema = Either.getOrElse(
-      getConstructorDataSchema(agentClassName.value, classMetadata),
-      (err) => {
-        throw new Error(
-          `Schema generation failed for agent class ${agentClassName.value} due to unsupported types in constructor. ` +
-            err,
-        );
-      },
+    const constructorDataSchema = getConstructorDataSchema(
+      agentClassName.value,
+      classMetadata,
     );
 
     const httpMount = getHttpMountDetails(options);
 
-    const methodSchemaEither = getAgentMethodSchema(
+    const methods = getAgentMethodSchema(
       classMetadata,
       agentClassName.value,
       httpMount,
     );
-
-    // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
-    if (Either.isLeft(methodSchemaEither)) {
-      throw new Error(
-        `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.val}`,
-      );
-    }
-    const methods: AgentMethod[] = methodSchemaEither.val;
 
     const agentTypeName = new AgentClassName(
       options?.name || agentClassName.value,
@@ -327,10 +312,11 @@ export function agent(options?: AgentDecoratorOptions) {
     );
 
     AgentInitiatorRegistry.register(agentTypeName, {
-      initiate: (constructorInput: DataValue) => {
+      initiate: (constructorInput: DataValue, principal: Principal) => {
         const deserializedConstructorArgs = deserializeDataValue(
           constructorInput,
           constructorParamTypes,
+          principal,
         );
 
         if (Either.isLeft(deserializedConstructorArgs)) {

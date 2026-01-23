@@ -21,6 +21,7 @@ import {
   Result,
   Multimodal,
   endpoint,
+  Principal,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -325,9 +326,6 @@ class BarAgent extends BaseAgent {
     readonly unstructuredBinary: UnstructuredBinary<['application/json']>,
   ) {
     super();
-    this.testInterfaceType = testInterfaceType;
-    this.optionalStringType = optionalStringType;
-    this.optionalUnionType = optionalUnionType;
   }
 
   async fun0(
@@ -546,6 +544,28 @@ class ComplexHttpAgent extends BaseAgent {
   })
   async greetCustom2(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent()
+class Bllll extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  async bar(principal: Principal): Promise<void> {
+    return;
+  }
+}
+
+@agent()
+class Fllll extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  async baz(principal: Principal): Promise<void> {
+    return;
   }
 }
 

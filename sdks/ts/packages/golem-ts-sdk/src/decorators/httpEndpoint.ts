@@ -22,8 +22,8 @@ import {
   QueryVariable,
 } from 'golem:agent/common';
 import { AgentMethodRegistry } from '../internal/registry/agentMethodRegistry';
-import { parsePath } from '../http/path';
-import { parseQuery } from '../http/query';
+import { parsePath } from '../internal/http/path';
+import { parseQuery } from '../internal/http/query';
 
 export type EndpointDecoratorOptions = {
   get?: string;
@@ -147,7 +147,7 @@ export function endpoint(opts: EndpointDecoratorOptions) {
     const methods = ['get', 'post', 'put', 'delete', 'custom'] as const;
 
     const providedMethods = methods.filter((m) =>
-      m === 'custom' ? opts.custom !== undefined : opts[m] !== undefined,
+      m === 'custom' ? !!opts.custom : !!opts[m],
     );
 
     if (providedMethods.length === 0) {
