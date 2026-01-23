@@ -27,306 +27,204 @@ import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
   getTextDescriptor,
-  isNamedMultimodal,
+  isMultimodalType,
 } from './helpers';
 import { TypeInfoInternal } from '../typeInfoInternal';
 
-export function buildOutputSchema(
+export function resolveMethodOutputSchema(
   returnType: Type.Type,
 ): Either.Either<TypeInfoInternal, string> {
-  const multiModalTarget =
-    returnType.kind === 'promise' && isNamedMultimodal(returnType.element)
+  const multimodal = tryMultimodal(returnType);
+
+  if (multimodal) return multimodal;
+
+  const voidOrResult = tryVoidLike(returnType);
+
+  if (Either.isLeft(voidOrResult)) return voidOrResult;
+
+  if (Option.isSome(voidOrResult.val)) {
+    return getTypeDetailsFromVoidLike(voidOrResult.val.val, returnType);
+  }
+
+  const unstructured = tryUnstructured(returnType);
+
+  if (unstructured) return unstructured;
+
+  return mapStandardTsType(returnType);
+}
+
+function tryMultimodal(
+  returnType: Type.Type,
+): Either.Either<TypeInfoInternal, string> | undefined {
+  const multimodalOrUndefined =
+    returnType.kind === 'promise' && isMultimodalType(returnType.element)
       ? returnType.element
-      : isNamedMultimodal(returnType)
+      : isMultimodalType(returnType)
         ? returnType
         : null;
 
-  if (
-    multiModalTarget &&
-    isNamedMultimodal(multiModalTarget) &&
-    multiModalTarget.kind === 'array'
-  ) {
-    const multiModalDetails = getMultimodalParamDetails(
-      multiModalTarget.element,
-    );
+  if (!multimodalOrUndefined || multimodalOrUndefined.kind !== 'array')
+    return undefined;
 
-    if (Either.isLeft(multiModalDetails)) {
-      return Either.left(
-        `Failed to get multimodal details: ${multiModalDetails.val}`,
-      );
-    }
+  const details = getMultimodalParamDetails(multimodalOrUndefined.element);
 
-    const typeInfoInternal: TypeInfoInternal = {
-      tag: 'multimodal',
-      tsType: multiModalTarget,
-      types: multiModalDetails.val,
-    };
-
-    return Either.right(typeInfoInternal);
-  }
-
-  const undefinedSchema = handleVoidReturnType(returnType);
-
-  if (Either.isLeft(undefinedSchema)) {
-    return Either.left(
-      `Failed to handle void return type: ${undefinedSchema.val}`,
-    );
-  }
-
-  if (Option.isSome(undefinedSchema.val)) {
-    const undefinedSchemaVal = undefinedSchema.val.val;
-
-    switch (undefinedSchemaVal.kind) {
-      case 'void':
-        const voidAnalysedType = tuple(undefined, 'undefined', []);
-        const witType = WitType.fromAnalysedType(voidAnalysedType);
-
-        return Either.right({
-          tag: 'analysed',
-          val: voidAnalysedType,
-          tsType: returnType,
-          witType: witType,
-        });
-      case 'result-with-void':
-        const resultWithVoidWitType = WitType.fromAnalysedType(
-          undefinedSchemaVal.analysedType,
-        );
-
-        return Either.right({
-          tag: 'analysed',
-          val: undefinedSchemaVal.analysedType,
-          witType: resultWithVoidWitType,
-          tsType: returnType,
-        });
-    }
-  }
-
-  const unstructured = handleUnstructuredType(returnType);
-
-  if (unstructured) {
-    return unstructured;
-  }
-
-  return Either.map(
-    WitType.fromTsType(returnType, Option.none()),
-    (typeInfo) => {
-      const witType = typeInfo[0];
-      const analysedType = typeInfo[1];
-
-      return {
-        tag: 'analysed',
-        val: analysedType,
-        witType: witType,
-        tsType: returnType,
-      };
-    },
-  );
+  return Either.map(details, (details) => ({
+    tag: 'multimodal',
+    tsType: multimodalOrUndefined,
+    types: details,
+  }));
 }
 
-// To handle void, undefined, null return types or Result with void/undefined/null on either side
-type ReturnTypeWithVoid =
-  | { kind: 'void'; dataSchema: DataSchema }
-  | { kind: 'result-with-void'; analysedType: AnalysedType };
+type VoidLike =
+  | { kind: 'void'; schema: DataSchema }
+  | { kind: 'result-with-void'; analysed: AnalysedType };
 
-function handleVoidReturnType(
-  returnType: Type.Type,
-): Either.Either<Option.Option<ReturnTypeWithVoid>, string> {
-  switch (returnType.kind) {
+function tryVoidLike(
+  type: Type.Type,
+): Either.Either<Option.Option<VoidLike>, string> {
+  switch (type.kind) {
+    case 'void':
+    case 'undefined':
     case 'null':
       return Either.right(
-        Option.some({
-          kind: 'void',
-          dataSchema: {
-            tag: 'tuple',
-            val: [],
-          },
-        }),
-      );
-
-    case 'undefined':
-      return Either.right(
-        Option.some({
-          kind: 'void',
-          dataSchema: {
-            tag: 'tuple',
-            val: [],
-          },
-        }),
-      );
-
-    case 'void':
-      return Either.right(
-        Option.some({
-          kind: 'void',
-          dataSchema: {
-            tag: 'tuple',
-            val: [],
-          },
-        }),
+        Option.some({ kind: 'void', schema: { tag: 'tuple', val: [] } }),
       );
 
     case 'promise':
-      const elementType = returnType.element;
-      return handleVoidReturnType(elementType);
+      return tryVoidLike(type.element);
 
-    // Special handling for union types that might include void/undefined/null
     case 'union':
-      const typeName = returnType.name;
-      const originalTypeName = returnType.originalTypeName;
-      const unionTypes = returnType.unionTypes;
-      const isResult = typeName === 'Result' || originalTypeName === 'Result';
-
-      if (
-        isResult &&
-        unionTypes.length === 2 &&
-        unionTypes[0].name === 'Ok' &&
-        unionTypes[1].name === 'Err'
-      ) {
-        const resultTypeParams = returnType.typeParams;
-
-        const okType = resultTypeParams[0];
-        const errType = resultTypeParams[1];
-
-        const okEmptyType: EmptyType | undefined =
-          okType.kind === 'void'
-            ? 'void'
-            : okType.kind === 'undefined'
-              ? 'undefined'
-              : okType.kind === 'null'
-                ? 'null'
-                : undefined;
-
-        const errEmptyType: EmptyType | undefined =
-          errType.kind === 'void'
-            ? 'void'
-            : errType.kind === 'undefined'
-              ? 'undefined'
-              : errType.kind === 'null'
-                ? 'null'
-                : undefined;
-
-        const isOkVoid = okEmptyType !== undefined;
-
-        const isErrVoid = errEmptyType !== undefined;
-
-        if (isOkVoid && isErrVoid) {
-          return Either.right(
-            Option.some({
-              kind: 'result-with-void',
-              analysedType: result(
-                undefined,
-                {
-                  tag: 'inbuilt',
-                  okEmptyType: okEmptyType,
-                  errEmptyType: errEmptyType,
-                },
-                undefined,
-                undefined,
-              ),
-            }),
-          );
-        }
-
-        if (isOkVoid) {
-          const errAnalysedTypeEither = WitType.fromTsType(
-            errType,
-            Option.none(),
-          );
-
-          if (Either.isLeft(errAnalysedTypeEither)) {
-            return errAnalysedTypeEither;
-          }
-
-          const errAnalysedType = errAnalysedTypeEither.val[1];
-
-          return Either.right(
-            Option.some({
-              kind: 'result-with-void',
-              analysedType: result(
-                undefined,
-                {
-                  tag: 'inbuilt',
-                  okEmptyType: okEmptyType,
-                  errEmptyType: errEmptyType,
-                },
-                undefined,
-                errAnalysedType,
-              ),
-            }),
-          );
-        }
-
-        if (isErrVoid) {
-          const okAnalysedTypeEither = WitType.fromTsType(
-            okType,
-            Option.none(),
-          );
-
-          if (Either.isLeft(okAnalysedTypeEither)) {
-            return okAnalysedTypeEither;
-          }
-
-          const okAnalysedType = okAnalysedTypeEither.val[1];
-
-          return Either.right(
-            Option.some({
-              kind: 'result-with-void',
-              analysedType: result(
-                undefined,
-                {
-                  tag: 'inbuilt',
-                  okEmptyType: okEmptyType,
-                  errEmptyType: errEmptyType,
-                },
-                okAnalysedType,
-                undefined,
-              ),
-            }),
-          );
-        }
-
-        return Either.right(Option.none());
-      }
-
-      return Either.right(Option.none());
+      return tryResultWithVoid(type, type.originalTypeName, type.typeParams);
 
     default:
       return Either.right(Option.none());
   }
 }
 
-function handleUnstructuredType(
-  returnType: Type.Type,
+function tryResultWithVoid(
+  type: Type.Type,
+  originalTypename: string | undefined,
+  resultTypeParams: Type.Type[],
+): Either.Either<Option.Option<VoidLike>, string> {
+  const isResultType = type.name === 'Result' || originalTypename === 'Result';
+  if (!isResultType || !resultTypeParams) return Either.right(Option.none());
+
+  const [okType, errType] = resultTypeParams;
+  const okEmpty = tryEmptyType(okType);
+  const errEmpty = tryEmptyType(errType);
+
+  if (!okEmpty && !errEmpty) return Either.right(Option.none());
+
+  const analysedOkEither = okEmpty
+    ? Either.right<AnalysedType | undefined, string>(undefined)
+    : Either.flatMap(
+        WitType.fromTsType(okType, Option.none()),
+        ([, analysedOk]) =>
+          Either.right<AnalysedType | undefined, string>(analysedOk),
+      );
+
+  const analysedErrEither = errEmpty
+    ? Either.right<AnalysedType | undefined, string>(undefined)
+    : Either.flatMap(
+        WitType.fromTsType(errType, Option.none()),
+        ([_, analysedErr]) =>
+          Either.right<AnalysedType | undefined, string>(analysedErr),
+      );
+
+  return Either.flatMap(analysedOkEither, (analysedOk) =>
+    Either.flatMap(analysedErrEither, (analysedErr) => {
+      const analysedResult: AnalysedType = result(
+        undefined,
+        { tag: 'inbuilt', okEmptyType: okEmpty, errEmptyType: errEmpty },
+        analysedOk ?? undefined,
+        analysedErr ?? undefined,
+      );
+
+      return Either.right(
+        Option.some({
+          kind: 'result-with-void',
+          analysed: analysedResult,
+        }),
+      );
+    }),
+  );
+}
+
+function tryEmptyType(type: Type.Type): EmptyType | undefined {
+  if (type.kind === 'void') return 'void';
+  if (type.kind === 'undefined') return 'undefined';
+  if (type.kind === 'null') return 'null';
+  return undefined;
+}
+
+function getTypeDetailsFromVoidLike(
+  resolved: VoidLike,
+  tsType: Type.Type,
+): Either.Either<TypeInfoInternal, string> {
+  switch (resolved.kind) {
+    case 'void': {
+      const analysed = tuple(undefined, 'undefined', []);
+      return Either.right({
+        tag: 'analysed',
+        val: analysed,
+        tsType,
+        witType: WitType.fromAnalysedType(analysed),
+      });
+    }
+    case 'result-with-void':
+      return Either.right({
+        tag: 'analysed',
+        val: resolved.analysed,
+        tsType,
+        witType: WitType.fromAnalysedType(resolved.analysed),
+      });
+  }
+}
+
+function tryUnstructured(
+  type: Type.Type,
 ): Either.Either<TypeInfoInternal, string> | undefined {
-  const unstructuredTarget =
-    returnType.kind === 'promise' &&
-    (returnType.element.name === 'UnstructuredText' ||
-      returnType.element.name === 'UnstructuredBinary')
-      ? returnType.element
-      : returnType.name === 'UnstructuredText' ||
-          returnType.name === 'UnstructuredBinary'
-        ? returnType
+  const target =
+    type.kind === 'promise' && isUnstructuredType(type.element)
+      ? type.element
+      : isUnstructuredType(type)
+        ? type
         : null;
 
-  if (!unstructuredTarget) {
-    return undefined;
-  }
+  if (!target) return undefined;
 
-  if (unstructuredTarget.name === 'UnstructuredText') {
-    return Either.map(getTextDescriptor(unstructuredTarget), (desc) => ({
+  if (target.name === 'UnstructuredText') {
+    return Either.map(getTextDescriptor(target), (desc) => ({
       tag: 'unstructured-text',
       val: desc,
-      tsType: unstructuredTarget,
+      tsType: target,
     }));
   }
-
-  if (unstructuredTarget.name === 'UnstructuredBinary') {
-    return Either.map(getBinaryDescriptor(unstructuredTarget), (desc) => ({
+  if (target.name === 'UnstructuredBinary') {
+    return Either.map(getBinaryDescriptor(target), (desc) => ({
       tag: 'unstructured-binary',
       val: desc,
-      tsType: unstructuredTarget,
+      tsType: target,
     }));
   }
 
   return undefined;
+}
+
+function isUnstructuredType(type: Type.Type): boolean {
+  return type.name === 'UnstructuredText' || type.name === 'UnstructuredBinary';
+}
+
+function mapStandardTsType(
+  type: Type.Type,
+): Either.Either<TypeInfoInternal, string> {
+  return Either.map(
+    WitType.fromTsType(type, Option.none()),
+    ([witType, analysed]) => ({
+      tag: 'analysed',
+      val: analysed,
+      witType,
+      tsType: type,
+    }),
+  );
 }

@@ -23,8 +23,8 @@ import {
 } from '../typeInfoInternal';
 import { validateHttpEndpoint } from '../http/validation';
 import { validateMethodName } from './helpers';
-import { buildMethodInputSchema } from './methodInput';
-import { buildOutputSchema } from './methodOutput';
+import { resolveMethodInputSchema } from './methodInput';
+import { resolveMethodOutputSchema } from './methodOutput';
 
 export function getAgentMethodSchema(
   classMetadata: ClassMetadata,
@@ -54,7 +54,7 @@ export function getAgentMethodSchema(
     const baseMeta =
       AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
 
-    const inputSchemaEither = buildMethodInputSchema(
+    const inputSchemaEither = resolveMethodInputSchema(
       agentClassName,
       methodName,
       parameters,
@@ -67,7 +67,7 @@ export function getAgentMethodSchema(
     const inputSchema = inputSchemaEither.val;
 
     const outputTypeInfoEither: Either.Either<TypeInfoInternal, string> =
-      buildOutputSchema(returnType);
+      resolveMethodOutputSchema(returnType);
 
     if (Either.isLeft(outputTypeInfoEither)) {
       throw new Error(

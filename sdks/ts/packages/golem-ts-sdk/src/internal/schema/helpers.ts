@@ -31,7 +31,7 @@ const MULTIMODAL_TYPE_NAMES = [
   'MultimodalCustom',
 ];
 
-export function isNamedMultimodal(type: Type.Type): boolean {
+export function isMultimodalType(type: Type.Type): boolean {
   if (type.name) {
     return MULTIMODAL_TYPE_NAMES.includes(type.name);
   }

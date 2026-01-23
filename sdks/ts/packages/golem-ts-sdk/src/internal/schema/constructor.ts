@@ -23,7 +23,7 @@ import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
   getTextDescriptor,
-  isNamedMultimodal,
+  isMultimodalType,
 } from './helpers';
 import {
   getMultimodalDataSchemaFromTypeInternal,
@@ -109,7 +109,7 @@ function getMultimodalTypeInConstructor(
 ): Type.Type | undefined {
   if (
     constructorParamInfos.length === 1 &&
-    isNamedMultimodal(constructorParamInfos[0].type)
+    isMultimodalType(constructorParamInfos[0].type)
   ) {
     return constructorParamInfos[0].type;
   }

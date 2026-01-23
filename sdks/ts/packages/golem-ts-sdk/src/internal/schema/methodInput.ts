@@ -28,75 +28,76 @@ import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
   getTextDescriptor,
-  isNamedMultimodal,
+  isMultimodalType,
 } from './helpers';
 import { ParameterSchemaCollection } from './paramSchema';
 
-export function buildMethodInputSchema(
+export function resolveMethodInputSchema(
   agentClassName: string,
   methodName: string,
   paramTypes: MethodParams,
 ): Either.Either<DataSchema, string> {
-  const paramTypesArray = Array.from(paramTypes);
+  const params: [string, Type.Type][] = Array.from(paramTypes);
 
-  if (
-    paramTypesArray.length === 1 &&
-    isNamedMultimodal(paramTypesArray[0][1])
-  ) {
-    const paramType = paramTypesArray[0][1];
+  if (params.length === 1) {
+    const [paramName, paramType] = params[0];
 
-    if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
-      const multiModalDetails = getMultimodalParamDetails(paramType.element);
-
-      if (Either.isLeft(multiModalDetails)) {
-        return Either.left(
-          `Failed to get multimodal details: ${multiModalDetails.val}`,
-        );
-      }
-
-      const typeInfoInternal: TypeInfoInternal = {
-        tag: 'multimodal',
-        tsType: paramType,
-        types: multiModalDetails.val,
-      };
-
-      const multimodalDataSchema =
-        getMultimodalDataSchemaFromTypeInternal(typeInfoInternal);
-
-      if (Either.isLeft(multimodalDataSchema)) {
-        return Either.left(multimodalDataSchema.val);
-      }
-
-      AgentMethodParamRegistry.setType(
+    if (isMultimodalType(paramType)) {
+      return buildSingleMultimodalInputSchema(
         agentClassName,
         methodName,
-        paramTypesArray[0][0],
-        {
-          tag: 'multimodal',
-          tsType: paramType,
-          types: multiModalDetails.val,
-        },
+        paramName,
+        paramType,
       );
-
-      return Either.right(multimodalDataSchema.val);
-    } else {
-      return Either.left('Multimodal type is not an array');
     }
-  } else {
-    return Either.map(
-      getMethodParameterSchemaCollection(
-        agentClassName,
-        methodName,
-        paramTypes,
-      ),
-      (paramSchemaCollection) => {
-        return paramSchemaCollection.getDataSchema();
-      },
-    );
   }
+
+  return Either.map(
+    buildMethodParameterSchemas(agentClassName, methodName, paramTypes),
+    (schemaCollection) => schemaCollection.getDataSchema(),
+  );
 }
 
-function getMethodParameterSchemaCollection(
+function buildSingleMultimodalInputSchema(
+  agentClassName: string,
+  methodName: string,
+  parameterName: string,
+  parameterType: Type.Type,
+): Either.Either<DataSchema, string> {
+  if (parameterType.kind !== 'array') {
+    return Either.left('Multimodal type is not an array');
+  }
+
+  const multimodalDetails = getMultimodalParamDetails(parameterType.element);
+
+  if (Either.isLeft(multimodalDetails)) {
+    return Either.left(
+      `Failed to get multimodal details: ${multimodalDetails.val}`,
+    );
+  }
+
+  const typeInfo: TypeInfoInternal = {
+    tag: 'multimodal',
+    tsType: parameterType,
+    types: multimodalDetails.val,
+  };
+
+  const dataSchema = getMultimodalDataSchemaFromTypeInternal(typeInfo);
+
+  if (Either.isLeft(dataSchema)) {
+    return Either.left(dataSchema.val);
+  }
+
+  AgentMethodParamRegistry.setType(agentClassName, methodName, parameterName, {
+    tag: 'multimodal',
+    tsType: parameterType,
+    types: multimodalDetails.val,
+  });
+
+  return Either.right(dataSchema.val);
+}
+
+function buildMethodParameterSchemas(
   agentClassName: string,
   methodName: string,
   paramTypes: MethodParams,
@@ -107,7 +108,7 @@ function getMethodParameterSchemaCollection(
   const result = Either.all(
     paramTypesArray.map((parameterInfo) =>
       Either.mapError(
-        accumulateParameterSchema(
+        processMethodParameter(
           agentClassName,
           methodName,
           parameterInfo[0],
@@ -120,10 +121,10 @@ function getMethodParameterSchemaCollection(
     ),
   );
 
-  return Either.map(result, (_) => parameterSchemaCollection);
+  return Either.map(result, () => parameterSchemaCollection);
 }
 
-function accumulateParameterSchema(
+function processMethodParameter(
   agentClassName: string,
   methodName: string,
   parameterName: string,
