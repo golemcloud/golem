@@ -406,7 +406,7 @@ script = """
 # NOTE: when we reach a stable phase during a release cycle, then these env vars should be commented
 
 set_env GOLEM_RUST_PATH ${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust
-set_env GOLEM_TS_PACKAGES_PATH" ${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages
+set_env GOLEM_TS_PACKAGES_PATH ${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages
 """
 
 [tasks.test]
