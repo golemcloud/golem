@@ -40,8 +40,9 @@ fn test_type_naming_ts_bar() {
 
 fn test_type_naming(language: GuestLanguage, agent_name: &str) {
     let agent_type = code_first_snippets_agent_type(language, agent_name);
-    let type_naming = TypeNaming::new(&agent_type, should_be_named);
+    TypeNaming::new(&agent_type, should_be_named);
 
+    /*
     println!("Collected anonymous types:");
     for (typ, locations) in &type_naming.anonymous_type_locations {
         println!("- {:?}", typ);
@@ -63,6 +64,7 @@ fn test_type_naming(language: GuestLanguage, agent_name: &str) {
     for (typ, name) in type_naming.types {
         println!("- {}: {:?}", name, typ);
     }
+    */
 }
 
 fn should_be_named(typ: &AnalysedType) -> bool {
