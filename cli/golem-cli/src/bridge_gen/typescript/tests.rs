@@ -881,36 +881,21 @@ fn bridge_tests_unionwithonlyliterals(
 fn bridge_tests_voidreturn(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
-    assert_function_output_decoding(
-        pkg.target_dir(),
-        "FunVoidReturn",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues { elements: vec![] }),
-        json!([]),
-    );
+    assert_function_output_decoding_void(pkg.target_dir(), "FunVoidReturn");
 }
 
 #[test]
 fn bridge_tests_nullreturn(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
-    assert_function_output_decoding(
-        pkg.target_dir(),
-        "FunNullReturn",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues { elements: vec![] }),
-        json!([]),
-    );
+    assert_function_output_decoding_void(pkg.target_dir(), "FunNullReturn");
 }
 
 #[test]
 fn bridge_tests_undefinedreturn(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
-    assert_function_output_decoding(
-        pkg.target_dir(),
-        "FunUndefinedReturn",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues { elements: vec![] }),
-        json!([]),
-    );
+    assert_function_output_decoding_void(pkg.target_dir(), "FunUndefinedReturn");
 }
 
 #[test]
@@ -1789,4 +1774,47 @@ fn assert_function_output_decoding(
         result, expected,
         "Encoded decoded JSON value does not match expected:\nData:\n{output:?}\nDecoded:\n{result_str}"
     );
+}
+
+fn assert_function_output_decoding_void(target_dir: &Utf8Path, function_name: &str) {
+    // In this test we pass a JSON representing an UntypedDataValue as it is returned from our REST API,
+    // and we expect the output to be a JSON value representing the method's return value
+
+    let mut child = std::process::Command::new("npm")
+        .arg("run")
+        .arg("test")
+        .arg(format!(
+            "decode{}Output",
+            function_name.to_upper_camel_case()
+        ))
+        .current_dir(target_dir.as_std_path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to run decode output function");
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to get stdin");
+        stdin
+            .write_all(
+                "THIS IS NOT A JSON AND WE EXPECT THAT IT IS NOT READ AT ALL, OTHERWISE (╯°□°)╯︵ ┻━┻"
+                    .as_bytes(),
+            )
+            .expect("Failed to write to stdin");
+    };
+
+    let output = child.wait_with_output().expect("Failed to wait on npx");
+
+    assert!(
+        output.status.success(),
+        "decode output function failed for void",
+    );
+
+    let result_str = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|s| !s.is_empty() && !s.starts_with("> "))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(result_str, "void");
 }

@@ -306,15 +306,19 @@ impl TypeScriptBridgeGenerator {
         let mut encode_output =
             writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
         encode_output.result("void");
-        encode_output.write_line("const __json = await readStdin();");
-        if !method_def.output_schema.is_unit() {
-            encode_output.write("const [");
-            Self::write_parameter_name_list(&mut encode_output, &method_def.output_schema);
-            encode_output.write_line("] = __json;");
+        if method_def.output_schema.is_unit() {
+            encode_output.write_line("console.log('void');");
+        } else {
+            encode_output.write_line("const __json = await readStdin();");
+            if !method_def.output_schema.is_unit() {
+                encode_output.write("const [");
+                Self::write_parameter_name_list(&mut encode_output, &method_def.output_schema);
+                encode_output.write_line("] = __json;");
+            }
+            encode_output.write_line("const __result: base.DataValue =");
+            self.write_encode_data_value(&mut encode_output, &method_def.output_schema)?;
+            encode_output.write_line("console.log(JSON.stringify(__result));");
         }
-        encode_output.write_line("const __result: base.DataValue =");
-        self.write_encode_data_value(&mut encode_output, &method_def.output_schema)?;
-        encode_output.write_line("console.log(JSON.stringify(__result));");
         Ok(())
     }
 
@@ -329,14 +333,18 @@ impl TypeScriptBridgeGenerator {
         let mut decode_output =
             writer.begin_export_async_function(&format!("decode{}Output", method_name_pascal));
         decode_output.result("void");
-        decode_output.write_line("const __jsonResult = await readStdin();");
-        decode_output.write_line("const result = { result: __jsonResult };");
-        decode_output.write_line("const __decoded = (() => {");
-        decode_output.indent();
-        self.write_decode_data_value(&mut decode_output, &method_def.output_schema)?;
-        decode_output.unindent();
-        decode_output.write_line("})();");
-        decode_output.write_line("console.log(JSON.stringify(__decoded));");
+        if method_def.output_schema.is_unit() {
+            decode_output.write_line("console.log('void');");
+        } else {
+            decode_output.write_line("const __jsonResult = await readStdin();");
+            decode_output.write_line("const result = { result: __jsonResult };");
+            decode_output.write_line("const __decoded = (() => {");
+            decode_output.indent();
+            self.write_decode_data_value(&mut decode_output, &method_def.output_schema)?;
+            decode_output.unindent();
+            decode_output.write_line("})();");
+            decode_output.write_line("console.log(JSON.stringify(__decoded));");
+        }
         Ok(())
     }
 
