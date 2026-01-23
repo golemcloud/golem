@@ -117,8 +117,8 @@ async fn string_path_var(agent: &TestContext) -> anyhow::Result<()> {
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
-    let body1: serde_json::Value = response.json().await?;
-    assert_eq!(body1, json!({ "value": "foo" }));
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "value": "foo" }));
     Ok(())
 }
 
