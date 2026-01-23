@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_execution::request_handler::RequestHandlerError;
+use crate::gateway_execution::route_resolver::RouteResolverError;
 use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
 use crate::service::limit::LimitServiceError;
@@ -260,6 +262,35 @@ impl From<RegistryServiceError> for ApiEndpointError {
             RegistryServiceError::InternalServerError(_) => Self::internal(value),
             RegistryServiceError::CouldNotAuthenticate(_) => Self::unauthorized(value),
             RegistryServiceError::InternalClientError(_) => Self::internal(value),
+        }
+    }
+}
+
+impl From<RequestHandlerError> for ApiEndpointError {
+    fn from(value: RequestHandlerError) -> Self {
+        match value {
+            RequestHandlerError::ValueParsingFailed { .. }
+            | RequestHandlerError::MissingValue { .. }
+            | RequestHandlerError::TooManyValues { .. }
+            | RequestHandlerError::HeaderIsNotAscii { .. }
+            | RequestHandlerError::BodyIsNotValidJson { .. }
+            | RequestHandlerError::JsonBodyParsingFailed { .. } => Self::bad_request(value),
+
+            RequestHandlerError::ResolvingRouteFailed(
+                RouteResolverError::CouldNotGetDomainFromRequest(_)
+                | RouteResolverError::MalformedPath(_),
+            ) => Self::bad_request(value),
+            RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
+                Self::internal(value)
+            }
+            RequestHandlerError::ResolvingRouteFailed(RouteResolverError::NoMatchingRoute) => {
+                Self::not_found(value)
+            }
+
+            RequestHandlerError::AgentResponseTypeMismatch { .. }
+            | RequestHandlerError::InvariantViolated { .. }
+            | RequestHandlerError::AgentInvocationFailed(_)
+            | RequestHandlerError::InternalError(_) => Self::internal(value),
         }
     }
 }

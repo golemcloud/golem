@@ -22,12 +22,12 @@ use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverErro
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::{WorkerService, WorkerServiceError};
 use anyhow::anyhow;
-use golem_common::error_forwarding;
 use golem_common::model::agent::{
     AgentId, BinaryReference, BinaryReferenceValue, DataValue, ElementValue, ElementValues,
     UntypedDataValue, UntypedElementValue,
 };
 use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::custom_api::{ConstructorParameter, MethodParameter, RouteBehaviour};
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -71,6 +71,31 @@ pub enum RequestHandlerError {
 impl RequestHandlerError {
     pub fn invariant_violated(msg: &'static str) -> Self {
         Self::InvariantViolated { msg }
+    }
+}
+
+impl SafeDisplay for RequestHandlerError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::ValueParsingFailed { .. } => self.to_string(),
+            Self::MissingValue { .. } => self.to_string(),
+            Self::TooManyValues { .. } => self.to_string(),
+            Self::HeaderIsNotAscii { .. } => self.to_string(),
+            Self::BodyIsNotValidJson { .. } => self.to_string(),
+            Self::JsonBodyParsingFailed { .. } => self.to_string(),
+            Self::AgentResponseTypeMismatch { .. } => self.to_string(),
+
+            Self::InvariantViolated { .. } => "internal error".to_string(),
+
+            Self::ResolvingRouteFailed(inner) => {
+                format!("Resolving route failed: {}", inner.to_safe_string())
+            }
+            Self::AgentInvocationFailed(inner) => {
+                format!("Invocation failed: {}", inner.to_safe_string())
+            }
+
+            Self::InternalError(_) => "internal error".to_string(),
+        }
     }
 }
 
@@ -280,7 +305,7 @@ impl RequestHandler {
                     match &mut body {
                         ParsedRequestBody::UnstructuredBinary(binary_source) => {
                             let binary_source = binary_source.take().ok_or_else(|| RequestHandlerError::invariant_violated(
-                                "Parsed body was already consumer",
+                                "Parsed body was already consumed",
                             ))?;
 
                             UntypedElementValue::UnstructuredBinary(BinaryReferenceValue { value: BinaryReference::Inline(binary_source) })

@@ -17,7 +17,6 @@ pub mod common;
 mod custom_http_request;
 mod worker;
 
-// use self::custom_http_request::CustomHttpRequestApi;
 use self::custom_http_request::CustomHttpRequestApi;
 use crate::api::agents::AgentsApi;
 use crate::api::worker::WorkerApi;

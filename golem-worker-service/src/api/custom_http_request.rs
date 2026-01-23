@@ -15,11 +15,11 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::gateway_execution::request_handler::{RequestHandler, RequestHandlerError};
-use futures::FutureExt;
+use crate::api::common::ApiEndpointError;
+use crate::gateway_execution::request_handler::RequestHandler;
+use futures::{FutureExt, TryFutureExt};
 use golem_common::recorded_http_api_request;
-use http::StatusCode;
-use poem::{Body, Endpoint, Request, Response};
+use poem::{Endpoint, IntoResponse, Request, Response};
 use tracing::Instrument;
 
 pub struct CustomHttpRequestApi {
@@ -32,17 +32,21 @@ impl CustomHttpRequestApi {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        let record = recorded_http_api_request!("execute",);
+        let record = recorded_http_api_request!("execute",
+            method = %request.method(),
+            uri = %request.uri()
+        );
 
         let response = self
             .request_handler
             .handle_request(request)
             .instrument(record.span.clone())
+            .map_err(ApiEndpointError::from)
             .await;
 
-        // let response = record.result(response);
-
-        response.unwrap_or_else(transform_request_handler_error)
+        record
+            .result(response)
+            .unwrap_or_else(IntoResponse::into_response)
     }
 }
 
@@ -52,69 +56,4 @@ impl Endpoint for CustomHttpRequestApi {
     fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {
         self.execute(req).map(Ok)
     }
-}
-
-fn transform_request_handler_error(error: RequestHandlerError) -> Response {
-    let status = match &error {
-        RequestHandlerError::ValueParsingFailed { .. }
-        | RequestHandlerError::MissingValue { .. }
-        | RequestHandlerError::TooManyValues { .. }
-        | RequestHandlerError::HeaderIsNotAscii { .. }
-        | RequestHandlerError::BodyIsNotValidJson { .. }
-        | RequestHandlerError::JsonBodyParsingFailed { .. } => StatusCode::BAD_REQUEST,
-
-        RequestHandlerError::ResolvingRouteFailed(_) => StatusCode::NOT_FOUND,
-
-        RequestHandlerError::AgentResponseTypeMismatch { .. }
-        | RequestHandlerError::InvariantViolated { .. }
-        | RequestHandlerError::AgentInvocationFailed(_)
-        | RequestHandlerError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-
-    let body = match &error {
-        RequestHandlerError::ValueParsingFailed { value, expected } => {
-            format!(
-                "Failed parsing value '{}', expected type: {}",
-                value, expected
-            )
-        }
-        RequestHandlerError::MissingValue { expected } => {
-            format!(
-                "Expected {} values to be provided, but found none",
-                expected
-            )
-        }
-        RequestHandlerError::TooManyValues { expected } => {
-            format!(
-                "Expected {} values to be provided, but found too many",
-                expected
-            )
-        }
-        RequestHandlerError::HeaderIsNotAscii { header_name } => {
-            format!("Header '{}' is not valid ASCII", header_name)
-        }
-        RequestHandlerError::BodyIsNotValidJson { error } => {
-            format!("Request body was not valid JSON: {}", error)
-        }
-        RequestHandlerError::JsonBodyParsingFailed { errors } => {
-            format!("Failed parsing JSON body: [{}]", errors.join(", "))
-        }
-        RequestHandlerError::AgentResponseTypeMismatch { error } => {
-            format!("Agent response did not match expected type: {}", error)
-        }
-        RequestHandlerError::InvariantViolated { msg } => {
-            format!("Invariant violated: {}", msg)
-        }
-        RequestHandlerError::ResolvingRouteFailed(inner) => {
-            format!("Resolving route failed: {}", inner)
-        }
-        RequestHandlerError::AgentInvocationFailed(inner) => {
-            format!("Agent invocation failed: {}", inner)
-        }
-        RequestHandlerError::InternalError(inner) => {
-            format!("Internal server error: {}", inner)
-        }
-    };
-
-    Response::builder().status(status).body(Body::from(body))
 }

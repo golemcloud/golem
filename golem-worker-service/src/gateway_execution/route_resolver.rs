@@ -25,6 +25,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_service_base::custom_api::CompiledRoutes;
 // use golem_service_base::custom_api::{RouteBehaviour, SwaggerUiBindingCompiled};
 use crate::model::RichCompiledRoute;
+use golem_common::SafeDisplay;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
@@ -45,6 +46,12 @@ pub enum RouteResolverError {
     NoMatchingRoute,
     #[error("Could not decode request path: {0}")]
     MalformedPath(String),
+}
+
+impl SafeDisplay for RouteResolverError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 pub struct RouteResolver {
