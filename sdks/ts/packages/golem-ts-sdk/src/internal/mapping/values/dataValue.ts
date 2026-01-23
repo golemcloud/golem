@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TypeInfoInternal } from '../../registry/typeInfoInternal';
+import {
+  isOptionalWithQuestionMark,
+  TypeInfoInternal,
+} from '../../typeInfoInternal';
 
 import * as Either from '../../../newTypes/either';
 import * as WitValue from '../../mapping/values/WitValue';
@@ -20,6 +23,7 @@ import {
   BinaryReference,
   DataValue,
   ElementValue,
+  Principal,
   TextReference,
 } from 'golem:agent/common';
 import {
@@ -27,14 +31,13 @@ import {
   serializeTsValueToTextReference,
   matchesType,
 } from './serializer';
-import { getLanguageCodes, getMimeTypes } from '../../schema';
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
 import * as Option from '../../../newTypes/option';
 
 import * as Value from '../values/Value';
-import { record } from '../types/AnalysedType';
+import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 
 export type ParameterDetail = {
   name: string;
@@ -52,6 +55,8 @@ export type ParameterDetail = {
  * @param paramTypes A data value is ever need to be deserialized only for method parameters or constructor parameters
  * (incoming values to dynamic invoke). Hence, it always expects a list of proper parameter names and its type info
  *
+ * @param principal The principal of the caller - required to pass through whenever the required parameter is a Principal, as this will not exist in DataValue
+ *
  * Implementation detail: The same functionality can be used to deserialize the result of the dynamic invoke - mainly
  * for testing purpose. In this case a fake parameter name can be provided when `dataValue.tag` is `tuple`.
  * And a proper list of `ParameterDetail` is required `dataValue.tag` is multi-modal - and it cannnot be fake.
@@ -59,23 +64,53 @@ export type ParameterDetail = {
 export function deserializeDataValue(
   dataValue: DataValue,
   paramTypes: ParameterDetail[],
+  principal: Principal,
 ): Either.Either<any[], string> {
   switch (dataValue.tag) {
     case 'tuple':
       const elements = dataValue.val;
+      const elementsCount = elements.length;
+
+      let dataValueElementIdx = 0;
 
       return Either.all(
-        elements.map((elem, idx) => {
-          switch (elem.tag) {
-            case 'unstructured-text':
-              const parameterDetail = paramTypes[idx];
+        paramTypes.map((parameterDetail) => {
+          const parameterType = parameterDetail.type;
 
+          if (dataValueElementIdx >= elementsCount) {
+            if (isOptionalWithQuestionMark(parameterType)) {
+              return Either.right(undefined);
+            }
+
+            throw new Error(
+              `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
+            );
+          }
+
+          const elementValue = elements[dataValueElementIdx];
+
+          switch (parameterType.tag) {
+            case 'multimodal':
+              return Either.left(
+                `Internal error: Unexpected multimodal type for parameter ${parameterDetail.name} in tuple data value`,
+              );
+
+            case 'principal':
+              // If principal, we do not increment the data value elemnt index,
+              // because principal is not represented in data value
+              return Either.right(principal);
+
+            case 'unstructured-text':
               const unstructuredTextParamName = parameterDetail.name;
 
-              const textRef = elem.val;
+              if (elementValue.tag !== 'unstructured-text') {
+                throw new Error(
+                  `Internal error: Expected unstructured-text element for parameter ${unstructuredTextParamName}, got ${util.format(elementValue)}`,
+                );
+              }
 
               const languageCodes: Either.Either<string[], string> =
-                getLanguageCodes(parameterDetail.type.tsType);
+                getLanguageCodes(parameterType.tsType);
 
               if (Either.isLeft(languageCodes)) {
                 throw new Error(
@@ -83,16 +118,22 @@ export function deserializeDataValue(
                 );
               }
 
+              dataValueElementIdx += 1;
+
               return UnstructuredText.fromDataValue(
                 unstructuredTextParamName,
-                textRef,
+                elementValue.val,
                 languageCodes.val,
               );
 
             case 'unstructured-binary':
-              const binaryParameterDetail = paramTypes[idx];
+              const binaryParameterDetail = paramTypes[dataValueElementIdx];
 
-              const binaryRef = elem.val;
+              if (elementValue.tag !== 'unstructured-binary') {
+                throw new Error(
+                  `Internal error: Expected unstructured-binary element for parameter ${binaryParameterDetail.name}, got ${util.format(elementValue)}`,
+                );
+              }
 
               const mimeTypes: Either.Either<string[], string> = getMimeTypes(
                 binaryParameterDetail.type.tsType,
@@ -104,24 +145,26 @@ export function deserializeDataValue(
                 );
               }
 
+              dataValueElementIdx += 1;
+
               return UnstructuredBinary.fromDataValue(
                 binaryParameterDetail.name,
-                binaryRef,
+                elementValue.val,
                 mimeTypes.val,
               );
 
-            case 'component-model':
-              const componentModelParameterDetail = paramTypes[idx];
-              const type = componentModelParameterDetail.type;
-
-              if (type.tag !== 'analysed') {
+            case 'analysed':
+              if (elementValue.tag !== 'component-model') {
                 throw new Error(
-                  `Internal error: Unknown parameter type for ${componentModelParameterDetail.name}`,
+                  `Internal error: Expected component-model element for parameter ${parameterDetail.name}, got ${util.format(elementValue)}`,
                 );
               }
 
-              const witValue = elem.val;
-              return Either.right(WitValue.toTsValue(witValue, type.val));
+              dataValueElementIdx += 1;
+
+              return Either.right(
+                WitValue.toTsValue(elementValue.val, parameterType.val),
+              );
           }
         }),
       );
@@ -263,6 +306,11 @@ export function serializeToDataValue(
             val: [elementValue],
           };
         },
+      );
+
+    case 'principal':
+      return Either.left(
+        `Internal Error: Serialization of 'Principal' data should have never happened`,
       );
 
     case 'unstructured-text':

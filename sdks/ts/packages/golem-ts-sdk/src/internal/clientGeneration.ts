@@ -23,7 +23,7 @@ import {
   RegisteredAgentType,
   Uuid,
 } from 'golem:agent/host';
-import { AgentClassName } from '../newTypes/agentClassName';
+import { AgentClassName } from '../agentClassName';
 import {
   AgentType,
   BinaryReference,
@@ -44,7 +44,7 @@ import {
   serializeTsValueToBinaryReference,
   serializeTsValueToTextReference,
 } from './mapping/values/serializer';
-import { TypeInfoInternal } from './registry/typeInfoInternal';
+import { TypeInfoInternal } from './typeInfoInternal';
 import {
   createSingleElementTupleDataValue,
   deserializeDataValue,
@@ -62,6 +62,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
 ) {
   const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
+
   if (Option.isNone(metadataOpt)) {
     throw new Error(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
@@ -493,6 +494,11 @@ function convertToValue(
     case 'unstructured-binary':
       return Either.right(serializeBinaryReferenceTsValue(arg));
 
+    case 'principal':
+      return Either.left(
+        'Internal error: Value of `Principal` should not be serialized at any point during RPC call',
+      );
+
     case 'multimodal':
       const types = typeInfoInternal.types;
 
@@ -572,12 +578,20 @@ function deserializeRpcResult(
       });
 
       return Either.getOrThrowWith(
-        deserializeDataValue(dataValue, [
-          {
-            name: 'return-value',
-            type: typeInfoInternal,
-          },
-        ]),
+        deserializeDataValue(
+          dataValue,
+          [
+            {
+              name: 'return-value',
+              type: typeInfoInternal,
+            },
+            // Deserializing rpc result doesn't require principal context
+            // i.e, return type of a method is never conceived to be 'Principal' anywhere in SDK,
+            // but the type is normalized to be simple component-model type
+          ],
+          { tag: 'anonymous' },
+        ),
+
         (err) =>
           new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
@@ -591,12 +605,18 @@ function deserializeRpcResult(
       });
 
       return Either.getOrThrowWith(
-        deserializeDataValue(dataValueText, [
-          {
-            name: 'return-value',
-            type: typeInfoInternal,
-          },
-        ]),
+        deserializeDataValue(
+          dataValueText,
+          [
+            {
+              name: 'return-value',
+              type: typeInfoInternal,
+            },
+            // Deserializing rpc result doesn't require principal context,
+            // In this case typeInfoInternal is 'unstructured-text', so Principal type cannot appear here
+          ],
+          { tag: 'anonymous' },
+        ),
         (err) =>
           new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
@@ -610,12 +630,18 @@ function deserializeRpcResult(
       });
 
       return Either.getOrThrowWith(
-        deserializeDataValue(dataValueBinary, [
-          {
-            name: 'return-value',
-            type: typeInfoInternal,
-          },
-        ]),
+        deserializeDataValue(
+          dataValueBinary,
+          [
+            {
+              name: 'return-value',
+              type: typeInfoInternal,
+            },
+            // Deserializing rpc result doesn't require principal context,
+            // In this case typeInfoInternal is 'unstructured-binary', so Principal type cannot appear here
+          ],
+          { tag: 'anonymous' },
+        ),
         (err) =>
           new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
@@ -663,12 +689,17 @@ function deserializeRpcResult(
           };
 
           return Either.getOrThrowWith(
-            deserializeDataValue(dataValue, [
-              {
-                name: 'return-value',
-                type: typeInfoInternal,
-              },
-            ]),
+            deserializeDataValue(
+              dataValue,
+              [
+                {
+                  name: 'return-value',
+                  type: typeInfoInternal,
+                },
+              ], // Deserializing rpc result doesn't require principal context,
+              // and multimodal cannot contain Principal type inside
+              { tag: 'anonymous' },
+            ),
             (err) =>
               new Error(
                 `Failed to deserialize multimodal return value: ${err}`,
@@ -696,6 +727,11 @@ function convertNonMultimodalValueToElementValue(
         tag: 'unstructured-text',
         val: textReference,
       };
+
+    case 'principal':
+      throw new Error(
+        `Internal error: Value of 'Principal' should not appear in RPC calls`,
+      );
 
     case 'unstructured-binary':
       const binaryReference = convertValueToBinaryReference(rpcValueUnwrapped);

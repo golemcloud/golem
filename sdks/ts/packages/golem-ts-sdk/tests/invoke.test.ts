@@ -55,7 +55,12 @@ import {
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
-import { DataValue, ElementValue } from 'golem:agent/common';
+import {
+  BinaryReference,
+  DataValue,
+  ElementValue,
+  TextReference,
+} from 'golem:agent/common';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
@@ -114,13 +119,37 @@ test('BarAgent can be successfully initiated', () => {
           typeRegistry.constructorArgs[2].name,
         );
 
+        // UnstructuredText,
+        const arg3 = AgentConstructorParamRegistry.getParamType(
+          'BarAgent',
+          typeRegistry.constructorArgs[3].name,
+        );
+
+        // UnstructuredText<['en', 'de']>
+        const arg4 = AgentConstructorParamRegistry.getParamType(
+          'BarAgent',
+          typeRegistry.constructorArgs[4].name,
+        );
+
+        // UnstructuredBinary<['application/json']>
+        const arg5 = AgentConstructorParamRegistry.getParamType(
+          'BarAgent',
+          typeRegistry.constructorArgs[5].name,
+        );
+
         if (
           !arg0 ||
           !arg1 ||
           !arg2 ||
+          !arg3 ||
+          !arg4 ||
+          !arg5 ||
           arg0.tag !== 'analysed' ||
           arg1.tag !== 'analysed' ||
-          arg2.tag !== 'analysed'
+          arg2.tag !== 'analysed' ||
+          arg3.tag !== 'unstructured-text' ||
+          arg4.tag !== 'unstructured-text' ||
+          arg5.tag !== 'unstructured-binary'
         ) {
           throw new Error(
             'Test failure: unresolved type in BarAgent constructor',
@@ -146,6 +175,16 @@ test('BarAgent can be successfully initiated', () => {
 
         expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
 
+        const textReference: TextReference = {
+          tag: 'url',
+          val: 'https://example.com/sample.txt',
+        };
+
+        const binaryReference: BinaryReference = {
+          tag: 'url',
+          val: 'https://example.com/binary',
+        };
+
         const dataValue: DataValue = {
           tag: 'tuple',
           val: [
@@ -161,6 +200,18 @@ test('BarAgent can be successfully initiated', () => {
               tag: 'component-model',
               val: optionalUnionWit,
             },
+            {
+              tag: 'unstructured-text',
+              val: textReference,
+            },
+            {
+              tag: 'unstructured-text',
+              val: textReference,
+            },
+            {
+              tag: 'unstructured-binary',
+              val: binaryReference,
+            },
           ],
         };
 
@@ -169,7 +220,7 @@ test('BarAgent can be successfully initiated', () => {
           () => new Error('BarAgent not found in AgentInitiatorRegistry'),
         );
 
-        const result = agentInitiator.initiate(dataValue);
+        const result = agentInitiator.initiate(dataValue, { tag: 'anonymous' });
 
         expect(result.tag).toEqual('ok');
       },
@@ -744,7 +795,7 @@ test('Invoke function that takes json unstructured-binary and returns json unstr
 
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
-test('Invoke method with optional parameter using ? syntax', () => {
+test('Invoke method with optional parameter using question syntax', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
@@ -849,15 +900,17 @@ test('Invoke function that takes unstructured-text and returns unstructured-text
     false,
   );
 
-  resolvedAgent.invoke('fun16', dataValue).then((invokeResult) => {
-    if (invokeResult.tag === 'ok') {
-      throw new Error('Test failure: invocation should have failed');
-    } else {
-      expect(invokeResult.val.val).toContain(
-        'Failed to deserialize arguments for method fun16 in agent FooAgent: Invalid value for parameter param. Language code `pl` is not allowed. Allowed codes: en, de',
-      );
-    }
-  });
+  resolvedAgent
+    .invoke('fun16', dataValue, { tag: 'anonymous' })
+    .then((invokeResult) => {
+      if (invokeResult.tag === 'ok') {
+        throw new Error('Test failure: invocation should have failed');
+      } else {
+        expect(invokeResult.val.val).toContain(
+          'Failed to deserialize arguments for method fun16 in agent FooAgent: Invalid value for parameter param. Language code `pl` is not allowed. Allowed codes: en, de',
+        );
+      }
+    });
 });
 
 function initiateFooAgent(
@@ -888,7 +941,9 @@ function initiateFooAgent(
     () => new Error('FooAgent not found in AgentInitiatorRegistry'),
   );
 
-  const result = agentInitiator.initiate(constructorParams);
+  const result = agentInitiator.initiate(constructorParams, {
+    tag: 'anonymous',
+  });
 
   if (result.tag !== 'ok') {
     throw new Error(
@@ -915,23 +970,25 @@ function testInvoke(
     multimodal,
   );
 
-  resolvedAgent.invoke(methodName, dataValue).then((invokeResult) => {
-    const resultDataValue =
-      invokeResult.tag === 'ok'
-        ? invokeResult.val
-        : (() => {
-            throw new Error(
-              'Test failure: ' + JSON.stringify(invokeResult.val),
-            );
-          })();
+  resolvedAgent
+    .invoke(methodName, dataValue, { tag: 'anonymous' })
+    .then((invokeResult) => {
+      const resultDataValue =
+        invokeResult.tag === 'ok'
+          ? invokeResult.val
+          : (() => {
+              throw new Error(
+                'Test failure: ' + JSON.stringify(invokeResult.val),
+              );
+            })();
 
-    // Unless it is an RPC call, we don't really need to deserialize the result
-    // But to ensure the data-value returned above corresponds to the original input
-    // we deserialize and assert if the input is same as output.
-    const result = deserializeReturnValue(methodName, resultDataValue);
+      // Unless it is an RPC call, we don't really need to deserialize the result
+      // But to ensure the data-value returned above corresponds to the original input
+      // we deserialize and assert if the input is same as output.
+      const result = deserializeReturnValue(methodName, resultDataValue);
 
-    expect(result).toEqual(Either.right(expectedOutput));
-  });
+      expect(result).toEqual(Either.right(expectedOutput));
+    });
 }
 
 function createInputDataValue(
@@ -1005,6 +1062,11 @@ function createInputDataValue(
             val: binaryReference,
           };
 
+        case 'principal':
+          throw new Error(
+            'Test failure: principal types should never be part of method parameters',
+          );
+
         case 'multimodal':
           throw new Error(
             'Test failure: multimodal types should not be part of other parameters',
@@ -1045,12 +1107,18 @@ function deserializeReturnValue(
     throw new Error(`Unsupported return type for method ${methodName}`);
   }
 
-  const result = deserializeDataValue(returnValue, [
+  const result = deserializeDataValue(
+    returnValue,
+    [
+      {
+        name: 'return-value',
+        type: returnTypeAnalysedType,
+      },
+    ],
     {
-      name: 'return-value',
-      type: returnTypeAnalysedType,
+      tag: 'anonymous',
     },
-  ]);
+  );
 
   // typescript compiles even if you don't index it by 0
   // any[] === any
