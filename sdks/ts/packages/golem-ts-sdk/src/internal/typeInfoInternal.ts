@@ -162,7 +162,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
       if (analysed.kind === 'tuple' && analysed.emptyType) {
         return Either.right({
           tag: 'tuple',
-          val: []
+          val: [],
         });
       }
 
