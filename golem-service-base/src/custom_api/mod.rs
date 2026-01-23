@@ -31,7 +31,7 @@ use std::fmt;
 
 pub type RouteId = i32;
 
-#[derive(Clone, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum PathSegment {
     Literal { value: String },
@@ -51,7 +51,7 @@ impl fmt::Display for PathSegment {
 }
 
 /// reduced version of AnalysedType for types that can be parsed from query params and headers.
-#[derive(Clone, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum PathSegmentType {
     Str,
@@ -120,7 +120,7 @@ impl TryFrom<AnalysedType> for PathSegmentType {
 /// * list maps to
 ///     * repeated query params
 ///     * repeated headers and/or comma-seperated header value. See https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.2
-#[derive(Clone, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum QueryOrHeaderType {
     Primitive(PathSegmentType),
@@ -177,7 +177,7 @@ impl TryFrom<AnalysedType> for QueryOrHeaderType {
     }
 }
 
-#[derive(BinaryCodec)]
+#[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RequestBodySchema {
     Unused,
@@ -185,7 +185,7 @@ pub enum RequestBodySchema {
     UnstructuredBinary,
 }
 
-#[derive(Clone, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum ConstructorParameter {
     Path {
@@ -194,7 +194,7 @@ pub enum ConstructorParameter {
     },
 }
 
-#[derive(Clone, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum MethodParameter {
     Path {
@@ -215,6 +215,7 @@ pub enum MethodParameter {
     UnstructuredBinaryBody,
 }
 
+#[derive(Debug)]
 pub struct CompiledRoutes {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
@@ -223,6 +224,7 @@ pub struct CompiledRoutes {
     pub routes: Vec<CompiledRoute>,
 }
 
+#[derive(Debug)]
 pub struct CompiledRoute {
     pub route_id: RouteId,
     pub method: HttpMethod,
@@ -233,7 +235,7 @@ pub struct CompiledRoute {
     pub cors: CorsOptions,
 }
 
-#[derive(BinaryCodec)]
+#[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RouteBehaviour {
     CallAgent {

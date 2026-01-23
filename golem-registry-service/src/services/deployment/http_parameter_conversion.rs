@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     ComponentModelElementSchema, DataSchema, ElementSchema, HeaderVariable, HttpEndpointDetails,
@@ -25,11 +24,11 @@ use golem_service_base::model::SafeIndex;
 use golem_wasm::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use std::collections::HashMap;
 
-pub fn build_http_agent_constructor_parameters(
+pub fn build_http_agent_constructor_parameters<E>(
     mount: &HttpMountDetails,
     schema: &DataSchema,
-    make_error: &impl Fn(String) -> DeployValidationError,
-) -> Result<Vec<ConstructorParameter>, DeployValidationError> {
+    make_error: &impl Fn(String) -> E,
+) -> Result<Vec<ConstructorParameter>, E> {
     let elements = match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => elements,
         _ => {
@@ -70,12 +69,12 @@ pub fn build_http_agent_constructor_parameters(
     Ok(result)
 }
 
-pub fn build_http_agent_method_parameters(
+pub fn build_http_agent_method_parameters<E>(
     mount: &HttpMountDetails,
     endpoint: &HttpEndpointDetails,
     schema: &DataSchema,
-    make_error: &impl Fn(String) -> DeployValidationError,
-) -> Result<(RequestBodySchema, Vec<MethodParameter>), DeployValidationError> {
+    make_error: &impl Fn(String) -> E,
+) -> Result<(RequestBodySchema, Vec<MethodParameter>), E> {
     let elements = match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => elements,
         _ => {
@@ -151,12 +150,12 @@ pub fn build_http_agent_method_parameters(
     Ok((body_schema, method_parameters))
 }
 
-fn handle_body_parameters(
+fn handle_body_parameters<E>(
     elements: &[NamedElementSchema],
     consumed: &[bool],
     out: &mut Vec<MethodParameter>,
-    make_error: &impl Fn(String) -> DeployValidationError,
-) -> Result<RequestBodySchema, DeployValidationError> {
+    make_error: &impl Fn(String) -> E,
+) -> Result<RequestBodySchema, E> {
     let leftovers: Vec<(usize, &NamedElementSchema)> = elements
         .iter()
         .enumerate()
@@ -218,11 +217,11 @@ fn handle_body_parameters(
     ))
 }
 
-fn collect_path_bindings_from_segments(
+fn collect_path_bindings_from_segments<E>(
     all_segments: &[PathSegment],
     bindable_range: std::ops::Range<usize>,
-    make_error: &impl Fn(String) -> DeployValidationError,
-) -> Result<HashMap<String, (SafeIndex, PathSegment)>, DeployValidationError> {
+    make_error: &impl Fn(String) -> E,
+) -> Result<HashMap<String, (SafeIndex, PathSegment)>, E> {
     let mut map = HashMap::new();
     let mut var_index: u32 = 0;
     let mut found_remaining_path_variable = false;
@@ -290,10 +289,10 @@ fn collect_header_bindings(endpoint: &HttpEndpointDetails) -> HashMap<String, He
         .collect()
 }
 
-fn element_schema_to_path_segment_type(
+fn element_schema_to_path_segment_type<E>(
     schema: &ElementSchema,
-    make_error: &impl Fn(String) -> DeployValidationError,
-) -> Result<PathSegmentType, DeployValidationError> {
+    make_error: &impl Fn(String) -> E,
+) -> Result<PathSegmentType, E> {
     let cm = match schema {
         ElementSchema::ComponentModel(cm) => cm,
         _ => {
@@ -307,10 +306,10 @@ fn element_schema_to_path_segment_type(
     Ok(ty)
 }
 
-fn element_schema_to_query_or_header_type(
+fn element_schema_to_query_or_header_type<E>(
     schema: &ElementSchema,
-    make_error: &impl Fn(String) -> DeployValidationError,
-) -> Result<QueryOrHeaderType, DeployValidationError> {
+    make_error: &impl Fn(String) -> E,
+) -> Result<QueryOrHeaderType, E> {
     let cm = match schema {
         ElementSchema::ComponentModel(cm) => cm,
         _ => {
@@ -324,11 +323,11 @@ fn element_schema_to_query_or_header_type(
     Ok(ty)
 }
 
-fn validate_path_segment_type(
+fn validate_path_segment_type<E>(
     segment: &PathSegment,
     ty: &PathSegmentType,
-    make_error: &impl Fn(String) -> DeployValidationError,
-) -> Result<(), DeployValidationError> {
+    make_error: &impl Fn(String) -> E,
+) -> Result<(), E> {
     if let PathSegment::RemainingPathVariable(_) = segment
         && !matches!(ty, PathSegmentType::Str)
     {
@@ -337,4 +336,306 @@ fn validate_path_segment_type(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use golem_common::model::agent::{
+        BinaryDescriptor, ComponentModelElementSchema, CorsOptions, DataSchema, ElementSchema,
+        HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
+        NamedElementSchemas, PathSegment, PathVariable,
+    };
+    use golem_wasm::analysis::analysed_type;
+    use test_r::test;
+
+    use crate::services::deployment::http_parameter_conversion::{
+        build_http_agent_constructor_parameters, build_http_agent_method_parameters,
+    };
+    use assert2::assert;
+    use golem_common::model::Empty;
+    use golem_service_base::custom_api::{
+        ConstructorParameter, MethodParameter, PathSegmentType, RequestBodySchema,
+    };
+    use golem_service_base::model::SafeIndex;
+
+    #[test]
+    fn constructor_binds_all_parameters_from_mount_path() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![
+                PathSegment::Literal(LiteralSegment {
+                    value: "agents".into(),
+                }),
+                PathSegment::PathVariable(PathVariable {
+                    variable_name: "agent_id".into(),
+                }),
+            ],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "agent_id".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+
+        assert_eq!(params.len(), 1);
+        assert!(matches!(
+            params[0],
+            ConstructorParameter::Path {
+                path_segment_index,
+                parameter_type: PathSegmentType::Str
+            } if path_segment_index == SafeIndex::from(0)
+        ));
+    }
+
+    #[test]
+    fn constructor_fails_if_parameter_not_in_path() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![PathSegment::Literal(LiteralSegment {
+                value: "agents".into(),
+            })],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "missing".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let err = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap_err();
+
+        assert!(err.contains("must bind to a path variable"));
+    }
+
+    #[test]
+    fn constructor_rejects_non_string_remaining_path_variable() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![PathSegment::RemainingPathVariable(PathVariable {
+                variable_name: "rest".into(),
+            })],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "rest".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::u32(),
+                }),
+            }],
+        });
+
+        let err = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap_err();
+
+        assert!(err.contains("Remaining path variables must be of type string"));
+    }
+
+    #[test]
+    fn method_parameters_only_bind_to_endpoint_suffix() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![PathSegment::PathVariable(PathVariable {
+                variable_name: "agent_id".into(),
+            })],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![PathSegment::PathVariable(PathVariable {
+                variable_name: "task_id".into(),
+            })],
+            query_vars: vec![],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "task_id".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let (_body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert_eq!(params.len(), 1);
+        assert!(matches!(
+            params[0],
+            MethodParameter::Path {
+                path_segment_index,
+                ..
+            } if path_segment_index == SafeIndex::from(1)
+        ));
+    }
+
+    #[test]
+    fn method_infers_json_body_from_component_model_parameters() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "a".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type::str(),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "b".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type::u32(),
+                    }),
+                },
+            ],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert!(let RequestBodySchema::JsonBody { .. } = body);
+        assert_eq!(params.len(), 2);
+
+        assert!(
+            params
+                .iter()
+                .all(|p| matches!(p, MethodParameter::JsonObjectBodyField { .. }))
+        );
+    }
+
+    #[test]
+    fn method_accepts_unstructured_binary_body() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "return-type".into(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            }],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert!(matches!(body, RequestBodySchema::UnstructuredBinary));
+        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
+    }
+
+    #[test]
+    fn method_rejects_mixed_body_parameters() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "a".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type::str(),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "b".into(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: None,
+                    }),
+                },
+            ],
+        });
+
+        let err =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap_err();
+
+        assert!(err.contains("Invalid body parameters"));
+    }
 }
