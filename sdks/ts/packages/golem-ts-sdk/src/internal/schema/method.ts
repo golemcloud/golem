@@ -15,16 +15,12 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
 import { AgentMethod, DataSchema, HttpMountDetails } from 'golem:agent/common';
-import { AgentMethodRegistry } from './../registry/agentMethodRegistry';
+import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
-import {
-  getReturnTypeDataSchemaFromTypeInternal,
-  TypeInfoInternal,
-} from '../typeInfoInternal';
 import { validateHttpEndpoint } from '../http/validation';
 import { validateMethodName } from './helpers';
 import { resolveMethodInputSchema } from './methodInput';
-import { resolveMethodOutputSchema } from './methodOutput';
+import { resolveMethodReturnDataSchema } from './methodOutput';
 
 export function getAgentMethodSchema(
   classMetadata: ClassMetadata,
@@ -105,49 +101,23 @@ function resolveInputSchemaOrThrow(
   return inputSchemaEither.val;
 }
 
-function resolveReturnTypeInfoOrThrow(
-  methodName: string,
-  returnType: Type.Type,
-  baseError: string,
-): TypeInfoInternal {
-  const outputTypeInfoEither = resolveMethodOutputSchema(returnType);
-
-  if (Either.isLeft(outputTypeInfoEither)) {
-    throw new Error(
-      `${baseError}. Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${outputTypeInfoEither.val}.`,
-    );
-  }
-
-  return outputTypeInfoEither.val;
-}
-
 function resolveReturnSchemaOrThrow(
   agentClassName: string,
   methodName: string,
   returnType: Type.Type,
   baseError: string,
-) {
-  const outputTypeInfoInternal = resolveReturnTypeInfoOrThrow(
-    methodName,
-    returnType,
-    baseError,
-  );
-
-  AgentMethodRegistry.setReturnType(
+): DataSchema {
+  const returnSchemaEither = resolveMethodReturnDataSchema(
     agentClassName,
     methodName,
-    outputTypeInfoInternal,
+    returnType,
   );
 
-  const outputSchemaEither = getReturnTypeDataSchemaFromTypeInternal(
-    outputTypeInfoInternal,
-  );
-
-  if (Either.isLeft(outputSchemaEither)) {
+  if (Either.isLeft(returnSchemaEither)) {
     throw new Error(
-      `${baseError}. Failed to get output data schema for method ${methodName}: ${outputSchemaEither.val}`,
+      `${baseError}. Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${returnSchemaEither.val}`,
     );
   }
 
-  return outputSchemaEither.val;
+  return returnSchemaEither.val;
 }

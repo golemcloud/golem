@@ -278,7 +278,7 @@ test('Agent method with empty tuple return type is rejected', async () => {
   await expect(async () => {
     await import('./agentWithEmptyTuple');
   }).rejects.toThrowError(
-    'Schema generation failed for agent class AgentWithEmptyTuple. Failed to construct output schema for method mysteriousArray with return type undefined: Empty tuple types are not supported.',
+    'Schema generation failed for agent class AgentWithEmptyTuple. Failed to construct output schema for method mysteriousArray with return type undefined: Empty tuple types are not supported',
   );
 });
 
