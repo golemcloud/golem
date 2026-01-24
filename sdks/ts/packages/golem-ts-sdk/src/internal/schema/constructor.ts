@@ -45,6 +45,136 @@ export function getAgentConstructorSchema(
   );
 }
 
+type ConstructorParamHandler = {
+  canHandle(param: ConstructorArg): boolean;
+  handle(
+    agentClassName: string,
+    param: ConstructorArg,
+    baseError: string,
+    collection: ParameterSchemaCollection,
+  ): void;
+};
+
+const principalHandler: ConstructorParamHandler = {
+  canHandle: (param) => param.type.name === 'Principal',
+
+  handle: (agentClassName, param, _, collection) => {
+    AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+      tag: 'principal',
+      tsType: param.type,
+    });
+
+    collection.addPrincipalParameter(param.name);
+  },
+};
+
+const unstructuredTextHandler: ConstructorParamHandler = {
+  canHandle: (param) => param.type.name === 'UnstructuredText',
+
+  handle: (agentClassName, param, baseError, collection) => {
+    const descriptor = getTextDescriptor(param.type);
+
+    if (Either.isLeft(descriptor)) {
+      throw new Error(
+        `${baseError}. Failed to get text descriptor for unstructured-text parameter ${param.name}: ${descriptor.val}`,
+      );
+    }
+
+    AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+      tag: 'unstructured-text',
+      val: descriptor.val,
+      tsType: param.type,
+    });
+
+    collection.addComponentModelParameter(param.name, {
+      tag: 'unstructured-text',
+      val: descriptor.val,
+    });
+  },
+};
+
+const unstructuredBinaryHandler: ConstructorParamHandler = {
+  canHandle: (param) => param.type.name === 'UnstructuredBinary',
+
+  handle: (agentClassName, param, baseError, collection) => {
+    const descriptor = getBinaryDescriptor(param.type);
+
+    if (Either.isLeft(descriptor)) {
+      throw new Error(
+        `${baseError}. Failed to get binary descriptor for unstructured-binary parameter ${param.name}: ${descriptor.val}`,
+      );
+    }
+
+    AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+      tag: 'unstructured-binary',
+      val: descriptor.val,
+      tsType: param.type,
+    });
+
+    collection.addComponentModelParameter(param.name, {
+      tag: 'unstructured-binary',
+      val: descriptor.val,
+    });
+  },
+};
+
+const analysedHandler: ConstructorParamHandler = {
+  canHandle: () => true,
+
+  handle: (agentClassName, param, baseError, collection) => {
+    const typeInfoEither = WitType.fromTsType(
+      param.type,
+      Option.some(
+        TypeMappingScope.constructor(
+          agentClassName,
+          param.name,
+          param.type.optional,
+        ),
+      ),
+    );
+
+    if (Either.isLeft(typeInfoEither)) {
+      throw new Error(`${baseError}. ${typeInfoEither.val}`);
+    }
+
+    const [witType, analysedType] = typeInfoEither.val;
+
+    AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+      tag: 'analysed',
+      val: analysedType,
+      witType,
+      tsType: param.type,
+    });
+
+    collection.addComponentModelParameter(param.name, {
+      tag: 'component-model',
+      val: witType,
+    });
+  },
+};
+
+const HANDLERS: readonly ConstructorParamHandler[] = [
+  principalHandler,
+  unstructuredTextHandler,
+  unstructuredBinaryHandler,
+  analysedHandler,
+];
+
+function handleConstructorParam(
+  agentClassName: string,
+  param: ConstructorArg,
+  baseError: string,
+  collection: ParameterSchemaCollection,
+): void {
+  const handler = HANDLERS.find((h) => h.canHandle(param));
+
+  if (!handler) {
+    throw new Error(baseError);
+  }
+
+  handler.handle(agentClassName, param, baseError, collection);
+}
+
 function buildBaseError(agentClassName: string): string {
   return `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor.`;
 }
@@ -123,137 +253,16 @@ function resolveStandardConstructorSchema(
   params: readonly ConstructorArg[],
   baseError: string,
 ): DataSchema {
-  const collection = new ParameterSchemaCollection();
+  const parameterSchemaCollection = new ParameterSchemaCollection();
 
   params.forEach((param) => {
-    handleConstructorParam(agentClassName, param, baseError, collection);
-  });
-
-  return collection.getDataSchema();
-}
-
-function handleConstructorParam(
-  agentClassName: string,
-  param: ConstructorArg,
-  baseError: string,
-  collection: ParameterSchemaCollection,
-): void {
-  if (tryPrincipal(agentClassName, param, collection)) return;
-
-  if (tryUnstructuredText(agentClassName, param, baseError, collection)) return;
-
-  if (tryUnstructuredBinary(agentClassName, param, baseError, collection))
-    return;
-
-  handleAnalysedType(agentClassName, param, baseError, collection);
-}
-
-function tryPrincipal(
-  agentClassName: string,
-  param: ConstructorArg,
-  collection: ParameterSchemaCollection,
-): boolean {
-  if (param.type.name !== 'Principal') return false;
-
-  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
-    tag: 'principal',
-    tsType: param.type,
-  });
-
-  collection.addPrincipalParameter(param.name);
-  return true;
-}
-
-function tryUnstructuredText(
-  agentClassName: string,
-  param: ConstructorArg,
-  baseError: string,
-  collection: ParameterSchemaCollection,
-): boolean {
-  if (param.type.name !== 'UnstructuredText') return false;
-
-  const descriptor = getTextDescriptor(param.type);
-  if (Either.isLeft(descriptor)) {
-    throw new Error(
-      `${baseError}. Failed to get text descriptor for unstructured-text parameter ${param.name}: ${descriptor.val}`,
+    handleConstructorParam(
+      agentClassName,
+      param,
+      baseError,
+      parameterSchemaCollection,
     );
-  }
-
-  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
-    tag: 'unstructured-text',
-    val: descriptor.val,
-    tsType: param.type,
   });
 
-  collection.addComponentModelParameter(param.name, {
-    tag: 'unstructured-text',
-    val: descriptor.val,
-  });
-
-  return true;
-}
-
-function tryUnstructuredBinary(
-  agentClassName: string,
-  param: ConstructorArg,
-  baseError: string,
-  collection: ParameterSchemaCollection,
-): boolean {
-  if (param.type.name !== 'UnstructuredBinary') return false;
-
-  const descriptor = getBinaryDescriptor(param.type);
-  if (Either.isLeft(descriptor)) {
-    throw new Error(
-      `${baseError}. Failed to get binary descriptor for unstructured-binary parameter ${param.name}: ${descriptor.val}`,
-    );
-  }
-
-  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
-    tag: 'unstructured-binary',
-    val: descriptor.val,
-    tsType: param.type,
-  });
-
-  collection.addComponentModelParameter(param.name, {
-    tag: 'unstructured-binary',
-    val: descriptor.val,
-  });
-
-  return true;
-}
-
-function handleAnalysedType(
-  agentClassName: string,
-  param: ConstructorArg,
-  baseError: string,
-  collection: ParameterSchemaCollection,
-): void {
-  const typeInfoEither = WitType.fromTsType(
-    param.type,
-    Option.some(
-      TypeMappingScope.constructor(
-        agentClassName,
-        param.name,
-        param.type.optional,
-      ),
-    ),
-  );
-
-  if (Either.isLeft(typeInfoEither)) {
-    throw new Error(`${baseError}. ${typeInfoEither.val}`);
-  }
-
-  const [witType, analysedType] = typeInfoEither.val;
-
-  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
-    tag: 'analysed',
-    val: analysedType,
-    witType,
-    tsType: param.type,
-  });
-
-  collection.addComponentModelParameter(param.name, {
-    tag: 'component-model',
-    val: witType,
-  });
+  return parameterSchemaCollection.getDataSchema();
 }
