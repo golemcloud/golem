@@ -53,7 +53,7 @@ export function isOptionalWithQuestionMark(
   return false;
 }
 
-export function isEmpty(typeInfoInternal: TypeInfoInternal): boolean {
+export function isEmptyType(typeInfoInternal: TypeInfoInternal): boolean {
   if (typeInfoInternal.tag === 'analysed') {
     const analysed = typeInfoInternal.val;
     if (analysed.kind === 'tuple' && analysed.emptyType) {

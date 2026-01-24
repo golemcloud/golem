@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import {
-  isEmpty,
+  isEmptyType,
   isOptionalWithQuestionMark,
   TypeInfoInternal,
 } from '../../typeInfoInternal';
@@ -83,7 +83,7 @@ export function deserializeDataValue(
               return Either.right(undefined);
             }
 
-            if (isEmpty(parameterType)) {
+            if (isEmptyType(parameterType)) {
               return Either.right(undefined);
             }
 
@@ -298,7 +298,7 @@ export function serializeToDataValue(
 ): Either.Either<DataValue, string> {
   switch (typeInfoInternal.tag) {
     case 'analysed':
-      if (isEmpty(typeInfoInternal)) {
+      if (isEmptyType(typeInfoInternal)) {
         return Either.right({
           tag: 'tuple',
           val: [],
