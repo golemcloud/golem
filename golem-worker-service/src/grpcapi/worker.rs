@@ -430,13 +430,13 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-        let target_version: ComponentRevision = request
-            .target_version
+        let target_revision: ComponentRevision = request
+            .target_revision
             .try_into()
-            .map_err(|e| bad_request_error(format!("failed converting target_version: {e}")))?;
+            .map_err(|e| bad_request_error(format!("failed converting target_revision: {e}")))?;
 
         self.worker_service
-            .update(&worker_id, worker_update_mode, target_version, auth)
+            .update(&worker_id, worker_update_mode, target_revision, auth)
             .await?;
 
         Ok(())

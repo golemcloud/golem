@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::environment::EnvironmentId;
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+import { agent, BaseAgent } from '../src';
 
-newtype_uuid!(ApiDomainId);
+@agent({
+  mount: '/chats/{agent-type}/{foo}',
+})
+class AgentWithInvalidHttpMount extends BaseAgent {
+  constructor(
+    readonly foo: string,
+    readonly bar: string,
+    // baz is neither satisfied by the path variable or headers
+    readonly baz: string,
+  ) {
+    super();
+  }
 
-declare_transparent_newtypes! {
-    pub struct ApiDomainName(pub String);
-
-    pub struct ApiDomainRevision(u64);
-}
-
-declare_structs! {
-    pub struct ApiDomain {
-        pub id: ApiDomainId,
-        pub revision: ApiDomainRevision,
-        pub environment_id: EnvironmentId,
-        pub domain_name: ApiDomainName,
-        pub name_servers: Vec<String>,
-        pub created_at: chrono::DateTime<chrono::Utc>,
-    }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
 }

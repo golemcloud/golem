@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType } from 'golem:agent/common';
+import { AgentType, Principal } from 'golem:agent/common';
 import { AgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
-import { AgentClassName } from './newTypes/agentClassName';
+import { AgentClassName } from './agentClassName';
 import { Datetime } from 'golem:rpc/types@0.2.2';
 import { Uuid } from 'golem:agent/host';
 
@@ -141,7 +141,7 @@ export class BaseAgent {
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
-    ...args: ConstructorParameters<T>
+    ...args: GetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -196,7 +196,7 @@ export type Client<T> = {
   [K in keyof T as T[K] extends (...args: any[]) => any
     ? K
     : never]: T[K] extends (...args: infer A) => infer R
-    ? RemoteMethod<A, Awaited<R>>
+    ? RemoteMethod<GetArgs<A>, Awaited<R>>
     : never;
 };
 
@@ -205,3 +205,41 @@ export type RemoteMethod<Args extends any[], R> = {
   trigger: (...args: Args) => void;
   schedule: (ts: Datetime, ...args: Args) => void;
 };
+
+// GetArgs extracts the argument types for the remote agent's get method
+// by removing the Principal parameter
+type GetArgs<T extends readonly unknown[]> =
+  SplitOnPrincipal<T> extends {
+    found: infer F extends boolean;
+    before: infer B extends unknown[];
+    after: infer A extends unknown[];
+  }
+    ? F extends true
+      ? AllOptional<A> extends true
+        ? B | [...B, ...A]
+        : [...B, ...A]
+      : T
+    : never;
+
+// Handles any trailing parameters (optional) after `Principal`
+// See `tests/agentWithPrincipalAutoInjection.ts` for usage example
+type IsOptional<T extends readonly unknown[], K extends keyof T> =
+  {} extends Pick<T, K> ? true : false;
+
+type AllOptional<
+  T extends readonly unknown[],
+  I extends any[] = [],
+> = T extends readonly [any, ...infer R]
+  ? IsOptional<T, I['length']> extends true
+    ? AllOptional<R, [...I, 0]>
+    : false
+  : true;
+
+type SplitOnPrincipal<
+  T extends readonly unknown[],
+  Before extends unknown[] = [],
+> = T extends readonly [infer H, ...infer R]
+  ? [H] extends [Principal]
+    ? { found: true; before: Before; after: R }
+    : SplitOnPrincipal<R, [...Before, H]>
+  : { found: false; before: Before; after: [] };

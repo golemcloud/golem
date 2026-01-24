@@ -14,12 +14,7 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import {
-  AgentError,
-  AgentType,
-  Principal,
-  DataValue,
-} from 'golem:agent/common';
+import { AgentType, Principal, DataValue } from 'golem:agent/common';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
@@ -28,15 +23,19 @@ import { getRawSelfAgentId } from './host/hostapi';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
-export { prompt, description, agent } from './decorators';
-export * from './newTypes/either';
-export * from './newTypes/agentClassName';
+export { description } from './decorators/description';
+export { agent, AgentDecoratorOptions } from './decorators/agent';
+export { prompt } from './decorators/prompt';
+export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
+
+export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
+export { Principal } from 'golem:agent/common';
 
 export { Client } from './baseAgent';
-export { AgentClassName } from './newTypes/agentClassName';
+export { AgentClassName } from './agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 
 export * from './host/hostapi';
@@ -66,7 +65,7 @@ async function initialize(
     );
   }
 
-  const initiateResult = initiator.val.initiate(input);
+  const initiateResult = initiator.val.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = Option.some(initiateResult.val);
@@ -86,7 +85,7 @@ async function invoke(
     );
   }
 
-  const result = await resolvedAgent.val.invoke(methodName, input);
+  const result = await resolvedAgent.val.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
     return result.val;
@@ -153,7 +152,10 @@ async function load(bytes: Uint8Array): Promise<void> {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = initiator.val.initiate(agentParameters);
+  // TODO; pass principal?
+  const initiateResult = initiator.val.initiate(agentParameters, {
+    tag: 'anonymous',
+  });
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;

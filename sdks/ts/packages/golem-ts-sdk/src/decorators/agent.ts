@@ -12,33 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentMode } from 'golem:agent/common';
-import { ResolvedAgent } from './internal/resolvedAgent';
+import {
+  AgentType,
+  DataValue,
+  AgentConstructor,
+  AgentMethod,
+  AgentMode,
+  Principal,
+} from 'golem:agent/common';
+import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
   getNewPhantomRemoteClient,
   getPhantomRemoteClient,
   getRemoteClient,
-} from './internal/clientGeneration';
-import { BaseAgent } from './baseAgent';
-import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-import * as Either from './newTypes/either';
-import {
-  getAgentMethodSchema,
-  getConstructorDataSchema,
-} from './internal/schema';
-import * as Option from './newTypes/option';
-import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
-import { AgentClassName } from './newTypes/agentClassName';
-import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { createCustomError } from './internal/agentError';
-import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
-import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
+} from '../internal/clientGeneration';
+import { BaseAgent } from '../baseAgent';
+import { AgentTypeRegistry } from '../internal/registry/agentTypeRegistry';
+import * as Either from '../newTypes/either';
+import * as Option from '../newTypes/option';
+import { AgentClassName } from '../agentClassName';
+import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegistry';
+import { createCustomError } from '../internal/agentError';
+import { AgentConstructorParamRegistry } from '../internal/registry/agentConstructorParamRegistry';
+import { AgentConstructorRegistry } from '../internal/registry/agentConstructorRegistry';
 import {
   deserializeDataValue,
   ParameterDetail,
-} from './internal/mapping/values/dataValue';
-import { getRawSelfAgentId } from './host/hostapi';
+} from '../internal/mapping/values/dataValue';
+import { getRawSelfAgentId } from '../host/hostapi';
+import { getHttpMountDetails } from '../internal/http/mount';
+import { validateHttpMountWithConstructor } from '../internal/http/validation';
+import { getAgentConstructorSchema } from '../internal/schema/constructor';
+import { getAgentMethodSchema } from '../internal/schema/method';
+
+export type AgentDecoratorOptions = {
+  name?: string;
+  mode?: AgentMode;
+  mount?: string;
+  cors?: string[];
+  auth?: boolean;
+  webhookSuffix?: string;
+};
 
 /**
  *
@@ -73,10 +88,34 @@ import { getRawSelfAgentId } from './host/hostapi';
  * - `name`: Custom agent name (default: class name)
  * - `mode`: Agent durability mode, either "durable" or "ephemeral" (default: "durable")
  *
- * Example:
+ * ### HTTP Mount Options
+ * Agents can optionally expose an HTTP API using a base mount path. The following options are available:
+ * - `mount`: The base HTTP path to expose agent methods (e.g., `'/api/weather'`). A path can have path variables (example: `'/api/{city}/weather'`),
+ *    or system variables (e.g., `'/api/{agent-type}/status'`) or both.
+ * - `headers`: Default HTTP headers mapped to constructor parameters (e.g., `{ 'X-Api-Key': 'apiKey' }`).
+ *    Note that the value of the header is the name of the constructor parameter to which it maps. In this case `apiKey` is one of the constructor parameters.
+ * -  Note that all the parameters in the constructor must be provided either via header variables or path variables.
+ * - `auth`: Boolean flag indicating if authentication is required for all HTTP endpoints.
+ * - `cors`: Array of allowed origins for cross-origin requests (e.g., `['https://app.acme.com']` or `['*']` for all origins).
+ * - `webhookSuffix`: Optional suffix path that gets appended to the globally configured webhook url exposing webhook endpoints
+ * - Only if we have a mount defined, we can use `endpoint` decorator on methods to expose them over HTTP.
+ *
+ *
+ * Example with HTTP mount:
  * ```ts
- * @agent({ name: "weather-api", mode: "durable" })
- * class WeatherAgent extends BaseAgent { ... }
+ * @agent({
+ *   mount: '/api/weather',
+ *   headers: { 'X-Api-Key': 'apiKey' },
+ *   auth: true,
+ *   cors: ['https://app.acme.com'],
+ *   webhookSuffix: '/webhook/{event}'
+ * })
+ * class WeatherAgent {
+ *   constructor(apiKey: string) {}
+ *
+ *   @endpoint({ get: '/current/{city}' })
+ *   getWeather(city: string): WeatherReport { ... }
+ * }
  * ```
  *
  * ### Metadata
@@ -120,7 +159,7 @@ import { getRawSelfAgentId } from './host/hostapi';
  * ### Remote Client
  *
  * The purpose of a remote client is that it allows you to invoke the agent constructor
- * and methods of an agent (even if it's defined with in the same code) in a different container.
+ * and methods of an agent (even if it's defined within the same code) in a different container.
  *
  * By passing the constructor parameters to `get()`, the SDK will ensure that an instance of the agent,
  * is created in a different container, and the method calls are proxied to that container.
@@ -151,11 +190,6 @@ import { getRawSelfAgentId } from './host/hostapi';
  *
  * The first parameter is the phantom ID. If undefined, a new phantom ID will be generated.
  */
-interface AgentDecoratorOptions {
-  name?: string;
-  mode?: AgentMode;
-}
-
 export function agent(options?: AgentDecoratorOptions) {
   return function <T extends new (...args: any[]) => any>(ctor: T) {
     if (!Object.prototype.isPrototypeOf.call(BaseAgent, ctor)) {
@@ -164,7 +198,6 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    // Decorator-time validation of the class name
     const agentClassName = new AgentClassName(ctor.name);
 
     if (AgentTypeRegistry.exists(agentClassName)) {
@@ -183,28 +216,18 @@ export function agent(options?: AgentDecoratorOptions) {
       },
     );
 
-    const constructorDataSchema = Either.getOrElse(
-      getConstructorDataSchema(agentClassName.value, classMetadata),
-      (err) => {
-        throw new Error(
-          `Schema generation failed for agent class ${agentClassName.value} due to unsupported types in constructor. ` +
-            err,
-        );
-      },
+    const constructorDataSchema = getAgentConstructorSchema(
+      agentClassName.value,
+      classMetadata,
     );
 
-    const methodSchemaEither = getAgentMethodSchema(
+    const httpMount = getHttpMountDetails(options);
+
+    const methods = getAgentMethodSchema(
       classMetadata,
       agentClassName.value,
+      httpMount,
     );
-
-    // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
-    if (Either.isLeft(methodSchemaEither)) {
-      throw new Error(
-        `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.val}`,
-      );
-    }
-    const methods = methodSchemaEither.val;
 
     const agentTypeName = new AgentClassName(
       options?.name || agentClassName.value,
@@ -230,18 +253,25 @@ export function agent(options?: AgentDecoratorOptions) {
       AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ??
       defaultPromptHint;
 
+    const constructor: AgentConstructor = {
+      name: agentClassName.value,
+      description: agentTypeDescription,
+      promptHint: agentTypePromptHint,
+      inputSchema: constructorDataSchema,
+    };
+
+    if (httpMount) {
+      validateHttpMountWithConstructor(httpMount, constructor);
+    }
+
     const agentType: AgentType = {
       typeName: agentTypeName.value,
       description: agentTypeDescription,
-      constructor: {
-        name: agentClassName.value,
-        description: agentTypeDescription,
-        promptHint: agentTypePromptHint,
-        inputSchema: constructorDataSchema,
-      },
+      constructor,
       methods,
       dependencies: [],
       mode: options?.mode ?? 'durable',
+      httpMount,
     };
 
     AgentTypeRegistry.register(agentClassName, agentType);
@@ -282,10 +312,11 @@ export function agent(options?: AgentDecoratorOptions) {
     );
 
     AgentInitiatorRegistry.register(agentTypeName, {
-      initiate: (constructorInput: DataValue) => {
+      initiate: (constructorInput: DataValue, principal: Principal) => {
         const deserializedConstructorArgs = deserializeDataValue(
           constructorInput,
           constructorParamTypes,
+          principal,
         );
 
         if (Either.isLeft(deserializedConstructorArgs)) {
@@ -328,111 +359,5 @@ export function agent(options?: AgentDecoratorOptions) {
         };
       },
     });
-  };
-}
-
-/**
- * Associates a **prompt** with a method or constructor of an agent
- *
- * A prompt is valid only for classes that are decorated with `@agent()`.
- * A prompt can be specified either at the class level or method level, or both.
- *
- * Example of prompt at constructor (class) level and method level
- *
- * ```ts
- * @agent()
- * @prompt("Provide an API key for the weather service")
- * class WeatherAgent {
- *   @prompt("Provide a city name")
- *   getWeather(city: string): WeatherReport { ... }
- * }
- * ```
- *
- *
- * @param prompt  A hint that describes what kind of input the agentic method expects.
- * They are especially useful for guiding other agents when deciding how to call this method.
- */
-export function prompt(prompt: string) {
-  return function (
-    target: Object | Function,
-    propertyKey?: string | symbol,
-    descriptor?: PropertyDescriptor,
-  ) {
-    if (propertyKey === undefined) {
-      const className = (target as Function).name;
-
-      const classMetadata = TypeMetadata.get(className);
-      if (!classMetadata) {
-        throw new Error(
-          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
-        );
-      }
-
-      AgentConstructorRegistry.setPrompt(className, prompt);
-    } else {
-      const className = target.constructor.name;
-
-      const classMetadata = TypeMetadata.get(className);
-      if (!classMetadata) {
-        throw new Error(
-          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
-        );
-      }
-
-      const methodName = String(propertyKey);
-
-      AgentMethodRegistry.setPrompt(className, methodName, prompt);
-    }
-  };
-}
-
-/**
- * Associates a **description** with a method or constructor of an agent.
-
- * A `description` is valid only for classes that are decorated with `@agent()`.
- * A `description` can be specified either at the class level or method level, or both.
- *
- * Example:
- * ```ts
- * @agent()
- * @description("An agent that provides weather information")
- * class WeatherAgent {
- *   @description("Get the current weather for a location")
- *   getWeather(city: string): WeatherReport { ... }
- * }
- * ```
- * @param description The details of what exactly the method does.
- */
-export function description(description: string) {
-  return function (
-    target: Object | Function,
-    propertyKey?: string | symbol,
-    descriptor?: PropertyDescriptor,
-  ) {
-    if (propertyKey === undefined) {
-      const className = (target as Function).name;
-
-      const classMetadata = TypeMetadata.get(className);
-      if (!classMetadata) {
-        throw new Error(
-          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
-        );
-      }
-
-      AgentConstructorRegistry.setDescription(className, description);
-    } else {
-      const className = target.constructor.name;
-
-      const classMetadata = TypeMetadata.get(className);
-      if (!classMetadata) {
-        throw new Error(
-          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
-        );
-      }
-
-      const methodName = String(propertyKey);
-
-      AgentMethodRegistry.setDescription(className, methodName, description);
-    }
   };
 }

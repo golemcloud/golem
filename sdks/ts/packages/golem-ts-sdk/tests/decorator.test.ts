@@ -19,6 +19,8 @@ import {
   BarAgentClassName,
   FooAgentClassName,
   EphemeralAgentClassName,
+  SimpleHttpAgentClassName,
+  ComplexHttpAgentClassName,
 } from './testUtils';
 import {
   AgentType,
@@ -34,22 +36,23 @@ import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import process from 'node:process';
 import { Uuid } from 'golem:agent/host';
 import { AgentClassName, AgentId } from '../src';
+import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
-  const complexAgent: AgentType = Option.getOrThrowWith(
+  const barAgent: AgentType = Option.getOrThrowWith(
     AgentTypeRegistry.get(BarAgentClassName),
     () => new Error('BarAgent not found in AgentTypeRegistry'),
   );
 
-  const barAgentConstructor = complexAgent.constructor;
+  const barAgentConstructor = barAgent.constructor;
 
   if (!barAgentConstructor) {
     throw new Error('BarAgent constructor not found');
   }
 
-  const barAgentMethod = complexAgent.methods.find(
+  const barAgentMethod = barAgent.methods.find(
     (method) => method.name === 'fun0',
   );
 
@@ -128,7 +131,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle Multimodal in method params', () => {
-    const multimodalAgentMethod = complexAgent.methods.find(
+    const multimodalAgentMethod = barAgent.methods.find(
       (method) => method.name === 'fun23',
     );
 
@@ -172,7 +175,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle MultimodalBasic in method params', () => {
-    const multimodalAgentMethod = complexAgent.methods.find(
+    const multimodalAgentMethod = barAgent.methods.find(
       (method) => method.name === 'fun24',
     );
 
@@ -759,9 +762,9 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     // Ensures no functions or constructors are skipped
-    expect(complexAgent.methods.length).toEqual(25);
-    expect(complexAgent.constructor.inputSchema.val.length).toEqual(6);
-    expect(complexAgent.typeName).toEqual('my-complex-agent');
+    expect(barAgent.methods.length).toEqual(25);
+    expect(barAgent.constructor.inputSchema.val.length).toEqual(6);
+    expect(barAgent.typeName).toEqual('my-complex-agent');
     expect(simpleAgent.methods.length).toEqual(44);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
@@ -779,7 +782,7 @@ describe('Agent decorator should register the agent class and its methods into A
       'save-snapshot',
     ];
 
-    [complexAgent, simpleAgent].forEach((agent) => {
+    [barAgent, simpleAgent].forEach((agent) => {
       forbidden.forEach((name) => {
         expect(agent.methods.find((m) => m.name === name)).toBeUndefined();
       });
@@ -822,10 +825,13 @@ describe('Annotated FooAgent class', () => {
     (globalThis as any).currentAgentId =
       `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
 
-    const fooResult = initiator.initiate({
-      tag: 'tuple',
-      val: [{ tag: 'component-model', val: toWitValue(value) }],
-    });
+    const fooResult = initiator.initiate(
+      {
+        tag: 'tuple',
+        val: [{ tag: 'component-model', val: toWitValue(value) }],
+      },
+      { tag: 'anonymous' },
+    );
     expect(fooResult.tag).toEqual('ok');
     const foo = fooResult.val as ResolvedAgent;
     expect(foo.phantomId()).toEqual(uuid);
@@ -848,6 +854,252 @@ describe('Annotated FooAgent class', () => {
   });
 });
 
+describe('Http Agent class', () => {
+  it('should register HTTP mount details with only mount', () => {
+    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(SimpleHttpAgentClassName),
+      () => new Error('SimpleHttpAgent not found in AgentTypeRegistry'),
+    );
+
+    expect(simpleHttpAgent.httpMount).toBeDefined();
+    expect(simpleHttpAgent.httpMount?.pathPrefix).toEqual([
+      {
+        tag: 'literal',
+        val: 'chats',
+      },
+      {
+        tag: 'system-variable',
+        val: 'agent-type',
+      },
+    ]);
+  });
+
+  it('should register HTTP endpoint details with endpoint details', () => {
+    const simpleHttpAgent = AgentMethodRegistry.get(
+      SimpleHttpAgentClassName.value,
+    )?.get('greet');
+
+    if (!simpleHttpAgent) {
+      throw new Error(
+        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
+      );
+    }
+
+    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
+    expect(simpleHttpAgent.httpEndpoint).toEqual([
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: false },
+        queryVars: [],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            tag: 'literal',
+            val: 'greet',
+          },
+          {
+            tag: 'path-variable',
+            val: {
+              variableName: 'name',
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('should register HTTP mount details with all details', () => {
+    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(ComplexHttpAgentClassName),
+      () => new Error('ComplexHttpAgent not found in AgentTypeRegistry'),
+    );
+
+    const expectedPathPrefix = [
+      {
+        tag: 'literal',
+        val: 'chats',
+      },
+      {
+        tag: 'system-variable',
+        val: 'agent-type',
+      },
+      {
+        tag: 'path-variable',
+        val: {
+          variableName: 'foo',
+        },
+      },
+      {
+        tag: 'path-variable',
+        val: {
+          variableName: 'bar',
+        },
+      },
+    ];
+
+    const expectedWebhookSuffix = [
+      {
+        tag: 'system-variable',
+        val: 'agent-type',
+      },
+      {
+        tag: 'literal',
+        val: 'events',
+      },
+      {
+        tag: 'path-variable',
+        val: {
+          variableName: 'foo',
+        },
+      },
+      {
+        tag: 'path-variable',
+        val: {
+          variableName: 'bar',
+        },
+      },
+    ];
+
+    expect(simpleHttpAgent.httpMount).toBeDefined();
+    expect(simpleHttpAgent.httpMount).toEqual({
+      pathPrefix: expectedPathPrefix,
+      authDetails: { required: true },
+      phantomAgent: false,
+      corsOptions: {
+        allowedPatterns: ['https://app.acme.com', 'https://staging.acme.com'],
+      },
+      webhookSuffix: expectedWebhookSuffix,
+    });
+  });
+
+  it('should register complex HTTP endpoint details with endpoint details', () => {
+    const simpleHttpAgent = AgentMethodRegistry.get(
+      ComplexHttpAgentClassName.value,
+    )?.get('greetCustom2');
+
+    if (!simpleHttpAgent) {
+      throw new Error(
+        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
+      );
+    }
+
+    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
+    expect(simpleHttpAgent.httpEndpoint).toEqual([
+      {
+        httpMethod: { tag: 'custom', val: 'patch' },
+        authDetails: { required: false },
+        queryVars: [
+          {
+            queryParamName: 'l',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'n',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            tag: 'literal',
+            val: 'greet',
+          },
+        ],
+      },
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: true },
+        queryVars: [
+          {
+            queryParamName: 'lx',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'nm',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: ['*'],
+        },
+        headerVars: [
+          {
+            headerName: 'X-Foo',
+            variableName: 'location',
+          },
+          {
+            headerName: 'X-Bar',
+            variableName: 'name',
+          },
+        ],
+        pathSuffix: [
+          {
+            tag: 'literal',
+            val: 'greet',
+          },
+        ],
+      },
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: false },
+        queryVars: [
+          {
+            queryParamName: 'l',
+            variableName: 'location',
+          },
+          {
+            queryParamName: 'n',
+            variableName: 'name',
+          },
+        ],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          {
+            tag: 'literal',
+            val: 'greet',
+          },
+        ],
+      },
+    ]);
+  });
+});
+
+describe('Agent with principal auto injected', async () => {
+  await import('./agentsWithPrincipalAutoInjection');
+
+  it("should never include anything about principal in the agent's constructor or method schemas", () => {
+    const agentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(
+        new AgentClassName('AgentWithPrincipalAutoInjection1'),
+      ),
+      () =>
+        new Error(
+          'AgentWithPrincipalAutoInjection not found in AgentTypeRegistry',
+        ),
+    );
+
+    const constructorParamNames = agentType.constructor.inputSchema.val.map(
+      ([name]) => name,
+    );
+
+    expect(constructorParamNames).not.toContain('principal');
+
+    agentType.methods.forEach((method) => {
+      const methodParamNames = method.inputSchema.val.map(([name]) => name);
+      expect(methodParamNames).not.toContain('principal');
+    });
+  });
+});
+
 describe('Annotated SingletonAgent class', () => {
   it('can be constructed', async () => {
     const initiator = Option.getOrThrowWith(
@@ -863,15 +1115,19 @@ describe('Annotated SingletonAgent class', () => {
     (globalThis as any).currentAgentId =
       `singleton-agent(${JSON.stringify(params)})`;
 
-    const singleton = initiator.initiate(params);
+    const singleton = initiator.initiate(params, { tag: 'anonymous' });
     expect(singleton.tag).toEqual('ok');
     const foo = singleton.val as ResolvedAgent;
     expect(foo.phantomId()).toBeUndefined();
 
-    const result = await foo.invoke('test', {
-      tag: 'tuple',
-      val: [],
-    });
+    const result = await foo.invoke(
+      'test',
+      {
+        tag: 'tuple',
+        val: [],
+      },
+      { tag: 'anonymous' },
+    );
 
     expect(result.tag).toEqual('ok');
     expect(result.val).toEqual({

@@ -278,7 +278,15 @@ test('Agent method with empty tuple return type is rejected', async () => {
   await expect(async () => {
     await import('./agentWithEmptyTuple');
   }).rejects.toThrowError(
-    'Schema generation failed for agent class AgentWithEmptyTuple. Failed to construct output schema for method mysteriousArray with return type undefined: Empty tuple types are not supported.',
+    'Schema generation failed for agent class AgentWithEmptyTuple. Failed to construct output schema for method mysteriousArray with return type undefined: Empty tuple types are not supported',
+  );
+});
+
+test('Agent with with invalid http mount is rejected', async () => {
+  await expect(async () => {
+    await import('./agentWithInvalidHttpMount');
+  }).rejects.toThrowError(
+    'Agent constructor variable "bar" is not provided by the HTTP mount path.',
   );
 });
 

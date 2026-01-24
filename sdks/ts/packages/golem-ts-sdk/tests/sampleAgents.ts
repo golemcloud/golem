@@ -20,6 +20,8 @@ import {
   UnstructuredText,
   Result,
   Multimodal,
+  endpoint,
+  Principal,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -324,9 +326,6 @@ class BarAgent extends BaseAgent {
     readonly unstructuredBinary: UnstructuredBinary<['application/json']>,
   ) {
     super();
-    this.testInterfaceType = testInterfaceType;
-    this.optionalStringType = optionalStringType;
-    this.optionalUnionType = optionalUnionType;
   }
 
   async fun0(
@@ -492,6 +491,81 @@ class EphemeralAgent extends BaseAgent {
 
   async greet(name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({
+  mount: '/chats/{agent-type}',
+})
+class SimpleHttpAgent extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  @endpoint({ get: '/greet/{name}' })
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({
+  mount: '/chats/{agent-type}/{foo}/{bar}',
+  cors: ['https://app.acme.com', 'https://staging.acme.com'],
+  auth: true,
+  webhookSuffix: '/{agent-type}/events/{foo}/{bar}',
+})
+class ComplexHttpAgent extends BaseAgent {
+  constructor(
+    readonly foo: string,
+    readonly bar: string,
+  ) {
+    super();
+  }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  async greet(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  async greetCustom(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @endpoint({ get: '/greet?l={location}&n={name}' })
+  @endpoint({
+    get: '/greet?lx={location}&nm={name}',
+    cors: ['*'],
+    auth: true,
+    headers: { 'X-Foo': 'location', 'X-Bar': 'name' },
+  })
+  @endpoint({
+    custom: { method: 'patch', path: '/greet?l={location}&n={name}' },
+  })
+  async greetCustom2(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent()
+class Bllll extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  async bar(principal: Principal): Promise<void> {
+    return;
+  }
+}
+
+@agent()
+class Fllll extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  async baz(principal: Principal): Promise<void> {
+    return;
   }
 }
 

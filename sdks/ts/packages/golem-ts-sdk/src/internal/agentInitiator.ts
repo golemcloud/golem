@@ -14,7 +14,7 @@
 
 import { ResolvedAgent } from './resolvedAgent';
 import { Result } from 'golem:rpc/types@0.2.2';
-import { AgentError, DataValue } from 'golem:agent/common';
+import { AgentError, DataValue, Principal } from 'golem:agent/common';
 
 /**
  * Any agent creation in SDK across any boundaries goes through `AgentInitiator`
@@ -34,5 +34,8 @@ export type AgentInitiator = {
    * @param constructorParams - Constructor arguments for the agent, encoded as `WitValue`s.
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
-  initiate(constructorParams: DataValue): Result<ResolvedAgent, AgentError>;
+  initiate(
+    constructorParams: DataValue,
+    principal: Principal,
+  ): Result<ResolvedAgent, AgentError>;
 };

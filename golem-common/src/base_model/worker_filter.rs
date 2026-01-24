@@ -76,18 +76,18 @@ impl Display for WorkerStatusFilter {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct WorkerVersionFilter {
+pub struct WorkerRevisionFilter {
     pub comparator: FilterComparator,
     pub value: ComponentRevision,
 }
 
-impl WorkerVersionFilter {
+impl WorkerRevisionFilter {
     pub fn new(comparator: FilterComparator, value: ComponentRevision) -> Self {
         Self { comparator, value }
     }
 }
 
-impl Display for WorkerVersionFilter {
+impl Display for WorkerRevisionFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "version {} {}", self.comparator, self.value)
     }
@@ -283,7 +283,7 @@ impl Display for WorkerNotFilter {
 pub enum WorkerFilter {
     Name(WorkerNameFilter),
     Status(WorkerStatusFilter),
-    Version(WorkerVersionFilter),
+    Revision(WorkerRevisionFilter),
     CreatedAt(WorkerCreatedAtFilter),
     Env(WorkerEnvFilter),
     And(WorkerAndFilter),
@@ -343,8 +343,8 @@ impl WorkerFilter {
         WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter::new(name, comparator, value))
     }
 
-    pub fn new_version(comparator: FilterComparator, value: ComponentRevision) -> Self {
-        WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
+    pub fn new_revision(comparator: FilterComparator, value: ComponentRevision) -> Self {
+        WorkerFilter::Revision(WorkerRevisionFilter::new(comparator, value))
     }
 
     pub fn new_status(comparator: FilterComparator, value: WorkerStatus) -> Self {
@@ -370,7 +370,7 @@ impl Display for WorkerFilter {
             WorkerFilter::Name(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::Version(filter) => {
+            WorkerFilter::Revision(filter) => {
                 write!(f, "{filter}")
             }
             WorkerFilter::Status(filter) => {
@@ -413,7 +413,7 @@ impl FromStr for WorkerFilter {
                     comparator.parse()?,
                     value.to_string(),
                 )),
-                "version" => Ok(WorkerFilter::new_version(
+                "revision" => Ok(WorkerFilter::new_revision(
                     comparator.parse()?,
                     value
                         .parse()

@@ -86,6 +86,13 @@ export function mapBoth<T, E, U, F>(
   return r.tag === 'right' ? right(onOk(r.val)) : left(onErr(r.val));
 }
 
+export function mapError<T, E, F>(
+  r: Either<T, E>,
+  f: (e: E) => F,
+): Either<T, F> {
+  return r.tag === 'right' ? r : left(f(r.val));
+}
+
 export function zipWith<A, B, C, E>(
   ra: Either<A, E>,
   rb: Either<B, E>,

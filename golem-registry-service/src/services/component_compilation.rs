@@ -35,7 +35,7 @@ pub trait ComponentCompilationService: Debug + Send + Sync {
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
     );
 
     fn set_own_grpc_port(&self, grpc_port: u16);
@@ -87,7 +87,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
-        component_version: ComponentRevision,
+        component_revision: ComponentRevision,
     ) {
         let component_service_port = match self.own_grpc_port.load(Ordering::Acquire) {
             0 => None,
@@ -100,7 +100,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id.into()),
-                        component_version: component_version.into(),
+                        component_revision: component_revision.into(),
                         component_service_port,
                         environment_id: Some(environment_id.into()),
                     };
@@ -112,12 +112,12 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
         match result {
             Ok(_) => tracing::info!(
                 component_id = component_id.to_string(),
-                component_version = component_version.to_string(),
+                component_revision = component_revision.to_string(),
                 "Enqueued compilation of uploaded component",
             ),
             Err(e) => tracing::error!(
                 component_id = component_id.to_string(),
-                component_version = component_version.to_string(),
+                component_revision = component_revision.to_string(),
                 "Failed to enqueue compilation: {e:?}"
             ),
         }
@@ -143,7 +143,7 @@ impl ComponentCompilationService for DisabledComponentCompilationService {
         &self,
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
-        _component_version: ComponentRevision,
+        _component_revision: ComponentRevision,
     ) {
     }
     fn set_own_grpc_port(&self, _grpc_port: u16) {}
