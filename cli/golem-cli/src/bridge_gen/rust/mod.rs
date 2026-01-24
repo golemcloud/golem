@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::bridge_gen::rust::rust::to_rust_ident;
+use crate::bridge_gen::rust::type_name::RustTypeName;
+use crate::bridge_gen::type_naming::TypeNaming;
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -23,16 +25,16 @@ use golem_wasm::analysis::AnalysedType;
 use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 use tracing::debug;
 
 #[allow(clippy::module_inception)]
 mod rust;
-
 #[cfg(test)]
 mod tests;
+mod type_name;
 
 #[allow(dead_code)]
 pub struct RustBridgeGenerator {
@@ -40,25 +42,26 @@ pub struct RustBridgeGenerator {
     agent_type: AgentType,
     testing: bool,
 
+    type_naming: TypeNaming<RustTypeName>,
+    // TODO: we should integrate these names with type naming to avoid collisions
     generated_language_enums: BTreeMap<Vec<TextType>, String>,
     generated_mimetypes_enums: BTreeMap<Vec<BinaryType>, String>,
-    known_types: HashMap<AnalysedType, RustType>,
     known_multimodals: HashMap<NamedElementSchemas, String>,
-    used_names: HashSet<String>,
 }
 
 impl BridgeGenerator for RustBridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
+        let type_naming = TypeNaming::new(&agent_type);
+
         Self {
             target_path: target_path.to_path_buf(),
             agent_type,
             testing,
 
+            type_naming,
             generated_language_enums: BTreeMap::new(),
             generated_mimetypes_enums: BTreeMap::new(),
-            known_types: HashMap::new(),
             known_multimodals: HashMap::new(),
-            used_names: HashSet::new(),
         }
     }
 
@@ -176,8 +179,6 @@ impl RustBridgeGenerator {
         let agent_type_name_lit = Lit::Str(LitStr::new(agent_type_name, Span::call_site()));
         let client_struct_name =
             Ident::new(&agent_type_name.to_upper_camel_case(), Span::call_site());
-
-        self.collect_named_types();
 
         let input_schema = self.agent_type.constructor.input_schema.clone();
         let constructor_params = self.parameter_list(&input_schema)?;
@@ -402,29 +403,18 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn wit_type_to_typedef(&mut self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
-        let name = if let Some(type_name) = typ.name() {
-            Ident::new(type_name, Span::call_site())
-        } else {
-            match self.known_types.get(typ) {
-                Some(RustType::Defined { name, .. }) => Ident::new(name, Span::call_site()),
-                Some(RustType::Remapped(_)) => {
-                    return Err(anyhow!("wit_type_to_typedef called on remapped type"))
-                }
-                None => {
-                    // Anonymous complex types need to be associated with a name
-                    let name = self.name_anonymous_type(typ);
-                    self.known_types.insert(
-                        typ.clone(),
-                        RustType::Defined {
-                            name: name.clone(),
-                            typ: typ.clone(),
-                        },
-                    );
-                    Ident::new(&name, Span::call_site())
-                }
+    fn wit_type_to_typedef(
+        &self,
+        type_name: &RustTypeName,
+        typ: &AnalysedType,
+    ) -> anyhow::Result<TokenStream> {
+        let name = match type_name {
+            RustTypeName::Derived(type_name) => Ident::new(type_name, Span::call_site()),
+            RustTypeName::Remapped() => {
+                todo!("implement remap")
             }
         };
+
         match typ {
             AnalysedType::Variant(variant) => {
                 let mut cases = Vec::new();
@@ -711,18 +701,19 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn wit_type_to_typeref(&mut self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
-        if typ.name().is_some() {
-            let rust_type = self.known_types.get(typ).expect("Must be in known_types");
-            Ok(match rust_type {
-                RustType::Defined { name, .. } => {
+    fn wit_type_to_typeref(&self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
+        let name = self.type_naming.type_name_for_type(typ);
+        match name {
+            Some(name) => match name {
+                RustTypeName::Derived(name) => {
                     let name = Ident::new(name, Span::call_site());
-                    quote! { #name }
+                    Ok(quote! { #name })
                 }
-                RustType::Remapped(remap) => remap.clone(),
-            })
-        } else {
-            match typ {
+                RustTypeName::Remapped() => {
+                    todo!("implement remap")
+                }
+            },
+            None => match typ {
                 AnalysedType::Option(inner) => {
                     let inner = self.wit_type_to_typeref(&inner.inner)?;
                     Ok(quote! { Option<#inner> })
@@ -767,37 +758,18 @@ impl RustBridgeGenerator {
                 | AnalysedType::Enum(_)
                 | AnalysedType::Flags(_)
                 | AnalysedType::Record(_) => {
-                    let rust_type = self.known_types.get(typ);
-                    match rust_type {
-                        Some(RustType::Defined { name, .. }) => {
+                    let type_name = self.type_naming.type_name_for_type(typ);
+                    match type_name {
+                        Some(RustTypeName::Derived(name)) => {
                             let name = Ident::new(name, Span::call_site());
                             Ok(quote! { #name })
                         }
-                        Some(RustType::Remapped(remap)) => Ok(remap.clone()),
-                        None => {
-                            // Anonymous complex types need to be associated with a name
-                            let name = self.name_anonymous_type(typ);
-                            self.known_types.insert(
-                                typ.clone(),
-                                RustType::Defined {
-                                    name: name.clone(),
-                                    typ: typ.clone(),
-                                },
-                            );
-                            let _def = self.wit_type_to_typedef(typ)?; // ensuring the whole type is traversed early
-                            let name = Ident::new(&name, Span::call_site());
-                            Ok(quote! { #name })
-                        }
+                        Some(RustTypeName::Remapped()) => todo!("implement remap"),
+                        None => Err(anyhow!("Missing type name for {:?}", typ)),
                     }
                 }
-            }
+            },
         }
-    }
-
-    fn name_anonymous_type(&self, _typ: &AnalysedType) -> String {
-        // TODO: better naming rules
-        let cnt = self.known_types.len();
-        format!("AnonType{cnt}")
     }
 
     fn encode_as_data_value(&self, name: &Ident, data_schema: &DataSchema) -> TokenStream {
@@ -2002,61 +1974,11 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn collect_named_types(&mut self) {
-        let all_types = super::collect_all_wit_types(&self.agent_type);
-        for typ in all_types {
-            if let Some(name) = typ.name() {
-                // TODO: detect special known types and store them as Remapped
-
-                let final_name = self.generate_type_name(name, typ.owner());
-                self.known_types.insert(
-                    typ.clone(),
-                    RustType::Defined {
-                        name: final_name,
-                        typ,
-                    },
-                );
-            }
-        }
-    }
-
-    fn generate_type_name(&mut self, name: &str, owner: Option<&str>) -> String {
-        let concatenated = match owner {
-            Some(owner) => format!("{}_{}", owner, name),
-            None => name.to_string(),
-        };
-        let final_name = to_rust_ident(&concatenated).to_upper_camel_case();
-        self.get_unique_name(final_name, None)
-    }
-
-    fn get_unique_name(&mut self, name: String, counter: Option<usize>) -> String {
-        let new_name = if let Some(c) = counter {
-            format!("{name}{c}")
-        } else {
-            name.clone()
-        };
-        if self.used_names.contains(&new_name) {
-            self.get_unique_name(name, Some(counter.unwrap_or(0) + 1))
-        } else {
-            self.used_names.insert(new_name.clone());
-            new_name
-        }
-    }
-
     fn type_definitions(&mut self) -> anyhow::Result<TokenStream> {
         let mut type_definitions = Vec::new();
 
-        let defined = self
-            .known_types
-            .iter()
-            .filter_map(|(_, rust_type)| match rust_type {
-                RustType::Defined { name, typ } => Some((name.clone(), typ.clone())),
-                _ => None,
-            })
-            .collect::<BTreeMap<String, AnalysedType>>();
-
-        for (name, typ) in defined {
-            let def = self.wit_type_to_typedef(&typ.named(name))?;
+        for (typ, name) in self.type_naming.types() {
+            let def = self.wit_type_to_typedef(name, typ)?;
             type_definitions.push(def);
         }
 
@@ -2072,13 +1994,4 @@ impl RustBridgeGenerator {
     fn package_crate_name(&self) -> String {
         self.package_name().to_kebab_case()
     }
-}
-
-enum RustType {
-    Defined {
-        name: String,
-        typ: AnalysedType,
-    },
-    #[allow(dead_code)]
-    Remapped(TokenStream),
 }
