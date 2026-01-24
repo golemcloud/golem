@@ -53,6 +53,17 @@ export function isOptionalWithQuestionMark(
   return false;
 }
 
+export function isEmpty(typeInfoInternal: TypeInfoInternal): boolean {
+  if (typeInfoInternal.tag === 'analysed') {
+    const analysed = typeInfoInternal.val;
+    if (analysed.kind === 'tuple' && analysed.emptyType) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Except for multimodal, all types can be converted to ElementSchema
 export function convertTypeInfoToElementSchema(
   typeInfoInternal: TypeInfoInternal,
