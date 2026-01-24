@@ -1,17 +1,3 @@
-// Copyright 2024-2025 Golem Cloud
-//
-// Licensed under the Golem Source License v1.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://license.golem.cloud/LICENSE
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { ClassMetadata, ConstructorArg } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
@@ -33,205 +19,240 @@ import { AgentConstructorParamRegistry } from '../registry/agentConstructorParam
 import { TypeMappingScope } from '../mapping/types/scope';
 import { ParameterSchemaCollection } from './paramSchema';
 
-export function getConstructorDataSchema(
+export function getAgentConstructorSchema(
   agentClassName: string,
   classType: ClassMetadata,
 ): DataSchema {
-  const constructorParamInfos: readonly ConstructorArg[] =
-    classType.constructorArgs;
+  const constructorParams = classType.constructorArgs;
+  const baseError = buildBaseError(agentClassName);
 
-  const baseError = `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor.`;
+  const multimodal: Type.Type | undefined =
+    getSingleMultimodalConstructorParam(constructorParams);
 
-  const multimodalInputInConstructor: Type.Type | undefined =
-    getMultimodalTypeInConstructor(constructorParamInfos);
-
-  if (
-    multimodalInputInConstructor &&
-    multimodalInputInConstructor.kind === 'array'
-  ) {
-    return getMultimodalDataSchema(
-      multimodalInputInConstructor,
-      multimodalInputInConstructor.element,
-      baseError,
-      constructorParamInfos[0].name,
+  if (multimodal) {
+    return resolveMultimodalConstructorSchema(
+      multimodal,
+      constructorParams[0].name,
       agentClassName,
+      baseError,
     );
   }
 
-  return getParamSchemaCollection(
+  return resolveStandardConstructorSchema(
     agentClassName,
-    constructorParamInfos,
+    constructorParams,
     baseError,
-  ).getDataSchema();
+  );
 }
 
-function getMultimodalDataSchema(
-  multimodalInputInConstructor: Type.Type,
-  elementType: Type.Type,
-  baseError: string,
+function buildBaseError(agentClassName: string): string {
+  return `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor.`;
+}
+
+function getSingleMultimodalConstructorParam(
+  params: readonly ConstructorArg[],
+): Type.Type | undefined {
+  if (params.length === 1 && isMultimodalType(params[0].type)) {
+    return params[0].type;
+  }
+}
+
+function resolveMultimodalConstructorSchema(
+  multimodalType: Type.Type,
   paramName: string,
   agentClassName: string,
+  baseError: string,
 ): DataSchema {
-  const multiModalParameters = getMultimodalParamDetails(elementType);
-
-  if (Either.isLeft(multiModalParameters)) {
-    throw new Error(
-      `${baseError}. Failed to get multimodal details for constructor parameter ${paramName}: ${multiModalParameters.val}`,
-    );
+  if (multimodalType.kind !== 'array') {
+    throw new Error(baseError);
   }
 
-  const typeInfoInternal: TypeInfoInternal = {
-    tag: 'multimodal',
-    tsType: multimodalInputInConstructor,
-    types: multiModalParameters.val,
-  };
-
-  const schemaDetailsEither =
-    getMultimodalDataSchemaFromTypeInternal(typeInfoInternal);
-
-  if (Either.isLeft(schemaDetailsEither)) {
-    throw new Error(
-      `${baseError}. Failed to get multimodal data schema for constructor parameter ${paramName}: ${schemaDetailsEither.val}`,
-    );
-  }
-
-  AgentConstructorParamRegistry.setType(
-    agentClassName,
+  const typeInfo = resolveMultimodalTypeInfo(
+    multimodalType,
+    multimodalType.element,
     paramName,
-    typeInfoInternal,
+    baseError,
   );
 
-  return schemaDetailsEither.val;
+  const schema = resolveMultimodalSchema(typeInfo, paramName, baseError);
+
+  AgentConstructorParamRegistry.setType(agentClassName, paramName, typeInfo);
+
+  return schema;
 }
 
-function getMultimodalTypeInConstructor(
-  constructorParamInfos: readonly ConstructorArg[],
-): Type.Type | undefined {
-  if (
-    constructorParamInfos.length === 1 &&
-    isMultimodalType(constructorParamInfos[0].type)
-  ) {
-    return constructorParamInfos[0].type;
-  }
-}
-
-export function getParamSchemaCollection(
-  agentClassName: string,
-  constructorParamInfos: readonly ConstructorArg[],
+function resolveMultimodalTypeInfo(
+  arrayType: Type.Type,
+  elementType: Type.Type,
+  paramName: string,
   baseError: string,
-): ParameterSchemaCollection {
-  const parameterSchemaCollection: ParameterSchemaCollection =
-    new ParameterSchemaCollection();
+): TypeInfoInternal {
+  const paramDetails = getMultimodalParamDetails(elementType);
 
-  constructorParamInfos.forEach((paramInfo) => {
-    const paramType = paramInfo.type;
-
-    const paramTypeName = paramType.name;
-
-    if (paramTypeName && paramTypeName === 'Principal') {
-      AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
-        tag: 'principal',
-        tsType: paramType,
-      });
-
-      parameterSchemaCollection.addPrincipalParameter(paramInfo.name);
-
-      return;
-    }
-
-    if (paramTypeName && paramTypeName === 'UnstructuredText') {
-      const textDescriptor = getTextDescriptor(paramType);
-
-      if (Either.isLeft(textDescriptor)) {
-        throw new Error(
-          `${baseError}. Failed to get text descriptor for unstructured-text parameter ${paramInfo.name}: ${textDescriptor.val}`,
-        );
-      }
-
-      AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
-        tag: 'unstructured-text',
-        val: textDescriptor.val,
-        tsType: paramType,
-      });
-
-      const elementSchema: ElementSchema = {
-        tag: 'unstructured-text',
-        val: textDescriptor.val,
-      };
-
-      parameterSchemaCollection.addComponentModelParameter(
-        paramInfo.name,
-        elementSchema,
-      );
-
-      return;
-    }
-
-    if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
-      const binaryDescriptor = getBinaryDescriptor(paramType);
-
-      if (Either.isLeft(binaryDescriptor)) {
-        throw new Error(
-          `${baseError}. Failed to get binary descriptor for unstructured-binary parameter ${paramInfo.name}: ${binaryDescriptor.val}`,
-        );
-      }
-
-      AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
-        tag: 'unstructured-binary',
-        val: binaryDescriptor.val,
-        tsType: paramType,
-      });
-
-      const elementSchema: ElementSchema = {
-        tag: 'unstructured-binary',
-        val: binaryDescriptor.val,
-      };
-
-      parameterSchemaCollection.addComponentModelParameter(
-        paramInfo.name,
-        elementSchema,
-      );
-
-      return;
-    }
-
-    const typeInfoEither = WitType.fromTsType(
-      paramInfo.type,
-      Option.some(
-        TypeMappingScope.constructor(
-          agentClassName,
-          paramInfo.name,
-          paramInfo.type.optional,
-        ),
-      ),
+  if (Either.isLeft(paramDetails)) {
+    throw new Error(
+      `${baseError}. Failed to get multimodal details for constructor parameter ${paramName}: ${paramDetails.val}`,
     );
+  }
 
-    if (Either.isLeft(typeInfoEither)) {
-      throw new Error(`${baseError}. ${typeInfoEither.val}`);
-    }
+  return {
+    tag: 'multimodal',
+    tsType: arrayType,
+    types: paramDetails.val,
+  };
+}
 
-    const typeInfo = typeInfoEither.val;
+function resolveMultimodalSchema(
+  typeInfo: TypeInfoInternal,
+  paramName: string,
+  baseError: string,
+): DataSchema {
+  const schemaEither = getMultimodalDataSchemaFromTypeInternal(typeInfo);
 
-    const witType = typeInfo[0];
-    const analysedType = typeInfo[1];
-
-    AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
-      tag: 'analysed',
-      val: analysedType,
-      witType: witType,
-      tsType: paramType,
-    });
-
-    const elementSchema: ElementSchema = {
-      tag: 'component-model',
-      val: witType,
-    };
-
-    parameterSchemaCollection.addComponentModelParameter(
-      paramInfo.name,
-      elementSchema,
+  if (Either.isLeft(schemaEither)) {
+    throw new Error(
+      `${baseError}. Failed to get multimodal data schema for constructor parameter ${paramName}: ${schemaEither.val}`,
     );
+  }
+
+  return schemaEither.val;
+}
+
+function resolveStandardConstructorSchema(
+  agentClassName: string,
+  params: readonly ConstructorArg[],
+  baseError: string,
+): DataSchema {
+  const collection = new ParameterSchemaCollection();
+
+  params.forEach((param) => {
+    handleConstructorParam(agentClassName, param, baseError, collection);
   });
 
-  return parameterSchemaCollection;
+  return collection.getDataSchema();
+}
+
+function handleConstructorParam(
+  agentClassName: string,
+  param: ConstructorArg,
+  baseError: string,
+  collection: ParameterSchemaCollection,
+): void {
+  if (tryHandlePrincipal(agentClassName, param, collection)) return;
+  if (tryHandleUnstructuredText(agentClassName, param, baseError, collection))
+    return;
+  if (tryHandleUnstructuredBinary(agentClassName, param, baseError, collection))
+    return;
+
+  handleAnalysedType(agentClassName, param, baseError, collection);
+}
+
+function tryHandlePrincipal(
+  agentClassName: string,
+  param: ConstructorArg,
+  collection: ParameterSchemaCollection,
+): boolean {
+  if (param.type.name !== 'Principal') return false;
+
+  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+    tag: 'principal',
+    tsType: param.type,
+  });
+
+  collection.addPrincipalParameter(param.name);
+  return true;
+}
+
+function tryHandleUnstructuredText(
+  agentClassName: string,
+  param: ConstructorArg,
+  baseError: string,
+  collection: ParameterSchemaCollection,
+): boolean {
+  if (param.type.name !== 'UnstructuredText') return false;
+
+  const descriptor = getTextDescriptor(param.type);
+  if (Either.isLeft(descriptor)) {
+    throw new Error(
+      `${baseError}. Failed to get text descriptor for unstructured-text parameter ${param.name}: ${descriptor.val}`,
+    );
+  }
+
+  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+    tag: 'unstructured-text',
+    val: descriptor.val,
+    tsType: param.type,
+  });
+
+  collection.addComponentModelParameter(param.name, {
+    tag: 'unstructured-text',
+    val: descriptor.val,
+  });
+
+  return true;
+}
+
+function tryHandleUnstructuredBinary(
+  agentClassName: string,
+  param: ConstructorArg,
+  baseError: string,
+  collection: ParameterSchemaCollection,
+): boolean {
+  if (param.type.name !== 'UnstructuredBinary') return false;
+
+  const descriptor = getBinaryDescriptor(param.type);
+  if (Either.isLeft(descriptor)) {
+    throw new Error(
+      `${baseError}. Failed to get binary descriptor for unstructured-binary parameter ${param.name}: ${descriptor.val}`,
+    );
+  }
+
+  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+    tag: 'unstructured-binary',
+    val: descriptor.val,
+    tsType: param.type,
+  });
+
+  collection.addComponentModelParameter(param.name, {
+    tag: 'unstructured-binary',
+    val: descriptor.val,
+  });
+
+  return true;
+}
+
+function handleAnalysedType(
+  agentClassName: string,
+  param: ConstructorArg,
+  baseError: string,
+  collection: ParameterSchemaCollection,
+): void {
+  const typeInfoEither = WitType.fromTsType(
+    param.type,
+    Option.some(
+      TypeMappingScope.constructor(
+        agentClassName,
+        param.name,
+        param.type.optional,
+      ),
+    ),
+  );
+
+  if (Either.isLeft(typeInfoEither)) {
+    throw new Error(`${baseError}. ${typeInfoEither.val}`);
+  }
+
+  const [witType, analysedType] = typeInfoEither.val;
+
+  AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+    tag: 'analysed',
+    val: analysedType,
+    witType,
+    tsType: param.type,
+  });
+
+  collection.addComponentModelParameter(param.name, {
+    tag: 'component-model',
+    val: witType,
+  });
 }
