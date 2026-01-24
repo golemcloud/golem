@@ -43,7 +43,7 @@ import {
 import { getRawSelfAgentId } from '../host/hostapi';
 import { getHttpMountDetails } from '../internal/http/mount';
 import { validateHttpMountWithConstructor } from '../internal/http/validation';
-import { getConstructorDataSchema } from '../internal/schema/constructor';
+import { getAgentConstructorSchema } from '../internal/schema/constructor';
 import { getAgentMethodSchema } from '../internal/schema/method';
 
 export type AgentDecoratorOptions = {
@@ -216,7 +216,7 @@ export function agent(options?: AgentDecoratorOptions) {
       },
     );
 
-    const constructorDataSchema = getConstructorDataSchema(
+    const constructorDataSchema = getAgentConstructorSchema(
       agentClassName.value,
       classMetadata,
     );

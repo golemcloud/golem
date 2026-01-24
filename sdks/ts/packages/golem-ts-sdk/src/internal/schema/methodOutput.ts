@@ -29,9 +29,33 @@ import {
   getTextDescriptor,
   isMultimodalType,
 } from './helpers';
-import { TypeInfoInternal } from '../typeInfoInternal';
+import {
+  getReturnTypeDataSchemaFromTypeInternal,
+  TypeInfoInternal,
+} from '../typeInfoInternal';
+import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 
-export function resolveMethodOutputSchema(
+export function resolveMethodReturnDataSchema(
+  agentClassName: string,
+  methodName: string,
+  returnType: Type.Type,
+): Either.Either<DataSchema, string> {
+  const outputTypeInfoInternal = resolveMethodReturnTypeInfo(returnType);
+
+  if (Either.isLeft(outputTypeInfoInternal)) {
+    return outputTypeInfoInternal;
+  }
+
+  AgentMethodRegistry.setReturnType(
+    agentClassName,
+    methodName,
+    outputTypeInfoInternal.val,
+  );
+
+  return getReturnTypeDataSchemaFromTypeInternal(outputTypeInfoInternal.val);
+}
+
+export function resolveMethodReturnTypeInfo(
   returnType: Type.Type,
 ): Either.Either<TypeInfoInternal, string> {
   const multimodal = tryMultimodal(returnType);

@@ -206,6 +206,23 @@ export type RemoteMethod<Args extends any[], R> = {
   schedule: (ts: Datetime, ...args: Args) => void;
 };
 
+// GetArgs extracts the argument types for the remote agent's get method
+// by removing the Principal parameter
+type GetArgs<T extends readonly unknown[]> =
+  SplitOnPrincipal<T> extends {
+    found: infer F extends boolean;
+    before: infer B extends unknown[];
+    after: infer A extends unknown[];
+  }
+    ? F extends true
+      ? AllOptional<A> extends true
+        ? B | [...B, ...A]
+        : [...B, ...A]
+      : T
+    : never;
+
+// Handles any trailing parameters (optional) after `Principal`
+// See `tests/agentWithPrincipalAutoInjection.ts` for usage example
 type IsOptional<T extends readonly unknown[], K extends keyof T> =
   {} extends Pick<T, K> ? true : false;
 
@@ -226,18 +243,3 @@ type SplitOnPrincipal<
     ? { found: true; before: Before; after: R }
     : SplitOnPrincipal<R, [...Before, H]>
   : { found: false; before: Before; after: [] };
-
-// Utility type to split constructor parameters on Principal
-// and mainly to exclude Principal while still allowing other trailing optional parameters
-type GetArgs<T extends readonly unknown[]> =
-  SplitOnPrincipal<T> extends {
-    found: infer F extends boolean;
-    before: infer B extends unknown[];
-    after: infer A extends unknown[];
-  }
-    ? F extends true
-      ? AllOptional<A> extends true
-        ? B | [...B, ...A] // Principal removed → optional tail logic
-        : [...B, ...A]
-      : T // 🚀 NO Principal → return original args untouched
-    : never;
