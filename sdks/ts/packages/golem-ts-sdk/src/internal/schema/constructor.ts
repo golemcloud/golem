@@ -4,7 +4,7 @@ import * as Either from '../../newTypes/either';
 import * as Option from '../../newTypes/option';
 import * as WitType from '../mapping/types/WitType';
 
-import { DataSchema, ElementSchema } from 'golem:agent/common';
+import { DataSchema } from 'golem:agent/common';
 import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
@@ -27,7 +27,7 @@ export function getAgentConstructorSchema(
   const baseError = buildBaseError(agentClassName);
 
   const multimodal: Type.Type | undefined =
-    getSingleMultimodalConstructorParam(constructorParams);
+    getMultimodalTypeInfo(constructorParams);
 
   if (multimodal) {
     return resolveMultimodalConstructorSchema(
@@ -49,7 +49,7 @@ function buildBaseError(agentClassName: string): string {
   return `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor.`;
 }
 
-function getSingleMultimodalConstructorParam(
+function getMultimodalTypeInfo(
   params: readonly ConstructorArg[],
 ): Type.Type | undefined {
   if (params.length === 1 && isMultimodalType(params[0].type)) {
@@ -138,16 +138,17 @@ function handleConstructorParam(
   baseError: string,
   collection: ParameterSchemaCollection,
 ): void {
-  if (tryHandlePrincipal(agentClassName, param, collection)) return;
-  if (tryHandleUnstructuredText(agentClassName, param, baseError, collection))
-    return;
-  if (tryHandleUnstructuredBinary(agentClassName, param, baseError, collection))
+  if (tryPrincipal(agentClassName, param, collection)) return;
+
+  if (tryUnstructuredText(agentClassName, param, baseError, collection)) return;
+
+  if (tryUnstructuredBinary(agentClassName, param, baseError, collection))
     return;
 
   handleAnalysedType(agentClassName, param, baseError, collection);
 }
 
-function tryHandlePrincipal(
+function tryPrincipal(
   agentClassName: string,
   param: ConstructorArg,
   collection: ParameterSchemaCollection,
@@ -163,7 +164,7 @@ function tryHandlePrincipal(
   return true;
 }
 
-function tryHandleUnstructuredText(
+function tryUnstructuredText(
   agentClassName: string,
   param: ConstructorArg,
   baseError: string,
@@ -192,7 +193,7 @@ function tryHandleUnstructuredText(
   return true;
 }
 
-function tryHandleUnstructuredBinary(
+function tryUnstructuredBinary(
   agentClassName: string,
   param: ConstructorArg,
   baseError: string,
