@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::rust::RustBridgeGenerator;
+use crate::bridge_gen::type_naming::tests::test_type_naming;
 use crate::bridge_gen::BridgeGenerator;
 use crate::model::agent::test::{
     code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
@@ -218,4 +220,24 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         .status()
         .expect("failed to run `cargo build`");
     assert!(status.success(), "`cargo build` failed: {:?}", status);
+}
+
+#[test]
+fn test_rust_type_naming_rust_foo() {
+    test_type_naming::<RustTypeName>(GuestLanguage::Rust, "FooAgent");
+}
+
+#[test]
+fn test_rust_type_naming_rust_bar() {
+    test_type_naming::<RustTypeName>(GuestLanguage::Rust, "BarAgent");
+}
+
+#[test]
+fn test_rust_type_naming_ts_foo() {
+    test_type_naming::<RustTypeName>(GuestLanguage::TypeScript, "FooAgent");
+}
+
+#[test]
+fn test_rust_type_naming_ts_bar() {
+    test_type_naming::<RustTypeName>(GuestLanguage::TypeScript, "BarAgent");
 }
