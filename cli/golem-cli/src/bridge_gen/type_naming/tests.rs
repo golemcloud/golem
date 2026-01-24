@@ -18,7 +18,7 @@ use golem_templates::model::GuestLanguage;
 
 pub(crate) fn test_type_naming<TN: TypeName>(language: GuestLanguage, agent_name: &str) {
     let agent_type = code_first_snippets_agent_type(language, agent_name);
-    TypeNaming::<TN>::new(&agent_type);
+    TypeNaming::<TN>::new(&agent_type).unwrap();
 
     /*
     println!("Collected anonymous types:");

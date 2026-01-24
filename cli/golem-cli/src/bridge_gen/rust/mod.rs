@@ -50,10 +50,10 @@ pub struct RustBridgeGenerator {
 }
 
 impl BridgeGenerator for RustBridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
-        let type_naming = TypeNaming::new(&agent_type);
+    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
+        let type_naming = TypeNaming::new(&agent_type)?;
 
-        Self {
+        Ok(Self {
             target_path: target_path.to_path_buf(),
             agent_type,
             testing,
@@ -62,7 +62,7 @@ impl BridgeGenerator for RustBridgeGenerator {
             generated_language_enums: BTreeMap::new(),
             generated_mimetypes_enums: BTreeMap::new(),
             known_multimodals: HashMap::new(),
-        }
+        })
     }
 
     fn generate(&mut self) -> anyhow::Result<()> {

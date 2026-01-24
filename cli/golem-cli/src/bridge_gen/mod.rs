@@ -20,7 +20,7 @@ use camino::Utf8Path;
 use golem_common::model::agent::AgentType;
 
 pub trait BridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self
+    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self>
     where
         Self: Sized;
     fn generate(&mut self) -> anyhow::Result<()>;

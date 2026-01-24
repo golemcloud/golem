@@ -1614,7 +1614,7 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         agent_type.type_name, agent_type.description, target_dir
     );
 
-    let mut gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true);
+    let mut gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true).unwrap();
     gen.generate().unwrap();
 
     let status = std::process::Command::new("npm")

@@ -14,6 +14,7 @@
 
 use crate::bridge_gen::type_naming::analyzed_type_ext::AnalysedTypeExt;
 use crate::bridge_gen::type_naming::builder::{Builder, RootOwner};
+use anyhow::bail;
 use golem_common::base_model::agent::{AgentType, DataSchema, ElementSchema};
 use golem_wasm::analysis::AnalysedType;
 use indexmap::IndexMap;
@@ -64,7 +65,7 @@ pub struct TypeNaming<TN: TypeName> {
 }
 
 impl<TN: TypeName> TypeNaming<TN> {
-    pub fn new(agent_type: &AgentType) -> Self {
+    pub fn new(agent_type: &AgentType) -> anyhow::Result<Self> {
         let mut type_naming = Self {
             named_type_locations: Default::default(),
             anonymous_type_locations: Default::default(),
@@ -73,9 +74,9 @@ impl<TN: TypeName> TypeNaming<TN> {
         };
 
         type_naming.collect_all_wit_types(agent_type);
-        type_naming.derive_type_names();
+        type_naming.derive_type_names()?;
 
-        type_naming
+        Ok(type_naming)
     }
 
     pub fn type_name_for_type(&self, typ: &AnalysedType) -> Option<&TN> {
@@ -275,7 +276,7 @@ impl<TN: TypeName> TypeNaming<TN> {
         }
     }
 
-    fn derive_type_names(&mut self) {
+    fn derive_type_names(&mut self) -> anyhow::Result<()> {
         for (name, type_to_locations) in self.named_type_locations.clone() {
             let force_generate_unique_name_by_location = type_to_locations.len() > 1;
             for (typ, locations) in type_to_locations {
@@ -284,12 +285,13 @@ impl<TN: TypeName> TypeNaming<TN> {
                     typ,
                     &locations,
                     force_generate_unique_name_by_location,
-                );
+                )?;
             }
         }
         for (typ, locations) in self.anonymous_type_locations.clone() {
-            self.add_unique_type(None, typ, &locations, false);
+            self.add_unique_type(None, typ, &locations, false)?;
         }
+        Ok(())
     }
 
     fn add_unique_type(
@@ -298,35 +300,33 @@ impl<TN: TypeName> TypeNaming<TN> {
         typ: AnalysedType,
         locations: &[TypeLocation],
         force_generate_unique_by_location: bool,
-    ) {
+    ) -> anyhow::Result<()> {
         if self.types.contains_key(&typ) {
-            return;
+            return Ok(());
         }
 
         let name = match name {
             Some(name) => {
                 if force_generate_unique_by_location || self.type_names.contains(&name) {
-                    self.generate_unique_type_name_based_on_locations(Some(&name), locations)
+                    self.generate_unique_type_name_based_on_locations(Some(&name), locations)?
                 } else {
                     name
                 }
             }
-            None => self.generate_unique_type_name_based_on_locations(None, locations),
+            None => self.generate_unique_type_name_based_on_locations(None, locations)?,
         };
-
-        if self.type_names.contains(&name) {
-            todo!("collision")
-        }
 
         self.type_names.insert(name.clone());
         self.types.insert(typ, name);
+
+        Ok(())
     }
 
     fn generate_unique_type_name_based_on_locations(
         &self,
         name: Option<&TN>,
         locations: &[TypeLocation],
-    ) -> TN {
+    ) -> anyhow::Result<TN> {
         for location in locations {
             let segments = location.to_type_naming_segments();
             let len = segments.len();
@@ -346,11 +346,15 @@ impl<TN: TypeName> TypeNaming<TN> {
                         .chain(std::iter::once(candidate.as_str())),
                 );
                 if !self.type_names.contains(&candidate_type_name) {
-                    return candidate_type_name;
+                    return Ok(candidate_type_name);
                 }
                 candidate = candidate_type_name.to_string();
             }
         }
-        todo!("collision")
+        bail!(
+            "Failed to generate unique location based type name for {:#?}\n\nlocations: {:#?}",
+            name,
+            locations,
+        )
     }
 }

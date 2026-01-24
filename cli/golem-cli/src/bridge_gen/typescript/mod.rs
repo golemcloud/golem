@@ -47,7 +47,7 @@ pub struct TypeScriptBridgeGenerator {
 }
 
 impl BridgeGenerator for TypeScriptBridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
+    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
         TypeScriptBridgeGenerator::new(agent_type, target_path, testing)
     }
 
@@ -76,13 +76,17 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
 }
 
 impl TypeScriptBridgeGenerator {
-    pub fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
-        Self {
+    pub fn new(
+        agent_type: AgentType,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             target_path: target_path.to_path_buf(),
-            type_naming: TypeNaming::new(&agent_type),
+            type_naming: TypeNaming::new(&agent_type)?,
             agent_type,
             testing,
-        }
+        })
     }
 
     /// Generates the client library's package.json
