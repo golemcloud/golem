@@ -13,14 +13,14 @@
 // limitations under the License.
 
 import { describe, it } from 'vitest';
-import { getHttpMountDetails } from '../src/http/mount';
+import { getHttpMountDetails } from '../src/internal/http/mount';
 import { AgentDecoratorOptions } from '../src';
-import { parseQuery } from '../src/http/query';
+import { parseQuery } from '../src/internal/http/query';
 import { HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
 import {
   validateHttpEndpoint,
   validateHttpMountWithConstructor,
-} from '../src/http/validation';
+} from '../src/internal/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
   it('returns undefined when mount is not provided', () => {

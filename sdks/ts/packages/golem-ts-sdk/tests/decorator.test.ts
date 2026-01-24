@@ -825,10 +825,13 @@ describe('Annotated FooAgent class', () => {
     (globalThis as any).currentAgentId =
       `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
 
-    const fooResult = initiator.initiate({
-      tag: 'tuple',
-      val: [{ tag: 'component-model', val: toWitValue(value) }],
-    });
+    const fooResult = initiator.initiate(
+      {
+        tag: 'tuple',
+        val: [{ tag: 'component-model', val: toWitValue(value) }],
+      },
+      { tag: 'anonymous' },
+    );
     expect(fooResult.tag).toEqual('ok');
     const foo = fooResult.val as ResolvedAgent;
     expect(foo.phantomId()).toEqual(uuid);
@@ -1070,6 +1073,33 @@ describe('Http Agent class', () => {
   });
 });
 
+describe('Agent with principal auto injected', async () => {
+  await import('./agentsWithPrincipalAutoInjection');
+
+  it("should never include anything about principal in the agent's constructor or method schemas", () => {
+    const agentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(
+        new AgentClassName('AgentWithPrincipalAutoInjection1'),
+      ),
+      () =>
+        new Error(
+          'AgentWithPrincipalAutoInjection not found in AgentTypeRegistry',
+        ),
+    );
+
+    const constructorParamNames = agentType.constructor.inputSchema.val.map(
+      ([name]) => name,
+    );
+
+    expect(constructorParamNames).not.toContain('principal');
+
+    agentType.methods.forEach((method) => {
+      const methodParamNames = method.inputSchema.val.map(([name]) => name);
+      expect(methodParamNames).not.toContain('principal');
+    });
+  });
+});
+
 describe('Annotated SingletonAgent class', () => {
   it('can be constructed', async () => {
     const initiator = Option.getOrThrowWith(
@@ -1085,15 +1115,19 @@ describe('Annotated SingletonAgent class', () => {
     (globalThis as any).currentAgentId =
       `singleton-agent(${JSON.stringify(params)})`;
 
-    const singleton = initiator.initiate(params);
+    const singleton = initiator.initiate(params, { tag: 'anonymous' });
     expect(singleton.tag).toEqual('ok');
     const foo = singleton.val as ResolvedAgent;
     expect(foo.phantomId()).toBeUndefined();
 
-    const result = await foo.invoke('test', {
-      tag: 'tuple',
-      val: [],
-    });
+    const result = await foo.invoke(
+      'test',
+      {
+        tag: 'tuple',
+        val: [],
+      },
+      { tag: 'anonymous' },
+    );
 
     expect(result.tag).toEqual('ok');
     expect(result.val).toEqual({

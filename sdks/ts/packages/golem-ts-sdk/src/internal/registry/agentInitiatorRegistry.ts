@@ -14,7 +14,7 @@
 
 import * as Option from '../../newTypes/option';
 import { AgentInitiator } from '../agentInitiator';
-import { AgentClassName } from '../../newTypes/agentClassName';
+import { AgentClassName } from '../../agentClassName';
 
 /**
  * Singleton registry for agent initiators.

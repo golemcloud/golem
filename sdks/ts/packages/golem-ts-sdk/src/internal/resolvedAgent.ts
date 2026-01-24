@@ -13,9 +13,14 @@
 // limitations under the License.
 
 import { Result } from 'golem:rpc/types@0.2.2';
-import { AgentError, AgentType, DataValue } from 'golem:agent/common';
+import {
+  AgentError,
+  AgentType,
+  DataValue,
+  Principal,
+} from 'golem:agent/common';
 import { AgentId } from '../agentId';
-import { AgentClassName } from '../newTypes/agentClassName';
+import { AgentClassName } from '../agentClassName';
 import { BaseAgent } from '../baseAgent';
 import {
   AgentMethodParamMetadata,
@@ -37,7 +42,7 @@ import {
   invalidMethod,
   invalidType,
 } from './agentError';
-import { TypeInfoInternal } from './registry/typeInfoInternal';
+import { TypeInfoInternal } from './typeInfoInternal';
 import { Uuid } from 'golem:agent/host';
 
 /**
@@ -97,6 +102,7 @@ export class ResolvedAgent {
   async invoke(
     methodName: string,
     methodArgs: DataValue,
+    principal: Principal,
   ): Promise<Result<DataValue, AgentError>> {
     const methodInfoResult = this.getCachedMethodInfo(methodName);
     if (methodInfoResult.tag === 'err') {
@@ -107,6 +113,7 @@ export class ResolvedAgent {
     const deserializedArgs: Either.Either<any[], string> = deserializeDataValue(
       methodArgs,
       methodInfo.paramTypes,
+      principal,
     );
 
     if (Either.isLeft(deserializedArgs)) {

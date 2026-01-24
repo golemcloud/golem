@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { AgentType } from 'golem:agent/common';
-import { AgentClassName } from '../../newTypes/agentClassName';
+import { AgentClassName } from '../../agentClassName';
 import * as Option from '../../newTypes/option';
 
 /**
