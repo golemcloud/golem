@@ -13,9 +13,9 @@
 // limitations under the License.
 
 mod javascript;
-
 #[allow(dead_code)]
 mod ts_writer;
+mod type_name;
 
 #[cfg(test)]
 mod tests;
@@ -25,6 +25,7 @@ use crate::bridge_gen::typescript::javascript::escape_js_ident;
 use crate::bridge_gen::typescript::ts_writer::{
     indent, FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter,
 };
+use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
 use crate::bridge_gen::BridgeGenerator;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -40,8 +41,8 @@ use serde_json::json;
 
 pub struct TypeScriptBridgeGenerator {
     target_path: Utf8PathBuf,
+    type_naming: TypeNaming<TypeScriptTypeName>,
     agent_type: AgentType,
-    type_naming: TypeNaming,
     testing: bool,
 }
 
@@ -76,37 +77,10 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
 
 impl TypeScriptBridgeGenerator {
     pub fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> Self {
-        let type_naming = TypeNaming::new(&agent_type, |typ: &AnalysedType| -> bool {
-            match typ {
-                AnalysedType::Variant(_)
-                | AnalysedType::Enum(_)
-                | AnalysedType::Flags(_)
-                | AnalysedType::Record(_)
-                | AnalysedType::Handle(_) => true,
-                AnalysedType::Result(_)
-                | AnalysedType::Option(_)
-                | AnalysedType::List(_)
-                | AnalysedType::Tuple(_)
-                | AnalysedType::Str(_)
-                | AnalysedType::Chr(_)
-                | AnalysedType::F64(_)
-                | AnalysedType::F32(_)
-                | AnalysedType::U64(_)
-                | AnalysedType::S64(_)
-                | AnalysedType::U32(_)
-                | AnalysedType::S32(_)
-                | AnalysedType::U16(_)
-                | AnalysedType::S16(_)
-                | AnalysedType::U8(_)
-                | AnalysedType::S8(_)
-                | AnalysedType::Bool(_) => false,
-            }
-        });
-
         Self {
             target_path: target_path.to_path_buf(),
+            type_naming: TypeNaming::new(&agent_type),
             agent_type,
-            type_naming,
             testing,
         }
     }
@@ -477,10 +451,9 @@ impl TypeScriptBridgeGenerator {
     /// by the agent.
     fn generate_ts_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         for (typ, name) in self.type_naming.types() {
-            let name = name.name.to_upper_camel_case();
-            self.generate_ts_wit_type_def(writer, &name, typ)?;
-            self.generate_ts_wit_type_encode(writer, &name, typ)?;
-            self.generate_ts_wit_type_decode(writer, &name, typ)?;
+            self.generate_ts_wit_type_def(writer, name, typ)?;
+            self.generate_ts_wit_type_encode(writer, name, typ)?;
+            self.generate_ts_wit_type_decode(writer, name, typ)?;
         }
         Ok(())
     }
@@ -738,13 +711,13 @@ impl TypeScriptBridgeGenerator {
     fn generate_ts_wit_type_encode(
         &self,
         writer: &mut TsWriter,
-        ts_name: &str,
+        ts_name: &TypeScriptTypeName,
         typ: &AnalysedType,
     ) -> anyhow::Result<()> {
         let encode_fn_name = format!("encode{ts_name}");
 
         let mut func = writer.begin_function(&encode_fn_name);
-        func.param("value", ts_name);
+        func.param("value", ts_name.as_str());
         func.result("unknown");
 
         // For the function body, we need to encode the actual structure, not delegate to itself
@@ -903,14 +876,14 @@ impl TypeScriptBridgeGenerator {
     fn generate_ts_wit_type_decode(
         &self,
         writer: &mut TsWriter,
-        ts_name: &str,
+        ts_name: &TypeScriptTypeName,
         typ: &AnalysedType,
     ) -> anyhow::Result<()> {
         let decode_fn_name = format!("decode{ts_name}");
 
         let mut func = writer.begin_function(&decode_fn_name);
         func.param("value", "unknown");
-        func.result(ts_name);
+        func.result(ts_name.as_str());
 
         // For the function body, we need to decode the actual structure, not delegate to itself
         // So we strip the name and decode the inner type directly
@@ -1125,7 +1098,7 @@ impl TypeScriptBridgeGenerator {
     fn generate_ts_wit_type_def(
         &self,
         writer: &mut TsWriter,
-        ts_name: &str,
+        ts_name: &TypeScriptTypeName,
         typ: &AnalysedType,
     ) -> anyhow::Result<()> {
         let def = self.type_definition(typ)?;
@@ -1455,9 +1428,8 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn decode_wit_value(&self, value: &str, typ: &AnalysedType) -> String {
-        if let Some(name) = self.type_naming.type_name(typ) {
-            let ts_name = name.name.to_upper_camel_case();
-            format!("decode{}({})", ts_name, value)
+        if let Some(name) = self.type_naming.type_name_for_type(typ) {
+            format!("decode{}({})", name, value)
         } else {
             match typ {
                 AnalysedType::Str(_) | AnalysedType::Chr(_) => {
@@ -1631,9 +1603,8 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn encode_wit_value(&self, value: &str, typ: &AnalysedType) -> String {
-        if let Some(name) = self.type_naming.type_name(typ) {
-            let ts_name = name.name.to_upper_camel_case();
-            format!("encode{}({})", ts_name, value)
+        if let Some(name) = self.type_naming.type_name_for_type(typ) {
+            format!("encode{}({})", name, value)
         } else {
             match typ {
                 AnalysedType::Str(_) => value.to_string(),
@@ -1927,8 +1898,8 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn type_reference(&self, typ: &AnalysedType) -> anyhow::Result<String> {
-        match self.type_naming.type_name(typ) {
-            Some(name) => Ok(name.name.to_upper_camel_case()),
+        match self.type_naming.type_name_for_type(typ) {
+            Some(name) => Ok(name.to_string()),
             None => {
                 match typ {
                     AnalysedType::Str(_) => Ok("string".to_string()),

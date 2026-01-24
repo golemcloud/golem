@@ -16,27 +16,38 @@ use crate::bridge_gen::type_naming::analyzed_type_ext::AnalysedTypeExt;
 use crate::bridge_gen::type_naming::builder::{Builder, RootOwner};
 use golem_common::base_model::agent::{AgentType, DataSchema, ElementSchema};
 use golem_wasm::analysis::AnalysedType;
-use heck::ToPascalCase;
 use indexmap::IndexMap;
-use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::Hash;
 use type_location::{TypeLocation, TypeLocationPath};
 
-mod analyzed_type_ext;
+pub(crate) mod analyzed_type_ext;
 mod builder;
 mod type_location;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+
+pub trait TypeName: Debug + Display + Clone + PartialEq + Eq + Hash {
+    // This is intended to be used for custom or special mappings. If this method returns some
+    // result for a type, then no further type naming will be attempted.
+    fn from_analysed_type(typ: &AnalysedType) -> Option<Self>;
+
+    fn from_owner_and_name(owner: Option<impl AsRef<str>>, name: impl AsRef<str>) -> Self;
+
+    fn from_segments(segments: impl IntoIterator<Item = impl AsRef<str>>) -> Self;
+
+    fn requires_type_name(typ: &AnalysedType) -> bool;
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeName {
+pub struct TsTypeName {
     pub name: String,
     pub owner: Option<String>,
 }
 
-impl Display for TypeName {
+impl Display for TsTypeName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(owner) = &self.owner {
             write!(f, "{}::", owner)?;
@@ -45,19 +56,16 @@ impl Display for TypeName {
     }
 }
 
-pub struct TypeNaming {
-    type_should_be_named: fn(&AnalysedType) -> bool,
-
-    named_type_locations: IndexMap<TypeName, IndexMap<AnalysedType, Vec<TypeLocation>>>,
+pub struct TypeNaming<TN: TypeName> {
+    named_type_locations: IndexMap<TN, IndexMap<AnalysedType, Vec<TypeLocation>>>,
     anonymous_type_locations: IndexMap<AnalysedType, Vec<TypeLocation>>,
-    type_names: HashSet<TypeName>,
-    types: HashMap<AnalysedType, TypeName>,
+    type_names: HashSet<TN>,
+    types: HashMap<AnalysedType, TN>,
 }
 
-impl TypeNaming {
-    pub fn new(agent_type: &AgentType, type_should_be_named: fn(&AnalysedType) -> bool) -> Self {
+impl<TN: TypeName> TypeNaming<TN> {
+    pub fn new(agent_type: &AgentType) -> Self {
         let mut type_naming = Self {
-            type_should_be_named,
             named_type_locations: Default::default(),
             anonymous_type_locations: Default::default(),
             type_names: HashSet::new(),
@@ -70,11 +78,11 @@ impl TypeNaming {
         type_naming
     }
 
-    pub fn type_name(&self, typ: &AnalysedType) -> Option<&TypeName> {
+    pub fn type_name_for_type(&self, typ: &AnalysedType) -> Option<&TN> {
         self.types.get(typ)
     }
 
-    pub fn types(&self) -> impl Iterator<Item = (&AnalysedType, &TypeName)> {
+    pub fn types(&self) -> impl Iterator<Item = (&AnalysedType, &TN)> {
         self.types.iter()
     }
 
@@ -250,16 +258,13 @@ impl TypeNaming {
             match typ.name() {
                 Some(name) => self
                     .named_type_locations
-                    .entry(TypeName {
-                        name: name.to_string(),
-                        owner: typ.owner().map(|owner| owner.to_string()),
-                    })
+                    .entry(TN::from_owner_and_name(typ.owner(), name))
                     .or_default()
                     .entry(typ.clone())
                     .or_default()
                     .push(builder.type_location()),
                 None => {
-                    if (self.type_should_be_named)(typ) {
+                    if TN::requires_type_name(typ) {
                         self.anonymous_type_locations
                             .entry(typ.clone())
                             .or_default()
@@ -283,15 +288,13 @@ impl TypeNaming {
             }
         }
         for (typ, locations) in self.anonymous_type_locations.clone() {
-            if (self.type_should_be_named)(&typ) {
-                self.add_unique_type(None, typ, &locations, false);
-            }
+            self.add_unique_type(None, typ, &locations, false);
         }
     }
 
     fn add_unique_type(
         &mut self,
-        name: Option<TypeName>,
+        name: Option<TN>,
         typ: AnalysedType,
         locations: &[TypeLocation],
         force_generate_unique_by_location: bool,
@@ -321,14 +324,14 @@ impl TypeNaming {
 
     fn generate_unique_type_name_based_on_locations(
         &self,
-        name: Option<&TypeName>,
+        name: Option<&TN>,
         locations: &[TypeLocation],
-    ) -> TypeName {
+    ) -> TN {
         for location in locations {
             let segments = location.to_type_naming_segments();
             let len = segments.len();
             let mut candidate = match name {
-                Some(name) => name.name.clone(),
+                Some(name) => name.to_string(),
                 None => "".to_string(),
             };
             for i in (0..len).rev() {
@@ -336,18 +339,16 @@ impl TypeNaming {
                 if subsegments.is_empty() {
                     continue;
                 }
-                candidate = format!(
-                    "{}{}",
-                    subsegments.iter().map(|s| s.to_pascal_case()).join(""),
-                    candidate
+                let candidate_type_name = TN::from_segments(
+                    subsegments
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(candidate.as_str())),
                 );
-                let type_name = TypeName {
-                    name: candidate.clone(),
-                    owner: None,
-                };
-                if !self.type_names.contains(&type_name) {
-                    return type_name;
+                if !self.type_names.contains(&candidate_type_name) {
+                    return candidate_type_name;
                 }
+                candidate = candidate_type_name.to_string();
             }
         }
         todo!("collision")

@@ -68,7 +68,7 @@ fn can_be_named(typ: &AnalysedType) -> bool {
     }
 }
 
-pub(super) trait AnalysedTypeExt {
+pub trait AnalysedTypeExt {
     fn is_path_leaf_type(&self) -> bool;
 
     fn as_path_elem_type(&self) -> Option<&AnalysedType>;

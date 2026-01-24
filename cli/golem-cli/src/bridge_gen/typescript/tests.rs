@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::type_naming::tests::test_type_naming;
+use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::BridgeGenerator;
 use crate::model::agent::test::{
@@ -1817,4 +1819,24 @@ fn assert_function_output_decoding_void(target_dir: &Utf8Path, function_name: &s
         .join("\n");
 
     assert_eq!(result_str, "void");
+}
+
+#[test]
+fn test_ts_type_naming_rust_foo() {
+    test_type_naming::<TypeScriptTypeName>(GuestLanguage::Rust, "FooAgent");
+}
+
+#[test]
+fn test_ts_type_naming_rust_bar() {
+    test_type_naming::<TypeScriptTypeName>(GuestLanguage::Rust, "BarAgent");
+}
+
+#[test]
+fn test_ts_type_naming_ts_foo() {
+    test_type_naming::<TypeScriptTypeName>(GuestLanguage::TypeScript, "FooAgent");
+}
+
+#[test]
+fn test_ts_type_naming_ts_bar() {
+    test_type_naming::<TypeScriptTypeName>(GuestLanguage::TypeScript, "BarAgent");
 }
