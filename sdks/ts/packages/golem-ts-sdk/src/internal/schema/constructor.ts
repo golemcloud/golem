@@ -59,15 +59,16 @@ export function getAgentConstructorSchema(
   );
 }
 
-type ConstructorParamHandler = {
+interface ConstructorParamHandler {
   canHandle(param: ConstructorArg): boolean;
+
   handle(
     agentClassName: string,
     param: ConstructorArg,
     baseError: string,
     collection: ParameterSchemaCollection,
   ): void;
-};
+}
 
 const principalHandler: ConstructorParamHandler = {
   canHandle: (param) => param.type.name === 'Principal',
