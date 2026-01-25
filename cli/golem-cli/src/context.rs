@@ -45,14 +45,12 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_definition::{
     HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
 };
 use golem_common::model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
-use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -97,7 +95,6 @@ pub struct Context {
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
-    rib_repl_state: tokio::sync::RwLock<RibReplState>,
     caches: Caches,
 }
 
@@ -358,7 +355,6 @@ impl Context {
                 yes,
                 app_source_mode,
             )),
-            rib_repl_state: tokio::sync::RwLock::default(),
             caches: Caches::new(),
         })
     }
@@ -613,24 +609,6 @@ impl Context {
         let app_ctx = self.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
         Ok(app_ctx.application.task_result_marker_dir())
-    }
-
-    pub async fn set_rib_repl_state(&self, state: RibReplState) {
-        let mut rib_repl_state = self.rib_repl_state.write().await;
-        *rib_repl_state = state;
-    }
-
-    pub async fn get_rib_repl_dependencies(&self) -> ReplComponentDependencies {
-        let rib_repl_state = self.rib_repl_state.read().await;
-        ReplComponentDependencies {
-            component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
-            custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
-        }
-    }
-
-    pub async fn get_rib_repl_component_metadata(&self) -> ComponentMetadata {
-        let rib_repl_state = self.rib_repl_state.read().await;
-        rib_repl_state.component_metadata.clone()
     }
 
     pub fn templates(
@@ -931,23 +909,6 @@ impl ApplicationContextState {
             Some(Ok(Some(app_ctx))) => Ok(app_ctx),
             Some(Err(err)) => Err(anyhow!(err.clone())),
             None => unreachable!("Uninitialized application context"),
-        }
-    }
-}
-
-pub struct RibReplState {
-    pub dependencies: ReplComponentDependencies,
-    pub component_metadata: ComponentMetadata,
-}
-
-impl Default for RibReplState {
-    fn default() -> Self {
-        Self {
-            dependencies: ReplComponentDependencies {
-                component_dependencies: vec![],
-                custom_instance_spec: vec![],
-            },
-            component_metadata: ComponentMetadata::default(),
         }
     }
 }
