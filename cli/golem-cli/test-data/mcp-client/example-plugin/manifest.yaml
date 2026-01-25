@@ -1,0 +1,11 @@
+# plugin-manifest.yaml
+
+name: my-awesome-plugin-app
+version: 1.0.0
+description: "Simple App plugin that points to a WASM component"
+icon: ./cli/golem-cli/test-data/mcp-client/example-plugin/icon.png
+homepage: https://example.com/my-awesome-plugin
+
+specs:
+  type: App
+  component: ./mytestapp/golem-temp/agents/pack_mycomponent.wasm
