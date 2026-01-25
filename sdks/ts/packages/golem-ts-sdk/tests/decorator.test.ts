@@ -765,7 +765,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(barAgent.methods.length).toEqual(25);
     expect(barAgent.constructor.inputSchema.val.length).toEqual(6);
     expect(barAgent.typeName).toEqual('my-complex-agent');
-    expect(simpleAgent.methods.length).toEqual(44);
+    expect(simpleAgent.methods.length).toEqual(45);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 

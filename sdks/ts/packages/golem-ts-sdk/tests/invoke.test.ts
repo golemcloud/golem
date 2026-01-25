@@ -502,6 +502,21 @@ test('Invoke function that takes and returns inbuilt result type', () => {
   );
 });
 
+test('Invoke function that returns unit type', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  testInvoke('fun45', [['param', 'foo']], resolvedAgent, undefined, false, {
+    tag: 'tuple',
+    val: [],
+  });
+});
+
 test('Invoke function that takes and returns custom result type with void', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
@@ -960,6 +975,7 @@ function testInvoke(
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
   multimodal: boolean,
+  expectedDataValueOutput?: DataValue,
 ) {
   // We need to first manually form the data-value to test the dynamic invoke.
   // For this, we first convert the original ts-value to data value and do a round trip to ensure
@@ -981,6 +997,10 @@ function testInvoke(
                 'Test failure: ' + JSON.stringify(invokeResult.val),
               );
             })();
+
+      if (expectedDataValueOutput !== undefined) {
+        expect(resultDataValue).toEqual(expectedDataValueOutput);
+      }
 
       // Unless it is an RPC call, we don't really need to deserialize the result
       // But to ensure the data-value returned above corresponds to the original input

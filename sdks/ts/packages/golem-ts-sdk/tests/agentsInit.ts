@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// This file represents the bootstrap code that actually runs
+// in real agents. Any `test` that requires an agent to be registered (the outcome of @agent decorator)
+// in global registry must make use of this test setup and avoid manual imports within tests.
+// The way to make use of this setup is adding new agents in the `ts` file which is imported here
+// or by creating new files with agents and importing them here.
+
 const SampleAgentModuleName = './sampleAgents';
 
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';

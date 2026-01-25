@@ -290,6 +290,10 @@ export class FooAgent extends BaseAgent {
     return param;
   }
 
+  async fun45(param: string): Promise<void> {
+    return;
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
