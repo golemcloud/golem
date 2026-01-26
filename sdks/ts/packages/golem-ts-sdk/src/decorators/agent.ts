@@ -42,7 +42,7 @@ import {
 } from '../internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from '../host/hostapi';
 import { getHttpMountDetails } from '../internal/http/mount';
-import { validateHttpMountWithConstructor } from '../internal/http/validation';
+import { validateHttpMount } from '../internal/http/validation';
 import { getAgentConstructorSchema } from '../internal/schema/constructor';
 import { getAgentMethodSchema } from '../internal/schema/method';
 
@@ -261,11 +261,7 @@ export function agent(options?: AgentDecoratorOptions) {
     };
 
     if (httpMount) {
-      validateHttpMountWithConstructor(
-        agentClassName.value,
-        httpMount,
-        constructor,
-      );
+      validateHttpMount(agentClassName.value, httpMount, constructor);
     }
 
     const agentType: AgentType = {

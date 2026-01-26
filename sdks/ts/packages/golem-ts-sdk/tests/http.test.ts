@@ -23,7 +23,7 @@ import {
 } from 'golem:agent/common';
 import {
   validateHttpEndpoint,
-  validateHttpMountWithConstructor,
+  validateHttpMount,
 } from '../src/internal/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
@@ -186,7 +186,7 @@ describe('validateHttpMountWithConstructor', () => {
     const agentConstructor = constructorVars('chatId', 'userId');
 
     expect(() =>
-      validateHttpMountWithConstructor('Foo', agentMount, agentConstructor),
+      validateHttpMount('Foo', agentMount, agentConstructor),
     ).not.toThrow();
   });
 
@@ -195,7 +195,7 @@ describe('validateHttpMountWithConstructor', () => {
     const agentConstructor = constructorVars('chatId', 'tenant');
 
     expect(() =>
-      validateHttpMountWithConstructor('Foo', agentMount, agentConstructor),
+      validateHttpMount('Foo', agentMount, agentConstructor),
     ).toThrow(
       'Agent constructor variable "tenant" is not provided by the HTTP mount path.',
     );
@@ -206,7 +206,7 @@ describe('validateHttpMountWithConstructor', () => {
     const agentConstructor = constructorVars();
 
     expect(() =>
-      validateHttpMountWithConstructor('Foo', agentMount, agentConstructor),
+      validateHttpMount('Foo', agentMount, agentConstructor),
     ).toThrow(
       'HTTP mount path variable "chatId" (in path segment 0) is not defined in the agent constructor.',
     );

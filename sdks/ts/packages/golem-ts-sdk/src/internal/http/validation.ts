@@ -19,11 +19,10 @@ import {
   HttpEndpointDetails,
   HttpMountDetails,
 } from 'golem:agent/common';
-import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 
-export function validateHttpMountWithConstructor(
+export function validateHttpMount(
   agentClassName: string,
   agentMount: HttpMountDetails,
   agentConstructor: AgentConstructor,
