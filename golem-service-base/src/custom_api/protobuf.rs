@@ -371,7 +371,11 @@ impl TryFrom<proto::golem::customapi::RequestBodySchema> for RequestBodySchema {
                     .try_into()?,
             }),
 
-            Kind::UnstructuredBinary(_) => Ok(RequestBodySchema::UnstructuredBinary),
+            Kind::UnrestrictedBinary(_) => Ok(RequestBodySchema::UnrestrictedBinary),
+
+            Kind::RestrictedBinary(body) => Ok(RequestBodySchema::RestrictedBinary {
+                allowed_mime_types: body.allowed_mime_types,
+            }),
         }
     }
 }
@@ -395,9 +399,17 @@ impl From<RequestBodySchema> for proto::golem::customapi::RequestBodySchema {
                 )),
             },
 
-            RequestBodySchema::UnstructuredBinary => Self {
-                kind: Some(Kind::UnstructuredBinary(
-                    proto::golem::customapi::request_body_schema::UnstructuredBinary {},
+            RequestBodySchema::UnrestrictedBinary => Self {
+                kind: Some(Kind::UnrestrictedBinary(
+                    proto::golem::customapi::request_body_schema::UnrestrictedBinary {},
+                )),
+            },
+
+            RequestBodySchema::RestrictedBinary { allowed_mime_types } => Self {
+                kind: Some(Kind::RestrictedBinary(
+                    proto::golem::customapi::request_body_schema::RestrictedBinary {
+                        allowed_mime_types,
+                    },
                 )),
             },
         }

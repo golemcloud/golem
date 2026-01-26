@@ -148,11 +148,7 @@ async fn multi_path_vars(agent: &TestContext) -> anyhow::Result<()> {
 async fn remaining_path_variable(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .get(
-            agent
-                .base_url
-                .join("/agents/test-agent/rest/a/b/c/d")?,
-        )
+        .get(agent.base_url.join("/agents/test-agent/rest/a/b/c/d")?)
         .send()
         .await?;
 
@@ -293,10 +289,14 @@ async fn json_body_wrong_type(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn unstructured_binary_inline(agent: &TestContext) -> anyhow::Result<()> {
+async fn unrestricted_unstructured_binary_inline(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .post(agent.base_url.join("/agents/test-agent/unstructured-binary/my-bucket")?)
+        .post(
+            agent
+                .base_url
+                .join("/agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
+        )
         .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
         .body(vec![1u8, 2, 3, 4, 5])
         .send()
@@ -312,10 +312,14 @@ async fn unstructured_binary_inline(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn unstructured_binary_missing_body(agent: &TestContext) -> anyhow::Result<()> {
+async fn unrestricted_unstructured_binary_missing_body(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .post(agent.base_url.join("/agents/test-agent/unstructured-binary/my-bucket")?)
+        .post(
+            agent
+                .base_url
+                .join("/agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
+        )
         .send()
         .await?;
 
@@ -329,10 +333,16 @@ async fn unstructured_binary_missing_body(agent: &TestContext) -> anyhow::Result
 
 #[test]
 #[tracing::instrument]
-async fn unstructured_binary_json_content_type(agent: &TestContext) -> anyhow::Result<()> {
+async fn unrestricted_unstructured_binary_json_content_type(
+    agent: &TestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
-        .post(agent.base_url.join("/agents/test-agent/unstructured-binary/my-bucket")?)
+        .post(
+            agent
+                .base_url
+                .join("/agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
+        )
         .json(&json!({ "oops": true }))
         .send()
         .await?;
@@ -341,6 +351,68 @@ async fn unstructured_binary_json_content_type(agent: &TestContext) -> anyhow::R
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(13.0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn restricted_unstructured_binary_inline(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/agents/test-agent/restricted-unstructured-binary/my-bucket")?,
+        )
+        .header(reqwest::header::CONTENT_TYPE, "image/gif")
+        .body(vec![1u8, 2, 3, 4, 5])
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!(5.0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn restricted_unstructured_binary_missing_body(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/agents/test-agent/restricted-unstructured-binary/my-bucket")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn restricted_unstructured_binary_unsupported_mime_type(
+    agent: &TestContext,
+) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/agents/test-agent/restricted-unstructured-binary/my-bucket")?,
+        )
+        .json(&json!({ "oops": true }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
 
     Ok(())
 }

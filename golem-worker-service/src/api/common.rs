@@ -274,7 +274,8 @@ impl From<RequestHandlerError> for ApiEndpointError {
             | RequestHandlerError::TooManyValues { .. }
             | RequestHandlerError::HeaderIsNotAscii { .. }
             | RequestHandlerError::BodyIsNotValidJson { .. }
-            | RequestHandlerError::JsonBodyParsingFailed { .. } => Self::bad_request(value),
+            | RequestHandlerError::JsonBodyParsingFailed { .. }
+            | RequestHandlerError::UnsupportedMimeType { .. } => Self::bad_request(value),
 
             RequestHandlerError::ResolvingRouteFailed(
                 RouteResolverError::CouldNotGetDomainFromRequest(_)

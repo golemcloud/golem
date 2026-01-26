@@ -218,6 +218,7 @@ pub async fn parse_request_body(
 ) -> Result<ParsedRequestBody, RequestHandlerError> {
     match expected {
         RequestBodySchema::Unused => Ok(ParsedRequestBody::Unused),
+
         RequestBodySchema::JsonBody { expected_type } => {
             let json_body: serde_json::Value = request
                 .underlying
@@ -231,31 +232,50 @@ pub async fn parse_request_body(
                 .map_err(|errors| RequestHandlerError::JsonBodyParsingFailed { errors })?;
             Ok(ParsedRequestBody::JsonBody(parsed_body.value))
         }
-        RequestBodySchema::UnstructuredBinary => {
-            let data = request
-                .underlying
-                .take_body()
-                .into_vec()
-                .await
-                .map_err(|err| anyhow!("Failed reading raw body: {err}"))?;
 
-            let header_name = http::header::CONTENT_TYPE.to_string();
+        RequestBodySchema::UnrestrictedBinary => parse_binary_body(request, None).await,
 
-            let mime_type = request
-                .headers()
-                .get(header_name.clone())
-                .map(|value| value.to_str())
-                .transpose()
-                .map_err(|_| RequestHandlerError::HeaderIsNotAscii { header_name })?
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "application/octet-stream".to_string());
-
-            Ok(ParsedRequestBody::UnstructuredBinary(Some(BinarySource {
-                data,
-                binary_type: BinaryType { mime_type },
-            })))
+        RequestBodySchema::RestrictedBinary { allowed_mime_types } => {
+            parse_binary_body(request, Some(allowed_mime_types)).await
         }
     }
+}
+
+async fn parse_binary_body(
+    request: &mut RichRequest,
+    allowed_mime_types: Option<&Vec<String>>,
+) -> Result<ParsedRequestBody, RequestHandlerError> {
+    let data = request
+        .underlying
+        .take_body()
+        .into_vec()
+        .await
+        .map_err(|err| anyhow!("Failed reading raw body: {err}"))?;
+
+    let header_name = http::header::CONTENT_TYPE.to_string();
+
+    let mime_type = request
+        .headers()
+        .get(header_name.clone())
+        .map(|value| value.to_str())
+        .transpose()
+        .map_err(|_| RequestHandlerError::HeaderIsNotAscii { header_name })?
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    if let Some(allowed) = allowed_mime_types {
+        if !allowed.iter().any(|allowed| allowed == &mime_type) {
+            return Err(RequestHandlerError::UnsupportedMimeType {
+                mime_type,
+                allowed_mime_types: allowed.clone(),
+            });
+        }
+    }
+
+    Ok(ParsedRequestBody::UnstructuredBinary(Some(BinarySource {
+        data,
+        binary_type: BinaryType { mime_type },
+    })))
 }
 
 #[cfg(test)]
@@ -514,6 +534,17 @@ mod request_body_tests {
     use serde_json::json;
     use test_r::test;
 
+    fn raw_request_with_content_type(
+        bytes: &'static [u8],
+        content_type: &'static str,
+    ) -> RichRequest {
+        let req = Request::builder()
+            .method(Method::POST)
+            .header(http::header::CONTENT_TYPE, content_type)
+            .body(Body::from(bytes));
+        RichRequest::new(req)
+    }
+
     fn json_request(value: serde_json::Value) -> RichRequest {
         let req = Request::builder()
             .method(Method::POST)
@@ -585,5 +616,79 @@ mod request_body_tests {
         let err = parse_request_body(&mut request, &schema).await.unwrap_err();
 
         assert!(let RequestHandlerError::JsonBodyParsingFailed { .. } = err);
+    }
+
+    #[test]
+    async fn restricted_binary_body_accepts_allowed_mime_type() {
+        let mut request = raw_request_with_content_type(b"binary-data", "application/octet-stream");
+
+        let schema = RequestBodySchema::RestrictedBinary {
+            allowed_mime_types: vec!["application/octet-stream".to_string()],
+        };
+
+        let result = parse_request_body(&mut request, &schema).await.unwrap();
+
+        let_assert!(
+            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { data, binary_type })) =
+                result
+        );
+
+        assert!(data == b"binary-data");
+        assert!(binary_type.mime_type == "application/octet-stream");
+    }
+
+    #[test]
+    async fn restricted_binary_body_rejects_disallowed_mime_type() {
+        let mut request = raw_request_with_content_type(b"binary-data", "application/json");
+
+        let schema = RequestBodySchema::RestrictedBinary {
+            allowed_mime_types: vec!["application/octet-stream".to_string()],
+        };
+
+        let err = parse_request_body(&mut request, &schema).await.unwrap_err();
+
+        {
+            let_assert!(
+                RequestHandlerError::UnsupportedMimeType {
+                    mime_type,
+                    allowed_mime_types,
+                } = err
+            );
+
+            assert!(mime_type == "application/json");
+            assert!(allowed_mime_types == vec!["application/octet-stream"]);
+        }
+    }
+
+    #[test]
+    async fn restricted_binary_body_without_content_type_uses_default_and_is_checked() {
+        let mut request = raw_request(b"binary-data");
+
+        let schema = RequestBodySchema::RestrictedBinary {
+            allowed_mime_types: vec!["application/octet-stream".to_string()],
+        };
+
+        let result = parse_request_body(&mut request, &schema).await.unwrap();
+
+        let_assert!(
+            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { binary_type, .. })) = result
+        );
+
+        assert!(binary_type.mime_type == "application/octet-stream");
+    }
+
+    #[test]
+    async fn unrestricted_binary_body_accepts_any_mime_type() {
+        let mut request = raw_request_with_content_type(b"binary-data", "application/weird");
+
+        let schema = RequestBodySchema::UnrestrictedBinary;
+
+        let result = parse_request_body(&mut request, &schema).await.unwrap();
+
+        let_assert!(
+            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { binary_type, .. })) = result
+        );
+
+        assert!(binary_type.mime_type == "application/weird");
     }
 }

@@ -89,7 +89,8 @@ message RequestBodySchema {
   oneof kind {
     Unused unused = 1;
     JsonBody json_body = 2;
-    UnstructuredBinary unstructured_binary = 3;
+    UnrestrictedBinary unrestricted_binary = 3;
+    RestrictedBinary restricted_binary = 4;
   }
 
   message Unused {}
@@ -98,7 +99,11 @@ message RequestBodySchema {
     wasm.rpc.Type expected_type = 1;
   }
 
-  message UnstructuredBinary {};
+  message UnrestrictedBinary { };
+
+  message RestrictedBinary {
+    repeated string allowed_mime_types = 1;
+  };
 }
 
 message ConstructorParameter {

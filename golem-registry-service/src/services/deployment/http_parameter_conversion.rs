@@ -203,11 +203,17 @@ fn handle_body_parameters<E>(
         });
     }
 
-    // Unstructured binary body
-    if leftovers.len() == 1 && matches!(leftovers[0].1.schema, ElementSchema::UnstructuredBinary(_))
+    // binary body
+    if leftovers.len() == 1
+        && let ElementSchema::UnstructuredBinary(descriptor) = &leftovers[0].1.schema
     {
         out.push(MethodParameter::UnstructuredBinaryBody);
-        return Ok(RequestBodySchema::UnstructuredBinary);
+        if let Some(binary_types) = &descriptor.restrictions {
+            let allowed_mime_types = binary_types.iter().map(|bd| bd.mime_type.clone()).collect();
+            return Ok(RequestBodySchema::RestrictedBinary { allowed_mime_types });
+        } else {
+            return Ok(RequestBodySchema::UnrestrictedBinary);
+        }
     }
 
     Err(make_error(
@@ -341,9 +347,9 @@ fn validate_path_segment_type<E>(
 #[cfg(test)]
 mod test {
     use golem_common::model::agent::{
-        BinaryDescriptor, ComponentModelElementSchema, CorsOptions, DataSchema, ElementSchema,
-        HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
-        NamedElementSchemas, PathSegment, PathVariable,
+        BinaryDescriptor, BinaryType, ComponentModelElementSchema, CorsOptions, DataSchema,
+        ElementSchema, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
+        NamedElementSchema, NamedElementSchemas, PathSegment, PathVariable,
     };
     use golem_wasm::analysis::analysed_type;
     use test_r::test;
@@ -351,7 +357,7 @@ mod test {
     use crate::services::deployment::http_parameter_conversion::{
         build_http_agent_constructor_parameters, build_http_agent_method_parameters,
     };
-    use assert2::assert;
+    use assert2::{assert, let_assert};
     use golem_common::model::Empty;
     use golem_service_base::custom_api::{
         ConstructorParameter, MethodParameter, PathSegmentType, RequestBodySchema,
@@ -557,7 +563,7 @@ mod test {
     }
 
     #[test]
-    fn method_accepts_unstructured_binary_body() {
+    fn method_accepts_unstructured_binary_body_unrestricted() {
         let mount = HttpMountDetails {
             path_prefix: vec![],
             auth_details: None,
@@ -589,7 +595,52 @@ mod test {
         let (body, params) =
             build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
 
-        assert!(matches!(body, RequestBodySchema::UnstructuredBinary));
+        assert!(matches!(body, RequestBodySchema::UnrestrictedBinary));
+        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
+    }
+
+    #[test]
+    fn method_accepts_unstructured_binary_body_restricted() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "return-type".into(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                    restrictions: Some(vec![BinaryType {
+                        mime_type: "application/octet-stream".into(),
+                    }]),
+                }),
+            }],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        {
+            let_assert!(RequestBodySchema::RestrictedBinary { allowed_mime_types } = body);
+            assert!(allowed_mime_types == vec!["application/octet-stream"]);
+        }
+
         assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
     }
 

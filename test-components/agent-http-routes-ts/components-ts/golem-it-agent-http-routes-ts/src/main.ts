@@ -53,10 +53,22 @@ class HttpAgent extends BaseAgent {
     return { ok: true }
   }
 
-  @endpoint({ post: "/unstructured-binary/{bucket}" })
-  unstructuredBinary(
+  @endpoint({ post: "/unrestricted-unstructured-binary/{bucket}" })
+  unrestrictedUnstructuredBinary(
     bucket: string,
     payload: UnstructuredBinary
+  ): number {
+    if (payload.tag === 'url') {
+      return -1
+    } else {
+      return payload.val.byteLength
+    }
+  }
+
+  @endpoint({ post: "/restricted-unstructured-binary/{bucket}" })
+  restrictedUnstructuredBinary(
+    bucket: string,
+    payload: UnstructuredBinary<["image/gif"]>
   ): number {
     if (payload.tag === 'url') {
       return -1

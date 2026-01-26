@@ -182,7 +182,8 @@ impl TryFrom<AnalysedType> for QueryOrHeaderType {
 pub enum RequestBodySchema {
     Unused,
     JsonBody { expected_type: AnalysedType },
-    UnstructuredBinary,
+    UnrestrictedBinary,
+    RestrictedBinary { allowed_mime_types: Vec<String> },
 }
 
 #[derive(Debug, Clone, BinaryCodec)]

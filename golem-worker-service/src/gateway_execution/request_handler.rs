@@ -58,6 +58,11 @@ pub enum RequestHandlerError {
     JsonBodyParsingFailed { errors: Vec<String> },
     #[error("Agent response did not match expected type: {error}")]
     AgentResponseTypeMismatch { error: String },
+    #[error("Mime type {mime_type} is not supported. Allowed mime types: [{formatted_mime_types}]", formatted_mime_types=.allowed_mime_types.join(","))]
+    UnsupportedMimeType {
+        mime_type: String,
+        allowed_mime_types: Vec<String>,
+    },
     #[error("Invariant violated: {msg}")]
     InvariantViolated { msg: &'static str },
     #[error("Resolving route failed: {0}")]
@@ -84,6 +89,7 @@ impl SafeDisplay for RequestHandlerError {
             Self::BodyIsNotValidJson { .. } => self.to_string(),
             Self::JsonBodyParsingFailed { .. } => self.to_string(),
             Self::AgentResponseTypeMismatch { .. } => self.to_string(),
+            Self::UnsupportedMimeType { .. } => self.to_string(),
 
             Self::InvariantViolated { .. } => "internal error".to_string(),
 
