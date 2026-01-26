@@ -12,10 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::BinarySource;
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::custom_api::{CorsOptions, SecuritySchemeDetails};
+use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
+use http::Method;
 use http::{HeaderName, StatusCode};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
+
+#[derive(Debug)]
+pub struct RichCompiledRoute {
+    pub account_id: AccountId,
+    pub environment_id: EnvironmentId,
+    pub route_id: RouteId,
+    pub method: Method,
+    pub path: Vec<PathSegment>,
+    pub body: RequestBodySchema,
+    pub behavior: RouteBehaviour,
+    pub security_scheme: Option<Arc<SecuritySchemeDetails>>,
+    pub cors: CorsOptions,
+}
 
 #[derive(Debug)]
 pub struct RouteExecutionResult {

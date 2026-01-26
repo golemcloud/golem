@@ -17,104 +17,11 @@
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::ScanCursor;
 // use golem_service_base::custom_api::HttpCors;
-use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::custom_api::{CorsOptions, SecuritySchemeDetails};
-use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
-use http::Method;
 use poem_openapi::Object;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadataDto>,
     pub cursor: Option<ScanCursor>,
 }
-
-// #[derive(Debug, Clone)]
-// pub enum HttpMiddleware {
-//     Cors(HttpCors),
-//     AuthenticateRequest(SecuritySchemeDetails),
-// }
-
-#[derive(Debug, Clone)]
-pub struct SwaggerHtml(pub String);
-
-#[derive(Debug, Clone)]
-pub struct SwaggerUiBinding {
-    pub swagger_html: Arc<SwaggerHtml>,
-}
-
-#[derive(Debug)]
-pub struct RichCompiledRoute {
-    pub account_id: AccountId,
-    pub environment_id: EnvironmentId,
-    pub route_id: RouteId,
-    pub method: Method,
-    pub path: Vec<PathSegment>,
-    pub body: RequestBodySchema,
-    pub behavior: RouteBehaviour,
-    pub security_scheme: Option<Arc<SecuritySchemeDetails>>,
-    pub cors: CorsOptions,
-}
-
-// #[derive(Debug, Clone)]
-// pub enum RichGatewayBindingCompiled {
-//     HttpCorsPreflight(Box<HttpCorsBindingCompiled>),
-//     HttpAuthCallBack(Box<SecuritySchemeDetails>),
-//     Worker(Box<WorkerBindingCompiled>),
-//     FileServer(Box<FileServerBindingCompiled>),
-//     HttpHandler(Box<HttpHandlerBindingCompiled>),
-//     SwaggerUi(SwaggerUiBinding),
-// }
-
-// impl RichGatewayBindingCompiled {
-//     pub fn from_compiled_binding(
-//         binding: RouteBehaviour,
-//         precomputed_swagger_ui_htmls: &HashMap<HttpApiDefinitionId, Arc<SwaggerHtml>>,
-//     ) -> Result<Self, String> {
-//         match binding {
-//             RouteBehaviour::FileServer(inner) => {
-//                 Ok(RichGatewayBindingCompiled::FileServer(inner))
-//             }
-//             RouteBehaviour::HttpCorsPreflight(inner) => {
-//                 Ok(RichGatewayBindingCompiled::HttpCorsPreflight(inner))
-//             }
-//             RouteBehaviour::Worker(inner) => Ok(RichGatewayBindingCompiled::Worker(inner)),
-//             RouteBehaviour::HttpHandler(inner) => {
-//                 Ok(RichGatewayBindingCompiled::HttpHandler(inner))
-//             }
-//             RouteBehaviour::SwaggerUi(inner) => {
-//                 let swagger_html = precomputed_swagger_ui_htmls
-//                     .get(&inner.http_api_definition_id)
-//                     .ok_or("no precomputed swagger html".to_string())?
-//                     .clone();
-//                 Ok(RichGatewayBindingCompiled::SwaggerUi(SwaggerUiBinding {
-//                     swagger_html,
-//                 }))
-//             }
-//         }
-//     }
-// }
-
-// #[derive(Debug, Clone)]
-// pub struct RichCompiledRoute {
-//     pub account_id: AccountId,
-//     pub environment_id: EnvironmentId,
-//     pub method: RouteMethod,
-//     pub path: AllPathPatterns,
-//     pub binding: RichGatewayBindingCompiled,
-//     pub middlewares: Vec<HttpMiddleware>,
-// }
-
-// impl RichCompiledRoute {
-//     pub fn get_security_middleware(&self) -> Option<SecuritySchemeDetails> {
-//         for middleware in &self.middlewares {
-//             if let HttpMiddleware::AuthenticateRequest(security) = middleware {
-//                 return Some(security.clone());
-//             }
-//         }
-//         None
-//     }
-// }

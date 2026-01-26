@@ -38,11 +38,11 @@ use crate::config::WorkerServiceConfig;
 // use crate::gateway_execution::route_resolver::RouteResolver;
 // use crate::gateway_execution::GatewayWorkerRequestExecutor;
 // use crate::gateway_security::DefaultIdentityProvider;
-use crate::gateway_execution::api_definition_lookup::{
+use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
-use crate::gateway_execution::request_handler::RequestHandler;
-use crate::gateway_execution::route_resolver::RouteResolver;
+use crate::custom_api::request_handler::RequestHandler;
+use crate::custom_api::route_resolver::RouteResolver;
 use crate::service::component::ComponentService;
 use crate::service::worker::{AgentsService, WorkerClient, WorkerExecutorWorkerClient};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;

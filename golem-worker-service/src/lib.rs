@@ -14,9 +14,7 @@
 
 pub mod api;
 pub mod config;
-pub mod gateway_execution;
-// pub mod gateway_middleware;
-pub mod gateway_router;
+pub mod custom_api;
 // pub mod gateway_security;
 pub mod getter;
 pub mod grpcapi;
@@ -180,7 +178,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let route = Route::new()
-            .nest("/", api::custom_http_request_api(&self.services))
+            .nest("/", api::custom_api_api(&self.services))
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())

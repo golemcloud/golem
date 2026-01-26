@@ -15,7 +15,7 @@
 pub mod tree;
 
 use self::tree::RadixNode;
-use crate::model::RichCompiledRoute;
+use super::RichCompiledRoute;
 use golem_service_base::custom_api::PathSegment;
 use http::Method;
 use std::sync::Arc;
@@ -69,7 +69,7 @@ impl Router<Arc<RichCompiledRoute>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::gateway_router::Router;
+    use super::Router;
     use golem_service_base::custom_api::PathSegment;
     use http::Method;
     use test_r::test;

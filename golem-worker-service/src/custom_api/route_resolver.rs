@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
+use super::router::Router;
 use crate::config::RouteResolverConfig;
-use crate::gateway_router::Router;
 // use crate::model::{HttpMiddleware, RichCompiledRoute, RichGatewayBindingCompiled, SwaggerHtml};
 // use crate::swagger_ui::generate_swagger_html;
 use golem_common::cache::SimpleCache;
@@ -24,7 +24,7 @@ use golem_common::model::domain_registration::Domain;
 // use golem_service_base::custom_api::HttpCors;
 use golem_service_base::custom_api::CompiledRoutes;
 // use golem_service_base::custom_api::{RouteBehaviour, SwaggerUiBindingCompiled};
-use crate::model::RichCompiledRoute;
+use super::model::RichCompiledRoute;
 use golem_common::SafeDisplay;
 use std::collections::HashMap;
 use std::sync::Arc;

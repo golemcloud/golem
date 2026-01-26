@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::identity_provider_metadata::GolemIdentityProviderMetadata;
-use crate::gateway_security::open_id_client::OpenIdClient;
+use super::open_id_client::OpenIdClient;
 use async_trait::async_trait;
 use golem_common::model::security_scheme::Provider;
 use golem_common::SafeDisplay;

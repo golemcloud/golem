@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_execution::request_handler::RequestHandlerError;
-use crate::gateway_execution::route_resolver::RouteResolverError;
+use crate::custom_api::request_handler::RequestHandlerError;
+use crate::custom_api::route_resolver::RouteResolverError;
 use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
 use crate::service::limit::LimitServiceError;

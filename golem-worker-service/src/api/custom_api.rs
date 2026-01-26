@@ -16,17 +16,17 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api::common::ApiEndpointError;
-use crate::gateway_execution::request_handler::RequestHandler;
+use crate::custom_api::request_handler::RequestHandler;
 use futures::{FutureExt, TryFutureExt};
 use golem_common::recorded_http_api_request;
 use poem::{Endpoint, IntoResponse, Request, Response};
 use tracing::Instrument;
 
-pub struct CustomHttpRequestApi {
+pub struct CustomApiApi {
     pub request_handler: Arc<RequestHandler>,
 }
 
-impl CustomHttpRequestApi {
+impl CustomApiApi {
     pub fn new(request_handler: Arc<RequestHandler>) -> Self {
         Self { request_handler }
     }
@@ -50,7 +50,7 @@ impl CustomHttpRequestApi {
     }
 }
 
-impl Endpoint for CustomHttpRequestApi {
+impl Endpoint for CustomApiApi {
     type Output = Response;
 
     fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {
