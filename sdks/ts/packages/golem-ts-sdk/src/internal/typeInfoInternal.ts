@@ -159,7 +159,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
         tag: 'tuple',
         val: [
           [
-            'return-type',
+            'return-value',
             {
               tag: 'unstructured-text',
               val: typeInfoInternal.val,
@@ -181,7 +181,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
         tag: 'tuple',
         val: [
           [
-            'return-type',
+            'return-value',
             {
               tag: 'component-model',
               val: typeInfoInternal.witType,
@@ -195,7 +195,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
         tag: 'tuple',
         val: [
           [
-            'return-type',
+            'return-value',
             {
               tag: 'unstructured-binary',
               val: typeInfoInternal.val,

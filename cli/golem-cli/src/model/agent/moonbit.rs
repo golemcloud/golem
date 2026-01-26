@@ -1502,6 +1502,7 @@ mod tests {
     };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use golem_common::model::component::ComponentName;
+    use golem_templates::model::GuestLanguage;
     use tempfile::NamedTempFile;
     use test_r::test;
 
@@ -1611,7 +1612,7 @@ mod tests {
     #[test]
     pub fn ts_code_first_snippets() {
         let component_name = "example:code-first-snippets".try_into().unwrap();
-        let agent_types = test::ts_code_first_snippets();
+        let agent_types = test::code_first_snippets_agent_types(GuestLanguage::TypeScript);
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

@@ -12,76 +12,84 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::rust::RustBridgeGenerator;
+use crate::bridge_gen::type_naming::tests::test_type_naming;
 use crate::bridge_gen::BridgeGenerator;
+use crate::model::agent::test::{
+    code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
+};
 use camino::Utf8Path;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas,
 };
+use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{f64, str};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
-#[allow(dead_code)]
 struct GeneratedPackage {
+    #[allow(dead_code)]
     pub dir: TempDir,
+}
+
+impl GeneratedPackage {
+    pub fn new(agent_type: AgentType) -> Self {
+        let dir = TempDir::new().unwrap();
+        let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::remove_dir_all(target_dir).ok();
+        generate_and_compile(agent_type, target_dir);
+        GeneratedPackage { dir }
+    }
 }
 
 #[test_dep(tagged_as = "single_agent_wrapper_types_1")]
 fn rust_single_agent_wrapper_1() -> GeneratedPackage {
-    let agent_type =
-        super::super::super::model::agent::test::single_agent_wrapper_types()[0].clone();
-    let dir = TempDir::new().unwrap();
-
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
-
-    GeneratedPackage { dir }
+    GeneratedPackage::new(single_agent_wrapper_types()[0].clone())
 }
 
 #[test_dep(tagged_as = "multi_agent_wrapper_2_types_1")]
 fn rust_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
-    let agent_type =
-        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[0].clone();
-    let dir = TempDir::new().unwrap();
-
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
-
-    GeneratedPackage { dir }
+    GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone())
 }
 
 #[test_dep(tagged_as = "multi_agent_wrapper_2_types_2")]
 fn rust_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
-    let agent_type =
-        super::super::super::model::agent::test::multi_agent_wrapper_2_types()[1].clone();
-    let dir = TempDir::new().unwrap();
-
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
-
-    GeneratedPackage { dir }
+    GeneratedPackage::new(multi_agent_wrapper_2_types()[1].clone())
 }
 
-#[test_dep(tagged_as = "code_first_snippets")]
-fn rust_code_first_snippets() -> GeneratedPackage {
-    let agent_type = super::super::super::model::agent::test::ts_code_first_snippets()[0].clone();
-    let dir = TempDir::new().unwrap();
+#[test_dep(tagged_as = "ts_code_first_snippets_foo_agent")]
+fn ts_code_first_snippets_foo_agent() -> GeneratedPackage {
+    GeneratedPackage::new(code_first_snippets_agent_type(
+        GuestLanguage::TypeScript,
+        "FooAgent",
+    ))
+}
 
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+#[test_dep(tagged_as = "ts_code_first_snippets_bar_agent")]
+fn ts_code_first_snippets_bar_agent() -> GeneratedPackage {
+    GeneratedPackage::new(code_first_snippets_agent_type(
+        GuestLanguage::TypeScript,
+        "BarAgent",
+    ))
+}
 
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
+#[test_dep(tagged_as = "rust_code_first_snippets_foo_agent")]
+fn rust_code_first_snippets_foo_agent() -> GeneratedPackage {
+    GeneratedPackage::new(code_first_snippets_agent_type(
+        GuestLanguage::Rust,
+        "FooAgent",
+    ))
+}
 
-    GeneratedPackage { dir }
+#[test_dep(tagged_as = "rust_code_first_snippets_bar_agent")]
+fn rust_code_first_snippets_bar_agent() -> GeneratedPackage {
+    GeneratedPackage::new(code_first_snippets_agent_type(
+        GuestLanguage::Rust,
+        "BarAgent",
+    ))
 }
 
 #[test_dep(tagged_as = "counter_agent")]
@@ -121,13 +129,8 @@ fn rust_counter_agent() -> GeneratedPackage {
         mode: AgentMode::Durable,
         http_mount: None,
     };
-    let dir = TempDir::new().unwrap();
 
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-    std::fs::remove_dir_all(target_dir).ok();
-    generate_and_compile(agent_type, target_dir);
-
-    GeneratedPackage { dir }
+    GeneratedPackage::new(agent_type)
 }
 
 #[test]
@@ -157,14 +160,40 @@ fn bridge_rust_compiles_counter_agent(#[tagged_as("counter_agent")] _pkg: &Gener
 }
 
 #[test]
-fn bridge_rust_compiles_code_first_snippets(
-    #[tagged_as("code_first_snippets")] _pkg: &GeneratedPackage,
+fn bridge_rust_compiles_ts_ode_first_snippets_foo_agent(
+    #[tagged_as("ts_code_first_snippets_foo_agent")] _pkg: &GeneratedPackage,
+) {
+    // The test_dep ensures it was compiled successfully in generate_and_compile
+}
+
+#[test]
+fn bridge_rust_compiles_ts_code_first_snippets_bar_agent(
+    #[tagged_as("ts_code_first_snippets_bar_agent")] _pkg: &GeneratedPackage,
+) {
+    // The test_dep ensures it was compiled successfully in generate_and_compile
+}
+
+#[test]
+fn bridge_rust_compiles_rust_code_first_snippets_foo_agent(
+    #[tagged_as("rust_code_first_snippets_foo_agent")] _pkg: &GeneratedPackage,
+) {
+    // The test_dep ensures it was compiled successfully in generate_and_compile
+}
+
+#[test]
+fn bridge_rust_compiles_rust_code_first_snippets_bar_agent(
+    #[tagged_as("rust_code_first_snippets_bar_agent")] _pkg: &GeneratedPackage,
 ) {
     // The test_dep ensures it was compiled successfully in generate_and_compile
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
-    let mut gen = RustBridgeGenerator::new(agent_type, target_dir, false);
+    println!(
+        "Generating Rust bridge SDK for {} ({}) into: {}",
+        agent_type.type_name, agent_type.description, target_dir
+    );
+
+    let mut gen = RustBridgeGenerator::new(agent_type, target_dir, false).unwrap();
     gen.generate().expect("Failed to generate Rust bridge");
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");
@@ -191,4 +220,24 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         .status()
         .expect("failed to run `cargo build`");
     assert!(status.success(), "`cargo build` failed: {:?}", status);
+}
+
+#[test]
+fn test_rust_type_naming_rust_foo() {
+    test_type_naming::<RustTypeName>(GuestLanguage::Rust, "FooAgent");
+}
+
+#[test]
+fn test_rust_type_naming_rust_bar() {
+    test_type_naming::<RustTypeName>(GuestLanguage::Rust, "BarAgent");
+}
+
+#[test]
+fn test_rust_type_naming_ts_foo() {
+    test_type_naming::<RustTypeName>(GuestLanguage::TypeScript, "FooAgent");
+}
+
+#[test]
+fn test_rust_type_naming_ts_bar() {
+    test_type_naming::<RustTypeName>(GuestLanguage::TypeScript, "BarAgent");
 }

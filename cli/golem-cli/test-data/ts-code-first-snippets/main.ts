@@ -1,12 +1,13 @@
 import {
     BaseAgent,
-    Result,
-    agent,
-    UnstructuredText,
-    UnstructuredBinary,
     Client,
     Multimodal,
-    MultimodalAdvanced
+    MultimodalAdvanced,
+    Result,
+    UnstructuredBinary,
+    UnstructuredText,
+    agent,
+    description
 } from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
@@ -41,6 +42,7 @@ export type InputImage = { val: Uint8Array; tag: "image" };
 
 
 @agent()
+@description("TS Code First FooAgent")
 class FooAgent extends BaseAgent {
     readonly barAgent: Client<BarAgent>;
 
@@ -305,6 +307,7 @@ class FooAgent extends BaseAgent {
 
 
 @agent()
+@description("TS Code First BarAgent")
 class BarAgent extends BaseAgent {
     constructor(
         readonly optionalStringType: string | null,

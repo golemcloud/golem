@@ -1,6 +1,6 @@
 export type PhantomId = string;
 
-export type GolemServer = 
+export type GolemServer =
     | { type: 'local' }
     | { type: 'cloud'; token: string }
     | { type: 'custom'; url: string; token: string };
@@ -166,7 +166,7 @@ export async function invokeAgent(
 }
 
 /// The Result type representation in Golem's JSON type mapping
-export type JsonResult<Ok, Err> = { ok: Ok } | { err: Err };
+export type JsonResult<Ok, Err> = { ok: Ok, err?: undefined } | { ok?: undefined, err: Err };
 
 export type RemoteMethod<Args extends any[], R> = {
     (...args: Args): Promise<R>;

@@ -184,7 +184,12 @@ where
         Run: FnOnce() -> anyhow::Result<()>,
         Skip: FnOnce(),
     {
-        if is_up_to_date(self.skip_check, self.sources, self.targets) {
+        if Self::is_up_to_date(
+            self.task_result_marker.as_ref(),
+            self.skip_check,
+            self.sources,
+            self.targets,
+        ) {
             skip();
             Ok(())
         } else {
@@ -200,7 +205,12 @@ where
         Run: AsyncFnOnce() -> anyhow::Result<()>,
         Skip: FnOnce(),
     {
-        if is_up_to_date(self.skip_check, self.sources, self.targets) {
+        if Self::is_up_to_date(
+            self.task_result_marker.as_ref(),
+            self.skip_check,
+            self.sources,
+            self.targets,
+        ) {
             skip();
             Ok(())
         } else {
@@ -220,7 +230,12 @@ where
         Run: AsyncFnOnce() -> anyhow::Result<Result>,
         Skip: FnOnce(),
     {
-        if is_up_to_date(self.skip_check, self.sources, self.targets) {
+        if Self::is_up_to_date(
+            self.task_result_marker.as_ref(),
+            self.skip_check,
+            self.sources,
+            self.targets,
+        ) {
             skip();
             Ok(None)
         } else {
@@ -229,6 +244,16 @@ where
                 None => Ok(Some(run().await?)),
             }
         }
+    }
+
+    fn is_up_to_date(
+        task_result_marker: Option<&TaskResultMarker>,
+        skip_check: bool,
+        sources: FS,
+        targets: FT,
+    ) -> bool {
+        task_result_marker.is_none_or(|marker| marker.is_up_to_date())
+            && is_up_to_date(skip_check, sources, targets)
     }
 }
 
