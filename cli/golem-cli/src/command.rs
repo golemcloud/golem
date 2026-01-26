@@ -57,8 +57,16 @@ pub struct GolemCliCommand {
     #[command(flatten)]
     pub global_flags: GolemCliGlobalFlags,
 
+    /// Start MCP (Model Context Protocol) server mode
+    #[arg(long, global = true)]
+    pub serve: bool,
+
+    /// Port for MCP server (default: 3000, only used with --serve)
+    #[arg(long, default_value = "3000")]
+    pub serve_port: u16,
+
     #[clap(subcommand)]
-    pub subcommand: GolemCliSubcommand,
+    pub subcommand: Option<GolemCliSubcommand>,
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,
