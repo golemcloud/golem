@@ -15,16 +15,11 @@
 pub mod api;
 pub mod config;
 pub mod custom_api;
-// pub mod gateway_security;
-pub mod getter;
 pub mod grpcapi;
-pub mod headers;
-pub mod http_invocation_context;
 pub mod metrics;
 pub mod model;
 pub mod path;
 pub mod service;
-// pub mod swagger_ui;
 
 use crate::config::WorkerServiceConfig;
 use crate::service::Services;
@@ -178,7 +173,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let route = Route::new()
-            .nest("/", api::custom_api_api(&self.services))
+            .nest("/", custom_api::make_custom_api_endpoint(&self.services))
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())

@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
-use std::sync::Arc;
-
 use crate::api::common::ApiEndpointError;
 use crate::custom_api::request_handler::RequestHandler;
 use futures::{FutureExt, TryFutureExt};
 use golem_common::recorded_http_api_request;
 use poem::{Endpoint, IntoResponse, Request, Response};
+use std::future::Future;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct CustomApiApi {
+pub struct CustomApiPoemEndpoint {
     pub request_handler: Arc<RequestHandler>,
 }
 
-impl CustomApiApi {
+impl CustomApiPoemEndpoint {
     pub fn new(request_handler: Arc<RequestHandler>) -> Self {
         Self { request_handler }
     }
@@ -50,7 +49,7 @@ impl CustomApiApi {
     }
 }
 
-impl Endpoint for CustomApiApi {
+impl Endpoint for CustomApiPoemEndpoint {
     type Output = Response;
 
     fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {

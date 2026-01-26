@@ -14,10 +14,8 @@
 
 pub mod agents;
 pub mod common;
-mod custom_api;
 mod worker;
 
-use self::custom_api::CustomApiApi;
 use crate::api::agents::AgentsApi;
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
@@ -43,8 +41,4 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
         "Golem API",
         "1.0",
     )
-}
-
-pub fn custom_api_api(services: &Services) -> CustomApiApi {
-    CustomApiApi::new(services.request_handler.clone())
 }
