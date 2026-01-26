@@ -23,11 +23,10 @@ class HttpAgent extends BaseAgent {
     return { joined: `${first}:${second}` }
   }
 
-  // Unsupported
-  // @endpoint({ get: "/rest/{*tail}" })
-  // remainingPath(tail: string): { tail: string } {
-  //   return { tail }
-  // }
+  @endpoint({ get: "/rest/{*tail}" })
+  remainingPath(tail: string): { tail: string } {
+    return { tail }
+  }
 
   @endpoint({ get: "/path-and-query/{itemId}?limit={limit}" })
   pathAndQuery(itemId: string, limit: number): { id: string; limit: number } {
@@ -45,28 +44,26 @@ class HttpAgent extends BaseAgent {
     return { resourceId, requestId }
   }
 
-  // Unsupported
-  // @endpoint({ post: "/json-body/{id}" })
-  // jsonBody(
-  //   id: string,
-  //   name: string,
-  //   count: number
-  // ): { ok: boolean } {
-  //   return { ok: true }
-  // }
+  @endpoint({ post: "/json-body/{id}" })
+  jsonBody(
+    id: string,
+    name: string,
+    count: number
+  ): { ok: boolean } {
+    return { ok: true }
+  }
 
-  // Unsupported
-  // @endpoint({ post: "/unstructured-binary/{bucket}" })
-  // unstructuredBinary(
-  //   bucket: string,
-  //   payload: UnstructuredBinary
-  // ): number {
-  //   if (payload.tag === 'url') {
-  //     return -1
-  //   } else {
-  //     return payload.val.byteLength
-  //   }
-  // }
+  @endpoint({ post: "/unstructured-binary/{bucket}" })
+  unstructuredBinary(
+    bucket: string,
+    payload: UnstructuredBinary
+  ): number {
+    if (payload.tag === 'url') {
+      return -1
+    } else {
+      return payload.val.byteLength
+    }
+  }
 
   @endpoint({ get: "/resp/no-content" })
   noContent() { }

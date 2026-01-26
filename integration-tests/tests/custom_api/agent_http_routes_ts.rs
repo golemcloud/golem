@@ -145,6 +145,45 @@ async fn multi_path_vars(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
+async fn remaining_path_variable(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/agents/test-agent/rest/a/b/c/d")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(
+        body,
+        json!({
+            "tail": "a/b/c/d"
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn remaining_path_missing(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/agents/test-agent/rest")?)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn path_and_query(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
@@ -200,8 +239,114 @@ async fn path_and_header(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-#[ignore]
-// https://github.com/golemcloud/golem/issues/2615
+async fn json_body(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(agent.base_url.join("/agents/test-agent/json-body/item-1")?)
+        .json(&json!({
+            "name": "test",
+            "count": 42
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "ok": true }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn json_body_missing_field(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(agent.base_url.join("/agents/test-agent/json-body/item-1")?)
+        .json(&json!({
+            "name": "test"
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn json_body_wrong_type(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(agent.base_url.join("/agents/test-agent/json-body/item-1")?)
+        .json(&json!({
+            "name": "test",
+            "count": "not-a-number"
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn unstructured_binary_inline(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(agent.base_url.join("/agents/test-agent/unstructured-binary/my-bucket")?)
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(vec![1u8, 2, 3, 4, 5])
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!(5.0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn unstructured_binary_missing_body(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(agent.base_url.join("/agents/test-agent/unstructured-binary/my-bucket")?)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!(0.0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn unstructured_binary_json_content_type(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .post(agent.base_url.join("/agents/test-agent/unstructured-binary/my-bucket")?)
+        .json(&json!({ "oops": true }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!(13.0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn response_no_content(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
