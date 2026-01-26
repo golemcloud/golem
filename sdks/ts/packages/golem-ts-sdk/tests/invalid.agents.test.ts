@@ -290,6 +290,14 @@ test('Agent with with invalid http mount is rejected', async () => {
   );
 });
 
+test('Agent with with invalid http mount is rejected', async () => {
+  await expect(async () => {
+    await import('./agentWithInvalidHttpMount2');
+  }).rejects.toThrowError(
+    'HTTP mount path variable "bar" cannot be used for constructor parameters of type \'Principal\'',
+  );
+});
+
 test('Agent with with http endpoint query variables referring to Principal is rejected', async () => {
   await expect(async () => {
     await import('./agentWithInvalidHttpEndpoint1');

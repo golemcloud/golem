@@ -16,16 +16,19 @@ import { agent, BaseAgent, endpoint } from '../src';
 import { Principal } from 'golem:agent/common';
 
 @agent({
-  mount: '/chats/{agent-type}/{foo}',
+  mount: '/chats/{agent-type}/{foo}/{bar}',
 })
-class AgentWithInvalidHttpEndpoint1 extends BaseAgent {
-  constructor(readonly foo: string) {
+class AgentWithInvalidHttpMount2 extends BaseAgent {
+  // 'bar' parameter of type Principal cannot be passed via path parameter in mount
+  constructor(
+    readonly foo: string,
+    bar: Principal,
+  ) {
     super();
   }
 
-  // 'user' parameter of type Principal cannot be passed via query parameter
-  @endpoint({ post: '/greet/{name}?u={user}' })
-  async myPrincipal(name: string, user: Principal): Promise<string> {
+  @endpoint({ post: '/greet/{name}' })
+  async myPrincipal(name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
 }

@@ -18,7 +18,7 @@ import { Principal } from 'golem:agent/common';
 @agent({
   mount: '/chats/{agent-type}/{foo}',
 })
-class AgentWithInvalidHttpMountEndpoint2 extends BaseAgent {
+class AgentWithInvalidHttpEndpoint2 extends BaseAgent {
   constructor(readonly foo: string) {
     super();
   }

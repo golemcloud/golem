@@ -260,8 +260,17 @@ export function agent(options?: AgentDecoratorOptions) {
       inputSchema: constructorDataSchema,
     };
 
+    const principalConstructorParameters =
+      AgentConstructorParamRegistry.getParametersForPrincipal(
+        agentClassName.value,
+      );
+
     if (httpMount) {
-      validateHttpMountWithConstructor(httpMount, constructor);
+      validateHttpMountWithConstructor(
+        httpMount,
+        constructor,
+        principalConstructorParameters,
+      );
     }
 
     const agentType: AgentType = {

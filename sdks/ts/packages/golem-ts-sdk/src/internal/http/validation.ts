@@ -21,21 +21,21 @@ import {
 } from 'golem:agent/common';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
+import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 
-export function rejectEmptyString(name: string, entityName: string) {
-  if (name.length === 0) {
-    throw new Error(`HTTP ${entityName} must not be empty`);
-  }
+export function validateHttpMountWithConstructor(
+  agentMount: HttpMountDetails,
+  agentConstructor: AgentConstructor,
+  parametersForPrincipal: Set<string>,
+) {
+  const constructorInputParams =
+    collectConstructorInputParameterNames(agentConstructor);
+
+  validateMountVariablesAreNotPrincipal(agentMount, parametersForPrincipal);
+  validateMountVariablesExistInConstructor(agentMount, constructorInputParams);
+  validateConstructorVarsAreSatisfied(agentMount, constructorInputParams);
 }
 
-export function rejectQueryParamsInPath(path: string, entityName: string) {
-  if (path.includes('?')) {
-    throw new Error(`HTTP ${entityName} must not contain query parameters`);
-  }
-}
-
-// Ensures that all method input parameters are provided
-// by the HTTP endpoint, and that no foreign variables are used.
 export function validateHttpEndpoint(
   agentClassName: string,
   agentMethod: AgentMethod,
@@ -71,16 +71,16 @@ export function validateHttpEndpoint(
   }
 }
 
-// Ensures that all agent constructor variables are provided
-// by the HTTP mount, either via path variables or header variables.
-export function validateHttpMountWithConstructor(
-  agentMount: HttpMountDetails,
-  agentConstructor: AgentConstructor,
-) {
-  const constructorVars = collectConstructorVars(agentConstructor);
+export function rejectEmptyString(name: string, entityName: string) {
+  if (name.length === 0) {
+    throw new Error(`HTTP ${entityName} must not be empty`);
+  }
+}
 
-  validateMountVariablesExistInConstructor(agentMount, constructorVars);
-  validateConstructorVarsAreSatisfied(agentMount, constructorVars);
+export function rejectQueryParamsInPath(path: string, entityName: string) {
+  if (path.includes('?')) {
+    throw new Error(`HTTP ${entityName} must not contain query parameters`);
+  }
 }
 
 function collectMethodInputVars(schema: DataSchema): Set<string> {
@@ -139,10 +139,26 @@ function validateNoForeignEndpointVariables(
   }
 }
 
-function collectConstructorVars(
+function collectConstructorInputParameterNames(
   agentConstructor: AgentConstructor,
 ): Set<string> {
   return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
+}
+
+function validateMountVariablesAreNotPrincipal(
+  agentMount: HttpMountDetails,
+  parametersForPrincipal: Set<string>,
+) {
+  for (const segment of agentMount.pathPrefix) {
+    if (segment.tag === 'path-variable') {
+      const variableName = segment.val.variableName;
+      if (parametersForPrincipal.has(variableName)) {
+        throw new Error(
+          `HTTP mount path variable "${variableName}" cannot be used for constructor parameters of type 'Principal'`,
+        );
+      }
+    }
+  }
 }
 
 function validateMountVariablesExistInConstructor(
