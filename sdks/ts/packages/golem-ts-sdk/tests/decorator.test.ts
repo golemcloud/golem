@@ -33,7 +33,6 @@ import { FooAgent } from './sampleAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { toWitValue, Value } from '../src/internal/mapping/values/Value';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import process from 'node:process';
 import { Uuid } from 'golem:agent/host';
 import { AgentClassName, AgentId } from '../src';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';

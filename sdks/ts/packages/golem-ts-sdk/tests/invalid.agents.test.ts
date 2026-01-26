@@ -290,6 +290,22 @@ test('Agent with with invalid http mount is rejected', async () => {
   );
 });
 
+test('Agent with with http endpoint query variables referring to Principal is rejected', async () => {
+  await expect(async () => {
+    await import('./agentWithInvalidHttpEndpoint1');
+  }).rejects.toThrowError(
+    'HTTP endpoint query variable "user" cannot be used for parameters of type \'Principal\'',
+  );
+});
+
+test('Agent with with http endpoint path variables referring to Principal is rejected', async () => {
+  await expect(async () => {
+    await import('./agentWithInvalidHttpEndpoint2');
+  }).rejects.toThrowError(
+    'HTTP endpoint path variable "user" cannot be used for parameters of type \'Principal\'',
+  );
+});
+
 function getAnalysedTypeInFun1(
   parameterName: string,
 ): Either.Either<AnalysedType.AnalysedType, string> {

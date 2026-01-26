@@ -19,6 +19,8 @@ import {
   HttpEndpointDetails,
   HttpMountDetails,
 } from 'golem:agent/common';
+import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
+import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
@@ -39,8 +41,6 @@ export function validateHttpEndpoint(
   agentMethod: AgentMethod,
   httpMountDetails: HttpMountDetails | undefined,
 ) {
-  const methodVars = collectMethodInputVars(agentMethod.inputSchema);
-
   if (!httpMountDetails && agentMethod.httpEndpoint.length > 0) {
     throw new Error(
       `Agent method '${agentMethod.name}' of '${agentClassName}' defines HTTP endpoints ` +
@@ -48,13 +48,25 @@ export function validateHttpEndpoint(
     );
   }
 
-  for (const endpoint of agentMethod.httpEndpoint) {
-    validateNoForeignEndpointVariables(endpoint, methodVars);
-    validateAllMethodParamsProvided(
-      endpoint,
-      methodVars,
+  if (agentMethod.httpEndpoint.length === 0) {
+    return;
+  }
+
+  const parametersForPrincipal =
+    AgentMethodParamRegistry.getParameterNamesOfPrincipalType(
       agentClassName,
       agentMethod.name,
+    );
+
+  const methodVarsWithoutAutoInjectedVariables = collectMethodInputVars(
+    agentMethod.inputSchema,
+  );
+
+  for (const endpoint of agentMethod.httpEndpoint) {
+    validateNoForeignEndpointVariables(
+      endpoint,
+      methodVarsWithoutAutoInjectedVariables,
+      parametersForPrincipal,
     );
   }
 }
@@ -75,50 +87,18 @@ function collectMethodInputVars(schema: DataSchema): Set<string> {
   return new Set(schema.val.map(([name]) => name));
 }
 
-function validateAllMethodParamsProvided(
-  endpoint: HttpEndpointDetails,
-  methodVars: Set<string>,
-  agentClassName: string,
-  agentMethodName: string,
-) {
-  const providedVars = collectHttpEndpointVariables(endpoint);
-
-  for (const methodVar of methodVars) {
-    if (!providedVars.has(methodVar)) {
-      throw new Error(
-        `Method parameter "${methodVar}" in method ${agentMethodName} of ${agentClassName} is not provided by HTTP endpoint (path, query, or headers).`,
-      );
-    }
-  }
-}
-
-function collectHttpEndpointVariables(
-  endpoint: HttpEndpointDetails,
-): Set<string> {
-  const vars = new Set<string>();
-
-  for (const { variableName } of endpoint.headerVars) {
-    vars.add(variableName);
-  }
-
-  for (const { variableName } of endpoint.queryVars) {
-    vars.add(variableName);
-  }
-
-  for (const segment of endpoint.pathSuffix) {
-    if (segment.tag === 'path-variable') {
-      vars.add(segment.val.variableName);
-    }
-  }
-
-  return vars;
-}
-
 function validateNoForeignEndpointVariables(
   endpoint: HttpEndpointDetails,
   methodVars: Set<string>,
+  methodVarsOfPrincipal: Set<string>,
 ) {
   for (const { variableName } of endpoint.headerVars) {
+    if (methodVarsOfPrincipal.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint header variable "${variableName}" cannot be used for method parameters of type 'Principal'`,
+      );
+    }
+
     if (!methodVars.has(variableName)) {
       throw new Error(
         `HTTP endpoint header variable "${variableName}" is not defined in method input parameters.`,
@@ -127,6 +107,12 @@ function validateNoForeignEndpointVariables(
   }
 
   for (const { variableName } of endpoint.queryVars) {
+    if (methodVarsOfPrincipal.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint query variable "${variableName}" cannot be used for parameters of type 'Principal'`,
+      );
+    }
+
     if (!methodVars.has(variableName)) {
       throw new Error(
         `HTTP endpoint query variable "${variableName}" is not defined in method input parameters.`,
@@ -137,6 +123,13 @@ function validateNoForeignEndpointVariables(
   for (const segment of endpoint.pathSuffix) {
     if (segment.tag === 'path-variable') {
       const name = segment.val.variableName;
+
+      if (methodVarsOfPrincipal.has(name)) {
+        throw new Error(
+          `HTTP endpoint path variable "${name}" cannot be used for parameters of type 'Principal'`,
+        );
+      }
+
       if (!methodVars.has(name)) {
         throw new Error(
           `HTTP endpoint path variable "${name}" is not defined in method input parameters.`,

@@ -14,6 +14,7 @@
 
 import { AgentClassName } from '../../agentClassName';
 import { TypeInfoInternal } from '../typeInfoInternal';
+import * as util from 'node:util';
 
 export interface AgentMethodParamMetadata {
   typeInfo?: TypeInfoInternal;
@@ -55,6 +56,25 @@ class AgentMethodParamRegistryImpl {
       this.registry.set(agentClassName, new Map());
     }
     return this.registry.get(agentClassName);
+  }
+
+  getParameterNamesOfPrincipalType(
+    agentClassName: string,
+    agentMethodName: string,
+  ): Set<string> {
+    const result = new Set<string>();
+
+    const classMeta = this.registry.get(agentClassName);
+
+    const methodMeta = classMeta?.get(agentMethodName);
+
+    methodMeta?.forEach((paramMeta, paramName) => {
+      if (paramMeta.typeInfo?.tag === 'principal') {
+        result.add(paramName);
+      }
+    });
+
+    return result;
   }
 
   getParamType(
