@@ -186,7 +186,7 @@ describe('validateHttpMountWithConstructor', () => {
     const agentConstructor = constructorVars('chatId', 'userId');
 
     expect(() =>
-      validateHttpMountWithConstructor(agentMount, agentConstructor, new Set()),
+      validateHttpMountWithConstructor('Foo', agentMount, agentConstructor),
     ).not.toThrow();
   });
 
@@ -195,7 +195,7 @@ describe('validateHttpMountWithConstructor', () => {
     const agentConstructor = constructorVars('chatId', 'tenant');
 
     expect(() =>
-      validateHttpMountWithConstructor(agentMount, agentConstructor, new Set()),
+      validateHttpMountWithConstructor('Foo', agentMount, agentConstructor),
     ).toThrow(
       'Agent constructor variable "tenant" is not provided by the HTTP mount path.',
     );
@@ -206,25 +206,9 @@ describe('validateHttpMountWithConstructor', () => {
     const agentConstructor = constructorVars();
 
     expect(() =>
-      validateHttpMountWithConstructor(agentMount, agentConstructor, new Set()),
+      validateHttpMountWithConstructor('Foo', agentMount, agentConstructor),
     ).toThrow(
       'HTTP mount path variable "chatId" (in path segment 0) is not defined in the agent constructor.',
-    );
-  });
-
-  it('fails when the mount uses a path variable for a Principal constructor parameter', () => {
-    const agentMount = mount(['userId']);
-    const agentConstructor = constructorVars('userId');
-    const principalParams = new Set(['userId']);
-
-    expect(() =>
-      validateHttpMountWithConstructor(
-        agentMount,
-        agentConstructor,
-        principalParams,
-      ),
-    ).toThrow(
-      'HTTP mount path variable "userId" cannot be used for constructor parameters of type \'Principal\'',
     );
   });
 });

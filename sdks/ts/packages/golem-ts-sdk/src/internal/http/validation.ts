@@ -24,10 +24,13 @@ import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 
 export function validateHttpMountWithConstructor(
+  agentClassName: string,
   agentMount: HttpMountDetails,
   agentConstructor: AgentConstructor,
-  parametersForPrincipal: Set<string>,
 ) {
+  const parametersForPrincipal =
+    AgentConstructorParamRegistry.getParametersForPrincipal(agentClassName);
+
   const constructorInputParams =
     collectConstructorInputParameterNames(agentConstructor);
 

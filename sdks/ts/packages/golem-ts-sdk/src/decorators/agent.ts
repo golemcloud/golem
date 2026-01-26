@@ -260,16 +260,11 @@ export function agent(options?: AgentDecoratorOptions) {
       inputSchema: constructorDataSchema,
     };
 
-    const principalConstructorParameters =
-      AgentConstructorParamRegistry.getParametersForPrincipal(
-        agentClassName.value,
-      );
-
     if (httpMount) {
       validateHttpMountWithConstructor(
+        agentClassName.value,
         httpMount,
         constructor,
-        principalConstructorParameters,
       );
     }
 
