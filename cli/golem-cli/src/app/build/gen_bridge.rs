@@ -4,7 +4,7 @@ use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::ApplicationContext;
 use crate::bridge_gen::rust::RustBridgeGenerator;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
-use crate::bridge_gen::BridgeGenerator;
+use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent};
@@ -14,7 +14,6 @@ use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_templates::model::GuestLanguage;
-use heck::ToKebabCase;
 use itertools::Itertools;
 
 pub async fn gen_bridge(ctx: &ApplicationContext) -> anyhow::Result<()> {
@@ -147,7 +146,9 @@ async fn collect_custom_targets(
             let output_dir = custom_target
                 .output_dir
                 .as_ref()
-                .map(|output_dir| output_dir.join(agent_type.type_name.as_str().to_kebab_case()))
+                .map(|output_dir| {
+                    output_dir.join(bridge_client_directory_name(&agent_type.type_name))
+                })
                 .unwrap_or_else(|| {
                     ctx.application
                         .bridge_sdk_dir(&agent_type.type_name, target_language)

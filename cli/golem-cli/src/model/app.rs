@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::bridge_client_directory_name;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
@@ -26,7 +27,6 @@ use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
@@ -653,15 +653,16 @@ impl Application {
                 .temp_dir()
                 .join("bridge-sdk")
                 .join(language.id())
-                .join(agent_type_name.to_wit_naming().as_str()),
+                .join(bridge_client_directory_name(&agent_type_name)),
         }
     }
 
-    pub fn repl_bridge_sdk_dir(&self, language: GuestLanguage) -> PathBuf {
-        self.temp_dir()
-            .join("repl")
-            .join(language.id())
-            .join("bridge-sdk")
+    pub fn repl_root_dir(&self, language: GuestLanguage) -> PathBuf {
+        self.temp_dir().join("repl").join(language.id())
+    }
+
+    pub fn repl_root_bridge_sdk_dir(&self, language: GuestLanguage) -> PathBuf {
+        self.repl_root_dir(language).join("bridge-sdk")
     }
 
     pub fn rib_repl_history_file(&self) -> PathBuf {

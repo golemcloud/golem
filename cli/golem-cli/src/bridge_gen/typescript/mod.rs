@@ -26,7 +26,7 @@ use crate::bridge_gen::typescript::ts_writer::{
     indent, FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter,
 };
 use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
-use crate::bridge_gen::BridgeGenerator;
+use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
@@ -35,7 +35,7 @@ use golem_common::model::agent::{
     NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::AnalysedType;
-use heck::{ToKebabCase, ToLowerCamelCase, ToUpperCamelCase};
+use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
 use serde_json::json;
 
@@ -2074,7 +2074,7 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn library_name(&self) -> String {
-        self.agent_type.type_name.0.to_kebab_case()
+        bridge_client_directory_name(&self.agent_type.type_name)
     }
 
     fn global_config_var_name(&self) -> String {

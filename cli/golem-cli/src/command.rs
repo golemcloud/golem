@@ -628,6 +628,7 @@ pub enum GolemCliSubcommand {
     /// Start Rib REPL for a selected component
     Repl {
         /// Select the language for the REPL, defaults to the component's language
+        #[arg(long)]
         language: Option<ReplLanguage>,
         #[command(flatten)]
         component_name: OptionalComponentName,

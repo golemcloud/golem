@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::bridge_client_directory_name;
 use crate::command::shared_args::DeployArgs;
 use crate::command_handler::repl::rib::CliRibRepl;
 use crate::command_handler::Handlers;
@@ -19,15 +20,15 @@ use crate::context::Context;
 use crate::fs;
 use crate::model::app::{ApplicationComponentSelectMode, CustomBridgeSdkTarget};
 use crate::model::component::ComponentNameMatchKind;
-use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::ReplLanguage;
 use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
 use anyhow::{anyhow, bail};
+use golem_common::base_model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::GuestLanguage;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -120,49 +121,108 @@ impl ReplHandler {
             }
         };
 
-        {
+        let (repl_root_dir, repl_root_bridge_sdk_dir) = {
             let mut app_ctx = self.ctx.app_context_lock_mut().await?;
             let app_ctx = app_ctx.some_or_err_mut()?;
+            let repl_root_dir = app_ctx.application.repl_root_dir(language);
+            let repl_root_bridge_sdk_dir = app_ctx.application.repl_root_bridge_sdk_dir(language);
             app_ctx.custom_repl_bridge_sdk_target = Some(CustomBridgeSdkTarget {
                 agent_type_names: Default::default(),
                 target_language: Some(language),
-                output_dir: Some(app_ctx.application.repl_bridge_sdk_dir(language)),
+                output_dir: Some(repl_root_bridge_sdk_dir.clone()),
             });
-        }
+            (repl_root_dir, repl_root_bridge_sdk_dir)
+        };
 
         self.ctx
             .app_handler()
             .build(vec![], None, &ApplicationComponentSelectMode::All)
             .await?;
 
+        let agent_type_names = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            app_ctx.wit.get_all_extracted_agent_type_names().await
+        };
+
         match language {
-            GuestLanguage::Rust => self.rust_repl(script, stream_logs).await?,
-            GuestLanguage::TypeScript => self.ts_repl(script, stream_logs).await?,
+            GuestLanguage::Rust => {
+                self.rust_repl(
+                    script,
+                    stream_logs,
+                    repl_root_dir,
+                    repl_root_bridge_sdk_dir,
+                    agent_type_names,
+                )
+                .await?
+            }
+            GuestLanguage::TypeScript => {
+                self.ts_repl(
+                    script,
+                    stream_logs,
+                    repl_root_dir,
+                    repl_root_bridge_sdk_dir,
+                    agent_type_names,
+                )
+                .await?
+            }
         }
 
         Ok(())
     }
 
-    async fn ts_repl(&self, script: Option<String>, stream_logs: bool) -> anyhow::Result<()> {
-        json!({
+    async fn ts_repl(
+        &self,
+        script: Option<String>,
+        stream_logs: bool,
+        repl_root_dir: PathBuf,
+        repl_root_bridge_sdk_dir: PathBuf,
+        agent_type_names: Vec<AgentTypeName>,
+    ) -> anyhow::Result<()> {
+        let workspaces = agent_type_names
+            .iter()
+            .map(|agent_type_name| {
+                format!(
+                    "{}/{}",
+                    repl_root_bridge_sdk_dir.display(),
+                    bridge_client_directory_name(agent_type_name)
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let dependencies = agent_type_names
+            .iter()
+            .map(|agent_type_name| (bridge_client_directory_name(agent_type_name), "workspace:*"))
+            .collect::<BTreeMap<_, _>>();
+
+        let package_json = json!({
           "name": "repl",
           "type": "module",
           "private": true,
-          "workspaces": [
-            "external/counter-agent"
-          ],
-          "dependencies": {
-            "counter_agent": "^0.0.1"
-          },
+          "workspaces": workspaces,
+          "dependencies": dependencies,
           "devDependencies": {
             "tsx": "^4.7",
             "typescript": "^5.9"
           }
         });
-        todo!("TypeScript REPL is not implemented yet")
+
+        fs::write_str(
+            repl_root_dir.join("package.json"),
+            serde_json::to_string_pretty(&package_json)?,
+        )?;
+
+        Ok(())
     }
 
-    async fn rust_repl(&self, script: Option<String>, stream_logs: bool) -> anyhow::Result<()> {
+    async fn rust_repl(
+        &self,
+        script: Option<String>,
+        stream_logs: bool,
+        repl_root_dir: PathBuf,
+        repl_root_bridge_sdk_dir: PathBuf,
+        agent_type_names: Vec<AgentTypeName>,
+    ) -> anyhow::Result<()> {
         todo!("Rust REPL is not implemented yet")
     }
 
