@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
 use anyhow::anyhow;
 use camino::Utf8Path;
 use std::collections::BTreeSet;
@@ -36,7 +37,6 @@ pub struct TsWriter {
     module_stack: Vec<TsModuleState>,
 }
 
-#[allow(unused)]
 impl TsWriter {
     pub fn new() -> Self {
         TsWriter {
@@ -217,7 +217,7 @@ impl TsWriter {
         self.indented_write_line("}");
     }
 
-    pub fn export_type(&mut self, name: &str, definition: &str) {
+    pub fn export_type(&mut self, name: &TypeScriptTypeName, definition: &str) {
         self.indented_write_line(format!("export type {name} = {definition};"));
     }
 
@@ -407,7 +407,6 @@ pub struct TsAnonymousFunctionWriter {
     indent_level: usize,
 }
 
-#[allow(unused)]
 impl TsAnonymousFunctionWriter {
     pub fn new() -> Self {
         TsAnonymousFunctionWriter {

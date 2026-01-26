@@ -196,12 +196,12 @@ async fn gen_bridge_sdk_target(
                         target.agent_type,
                         &output_dir,
                         false,
-                    )),
+                    )?),
                     GuestLanguage::TypeScript => Box::new(TypeScriptBridgeGenerator::new(
                         target.agent_type,
                         &output_dir,
                         false,
-                    )),
+                    )?),
                 };
 
                 fs::remove(&output_dir)?;

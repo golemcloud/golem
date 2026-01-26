@@ -132,6 +132,7 @@ openssl-sys = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+goldenfile = { workspace = true }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }

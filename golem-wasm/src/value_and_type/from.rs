@@ -195,6 +195,19 @@ impl<S: FromValue> FromValue for Result<S, ()> {
     }
 }
 
+impl FromValue for Result<(), ()> {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Result(result) => match result {
+                Ok(None) => Ok(Ok(())),
+                Err(None) => Ok(Err(())),
+                _ => Err(format!("Invalid Result<S, ()> value: {result:?}")),
+            },
+            _ => Err(format!("Expected Result<(), ()> value, got {value:?}")),
+        }
+    }
+}
+
 impl<T: FromValue> FromValue for Box<T> {
     fn from_value(value: Value) -> Result<Self, String> {
         Ok(Box::new(T::from_value(value)?))
@@ -249,30 +262,38 @@ impl<T: FromValue> FromValue for Vec<T> {
     }
 }
 
-impl<A: FromValue, B: FromValue> FromValue for (A, B) {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Tuple(values) if values.len() == 2 => Ok((
-                A::from_value(values[0].clone())?,
-                B::from_value(values[1].clone())?,
-            )),
-            _ => Err(format!("Expected Tuple of 2 elements, got {value:?}")),
+macro_rules! impl_from_value_for_tuples {
+    ($($ty:ident),*) => {
+        impl<$($ty: FromValue),*> FromValue for ($($ty,)*) {
+            fn from_value(value: Value) -> Result<Self, String> {
+                const EXPECTED_LEN: usize = [$(stringify!($ty)),*].len();
+                match value {
+                    Value::Tuple(values) if values.len() == EXPECTED_LEN => {
+                        let mut iter = values.into_iter();
+                        Ok((
+                            $(
+                                $ty::from_value(iter.next().unwrap())?,
+                            )*
+                        ))
+                    }
+                    _ => Err(format!("Expected Tuple of {EXPECTED_LEN} elements, got {value:?}")),
+                }
+            }
         }
-    }
+    };
 }
 
-impl<A: FromValue, B: FromValue, C: FromValue> FromValue for (A, B, C) {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Tuple(values) if values.len() == 3 => Ok((
-                A::from_value(values[0].clone())?,
-                B::from_value(values[1].clone())?,
-                C::from_value(values[2].clone())?,
-            )),
-            _ => Err(format!("Expected Tuple of 3 elements, got {value:?}")),
-        }
-    }
-}
+impl_from_value_for_tuples!(A, B);
+impl_from_value_for_tuples!(A, B, C);
+impl_from_value_for_tuples!(A, B, C, D);
+impl_from_value_for_tuples!(A, B, C, D, E);
+impl_from_value_for_tuples!(A, B, C, D, E, F);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I, J);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K, L);
 
 impl<K: FromValue + Eq + std::hash::Hash, V: FromValue> FromValue
     for std::collections::HashMap<K, V>

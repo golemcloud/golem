@@ -1,7 +1,12 @@
 use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
+use crate::stubgen::test_data_path;
 use crate::Tracing;
+use anyhow::Context;
+use goldenfile::Mint;
 use golem_cli::fs;
+use golem_templates::model::GuestLanguage;
 use indoc::indoc;
+use std::io::Write;
 use std::path::Path;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
@@ -16,14 +21,14 @@ async fn test_rust_counter() {
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:counter"])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let uuid = Uuid::new_v4().to_string();
     let outputs = ctx
@@ -35,7 +40,7 @@ async fn test_rust_counter() {
             "increment",
         ])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     assert!(outputs.stdout_contains("- 1"));
 }
@@ -50,7 +55,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
 
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
@@ -58,7 +63,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         .cli([cmd::COMPONENT, cmd::NEW, "rust", "rust:agent"])
         .await;
 
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let component_manifest_path = ctx.cwd_path_join(
         Path::new("components-rust")
@@ -91,6 +96,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             bridge:
               ts:
                 agents: "*"
+              rust:
+                agents: "*"
         "# },
     )
     .unwrap();
@@ -108,10 +115,12 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     .unwrap();
 
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
+
+    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::Rust).unwrap();
 
     let outputs = ctx.cli([cmd::DEPLOY]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
@@ -454,14 +463,14 @@ async fn test_ts_counter() {
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter"])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let uuid = Uuid::new_v4().to_string();
     let outputs = ctx
@@ -473,7 +482,7 @@ async fn test_ts_counter() {
             "increment",
         ])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     assert!(outputs.stdout_contains("- 1"));
 }
@@ -493,13 +502,13 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
 
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "ts:agent"]).await;
 
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let component_manifest_path = ctx.cwd_path_join(
         Path::new("components-ts")
@@ -532,6 +541,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             bridge:
               ts:
                 agents: "*"
+              rust:
+                agents: "*"
         "# },
     )
     .unwrap();
@@ -549,10 +560,12 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     .unwrap();
 
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
+
+    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::TypeScript).unwrap();
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
@@ -664,12 +677,12 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // A map type
     run_and_assert(&ctx, "fun-map", &[r#"[("foo", 42), ("bar", 42)]"#]).await;
 
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     // A tagged union
     run_and_assert(&ctx, "fun-tagged-union", &[r#"a("foo")"#]).await;
 
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     // A simple tuple type
     run_and_assert(&ctx, "fun-tuple-type", &[r#"("foo", 42, true)"#]).await;
@@ -760,17 +773,17 @@ async fn test_common_dep_plugs_errors() {
     let app_name = "common-dep-plug-errors";
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent"])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let component_manifest_path = ctx.cwd_path_join(
         Path::new("components-ts")
@@ -831,7 +844,7 @@ async fn test_common_dep_plugs_errors() {
         .unwrap();
 
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     fs::write_str(
         &component_manifest_path,
@@ -868,7 +881,7 @@ async fn test_common_dep_plugs_errors() {
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx
         .cli([
@@ -891,14 +904,14 @@ async fn test_component_env_var_substitution() {
     let app_name = "env-var-substitution";
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent"])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let component_manifest_path = ctx.cwd_path_join(
         Path::new("components-ts")
@@ -925,7 +938,7 @@ async fn test_component_env_var_substitution() {
 
     // Building is okay, as that does not resolve env vars
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     // But deploying will do so, so it should fail
     let outputs = ctx
@@ -950,7 +963,7 @@ async fn test_component_env_var_substitution() {
     let outputs = ctx
         .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     assert!(outputs.stdout_contains_ordered([
         "+      env:",
@@ -968,14 +981,14 @@ async fn test_http_api_merging() {
     let app_name = "http-api-merging";
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter1"])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     let component1_manifest_path = ctx.cwd_path_join(
         Path::new("components-ts")
             .join("app-counter1")
@@ -985,7 +998,7 @@ async fn test_http_api_merging() {
     let outputs = ctx
         .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter2"])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let component2_source_path = ctx.cwd_path_join(
         Path::new("components-ts")
@@ -1144,7 +1157,7 @@ async fn test_http_api_merging() {
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
         "+httpApiDeployments:",
         "+  http_api_merging.localhost:9006:",
@@ -1163,15 +1176,15 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     let app_name = "common-dep-plug-errors";
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let component_golem_yaml = ctx.cwd_path_join(
         Path::new("components-ts")
@@ -1233,7 +1246,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             r#"{one-field: "1", another-field: 2}"#,
         ])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
         r#"long-agent-name({one-field:"1212",another-field:100})"#,
         r#"({one-field: "1212", another-field: 100}, {one-field: "1", another-field: 2})"#,
@@ -1251,7 +1264,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             "#,
         ])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains(
         r#"{"another-field":100.0,"one-field":"1212"},{"another-field":2.0,"one-field":"1"}"#
     ));
@@ -1265,12 +1278,12 @@ async fn test_naming_extremes() {
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let component_golem_yaml = ctx.cwd_path_join(
         Path::new("components-ts")
@@ -1310,7 +1323,7 @@ async fn test_naming_extremes() {
             "test-all",
         ])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx
         .cli([
@@ -1319,7 +1332,7 @@ async fn test_naming_extremes() {
             &format!("string-agent(    \"{}\"    )", " ".repeat(447)), // HTTP API should normalize it
         ])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx
         .cli([
@@ -1333,5 +1346,37 @@ async fn test_naming_extremes() {
             ),
         ])
         .await;
-    assert!(outputs.success());
+    assert!(outputs.success_or_dump());
+}
+
+// Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files
+fn check_agent_types_golden_file(
+    application_path: &Path,
+    language: GuestLanguage,
+) -> anyhow::Result<()> {
+    let mut mint = Mint::new(test_data_path().join("goldenfiles/extracted-agent-types"));
+    let mut mint_file =
+        mint.new_goldenfile(format!("code_first_snippets_{}.json", language.id()))?;
+
+    let extract_dir = application_path.join("golem-temp/extracted-agent-types");
+    let entries = std::fs::read_dir(&extract_dir)
+        .with_context(|| format!("Failed to read directory {}", extract_dir.display()))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if entries.len() != 1 {
+        anyhow::bail!(
+            "Expected exactly one entry in {}, got: {:?}",
+            extract_dir.display(),
+            entries
+        );
+    }
+    let agent_types_source = entries[0].path();
+
+    let formatted_agent_types_json =
+        serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(&agent_types_source)?,
+        )?)?;
+
+    mint_file.write_all(formatted_agent_types_json.as_bytes())?;
+
+    Ok(())
 }

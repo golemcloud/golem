@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::analysis::analysed_type::{
-    bool, case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
+    bool, case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case,
+    unit_result, variant,
 };
 use crate::analysis::{analysed_type, AnalysedType, NameTypePair};
 use crate::{Value, ValueAndType};
@@ -230,6 +231,19 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     }
 }
 
+impl IntoValue for Result<(), ()> {
+    fn into_value(self) -> Value {
+        match self {
+            Ok(_) => Value::Result(Ok(None)),
+            Err(_) => Value::Result(Err(None)),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        unit_result()
+    }
+}
+
 impl<T: IntoValue> IntoValue for Box<T> {
     fn into_value(self) -> Value {
         (*self).into_value()
@@ -290,29 +304,33 @@ impl<T: IntoValue> IntoValue for Vec<T> {
     }
 }
 
-impl<A: IntoValue, B: IntoValue> IntoValue for (A, B) {
-    fn into_value(self) -> Value {
-        Value::Tuple(vec![self.0.into_value(), self.1.into_value()])
-    }
+macro_rules! impl_into_value_for_tuples {
+    ($($ty:ident),*) => {
+        impl<$($ty: IntoValue),*> IntoValue for ($($ty,)*) {
+            fn into_value(self) -> Value {
+                #[allow(non_snake_case)]
+                let ($($ty,)*) = self;
+                Value::Tuple(vec![$($ty.into_value()),*])
+            }
 
-    fn get_type() -> AnalysedType {
-        tuple(vec![A::get_type(), B::get_type()])
-    }
+            fn get_type() -> AnalysedType {
+                tuple(vec![$($ty::get_type()),*])
+            }
+        }
+    };
 }
 
-impl<A: IntoValue, B: IntoValue, C: IntoValue> IntoValue for (A, B, C) {
-    fn into_value(self) -> Value {
-        Value::Tuple(vec![
-            self.0.into_value(),
-            self.1.into_value(),
-            self.2.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        tuple(vec![A::get_type(), B::get_type(), C::get_type()])
-    }
-}
+impl_into_value_for_tuples!(A, B);
+impl_into_value_for_tuples!(A, B, C);
+impl_into_value_for_tuples!(A, B, C, D);
+impl_into_value_for_tuples!(A, B, C, D, E);
+impl_into_value_for_tuples!(A, B, C, D, E, F);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I, J);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K, L);
 
 impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
     fn into_value(self) -> Value {
