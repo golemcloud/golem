@@ -12,22 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, BaseAgent } from '../src';
+import { agent, BaseAgent, endpoint, UnstructuredBinary } from '../src';
 
 @agent({
-  mount: '/chats/{agent-type}/{foo}',
+  mount: '/chats/{agent-type}/{foo}/{bar}',
 })
-class AgentWithInvalidHttpMount extends BaseAgent {
+class AgentWithInvalidHttpMount3 extends BaseAgent {
+  // 'bar' parameter of type Principal cannot be passed via path parameter in mount
   constructor(
     readonly foo: string,
-    readonly bar: string,
-    // baz is neither satisfied by the path variable or headers
-    readonly baz: string,
+    bar: UnstructuredBinary,
   ) {
     super();
   }
 
-  async greet(name: string): Promise<string> {
+  @endpoint({ post: '/greet/{name}' })
+  async myPrincipal(name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
 }

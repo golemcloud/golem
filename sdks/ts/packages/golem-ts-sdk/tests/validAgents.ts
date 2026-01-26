@@ -536,6 +536,7 @@ class ComplexHttpAgent extends BaseAgent {
     return Promise.resolve(`Hello, ${name}!`);
   }
 
+  // Multiple endpoint decorators
   @endpoint({ get: '/greet?l={location}&n={name}' })
   @endpoint({
     get: '/greet?lx={location}&nm={name}',
@@ -543,33 +544,26 @@ class ComplexHttpAgent extends BaseAgent {
     auth: true,
     headers: { 'X-Foo': 'location', 'X-Bar': 'name' },
   })
+
+  // Endpoint with custom http method
   @endpoint({
     custom: { method: 'patch', path: '/greet?l={location}&n={name}' },
   })
   async greetCustom2(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
-}
 
-@agent()
-class Bllll extends BaseAgent {
-  constructor() {
-    super();
+  // Endpoint with POST method with leftover parameters
+  // The 'name' parameter is expected to be in the request body and hence should be a valid endpoint definition
+  @endpoint({ post: '/greet?l={location}' })
+  async greetPost(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
   }
 
-  async bar(principal: Principal): Promise<void> {
-    return;
-  }
-}
-
-@agent()
-class Fllll extends BaseAgent {
-  constructor() {
-    super();
-  }
-
-  async baz(principal: Principal): Promise<void> {
-    return;
+  // Endpoint with catch-all var
+  @endpoint({ get: '/greet/{name}/{*filePath}' })
+  async catchAllFun(name: string, filePath: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
   }
 }
 
