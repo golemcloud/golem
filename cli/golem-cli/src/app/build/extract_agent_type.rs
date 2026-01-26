@@ -68,9 +68,12 @@ pub async fn extract_and_store_agent_types(
 
     match agent_types {
         Some(agent_types) => Ok(agent_types),
-        None => Ok(
-            serde_json::from_str(&fs::read_to_string(&extracted_agent_types)?)
-                .context("Failed to deserialize agent types")?,
-        ),
+        None => {
+            let agent_types = serde_json::from_str(&fs::read_to_string(&extracted_agent_types)?)
+                .context("Failed to deserialize agent types")?;
+            ctx.wit
+                .add_cached_component_agent_types(component_name, agent_types)
+                .await
+        }
     }
 }

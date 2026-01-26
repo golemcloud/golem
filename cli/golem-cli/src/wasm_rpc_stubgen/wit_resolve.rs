@@ -306,7 +306,7 @@ struct ExtractedAgentTypes {
 }
 
 pub struct ResolvedWitApplication {
-    components: BTreeMap<ComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
+    components: BTreeMap<ComponentName, ResolvedWitComponent>,
     package_to_component: HashMap<PackageName, ComponentName>,
     stub_package_to_component: HashMap<PackageName, ComponentName>,
     interface_package_to_component: HashMap<PackageName, ComponentName>,
@@ -379,52 +379,70 @@ impl ResolvedWitApplication {
                     self.enable_wasmtime_fs_cache,
                 )
                 .await?;
-                let agent_types = AgentType::normalized_vec(agent_types);
-                for agent_type in &agent_types {
-                    {
-                        let component_names = all_agent_types
-                            .agent_type_wrapper_name_sources
-                            .entry(agent_type.wrapper_type_name())
-                            .or_default();
-                        component_names.insert(component_name.clone());
-                        if component_names.len() > 1 {
-                            bail!(
-                                "Wrapper agent type name {} is defined by multiple components: {}",
-                                agent_type.wrapper_type_name().log_color_highlight(),
-                                component_names
-                                    .iter()
-                                    .map(|s| s.as_str().log_color_highlight())
-                                    .join(", ")
-                            );
-                        }
-                    }
-
-                    {
-                        let component_names = all_agent_types
-                            .agent_type_name_sources
-                            .entry(agent_type.type_name.clone())
-                            .or_default();
-                        component_names.insert(component_name.clone());
-                        if component_names.len() > 1 {
-                            bail!(
-                                "Agent type name {} is defined by multiple components: {}",
-                                agent_type.type_name.as_str().log_color_highlight(),
-                                component_names
-                                    .iter()
-                                    .map(|s| s.as_str().log_color_highlight())
-                                    .join(", ")
-                            );
-                        }
-                    }
-                }
-                all_agent_types.component_agent_types.insert(
-                    component_name.clone(),
-                    ExtractedComponentAgentTypes::Extracted(agent_types.clone()),
-                );
-                Ok(agent_types)
+                Self::add_component_agent_types(&mut all_agent_types, component_name, agent_types)
             }
             Some(ExtractedComponentAgentTypes::Extracted(agent_types)) => Ok(agent_types),
         }
+    }
+
+    pub async fn add_cached_component_agent_types(
+        &self,
+        component_name: &ComponentName,
+        agent_types: Vec<AgentType>,
+    ) -> anyhow::Result<Vec<AgentType>> {
+        let mut agent_type = self.agent_types.write().await;
+        Self::add_component_agent_types(&mut agent_type, component_name, agent_types)
+    }
+
+    // Adds, normalizes and checks for uniqueness
+    fn add_component_agent_types(
+        all_agent_types: &mut ExtractedAgentTypes,
+        component_name: &ComponentName,
+        agent_types: Vec<AgentType>,
+    ) -> anyhow::Result<Vec<AgentType>> {
+        let agent_types = AgentType::normalized_vec(agent_types);
+        for agent_type in &agent_types {
+            {
+                let component_names = all_agent_types
+                    .agent_type_wrapper_name_sources
+                    .entry(agent_type.wrapper_type_name())
+                    .or_default();
+                component_names.insert(component_name.clone());
+                if component_names.len() > 1 {
+                    bail!(
+                        "Wrapper agent type name {} is defined by multiple components: {}",
+                        agent_type.wrapper_type_name().log_color_highlight(),
+                        component_names
+                            .iter()
+                            .map(|s| s.as_str().log_color_highlight())
+                            .join(", ")
+                    );
+                }
+            }
+
+            {
+                let component_names = all_agent_types
+                    .agent_type_name_sources
+                    .entry(agent_type.type_name.clone())
+                    .or_default();
+                component_names.insert(component_name.clone());
+                if component_names.len() > 1 {
+                    bail!(
+                        "Agent type name {} is defined by multiple components: {}",
+                        agent_type.type_name.as_str().log_color_highlight(),
+                        component_names
+                            .iter()
+                            .map(|s| s.as_str().log_color_highlight())
+                            .join(", ")
+                    );
+                }
+            }
+        }
+        all_agent_types.component_agent_types.insert(
+            component_name.clone(),
+            ExtractedComponentAgentTypes::Extracted(agent_types.clone()),
+        );
+        Ok(agent_types)
     }
 
     pub async fn get_all_extracted_agent_type_names(&self) -> Vec<AgentTypeName> {
