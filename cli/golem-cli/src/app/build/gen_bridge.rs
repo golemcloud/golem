@@ -8,7 +8,7 @@ use crate::bridge_gen::BridgeGenerator;
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent};
-use crate::model::app::BridgeSdkTarget;
+use crate::model::app::{BridgeSdkTarget, CustomBridgeSdkTarget};
 use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use camino::Utf8PathBuf;
@@ -17,135 +17,19 @@ use golem_templates::model::GuestLanguage;
 use heck::ToKebabCase;
 use itertools::Itertools;
 
-pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
-    let mut targets = vec![];
+pub async fn gen_bridge(ctx: &ApplicationContext) -> anyhow::Result<()> {
+    let targets = {
+        let mut targets = match &ctx.config.custom_bridge_sdk_target {
+            Some(custom_target) => collect_custom_targets(ctx, custom_target).await?,
+            None => collect_manifest_targets(ctx).await?,
+        };
 
-    match &ctx.config.custom_bridge_sdk_target {
-        Some(custom_target) => {
-            let should_filter_by_agent_type_name = !custom_target.agent_type_names.is_empty();
-            let mut agent_type_names = custom_target.agent_type_names.clone();
-            for component_name in ctx.selected_component_names() {
-                if !ctx.wit.is_agent(component_name) {
-                    continue;
-                }
-
-                let component = ctx.application.component(component_name);
-                let target_language = custom_target
-                    .target_language
-                    .or_else(|| component.guess_language())
-                    .unwrap_or(GuestLanguage::TypeScript);
-
-                let agent_types = {
-                    let mut agent_types =
-                        extract_and_store_agent_types(ctx, component_name).await?;
-
-                    if should_filter_by_agent_type_name {
-                        agent_types.retain(|agent_type| {
-                            agent_type_names.remove(&agent_type.type_name)
-                                || agent_type_names.remove(&agent_type.type_name.to_wit_naming())
-                        });
-                    }
-
-                    agent_types
-                };
-
-                for agent_type in agent_types {
-                    let output_dir = custom_target
-                        .output_dir
-                        .as_ref()
-                        .map(|output_dir| {
-                            output_dir.join(agent_type.type_name.as_str().to_kebab_case())
-                        })
-                        .unwrap_or_else(|| {
-                            ctx.application
-                                .bridge_sdk_dir(&agent_type.type_name, target_language)
-                        });
-
-                    targets.push(BridgeSdkTarget {
-                        component_name: component_name.clone(),
-                        agent_type,
-                        target_language,
-                        output_dir,
-                    });
-                }
-            }
-
-            if !agent_type_names.is_empty() {
-                logln("");
-                log_error(format!(
-                    "The following agent type names were not found: {}",
-                    agent_type_names
-                        .iter()
-                        .map(|at| at.as_str().log_color_highlight().to_string())
-                        .join(", ")
-                ));
-                bail!(NonSuccessfulExit)
-            }
+        if let Some(target) = ctx.custom_repl_bridge_sdk_target.as_ref() {
+            targets.extend(collect_custom_targets(ctx, target).await?);
         }
-        None => {
-            for (target_language, sdks_targets) in
-                ctx.application.bridge_sdks().for_all_used_languages()
-            {
-                let mut matchers = sdks_targets.agents.clone().into_set();
 
-                if matchers.is_empty() {
-                    continue;
-                }
-
-                let is_matching_all = matchers.remove("*");
-
-                for component_name in ctx.selected_component_names() {
-                    if !ctx.wit.is_agent(component_name) {
-                        continue;
-                    }
-
-                    let is_matching_component = matchers.remove(component_name.as_str());
-
-                    let mut agent_types =
-                        extract_and_store_agent_types(ctx, component_name).await?;
-
-                    if !is_matching_all && !is_matching_component {
-                        agent_types
-                            .retain(|agent_type| matchers.contains(agent_type.type_name.as_str()));
-                    }
-
-                    for agent_type in agent_types {
-                        matchers.remove(agent_type.type_name.as_str());
-
-                        let output_dir = ctx
-                            .application
-                            .bridge_sdk_dir(&agent_type.type_name, target_language);
-                        targets.push(BridgeSdkTarget {
-                            component_name: component_name.clone(),
-                            agent_type,
-                            target_language,
-                            output_dir,
-                        });
-                    }
-                }
-
-                if !matchers.is_empty() {
-                    // Remove "non-selected" components
-                    for component_name in ctx.application.component_names() {
-                        matchers.remove(component_name.as_str());
-                    }
-                }
-
-                if !matchers.is_empty() {
-                    logln("");
-                    log_error(format!(
-                        "The following agent matchers were not found during {} bridge SDK generation: {}",
-                        target_language.to_string().log_color_highlight(),
-                        matchers
-                            .iter()
-                            .map(|at| at.as_str().log_color_highlight().to_string())
-                            .join(", ")
-                    ));
-                    bail!(NonSuccessfulExit)
-                }
-            }
-        }
-    }
+        targets
+    };
 
     if targets.is_empty() {
         return Ok(());
@@ -159,6 +43,138 @@ pub async fn gen_bridge(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+async fn collect_manifest_targets(
+    ctx: &ApplicationContext,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let mut targets = vec![];
+
+    for (target_language, sdks_targets) in ctx.application.bridge_sdks().for_all_used_languages() {
+        let mut matchers = sdks_targets.agents.clone().into_set();
+
+        if matchers.is_empty() {
+            continue;
+        }
+
+        let is_matching_all = matchers.remove("*");
+
+        for component_name in ctx.selected_component_names() {
+            if !ctx.wit.is_agent(component_name) {
+                continue;
+            }
+
+            let is_matching_component = matchers.remove(component_name.as_str());
+
+            let mut agent_types = extract_and_store_agent_types(ctx, component_name).await?;
+
+            if !is_matching_all && !is_matching_component {
+                agent_types.retain(|agent_type| matchers.contains(agent_type.type_name.as_str()));
+            }
+
+            for agent_type in agent_types {
+                matchers.remove(agent_type.type_name.as_str());
+
+                let output_dir = ctx
+                    .application
+                    .bridge_sdk_dir(&agent_type.type_name, target_language);
+                targets.push(BridgeSdkTarget {
+                    component_name: component_name.clone(),
+                    agent_type,
+                    target_language,
+                    output_dir,
+                });
+            }
+        }
+
+        if !matchers.is_empty() {
+            // Remove "non-selected" components
+            for component_name in ctx.application.component_names() {
+                matchers.remove(component_name.as_str());
+            }
+        }
+
+        if !matchers.is_empty() {
+            logln("");
+            log_error(format!(
+                "The following agent matchers were not found during {} bridge SDK generation: {}",
+                target_language.to_string().log_color_highlight(),
+                matchers
+                    .iter()
+                    .map(|at| at.as_str().log_color_highlight().to_string())
+                    .join(", ")
+            ));
+            bail!(NonSuccessfulExit)
+        }
+    }
+
+    Ok(targets)
+}
+
+async fn collect_custom_targets(
+    ctx: &ApplicationContext,
+    custom_target: &CustomBridgeSdkTarget,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let mut targets = vec![];
+
+    let should_filter_by_agent_type_name = !custom_target.agent_type_names.is_empty();
+    let mut agent_type_names = custom_target.agent_type_names.clone();
+    for component_name in ctx.selected_component_names() {
+        if !ctx.wit.is_agent(component_name) {
+            continue;
+        }
+
+        let component = ctx.application.component(component_name);
+        let target_language = custom_target
+            .target_language
+            .or_else(|| component.guess_language())
+            .unwrap_or(GuestLanguage::TypeScript);
+
+        let agent_types = {
+            let mut agent_types = extract_and_store_agent_types(ctx, component_name).await?;
+
+            if should_filter_by_agent_type_name {
+                agent_types.retain(|agent_type| {
+                    agent_type_names.remove(&agent_type.type_name)
+                        || agent_type_names.remove(&agent_type.type_name.to_wit_naming())
+                });
+            }
+
+            agent_types
+        };
+
+        for agent_type in agent_types {
+            let output_dir = custom_target
+                .output_dir
+                .as_ref()
+                .map(|output_dir| output_dir.join(agent_type.type_name.as_str().to_kebab_case()))
+                .unwrap_or_else(|| {
+                    ctx.application
+                        .bridge_sdk_dir(&agent_type.type_name, target_language)
+                });
+
+            targets.push(BridgeSdkTarget {
+                component_name: component_name.clone(),
+                agent_type,
+                target_language,
+                output_dir,
+            });
+        }
+    }
+
+    if !agent_type_names.is_empty() {
+        logln("");
+        log_error(format!(
+            "The following agent type names were not found: {}",
+            agent_type_names
+                .iter()
+                .map(|at| at.as_str().log_color_highlight().to_string())
+                .join(", ")
+        ));
+        bail!(NonSuccessfulExit)
+    }
+
+    Ok(targets)
 }
 
 async fn gen_bridge_sdk_target(

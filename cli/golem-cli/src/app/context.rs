@@ -22,8 +22,8 @@ use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, Application, ApplicationComponentSelectMode, ApplicationConfig,
     ApplicationNameAndEnvironments, ApplicationSourceMode, BinaryComponentSource, CleanMode,
-    ComponentPresetSelector, ComponentStubInterfaces, DependentComponent, DynamicHelpSections,
-    WithSource, DEFAULT_CONFIG_FILE_NAME,
+    ComponentPresetSelector, ComponentStubInterfaces, CustomBridgeSdkTarget, DependentComponent,
+    DynamicHelpSections, WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;
@@ -42,6 +42,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+// TODO: review pub fields?
 pub struct ApplicationContext {
     pub loaded_with_warnings: bool,
     pub config: ApplicationConfig,
@@ -54,6 +55,7 @@ pub struct ApplicationContext {
     selected_component_names: BTreeSet<ComponentName>,
     remote_components: RemoteComponents,
     pub tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
+    pub custom_repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
 }
 
 pub struct ToolsWithEnsuredCommonDeps {
@@ -200,6 +202,7 @@ impl ApplicationContext {
                         offline,
                     ),
                     tools_with_ensured_common_deps,
+                    custom_repl_bridge_sdk_target: None,
                 };
                 ValidatedResult::Ok(ctx)
             } else {

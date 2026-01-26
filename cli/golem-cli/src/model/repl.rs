@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_templates::model::GuestLanguage;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
@@ -31,6 +32,18 @@ impl ReplLanguage {
             "rust" => Some(ReplLanguage::Rust),
             "ts" | "typescript" => Some(ReplLanguage::TypeScript),
             _ => None,
+        }
+    }
+
+    pub fn is_rib(&self) -> bool {
+        matches!(self, ReplLanguage::Rib)
+    }
+
+    pub fn to_guest_language(&self) -> Option<GuestLanguage> {
+        match self {
+            ReplLanguage::Rib => None,
+            ReplLanguage::Rust => Some(GuestLanguage::Rust),
+            ReplLanguage::TypeScript => Some(GuestLanguage::TypeScript),
         }
     }
 }

@@ -657,6 +657,13 @@ impl Application {
         }
     }
 
+    pub fn repl_bridge_sdk_dir(&self, language: GuestLanguage) -> PathBuf {
+        self.temp_dir()
+            .join("repl")
+            .join(language.id())
+            .join("bridge-sdk")
+    }
+
     pub fn rib_repl_history_file(&self) -> PathBuf {
         self.temp_dir().join(".rib_repl_history")
     }
