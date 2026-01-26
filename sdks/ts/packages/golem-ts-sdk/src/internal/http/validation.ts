@@ -34,6 +34,7 @@ export function validateHttpMountWithConstructor(
   const constructorInputParams =
     collectConstructorInputParameterNames(agentConstructor);
 
+  validateConstructorParamsAreHttpSafe(agentClassName, agentConstructor);
   validateMountVariablesAreNotPrincipal(agentMount, parametersForPrincipal);
   validateMountVariablesExistInConstructor(agentMount, constructorInputParams);
   validateConstructorVarsAreSatisfied(agentMount, constructorInputParams);
@@ -158,6 +159,19 @@ function collectConstructorInputParameterNames(
   agentConstructor: AgentConstructor,
 ): Set<string> {
   return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
+}
+
+function validateConstructorParamsAreHttpSafe(
+  agentClassName: string,
+  agentConstructor: AgentConstructor,
+) {
+  for (const [paramName, paramSchema] of agentConstructor.inputSchema.val) {
+    if (paramSchema.tag === 'unstructured-binary') {
+      throw new Error(
+        `Constructor parameter '${paramName}' in '${agentClassName}' is of type 'UnstructuredBinary' which is not allowed when used with HTTP mounts.`,
+      );
+    }
+  }
 }
 
 function validateMountVariablesAreNotPrincipal(
