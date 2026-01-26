@@ -59,7 +59,7 @@ impl FromStr for Provider {
 mod protobuf {
     use super::Provider;
 
-    impl From<Provider> for golem_api_grpc::proto::golem::apidefinition::Provider {
+    impl From<Provider> for golem_api_grpc::proto::golem::registry::SecuritySchemeProvider {
         fn from(value: Provider) -> Self {
             match value {
                 Provider::Google => Self::Google,
@@ -70,12 +70,12 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::apidefinition::Provider> for Provider {
+    impl TryFrom<golem_api_grpc::proto::golem::registry::SecuritySchemeProvider> for Provider {
         type Error = String;
         fn try_from(
-            value: golem_api_grpc::proto::golem::apidefinition::Provider,
+            value: golem_api_grpc::proto::golem::registry::SecuritySchemeProvider,
         ) -> Result<Self, String> {
-            use golem_api_grpc::proto::golem::apidefinition::Provider as GrpcProvider;
+            use golem_api_grpc::proto::golem::registry::SecuritySchemeProvider as GrpcProvider;
             match value {
                 GrpcProvider::Facebook => Ok(Self::Facebook),
                 GrpcProvider::Gitlab => Ok(Self::Gitlab),

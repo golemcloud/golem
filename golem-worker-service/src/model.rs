@@ -17,6 +17,12 @@
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::ScanCursor;
 // use golem_service_base::custom_api::HttpCors;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::CorsOptions;
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
+use http::Method;
 use poem_openapi::Object;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -39,6 +45,19 @@ pub struct SwaggerHtml(pub String);
 #[derive(Debug, Clone)]
 pub struct SwaggerUiBinding {
     pub swagger_html: Arc<SwaggerHtml>,
+}
+
+#[derive(Debug)]
+pub struct RichCompiledRoute {
+    pub account_id: AccountId,
+    pub environment_id: EnvironmentId,
+    pub route_id: RouteId,
+    pub method: Method,
+    pub path: Vec<PathSegment>,
+    pub body: RequestBodySchema,
+    pub behavior: RouteBehaviour,
+    pub security_scheme: Option<Arc<SecuritySchemeDetails>>,
+    pub cors: CorsOptions,
 }
 
 // #[derive(Debug, Clone)]

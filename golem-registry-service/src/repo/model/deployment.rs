@@ -260,7 +260,7 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, FromRow)]
+#[derive(FromRow)]
 pub struct DeploymentCompiledRouteRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -412,7 +412,7 @@ impl DeploymentRevisionCreationRecord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, FromRow)]
+#[derive(FromRow)]
 pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
     pub account_id: Uuid,
     pub environment_id: Uuid,

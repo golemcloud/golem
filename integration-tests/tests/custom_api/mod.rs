@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_http_routes_ts;
 // mod echo_agent;
 // mod shopping_cart;
 

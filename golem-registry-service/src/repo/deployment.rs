@@ -717,7 +717,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         ac.account_id,
                         e.environment_id,
-                        d.deployment_revision_id,
+                        r.deployment_revision_id,
+                        r.domain,
                         r.route_id,
                         FALSE as security_scheme_missing,
                         s.security_scheme_id,
@@ -785,6 +786,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ac.account_id,
                         e.environment_id,
                         r.deployment_revision_id,
+                        r.domain,
                         r.route_id,
                         (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
