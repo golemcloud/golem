@@ -13,44 +13,32 @@
 // limitations under the License.
 
 use golem_common::model::agent::BinarySource;
-use golem_wasm::ValueAndType;
-use http::StatusCode;
+use http::{HeaderName, StatusCode};
+use std::collections::HashMap;
 use std::fmt;
 
-pub enum RouteExecutionResult {
-    NoBody {
-        status: StatusCode,
-    },
-    ComponentModelJsonBody {
-        body: golem_wasm::ValueAndType,
-        status: StatusCode,
-    },
-    UnstructuredBinaryBody {
-        body: BinarySource,
-    },
-    CustomAgentError {
-        body: ValueAndType,
-    },
+#[derive(Debug)]
+pub struct RouteExecutionResult {
+    pub status: StatusCode,
+    pub headers: HashMap<HeaderName, String>,
+    pub body: ResponseBody,
 }
 
-impl fmt::Debug for RouteExecutionResult {
+pub enum ResponseBody {
+    NoBody,
+    ComponentModelJsonBody { body: golem_wasm::ValueAndType },
+    UnstructuredBinaryBody { body: BinarySource },
+}
+
+impl fmt::Debug for ResponseBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RouteExecutionResult::NoBody { status } => {
-                f.debug_struct("NoBody").field("status", status).finish()
-            }
-            RouteExecutionResult::ComponentModelJsonBody { body, status } => f
+            ResponseBody::NoBody => f.debug_struct("NoBody").finish(),
+            ResponseBody::ComponentModelJsonBody { body } => f
                 .debug_struct("ComponentModelJsonBody")
                 .field("body", body)
-                .field("status", status)
                 .finish(),
-            RouteExecutionResult::UnstructuredBinaryBody { .. } => {
-                f.write_str("UnstructuredBinaryBody")
-            }
-            RouteExecutionResult::CustomAgentError { body } => f
-                .debug_struct("CustomAgentError")
-                .field("body", body)
-                .finish(),
+            ResponseBody::UnstructuredBinaryBody { .. } => f.write_str("UnstructuredBinaryBody"),
         }
     }
 }

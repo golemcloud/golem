@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::request_handler::RequestHandlerError;
-use super::RouteExecutionResult;
+use super::{ResponseBody, RouteExecutionResult};
 use anyhow::anyhow;
 use golem_common::model::agent::{
     AgentError, BinaryReference, DataSchema, DataValue, ElementValue, ElementValues,
@@ -22,6 +22,7 @@ use golem_common::model::agent::{
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, ValueAndType};
 use http::StatusCode;
+use std::collections::HashMap;
 use tracing::debug;
 
 pub fn interpret_agent_response(
@@ -57,9 +58,11 @@ fn map_agent_error(agent_error: AgentError) -> Result<RouteExecutionResult, Requ
         | AgentError::InvalidType(_) => Err(RequestHandlerError::invariant_violated(
             "unexpected agent error type",
         )),
-        AgentError::CustomError(inner) => {
-            Ok(RouteExecutionResult::CustomAgentError { body: inner })
-        }
+        AgentError::CustomError(inner) => Ok(RouteExecutionResult {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            headers: HashMap::new(),
+            body: ResponseBody::ComponentModelJsonBody { body: inner },
+        }),
     }
 }
 
@@ -74,8 +77,10 @@ fn map_successful_agent_response(
 
     match typed_value {
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
-            0 => Ok(RouteExecutionResult::NoBody {
+            0 => Ok(RouteExecutionResult {
                 status: StatusCode::NO_CONTENT,
+                headers: HashMap::new(),
+                body: ResponseBody::NoBody,
             }),
             1 => map_single_element_agent_response(elements.into_iter().next().unwrap()),
             _ => Err(RequestHandlerError::invariant_violated(
@@ -97,7 +102,11 @@ fn map_single_element_agent_response(
         }
 
         ElementValue::UnstructuredBinary(BinaryReference::Inline(binary)) => {
-            Ok(RouteExecutionResult::UnstructuredBinaryBody { body: binary })
+            Ok(RouteExecutionResult {
+                status: StatusCode::OK,
+                headers: HashMap::new(),
+                body: ResponseBody::UnstructuredBinaryBody { body: binary },
+            })
         }
 
         _ => Err(RequestHandlerError::invariant_violated(
@@ -112,40 +121,55 @@ fn map_component_model_agent_response(
     use golem_wasm::Value;
 
     match value_and_type.value {
-        Value::Option(None) => Ok(RouteExecutionResult::NoBody {
+        Value::Option(None) => Ok(RouteExecutionResult {
             status: StatusCode::NOT_FOUND,
+            headers: HashMap::new(),
+            body: ResponseBody::NoBody,
         }),
 
         Value::Option(Some(inner)) => {
             let inner_type = unwrap_option_type(value_and_type.typ)?;
-            Ok(json_response_body(*inner, inner_type, StatusCode::OK))
+            Ok(RouteExecutionResult {
+                status: StatusCode::OK,
+                headers: HashMap::new(),
+                body: json_response_body(*inner, inner_type),
+            })
         }
 
-        Value::Result(Ok(None)) => Ok(RouteExecutionResult::NoBody {
+        Value::Result(Ok(None)) => Ok(RouteExecutionResult {
             status: StatusCode::NO_CONTENT,
+            headers: HashMap::new(),
+            body: ResponseBody::NoBody,
         }),
 
         Value::Result(Ok(Some(inner))) => {
             let inner_type = unwrap_result_ok_type(value_and_type.typ)?;
-            Ok(json_response_body(*inner, inner_type, StatusCode::OK))
+            Ok(RouteExecutionResult {
+                status: StatusCode::OK,
+                headers: HashMap::new(),
+                body: json_response_body(*inner, inner_type),
+            })
         }
 
-        Value::Result(Err(None)) => Ok(RouteExecutionResult::NoBody {
+        Value::Result(Err(None)) => Ok(RouteExecutionResult {
             status: StatusCode::INTERNAL_SERVER_ERROR,
+            headers: HashMap::new(),
+            body: ResponseBody::NoBody,
         }),
 
         Value::Result(Err(Some(inner))) => {
             let inner_type = unwrap_result_err_type(value_and_type.typ)?;
-            Ok(json_response_body(
-                *inner,
-                inner_type,
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ))
+            Ok(RouteExecutionResult {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                headers: HashMap::new(),
+                body: json_response_body(*inner, inner_type),
+            })
         }
 
-        other => Ok(RouteExecutionResult::ComponentModelJsonBody {
-            body: ValueAndType::new(other, value_and_type.typ),
+        other => Ok(RouteExecutionResult {
             status: StatusCode::OK,
+            headers: HashMap::new(),
+            body: json_response_body(other, value_and_type.typ),
         }),
     }
 }
@@ -192,13 +216,8 @@ fn unwrap_result_err_type(typ: AnalysedType) -> Result<AnalysedType, RequestHand
     }
 }
 
-fn json_response_body(
-    value: golem_wasm::Value,
-    typ: AnalysedType,
-    status: StatusCode,
-) -> RouteExecutionResult {
-    RouteExecutionResult::ComponentModelJsonBody {
+fn json_response_body(value: golem_wasm::Value, typ: AnalysedType) -> ResponseBody {
+    ResponseBody::ComponentModelJsonBody {
         body: ValueAndType::new(value, typ),
-        status,
     }
 }

@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::SecuritySchemeDetails;
 use super::{CompiledRoute, CompiledRoutes};
+use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
-use crate::custom_api::{ConstructorParameter, MethodParameter, QueryOrHeaderType};
+use crate::custom_api::{ConstructorParameter, MethodParameter, OriginPattern, QueryOrHeaderType};
 use golem_api_grpc::proto;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentTypeName, HttpMethod};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_wasm::analysis::TypeEnum;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 
 impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeDetails {
@@ -182,6 +182,18 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .ok_or("Missing expected_agent_response")?
                     .try_into()?,
             }),
+            Kind::CorsPreflight(cors_preflight) => Ok(RouteBehaviour::CorsPreflight {
+                allowed_origins: cors_preflight
+                    .allowed_origins
+                    .into_iter()
+                    .map(OriginPattern)
+                    .collect(),
+                allowed_methods: cors_preflight
+                    .allowed_methods
+                    .into_iter()
+                    .map(HttpMethod::try_from)
+                    .collect::<Result<BTreeSet<_>, _>>()?,
+            }),
         }
     }
 }
@@ -214,6 +226,20 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         method_name,
                         method_parameters: method_parameters.into_iter().map(Into::into).collect(),
                         expected_agent_response: Some(expected_agent_response.into()),
+                    },
+                )),
+            },
+            RouteBehaviour::CorsPreflight {
+                allowed_origins,
+                allowed_methods,
+            } => Self {
+                kind: Some(Kind::CorsPreflight(
+                    proto::golem::customapi::route_behaviour::CorsPreflight {
+                        allowed_origins: allowed_origins.into_iter().map(|ao| ao.0).collect(),
+                        allowed_methods: allowed_methods
+                            .into_iter()
+                            .map(proto::golem::component::HttpMethod::from)
+                            .collect(),
                     },
                 )),
             },
@@ -576,5 +602,29 @@ impl From<QueryOrHeaderType> for proto::golem::customapi::QueryOrHeaderType {
         };
 
         Self { kind: Some(kind) }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::customapi::CorsOptions> for CorsOptions {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::customapi::CorsOptions,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            allowed_patterns: value
+                .allowed_patterns
+                .into_iter()
+                .map(OriginPattern)
+                .collect(),
+        })
+    }
+}
+
+impl From<CorsOptions> for golem_api_grpc::proto::golem::customapi::CorsOptions {
+    fn from(value: CorsOptions) -> Self {
+        Self {
+            allowed_patterns: value.allowed_patterns.into_iter().map(|op| op.0).collect(),
+        }
     }
 }

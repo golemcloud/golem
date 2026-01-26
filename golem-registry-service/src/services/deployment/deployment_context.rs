@@ -19,6 +19,7 @@ use super::http_parameter_conversion::{
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::model::component::Component;
 use crate::services::deployment::write::DeployValidationError;
+use golem_common::model::Empty;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
@@ -29,9 +30,12 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use golem_service_base::custom_api::{ConstructorParameter, PathSegment, RouteBehaviour};
+use golem_service_base::custom_api::{
+    ConstructorParameter, CorsOptions, OriginPattern, PathSegment, RequestBodySchema,
+    RouteBehaviour,
+};
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{
@@ -186,7 +190,24 @@ impl DeploymentContext {
         constructor_parameters: Vec<ConstructorParameter>,
         errors: &mut Vec<DeployValidationError>,
     ) -> Vec<UnboundCompiledRoute> {
-        let mut compiled_routes = Vec::new();
+        let mut compiled_routes: HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute> =
+            HashMap::new();
+
+        struct PreflightMapEntry {
+            allowed_methods: BTreeSet<HttpMethod>,
+            allowed_origins: BTreeSet<OriginPattern>,
+        }
+
+        impl PreflightMapEntry {
+            fn new() -> Self {
+                PreflightMapEntry {
+                    allowed_methods: BTreeSet::new(),
+                    allowed_origins: BTreeSet::new(),
+                }
+            }
+        }
+
+        let mut preflight_map: HashMap<Vec<PathSegment>, PreflightMapEntry> = HashMap::new();
 
         for agent_method in agent_methods {
             for http_endpoint in &agent_method.http_endpoint {
@@ -198,11 +219,32 @@ impl DeploymentContext {
                     agent_method,
                 );
 
-                let cors = if !http_endpoint.cors_options.allowed_patterns.is_empty() {
-                    http_endpoint.cors_options.clone()
-                } else {
-                    http_mount.cors_options.clone()
+                let mut cors = CorsOptions {
+                    allowed_patterns: vec![],
                 };
+
+                if !http_mount.cors_options.allowed_patterns.is_empty() {
+                    cors.allowed_patterns.extend(
+                        http_mount
+                            .cors_options
+                            .allowed_patterns
+                            .iter()
+                            .cloned()
+                            .map(OriginPattern),
+                    );
+                }
+                if !http_endpoint.cors_options.allowed_patterns.is_empty() {
+                    cors.allowed_patterns.extend(
+                        http_endpoint
+                            .cors_options
+                            .allowed_patterns
+                            .iter()
+                            .cloned()
+                            .map(OriginPattern),
+                    );
+                }
+                cors.allowed_patterns.sort();
+                cors.allowed_patterns.dedup();
 
                 let route_id = *current_route_id;
                 *current_route_id = current_route_id.checked_add(1).unwrap();
@@ -225,7 +267,7 @@ impl DeploymentContext {
                     errors
                 );
 
-                let path = http_mount
+                let path_segments: Vec<PathSegment> = http_mount
                     .path_prefix
                     .iter()
                     .cloned()
@@ -233,11 +275,24 @@ impl DeploymentContext {
                     .map(|p| compile_agent_path_segment(agent, implementer, p))
                     .collect();
 
+                if !cors.allowed_patterns.is_empty() {
+                    let entry = preflight_map
+                        .entry(path_segments.clone())
+                        .or_insert(PreflightMapEntry::new());
+
+                    entry
+                        .allowed_methods
+                        .insert(http_endpoint.http_method.clone());
+                    for allowed_pattern in &cors.allowed_patterns {
+                        entry.allowed_origins.insert(allowed_pattern.clone());
+                    }
+                }
+
                 let compiled = UnboundCompiledRoute {
                     route_id,
                     domain: deployment.domain.clone(),
                     method: http_endpoint.http_method.clone(),
-                    path,
+                    path: path_segments.clone(),
                     body,
                     behaviour: RouteBehaviour::CallAgent {
                         component_id: implementer.component_id,
@@ -253,11 +308,60 @@ impl DeploymentContext {
                     cors,
                 };
 
-                compiled_routes.push(compiled);
+                {
+                    let key = (http_endpoint.http_method.clone(), path_segments);
+                    if let std::collections::hash_map::Entry::Vacant(e) = compiled_routes.entry(key)
+                    {
+                        e.insert(compiled);
+                    } else {
+                        errors.push(make_route_validation_error(
+                            "Duplicate route detected".into(),
+                        ));
+                    }
+                }
             }
         }
 
-        compiled_routes
+        // Generate synthetic OPTIONS routes for preflight requests
+        for (
+            path_segments,
+            PreflightMapEntry {
+                allowed_methods,
+                allowed_origins,
+            },
+        ) in preflight_map
+        {
+            let key = (HttpMethod::Options(Empty {}), path_segments.clone());
+            if compiled_routes.contains_key(&key) {
+                // Skip synthetic OPTIONS if user already defined one
+                // TODO: Emit to the cli as warning
+                continue;
+            }
+
+            let route_id = *current_route_id;
+            *current_route_id = current_route_id.checked_add(1).unwrap();
+
+            compiled_routes.insert(
+                key,
+                UnboundCompiledRoute {
+                    route_id,
+                    domain: deployment.domain.clone(),
+                    method: HttpMethod::Options(Empty {}),
+                    path: path_segments,
+                    body: RequestBodySchema::Unused,
+                    behaviour: RouteBehaviour::CorsPreflight {
+                        allowed_origins,
+                        allowed_methods,
+                    },
+                    security_scheme: None,
+                    cors: CorsOptions {
+                        allowed_patterns: vec![],
+                    },
+                },
+            );
+        }
+
+        compiled_routes.into_values().collect()
     }
 }
 

@@ -18,7 +18,7 @@ mod protobuf;
 use crate::model::SafeIndex;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, CorsOptions, DataSchema, HttpMethod};
+use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -26,12 +26,12 @@ use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecurityS
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::{AnalysedType, TypeList, TypeOption};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 pub type RouteId = i32;
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
 #[desert(evolution())]
 pub enum PathSegment {
     Literal { value: String },
@@ -249,6 +249,10 @@ pub enum RouteBehaviour {
         method_parameters: Vec<MethodParameter>,
         expected_agent_response: DataSchema,
     },
+    CorsPreflight {
+        allowed_origins: BTreeSet<OriginPattern>,
+        allowed_methods: BTreeSet<HttpMethod>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -260,4 +264,47 @@ pub struct SecuritySchemeDetails {
     pub client_secret: ClientSecret,
     pub redirect_url: RedirectUrl,
     pub scopes: Vec<Scope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
+pub struct CorsOptions {
+    pub allowed_patterns: Vec<OriginPattern>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
+#[desert(transparent)]
+// Note: Wildcards are only considered during matching. When setting the allow-origin header
+// always use the exact origin that made the request to avoid complications with
+// presence of auth information.
+// https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Access-Control-Allow-Origin#sect
+pub struct OriginPattern(pub String);
+
+impl OriginPattern {
+    // match origin according to cors spec https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Access-Control-Allow-Origin
+    pub fn matches(&self, origin: &str) -> bool {
+        if self.0 == "*" {
+            true
+        } else {
+            self.0 == origin
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn test_origin_pattern_matches() {
+        let wildcard = OriginPattern("*".to_string());
+        assert!(wildcard.matches("https://example.com"));
+        assert!(wildcard.matches("https://foo.bar"));
+
+        let exact = OriginPattern("https://example.com".to_string());
+        assert!(exact.matches("https://example.com"));
+        assert!(!exact.matches("https://other.com"));
+        assert!(!exact.matches("http://example.com")); // scheme matters
+    }
 }

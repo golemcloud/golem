@@ -19,7 +19,7 @@ use super::parameter_parsing::{
 };
 use super::request::RichRequest;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverError};
-use super::{ParsedRequestBody, RouteExecutionResult};
+use super::{ParsedRequestBody, ResponseBody, RouteExecutionResult};
 use crate::service::worker::{WorkerService, WorkerServiceError};
 use anyhow::anyhow;
 use golem_common::model::agent::{
@@ -34,7 +34,8 @@ use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::IntoValue;
 use golem_wasm::ValueAndType;
 use http::StatusCode;
-use poem::{Request, Response};
+use poem::{Request, Response, ResponseBuilder};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
 use uuid::Uuid;
@@ -127,7 +128,8 @@ impl RequestHandler {
         let matching_route = self.route_resolver.resolve_matching_route(&request).await?;
         let mut request = RichRequest::new(request);
         let execution_result = self.execute_route(&mut request, &matching_route).await?;
-        let response = route_execution_result_to_response(execution_result)?;
+        let response =
+            route_execution_result_to_response(execution_result, &request, &matching_route)?;
         Ok(response)
     }
 
@@ -139,6 +141,58 @@ impl RequestHandler {
         match &resolved_route.route.behavior {
             RouteBehaviour::CallAgent { .. } => {
                 self.execute_call_agent(request, resolved_route).await
+            }
+
+            RouteBehaviour::CorsPreflight {
+                allowed_origins,
+                allowed_methods,
+            } => {
+                let origin = request.origin()?.ok_or(RequestHandlerError::MissingValue {
+                    expected: "Origin header",
+                })?;
+
+                let origin_allowed = allowed_origins
+                    .iter()
+                    .any(|pattern| pattern.matches(origin));
+                if !origin_allowed {
+                    return Ok(RouteExecutionResult {
+                        status: StatusCode::FORBIDDEN,
+                        headers: HashMap::new(),
+                        body: ResponseBody::NoBody,
+                    });
+                }
+
+                let allow_methods = allowed_methods
+                    .iter()
+                    .map(|m| {
+                        let converted = http::Method::try_from(m.clone()).map_err(|_| {
+                            RequestHandlerError::invariant_violated("HttpMethod conversion error")
+                        })?;
+                        let rendered = converted.to_string();
+                        Ok::<_, RequestHandlerError>(rendered)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join(", ");
+
+                let mut headers = HashMap::new();
+
+                headers.insert(
+                    http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                    origin.to_string(),
+                );
+                headers.insert(http::header::ACCESS_CONTROL_ALLOW_METHODS, allow_methods);
+                headers.insert(
+                    http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+                    "Content-Type, Authorization".to_string(),
+                );
+                headers.insert(http::header::ACCESS_CONTROL_MAX_AGE, "3600".to_string());
+                headers.insert(http::header::VARY, "Origin".to_string());
+
+                Ok(RouteExecutionResult {
+                    status: StatusCode::NO_CONTENT,
+                    headers,
+                    body: ResponseBody::NoBody,
+                })
             }
         }
     }
@@ -175,11 +229,11 @@ impl RequestHandler {
             agent_response.clone().unwrap().to_json_value().unwrap()
         );
 
-        let mapped_result = interpret_agent_response(agent_response, expected_agent_response)?;
+        let route_result = interpret_agent_response(agent_response, expected_agent_response)?;
 
-        debug!("Returning mapped agent result: {mapped_result:?}");
+        debug!("Returning call agent route result: {route_result:?}");
 
-        Ok(mapped_result)
+        Ok(route_result)
     }
 
     fn build_worker_id(
@@ -366,35 +420,63 @@ impl RequestHandler {
 
 fn route_execution_result_to_response(
     result: RouteExecutionResult,
+    request: &RichRequest,
+    resolved_route: &ResolvedRouteEntry,
 ) -> Result<Response, RequestHandlerError> {
-    match result {
-        RouteExecutionResult::NoBody { status } => Ok(Response::builder().status(status).finish()),
+    let mut response_builder = Response::builder().status(result.status);
 
-        RouteExecutionResult::ComponentModelJsonBody { body, status } => {
+    for (name, value) in result.headers {
+        response_builder = response_builder.header(name, value);
+    }
+
+    response_builder = apply_cors_headers(response_builder, request, resolved_route)?;
+
+    match result.body {
+        ResponseBody::NoBody => Ok(response_builder.finish()),
+
+        ResponseBody::ComponentModelJsonBody { body } => {
             let body = poem::Body::from_json(
                 body.to_json_value()
                     .map_err(|e| anyhow!("ComponentModelJsonBody conversion error: {e}"))?,
             )
             .map_err(anyhow::Error::from)?;
 
-            Ok(Response::builder().status(status).body(body))
+            Ok(response_builder.body(body))
         }
 
-        RouteExecutionResult::UnstructuredBinaryBody { body } => Ok(Response::builder()
-            .status(StatusCode::OK)
+        ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
-
-        RouteExecutionResult::CustomAgentError { body } => {
-            let body = poem::Body::from_json(
-                body.to_json_value()
-                    .map_err(|e| anyhow!("CustomAgentError conversion error: {e}"))?,
-            )
-            .map_err(anyhow::Error::from)?;
-
-            Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(body))
-        }
     }
+}
+
+fn apply_cors_headers(
+    mut builder: ResponseBuilder,
+    request: &RichRequest,
+    resolved_route: &ResolvedRouteEntry,
+) -> Result<ResponseBuilder, RequestHandlerError> {
+    let cors = &resolved_route.route.cors;
+
+    if cors.allowed_patterns.is_empty() {
+        return Ok(builder);
+    }
+
+    let origin = match request.origin()? {
+        Some(o) => o,
+        None => return Ok(builder), // non-CORS request
+    };
+
+    if !cors
+        .allowed_patterns
+        .iter()
+        .any(|pattern| pattern.matches(origin))
+    {
+        return Ok(builder);
+    }
+
+    builder = builder.header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    builder = builder.header(http::header::VARY, "Origin");
+    builder = builder.header(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+
+    Ok(builder)
 }

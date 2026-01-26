@@ -15,6 +15,7 @@
 // use super::gateway_session_store::{DataKey, GatewaySessionStore, SessionId};
 // use crate::gateway_router::PathParamExtractor;
 // use crate::model::{HttpMiddleware, RichGatewayBindingCompiled};
+use super::request_handler::RequestHandlerError;
 use http::HeaderMap;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -46,6 +47,21 @@ impl RichRequest {
     // pub fn auth_data(&self) -> Option<&Value> {
     //     self.auth_data.as_ref()
     // }
+
+    pub fn origin(&self) -> Result<Option<&str>, RequestHandlerError> {
+        match self.underlying.headers().get("Origin") {
+            Some(header) => {
+                let result =
+                    header
+                        .to_str()
+                        .map_err(|_| RequestHandlerError::HeaderIsNotAscii {
+                            header_name: "Origin".to_string(),
+                        })?;
+                Ok(Some(result))
+            }
+            None => Ok(None),
+        }
+    }
 
     pub fn headers(&self) -> &HeaderMap {
         self.underlying.headers()

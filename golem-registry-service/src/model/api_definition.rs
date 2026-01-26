@@ -14,13 +14,13 @@
 
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{CorsOptions, HttpMethod};
+use golem_common::model::agent::HttpMethod;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::{
-    PathSegment, RequestBodySchema, RouteBehaviour, RouteId, SecuritySchemeDetails,
+    CorsOptions, PathSegment, RequestBodySchema, RouteBehaviour, RouteId, SecuritySchemeDetails,
 };
 use std::collections::HashMap;
 

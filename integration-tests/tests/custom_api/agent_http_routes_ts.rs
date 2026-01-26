@@ -75,7 +75,10 @@ async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resul
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agent_types: BTreeSet::from_iter([AgentTypeName("http-agent".into())]),
+        agent_types: BTreeSet::from_iter([
+            AgentTypeName("http-agent".into()),
+            AgentTypeName("cors-agent".into()),
+        ]),
     };
 
     client
@@ -111,7 +114,7 @@ async fn string_path_var(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/string-path-var/foo")?,
+                .join("/http-agents/test-agent/string-path-var/foo")?,
         )
         .send()
         .await?;
@@ -130,7 +133,7 @@ async fn multi_path_vars(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/multi-path-vars/foo/bar")?,
+                .join("/http-agents/test-agent/multi-path-vars/foo/bar")?,
         )
         .send()
         .await?;
@@ -148,7 +151,11 @@ async fn multi_path_vars(agent: &TestContext) -> anyhow::Result<()> {
 async fn remaining_path_variable(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .get(agent.base_url.join("/agents/test-agent/rest/a/b/c/d")?)
+        .get(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/rest/a/b/c/d")?,
+        )
         .send()
         .await?;
 
@@ -170,7 +177,7 @@ async fn remaining_path_variable(agent: &TestContext) -> anyhow::Result<()> {
 async fn remaining_path_missing(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .get(agent.base_url.join("/agents/test-agent/rest")?)
+        .get(agent.base_url.join("/http-agents/test-agent/rest")?)
         .send()
         .await?;
 
@@ -186,7 +193,7 @@ async fn path_and_query(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/path-and-query/item-123?limit=10")?,
+                .join("/http-agents/test-agent/path-and-query/item-123?limit=10")?,
         )
         .send()
         .await?;
@@ -213,7 +220,7 @@ async fn path_and_header(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/path-and-header/res-42")?,
+                .join("/http-agents/test-agent/path-and-header/res-42")?,
         )
         .header("x-request-id", "req-abc")
         .send()
@@ -238,7 +245,11 @@ async fn path_and_header(agent: &TestContext) -> anyhow::Result<()> {
 async fn json_body(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .post(agent.base_url.join("/agents/test-agent/json-body/item-1")?)
+        .post(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/json-body/item-1")?,
+        )
         .json(&json!({
             "name": "test",
             "count": 42
@@ -259,7 +270,11 @@ async fn json_body(agent: &TestContext) -> anyhow::Result<()> {
 async fn json_body_missing_field(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .post(agent.base_url.join("/agents/test-agent/json-body/item-1")?)
+        .post(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/json-body/item-1")?,
+        )
         .json(&json!({
             "name": "test"
         }))
@@ -275,7 +290,11 @@ async fn json_body_missing_field(agent: &TestContext) -> anyhow::Result<()> {
 async fn json_body_wrong_type(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .post(agent.base_url.join("/agents/test-agent/json-body/item-1")?)
+        .post(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/json-body/item-1")?,
+        )
         .json(&json!({
             "name": "test",
             "count": "not-a-number"
@@ -295,7 +314,7 @@ async fn unrestricted_unstructured_binary_inline(agent: &TestContext) -> anyhow:
         .post(
             agent
                 .base_url
-                .join("/agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
+                .join("/http-agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
         )
         .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
         .body(vec![1u8, 2, 3, 4, 5])
@@ -318,7 +337,7 @@ async fn unrestricted_unstructured_binary_missing_body(agent: &TestContext) -> a
         .post(
             agent
                 .base_url
-                .join("/agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
+                .join("/http-agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
         )
         .send()
         .await?;
@@ -341,7 +360,7 @@ async fn unrestricted_unstructured_binary_json_content_type(
         .post(
             agent
                 .base_url
-                .join("/agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
+                .join("/http-agents/test-agent/unrestricted-unstructured-binary/my-bucket")?,
         )
         .json(&json!({ "oops": true }))
         .send()
@@ -363,7 +382,7 @@ async fn restricted_unstructured_binary_inline(agent: &TestContext) -> anyhow::R
         .post(
             agent
                 .base_url
-                .join("/agents/test-agent/restricted-unstructured-binary/my-bucket")?,
+                .join("/http-agents/test-agent/restricted-unstructured-binary/my-bucket")?,
         )
         .header(reqwest::header::CONTENT_TYPE, "image/gif")
         .body(vec![1u8, 2, 3, 4, 5])
@@ -386,7 +405,7 @@ async fn restricted_unstructured_binary_missing_body(agent: &TestContext) -> any
         .post(
             agent
                 .base_url
-                .join("/agents/test-agent/restricted-unstructured-binary/my-bucket")?,
+                .join("/http-agents/test-agent/restricted-unstructured-binary/my-bucket")?,
         )
         .send()
         .await?;
@@ -406,7 +425,7 @@ async fn restricted_unstructured_binary_unsupported_mime_type(
         .post(
             agent
                 .base_url
-                .join("/agents/test-agent/restricted-unstructured-binary/my-bucket")?,
+                .join("/http-agents/test-agent/restricted-unstructured-binary/my-bucket")?,
         )
         .json(&json!({ "oops": true }))
         .send()
@@ -422,7 +441,11 @@ async fn restricted_unstructured_binary_unsupported_mime_type(
 async fn response_no_content(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .get(agent.base_url.join("/agents/test-agent/resp/no-content")?)
+        .get(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/resp/no-content")?,
+        )
         .send()
         .await?;
 
@@ -437,7 +460,7 @@ async fn response_no_content(agent: &TestContext) -> anyhow::Result<()> {
 async fn response_json(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .get(agent.base_url.join("/agents/test-agent/resp/json")?)
+        .get(agent.base_url.join("/http-agents/test-agent/resp/json")?)
         .send()
         .await?;
 
@@ -457,7 +480,7 @@ async fn response_optional_found(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/resp/optional/true")?,
+                .join("/http-agents/test-agent/resp/optional/true")?,
         )
         .send()
         .await?;
@@ -478,7 +501,7 @@ async fn response_optional_not_found(agent: &TestContext) -> anyhow::Result<()> 
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/resp/optional/false")?,
+                .join("/http-agents/test-agent/resp/optional/false")?,
         )
         .send()
         .await?;
@@ -497,7 +520,7 @@ async fn response_result_ok(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/resp/result-json-json/true")?,
+                .join("/http-agents/test-agent/resp/result-json-json/true")?,
         )
         .send()
         .await?;
@@ -518,7 +541,7 @@ async fn response_result_err(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/resp/result-json-json/false")?,
+                .join("/http-agents/test-agent/resp/result-json-json/false")?,
         )
         .send()
         .await?;
@@ -542,7 +565,7 @@ async fn response_result_void_err(agent: &TestContext) -> anyhow::Result<()> {
         .post(
             agent
                 .base_url
-                .join("/agents/test-agent/resp/result-void-json")?,
+                .join("/http-agents/test-agent/resp/result-void-json")?,
         )
         .send()
         .await?;
@@ -566,7 +589,7 @@ async fn response_result_json_void(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/resp/result-json-void")?,
+                .join("/http-agents/test-agent/resp/result-json-void")?,
         )
         .send()
         .await?;
@@ -584,7 +607,7 @@ async fn response_result_json_void(agent: &TestContext) -> anyhow::Result<()> {
 async fn response_binary(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
-        .get(agent.base_url.join("/agents/test-agent/resp/binary")?)
+        .get(agent.base_url.join("/http-agents/test-agent/resp/binary")?)
         .send()
         .await?;
 
@@ -612,7 +635,7 @@ async fn negative_missing_path_var(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/multi-path-vars/foo")?,
+                .join("/http-agents/test-agent/multi-path-vars/foo")?,
         )
         .send()
         .await?;
@@ -629,7 +652,7 @@ async fn negative_extra_path_segment(agent: &TestContext) -> anyhow::Result<()> 
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/string-path-var/foo/bar")?,
+                .join("/http-agents/test-agent/string-path-var/foo/bar")?,
         )
         .send()
         .await?;
@@ -646,7 +669,7 @@ async fn negative_missing_query_param(agent: &TestContext) -> anyhow::Result<()>
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/path-and-query/item-123")?,
+                .join("/http-agents/test-agent/path-and-query/item-123")?,
         )
         .send()
         .await?;
@@ -663,7 +686,7 @@ async fn negative_invalid_query_param_type(agent: &TestContext) -> anyhow::Resul
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/path-and-query/item-123?limit=not-a-number")?,
+                .join("/http-agents/test-agent/path-and-query/item-123?limit=not-a-number")?,
         )
         .send()
         .await?;
@@ -680,12 +703,147 @@ async fn negative_missing_header(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/agents/test-agent/path-and-header/res-42")?,
+                .join("/http-agents/test-agent/path-and-header/res-42")?,
         )
         // no x-request-id header
         .send()
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn cors_preflight_wildcard(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .request(
+            reqwest::Method::OPTIONS,
+            agent.base_url.join("/cors-agents/test-agent/wildcard")?,
+        )
+        .header("Origin", "https://any-origin.com")
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let allow_origin = response
+        .headers()
+        .get("access-control-allow-origin")
+        .unwrap()
+        .to_str()?;
+    assert_eq!(allow_origin, "https://any-origin.com");
+
+    let vary = response.headers().get("vary").unwrap().to_str()?;
+    assert_eq!(vary, "Origin");
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn cors_preflight_specific_origin(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .request(
+            reqwest::Method::OPTIONS,
+            agent
+                .base_url
+                .join("/cors-agents/test-agent/preflight-required")?,
+        )
+        .header("Origin", "https://app.example.com")
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let allow_origin = response
+        .headers()
+        .get("access-control-allow-origin")
+        .unwrap()
+        .to_str()?;
+    assert_eq!(allow_origin, "https://app.example.com");
+
+    let allow_methods = response
+        .headers()
+        .get("access-control-allow-methods")
+        .unwrap()
+        .to_str()?;
+    assert!(allow_methods.contains("POST"));
+
+    let vary = response.headers().get("vary").unwrap().to_str()?;
+    assert_eq!(vary, "Origin");
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn cors_get_with_origin_header(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/cors-agents/test-agent/inherited")?)
+        .header("Origin", "https://mount.example.com")
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let allow_origin = response
+        .headers()
+        .get("access-control-allow-origin")
+        .unwrap()
+        .to_str()?;
+    assert_eq!(allow_origin, "https://mount.example.com");
+
+    let vary = response.headers().get("vary").unwrap().to_str()?;
+    assert_eq!(vary, "Origin");
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn cors_get_with_origin_header_invalid(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/cors-agents/test-agent/inherited")?)
+        .header("Origin", "https://not-allowed.com")
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    assert!(response
+        .headers()
+        .get("access-control-allow-origin")
+        .is_none());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn cors_get_wildcard_origin(agent: &TestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/cors-agents/test-agent/wildcard")?)
+        .header("Origin", "https://random-origin.com")
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let allow_origin = response
+        .headers()
+        .get("access-control-allow-origin")
+        .unwrap()
+        .to_str()?;
+    assert_eq!(allow_origin, "https://random-origin.com");
+
+    let vary = response.headers().get("vary").unwrap().to_str()?;
+    assert_eq!(vary, "Origin");
+
     Ok(())
 }
