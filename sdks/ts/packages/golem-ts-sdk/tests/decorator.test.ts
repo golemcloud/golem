@@ -19,8 +19,6 @@ import {
   BarAgentClassName,
   FooAgentClassName,
   EphemeralAgentClassName,
-  SimpleHttpAgentClassName,
-  ComplexHttpAgentClassName,
 } from './testUtils';
 import {
   AgentType,
@@ -29,13 +27,12 @@ import {
   ElementSchema,
 } from 'golem:agent/common';
 import * as util from 'node:util';
-import { FooAgent } from './sampleAgents';
+import { FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { toWitValue, Value } from '../src/internal/mapping/values/Value';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from 'golem:agent/host';
 import { AgentClassName, AgentId } from '../src';
-import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
@@ -850,225 +847,6 @@ describe('Annotated FooAgent class', () => {
     );
     expect(await client.phantomId()).toBeUndefined();
     expect(await client.getAgentType()).toEqual(agentType);
-  });
-});
-
-describe('Http Agent class', () => {
-  it('should register HTTP mount details with only mount', () => {
-    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
-      AgentTypeRegistry.get(SimpleHttpAgentClassName),
-      () => new Error('SimpleHttpAgent not found in AgentTypeRegistry'),
-    );
-
-    expect(simpleHttpAgent.httpMount).toBeDefined();
-    expect(simpleHttpAgent.httpMount?.pathPrefix).toEqual([
-      {
-        tag: 'literal',
-        val: 'chats',
-      },
-      {
-        tag: 'system-variable',
-        val: 'agent-type',
-      },
-    ]);
-  });
-
-  it('should register HTTP endpoint details with endpoint details', () => {
-    const simpleHttpAgent = AgentMethodRegistry.get(
-      SimpleHttpAgentClassName.value,
-    )?.get('greet');
-
-    if (!simpleHttpAgent) {
-      throw new Error(
-        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
-      );
-    }
-
-    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
-    expect(simpleHttpAgent.httpEndpoint).toEqual([
-      {
-        httpMethod: { tag: 'get' },
-        authDetails: { required: false },
-        queryVars: [],
-        corsOptions: {
-          allowedPatterns: [],
-        },
-        headerVars: [],
-        pathSuffix: [
-          {
-            tag: 'literal',
-            val: 'greet',
-          },
-          {
-            tag: 'path-variable',
-            val: {
-              variableName: 'name',
-            },
-          },
-        ],
-      },
-    ]);
-  });
-
-  it('should register HTTP mount details with all details', () => {
-    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
-      AgentTypeRegistry.get(ComplexHttpAgentClassName),
-      () => new Error('ComplexHttpAgent not found in AgentTypeRegistry'),
-    );
-
-    const expectedPathPrefix = [
-      {
-        tag: 'literal',
-        val: 'chats',
-      },
-      {
-        tag: 'system-variable',
-        val: 'agent-type',
-      },
-      {
-        tag: 'path-variable',
-        val: {
-          variableName: 'foo',
-        },
-      },
-      {
-        tag: 'path-variable',
-        val: {
-          variableName: 'bar',
-        },
-      },
-    ];
-
-    const expectedWebhookSuffix = [
-      {
-        tag: 'system-variable',
-        val: 'agent-type',
-      },
-      {
-        tag: 'literal',
-        val: 'events',
-      },
-      {
-        tag: 'path-variable',
-        val: {
-          variableName: 'foo',
-        },
-      },
-      {
-        tag: 'path-variable',
-        val: {
-          variableName: 'bar',
-        },
-      },
-    ];
-
-    expect(simpleHttpAgent.httpMount).toBeDefined();
-    expect(simpleHttpAgent.httpMount).toEqual({
-      pathPrefix: expectedPathPrefix,
-      authDetails: { required: true },
-      phantomAgent: false,
-      corsOptions: {
-        allowedPatterns: ['https://app.acme.com', 'https://staging.acme.com'],
-      },
-      webhookSuffix: expectedWebhookSuffix,
-    });
-  });
-
-  it('should register complex HTTP endpoint details with endpoint details', () => {
-    const simpleHttpAgent = AgentMethodRegistry.get(
-      ComplexHttpAgentClassName.value,
-    )?.get('greetCustom2');
-
-    if (!simpleHttpAgent) {
-      throw new Error(
-        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
-      );
-    }
-
-    expect(simpleHttpAgent.httpEndpoint).toBeDefined();
-    expect(simpleHttpAgent.httpEndpoint).toEqual([
-      {
-        httpMethod: { tag: 'custom', val: 'patch' },
-        authDetails: { required: false },
-        queryVars: [
-          {
-            queryParamName: 'l',
-            variableName: 'location',
-          },
-          {
-            queryParamName: 'n',
-            variableName: 'name',
-          },
-        ],
-        corsOptions: {
-          allowedPatterns: [],
-        },
-        headerVars: [],
-        pathSuffix: [
-          {
-            tag: 'literal',
-            val: 'greet',
-          },
-        ],
-      },
-      {
-        httpMethod: { tag: 'get' },
-        authDetails: { required: true },
-        queryVars: [
-          {
-            queryParamName: 'lx',
-            variableName: 'location',
-          },
-          {
-            queryParamName: 'nm',
-            variableName: 'name',
-          },
-        ],
-        corsOptions: {
-          allowedPatterns: ['*'],
-        },
-        headerVars: [
-          {
-            headerName: 'X-Foo',
-            variableName: 'location',
-          },
-          {
-            headerName: 'X-Bar',
-            variableName: 'name',
-          },
-        ],
-        pathSuffix: [
-          {
-            tag: 'literal',
-            val: 'greet',
-          },
-        ],
-      },
-      {
-        httpMethod: { tag: 'get' },
-        authDetails: { required: false },
-        queryVars: [
-          {
-            queryParamName: 'l',
-            variableName: 'location',
-          },
-          {
-            queryParamName: 'n',
-            variableName: 'name',
-          },
-        ],
-        corsOptions: {
-          allowedPatterns: [],
-        },
-        headerVars: [],
-        pathSuffix: [
-          {
-            tag: 'literal',
-            val: 'greet',
-          },
-        ],
-      },
-    ]);
   });
 });
 

@@ -18,7 +18,7 @@
 // The way to make use of this setup is adding new agents in the `ts` file which is imported here
 // or by creating new files with agents and importing them here.
 
-const SampleAgentModuleName = './sampleAgents';
+const SampleAgentModuleName = './validAgents';
 
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 

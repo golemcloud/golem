@@ -82,9 +82,7 @@ import {
   deserializeDataValue,
   serializeToDataValue,
 } from '../src/internal/mapping/values/dataValue';
-import { TextOrImage } from './sampleAgents';
-import { RegisteredAgentType } from 'golem:agent/host';
-import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
+import { TextOrImage } from './validAgents';
 
 test('BarAgent can be successfully initiated', () => {
   fc.assert(
