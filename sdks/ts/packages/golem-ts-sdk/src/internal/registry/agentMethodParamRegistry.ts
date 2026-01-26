@@ -76,7 +76,7 @@ class AgentMethodParamRegistryImpl {
 
     return result;
   }
-  
+
   getParamType(
     agentClassName: string,
     agentMethodName: string,

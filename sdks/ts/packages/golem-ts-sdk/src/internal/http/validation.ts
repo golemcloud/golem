@@ -65,7 +65,7 @@ export function validateHttpEndpoint(
   );
 
   for (const endpoint of agentMethod.httpEndpoint) {
-    validateNoForeignEndpointVariables(
+    validateEndpointVariables(
       endpoint,
       methodVarsWithoutAutoInjectedVariables,
       parameterTypes,
@@ -102,11 +102,68 @@ function validateMountIsDefinedForHttpEndpoint(
   }
 }
 
-function validateNoForeignEndpointVariables(
+function validateEndpointVariables(
   endpoint: HttpEndpointDetails,
   methodVars: Set<string>,
   parameterTypes: Map<string, TypeInfoInternal>,
 ) {
+  const principalParams = getPrincipalParams(parameterTypes);
+  const unstructuredBinaryParams = getUnstructuredBinaryParams(parameterTypes);
+
+  function validateVariable(
+    variableName: string,
+    location: 'header' | 'query' | 'path',
+    binaryError: string,
+  ) {
+    if (principalParams.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint ${location} variable '${variableName}' cannot be used for parameters of type 'Principal'`,
+      );
+    }
+
+    if (unstructuredBinaryParams.has(variableName)) {
+      throw new Error(binaryError);
+    }
+
+    if (!methodVars.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint ${location} variable '${variableName}' is not defined in method input parameters.`,
+      );
+    }
+  }
+
+  for (const { variableName } of endpoint.headerVars) {
+    validateVariable(
+      variableName,
+      'header',
+      `HTTP endpoint header variable '${variableName}' cannot be used for method parameters of type 'UnstructuredBinary'`,
+    );
+  }
+
+  for (const { variableName } of endpoint.queryVars) {
+    validateVariable(
+      variableName,
+      'query',
+      `HTTP endpoint query variable '${variableName}' cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
+    );
+  }
+
+  for (const segment of endpoint.pathSuffix) {
+    if (segment.tag !== 'path-variable') continue;
+
+    const name = segment.val.variableName;
+
+    validateVariable(
+      name,
+      'path',
+      `HTTP endpoint path variable "${name}" cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
+    );
+  }
+}
+
+function getPrincipalParams(
+  parameterTypes: Map<string, TypeInfoInternal>,
+): Set<string> {
   const methodVarsOfPrincipal = new Set<string>();
 
   for (const [varName, typeInfo] of parameterTypes.entries()) {
@@ -115,51 +172,21 @@ function validateNoForeignEndpointVariables(
     }
   }
 
-  for (const { variableName } of endpoint.headerVars) {
-    if (methodVarsOfPrincipal.has(variableName)) {
-      throw new Error(
-        `HTTP endpoint header variable "${variableName}" cannot be used for method parameters of type 'Principal'`,
-      );
-    }
+  return methodVarsOfPrincipal;
+}
 
-    if (!methodVars.has(variableName)) {
-      throw new Error(
-        `HTTP endpoint header variable "${variableName}" is not defined in method input parameters.`,
-      );
-    }
-  }
+function getUnstructuredBinaryParams(
+  parameterTypes: Map<string, TypeInfoInternal>,
+): Set<string> {
+  const methodVarsOfPrincipal = new Set<string>();
 
-  for (const { variableName } of endpoint.queryVars) {
-    if (methodVarsOfPrincipal.has(variableName)) {
-      throw new Error(
-        `HTTP endpoint query variable "${variableName}" cannot be used for parameters of type 'Principal'`,
-      );
-    }
-
-    if (!methodVars.has(variableName)) {
-      throw new Error(
-        `HTTP endpoint query variable "${variableName}" is not defined in method input parameters.`,
-      );
+  for (const [varName, typeInfo] of parameterTypes.entries()) {
+    if (typeInfo.tag === 'unstructured-binary') {
+      methodVarsOfPrincipal.add(varName);
     }
   }
 
-  for (const segment of endpoint.pathSuffix) {
-    if (segment.tag === 'path-variable') {
-      const name = segment.val.variableName;
-
-      if (methodVarsOfPrincipal.has(name)) {
-        throw new Error(
-          `HTTP endpoint path variable "${name}" cannot be used for parameters of type 'Principal'`,
-        );
-      }
-
-      if (!methodVars.has(name)) {
-        throw new Error(
-          `HTTP endpoint path variable "${name}" is not defined in method input parameters.`,
-        );
-      }
-    }
-  }
+  return methodVarsOfPrincipal;
 }
 
 function collectConstructorInputParameterNames(
@@ -175,7 +202,7 @@ function validateConstructorParamsAreHttpSafe(
   for (const [paramName, paramSchema] of agentConstructor.inputSchema.val) {
     if (paramSchema.tag === 'unstructured-binary') {
       throw new Error(
-        `Constructor parameter '${paramName}' in '${agentClassName}' is of type 'UnstructuredBinary' which is not allowed when used with HTTP mounts.`,
+        `HTTP mount path variable '${paramName}' cannot be used for constructor parameters of type 'UnstructuredBinary'`,
       );
     }
   }
@@ -190,7 +217,7 @@ function validateMountVariablesAreNotPrincipal(
       const variableName = segment.val.variableName;
       if (parametersForPrincipal.has(variableName)) {
         throw new Error(
-          `HTTP mount path variable "${variableName}" cannot be used for constructor parameters of type 'Principal'`,
+          `HTTP mount path variable '${variableName}' cannot be used for constructor parameters of type 'Principal'`,
         );
       }
     }
@@ -207,7 +234,7 @@ function validateMountVariablesExistInConstructor(
 
       if (!constructorVars.has(variableName)) {
         throw new Error(
-          `HTTP mount path variable "${variableName}" ` +
+          `HTTP mount path variable '${variableName}' ` +
             `(in path segment ${segmentIndex}) ` +
             `is not defined in the agent constructor.`,
         );
@@ -225,7 +252,7 @@ function validateConstructorVarsAreSatisfied(
   for (const constructorVar of constructorVars) {
     if (!providedVars.has(constructorVar)) {
       throw new Error(
-        `Agent constructor variable "${constructorVar}" ` +
+        `Agent constructor variable '${constructorVar}' ` +
           `is not provided by the HTTP mount path.`,
       );
     }

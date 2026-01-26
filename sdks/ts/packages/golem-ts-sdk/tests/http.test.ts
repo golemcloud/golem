@@ -197,7 +197,7 @@ describe('validateHttpMountWithConstructor', () => {
     expect(() =>
       validateHttpMount('Foo', agentMount, agentConstructor),
     ).toThrow(
-      'Agent constructor variable "tenant" is not provided by the HTTP mount path.',
+      "Agent constructor variable 'tenant' is not provided by the HTTP mount path.",
     );
   });
 
@@ -208,7 +208,7 @@ describe('validateHttpMountWithConstructor', () => {
     expect(() =>
       validateHttpMount('Foo', agentMount, agentConstructor),
     ).toThrow(
-      'HTTP mount path variable "chatId" (in path segment 0) is not defined in the agent constructor.',
+      "HTTP mount path variable 'chatId' (in path segment 0) is not defined in the agent constructor.",
     );
   });
 });
@@ -290,7 +290,7 @@ describe('validateHttpEndpoint', () => {
     expect(() =>
       validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
     ).toThrow(
-      'HTTP endpoint path variable "id" is not defined in method input parameters.',
+      "HTTP endpoint path variable 'id' is not defined in method input parameters.",
     );
   });
 
@@ -300,7 +300,7 @@ describe('validateHttpEndpoint', () => {
     expect(() =>
       validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
     ).toThrow(
-      'HTTP endpoint query variable "limit" is not defined in method input parameters.',
+      "HTTP endpoint query variable 'limit' is not defined in method input parameters.",
     );
   });
 
@@ -310,7 +310,7 @@ describe('validateHttpEndpoint', () => {
     expect(() =>
       validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
     ).toThrow(
-      'HTTP endpoint header variable "tenant" is not defined in method input parameters.',
+      "HTTP endpoint header variable 'tenant' is not defined in method input parameters.",
     );
   });
 
@@ -326,7 +326,7 @@ describe('validateHttpEndpoint', () => {
     expect(() =>
       validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
     ).toThrow(
-      'HTTP endpoint path variable "foo" is not defined in method input parameters.',
+      "HTTP endpoint path variable 'foo' is not defined in method input parameters.",
     );
   });
 
