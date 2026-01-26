@@ -58,25 +58,25 @@ class AgentMethodParamRegistryImpl {
     return this.registry.get(agentClassName);
   }
 
-  getParameterNamesOfPrincipalType(
+  getParametersAndType(
     agentClassName: string,
     agentMethodName: string,
-  ): Set<string> {
-    const result = new Set<string>();
+  ): Map<string, TypeInfoInternal> {
+    const result = new Map<string, TypeInfoInternal>();
 
     const classMeta = this.registry.get(agentClassName);
 
     const methodMeta = classMeta?.get(agentMethodName);
 
     methodMeta?.forEach((paramMeta, paramName) => {
-      if (paramMeta.typeInfo?.tag === 'principal') {
-        result.add(paramName);
+      if (paramMeta.typeInfo) {
+        result.set(paramName, paramMeta.typeInfo!);
       }
     });
 
     return result;
   }
-
+  
   getParamType(
     agentClassName: string,
     agentMethodName: string,

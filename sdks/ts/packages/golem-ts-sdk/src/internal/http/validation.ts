@@ -21,6 +21,7 @@ import {
 } from 'golem:agent/common';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
+import { TypeInfoInternal } from '../typeInfoInternal';
 
 export function validateHttpMount(
   agentClassName: string,
@@ -54,11 +55,10 @@ export function validateHttpEndpoint(
     httpMountDetails,
   );
 
-  const parametersForPrincipal =
-    AgentMethodParamRegistry.getParameterNamesOfPrincipalType(
-      agentClassName,
-      agentMethod.name,
-    );
+  const parameterTypes = AgentMethodParamRegistry.getParametersAndType(
+    agentClassName,
+    agentMethod.name,
+  );
 
   const methodVarsWithoutAutoInjectedVariables = collectMethodInputVars(
     agentMethod.inputSchema,
@@ -68,7 +68,7 @@ export function validateHttpEndpoint(
     validateNoForeignEndpointVariables(
       endpoint,
       methodVarsWithoutAutoInjectedVariables,
-      parametersForPrincipal,
+      parameterTypes,
     );
   }
 }
@@ -105,8 +105,16 @@ function validateMountIsDefinedForHttpEndpoint(
 function validateNoForeignEndpointVariables(
   endpoint: HttpEndpointDetails,
   methodVars: Set<string>,
-  methodVarsOfPrincipal: Set<string>,
+  parameterTypes: Map<string, TypeInfoInternal>,
 ) {
+  const methodVarsOfPrincipal = new Set<string>();
+
+  for (const [varName, typeInfo] of parameterTypes.entries()) {
+    if (typeInfo.tag === 'principal') {
+      methodVarsOfPrincipal.add(varName);
+    }
+  }
+
   for (const { variableName } of endpoint.headerVars) {
     if (methodVarsOfPrincipal.has(variableName)) {
       throw new Error(
