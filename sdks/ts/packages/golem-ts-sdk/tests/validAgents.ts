@@ -513,6 +513,20 @@ class SimpleHttpAgent extends BaseAgent {
 }
 
 @agent({
+  mount: '/chats/{agent-type}/{*filePath}',
+})
+class SimpleHttpAgent1 extends BaseAgent {
+  constructor(filePath: string) {
+    super();
+  }
+
+  @endpoint({ get: '/greet/{name}/{*filePath}' })
+  async greet(name: string, filePath: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({
   mount: '/chats/{agent-type}/{foo}/{bar}',
   cors: ['https://app.acme.com', 'https://staging.acme.com'],
   auth: true,

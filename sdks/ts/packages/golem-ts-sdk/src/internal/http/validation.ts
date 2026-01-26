@@ -34,6 +34,7 @@ export function validateHttpMount(
   const constructorInputParams =
     collectConstructorInputParameterNames(agentConstructor);
 
+  validateNoCatchAllInHttpMount(agentClassName, agentMount);
   validateConstructorParamsAreHttpSafe(agentClassName, agentConstructor);
   validateMountVariablesAreNotPrincipal(agentMount, parametersForPrincipal);
   validateMountVariablesExistInConstructor(agentMount, constructorInputParams);
@@ -98,6 +99,21 @@ function validateMountIsDefinedForHttpEndpoint(
     throw new Error(
       `Agent method '${agentMethod.name}' of '${agentClassName}' defines HTTP endpoints ` +
         `but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.`,
+    );
+  }
+}
+
+function validateNoCatchAllInHttpMount(
+  agentClassName: string,
+  agentMount: HttpMountDetails,
+) {
+  const catchAllSegment = agentMount.pathPrefix.find(
+    (segment) => segment.tag === 'remaining-path-variable'
+  );
+
+  if (catchAllSegment) {
+    throw new Error(
+      `HTTP mount for agent '${agentClassName}' cannot contain catch-all path variable '${catchAllSegment.val.variableName}'.`
     );
   }
 }
