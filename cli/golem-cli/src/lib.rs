@@ -35,6 +35,7 @@ pub mod log;
 pub mod model;
 pub mod validation;
 pub mod wasm_rpc_stubgen;
+pub mod process;
 
 #[allow(unused)]
 mod wasm_metadata;

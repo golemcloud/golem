@@ -33,19 +33,14 @@ use crate::model::app_raw::{
     InjectToPrebuiltQuickJs,
 };
 use crate::model::text::fmt::log_error;
+use crate::process::{with_hidden_output_unless_error, CommandExt};
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use camino::Utf8Path;
-use colored::Colorize;
-use gag::BufferRedirect;
 use golem_common::model::component::ComponentName;
-use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{ExitStatus, Stdio};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
-use tracing::{enabled, Level};
+use tokio::process::Command;
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
@@ -562,117 +557,4 @@ pub async fn ensure_common_deps_for_tool(
         }
         _ => Ok(()),
     }
-}
-
-trait ExitStatusExt {
-    fn check_exit_status(&self) -> anyhow::Result<()>;
-}
-
-impl ExitStatusExt for ExitStatus {
-    fn check_exit_status(&self) -> anyhow::Result<()> {
-        if self.success() {
-            Ok(())
-        } else {
-            Err(anyhow!(format!(
-                "Command failed with exit code: {}",
-                self.code()
-                    .map(|code| code.to_string().log_color_error_highlight().to_string())
-                    .unwrap_or_else(|| "?".to_string())
-            )))
-        }
-    }
-}
-
-trait CommandExt {
-    async fn stream_and_wait_for_status(
-        &mut self,
-        command_name: &str,
-    ) -> anyhow::Result<ExitStatus>;
-
-    async fn stream_and_run(&mut self, command_name: &str) -> anyhow::Result<()> {
-        self.stream_and_wait_for_status(command_name)
-            .await?
-            .check_exit_status()
-    }
-
-    fn stream_output(command_name: &str, child: &mut Child) -> anyhow::Result<()> {
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("Failed to capture stdout for {command_name}"))?;
-
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow!("Failed to capture stderr for {command_name}"))?;
-
-        tokio::spawn({
-            let prefix = format!("{} | ", command_name).green().bold();
-            async move {
-                let mut lines = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    logln(format!("{prefix} {line}"));
-                }
-            }
-        });
-
-        tokio::spawn({
-            let prefix = format!("{} | ", command_name).yellow().bold();
-            async move {
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    logln(format!("{prefix} {line}"));
-                }
-            }
-        });
-
-        Ok(())
-    }
-}
-
-impl CommandExt for Command {
-    async fn stream_and_wait_for_status(
-        &mut self,
-        command_name: &str,
-    ) -> anyhow::Result<ExitStatus> {
-        let _indent = LogIndent::stash();
-
-        let mut child = self
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("Failed to spawn {command_name}"))?;
-
-        Self::stream_output(command_name, &mut child)?;
-
-        child
-            .wait()
-            .await
-            .with_context(|| format!("Failed to execute {command_name}"))
-    }
-}
-
-fn with_hidden_output_unless_error<F, R>(f: F) -> anyhow::Result<R>
-where
-    F: FnOnce() -> anyhow::Result<R>,
-{
-    let redirect = (!enabled!(Level::WARN))
-        .then(|| BufferRedirect::stderr().ok())
-        .flatten();
-
-    let result = f();
-
-    if result.is_err() {
-        if let Some(mut redirect) = redirect {
-            let mut output = Vec::new();
-            let read_result = redirect.read_to_end(&mut output);
-            drop(redirect);
-            read_result.expect("Failed to read stderr from moonbit redirect");
-            std::io::stderr()
-                .write_all(output.as_slice())
-                .expect("Failed to write captured moonbit stderr");
-        }
-    }
-
-    result
 }
