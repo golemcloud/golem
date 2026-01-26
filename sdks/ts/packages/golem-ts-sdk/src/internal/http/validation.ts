@@ -108,12 +108,12 @@ function validateNoCatchAllInHttpMount(
   agentMount: HttpMountDetails,
 ) {
   const catchAllSegment = agentMount.pathPrefix.find(
-    (segment) => segment.tag === 'remaining-path-variable'
+    (segment) => segment.tag === 'remaining-path-variable',
   );
 
   if (catchAllSegment) {
     throw new Error(
-      `HTTP mount for agent '${agentClassName}' cannot contain catch-all path variable '${catchAllSegment.val.variableName}'.`
+      `HTTP mount for agent '${agentClassName}' cannot contain catch-all path variable '${catchAllSegment.val.variableName}'`,
     );
   }
 }
@@ -165,15 +165,18 @@ function validateEndpointVariables(
   }
 
   for (const segment of endpoint.pathSuffix) {
-    if (segment.tag !== 'path-variable') continue;
+    if (
+      segment.tag === 'remaining-path-variable' ||
+      segment.tag === 'path-variable'
+    ) {
+      const name = segment.val.variableName;
 
-    const name = segment.val.variableName;
-
-    validateVariable(
-      name,
-      'path',
-      `HTTP endpoint path variable "${name}" cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
-    );
+      validateVariable(
+        name,
+        'path',
+        `HTTP endpoint path variable "${name}" cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
+      );
+    }
   }
 }
 

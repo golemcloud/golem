@@ -513,20 +513,6 @@ class SimpleHttpAgent extends BaseAgent {
 }
 
 @agent({
-  mount: '/chats/{agent-type}/{*filePath}',
-})
-class SimpleHttpAgent1 extends BaseAgent {
-  constructor(filePath: string) {
-    super();
-  }
-
-  @endpoint({ get: '/greet/{name}/{*filePath}' })
-  async greet(name: string, filePath: string): Promise<string> {
-    return Promise.resolve(`Hello, ${name}!`);
-  }
-}
-
-@agent({
   mount: '/chats/{agent-type}/{foo}/{bar}',
   cors: ['https://app.acme.com', 'https://staging.acme.com'],
   auth: true,
@@ -571,6 +557,12 @@ class ComplexHttpAgent extends BaseAgent {
   // The 'name' parameter is expected to be in the request body and hence should be a valid endpoint definition
   @endpoint({ post: '/greet?l={location}' })
   async greetPost(location: string, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  // Endpoint with catch-all var
+  @endpoint({ get: '/greet/{name}/{*filePath}' })
+  async catchAllFun(name: string, filePath: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
 }
