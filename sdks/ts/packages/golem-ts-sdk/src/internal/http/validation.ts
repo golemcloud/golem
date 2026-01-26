@@ -41,16 +41,15 @@ export function validateHttpEndpoint(
   agentMethod: AgentMethod,
   httpMountDetails: HttpMountDetails | undefined,
 ) {
-  if (!httpMountDetails && agentMethod.httpEndpoint.length > 0) {
-    throw new Error(
-      `Agent method '${agentMethod.name}' of '${agentClassName}' defines HTTP endpoints ` +
-        `but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.`,
-    );
-  }
-
   if (agentMethod.httpEndpoint.length === 0) {
     return;
   }
+
+  validateMountIsDefinedForHttpEndpoint(
+    agentClassName,
+    agentMethod,
+    httpMountDetails,
+  );
 
   const parametersForPrincipal =
     AgentMethodParamRegistry.getParameterNamesOfPrincipalType(
@@ -85,6 +84,19 @@ export function rejectQueryParamsInPath(path: string, entityName: string) {
 
 function collectMethodInputVars(schema: DataSchema): Set<string> {
   return new Set(schema.val.map(([name]) => name));
+}
+
+function validateMountIsDefinedForHttpEndpoint(
+  agentClassName: string,
+  agentMethod: AgentMethod,
+  httpMountDetails: HttpMountDetails | undefined,
+) {
+  if (!httpMountDetails && agentMethod.httpEndpoint.length > 0) {
+    throw new Error(
+      `Agent method '${agentMethod.name}' of '${agentClassName}' defines HTTP endpoints ` +
+        `but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.`,
+    );
+  }
 }
 
 function validateNoForeignEndpointVariables(
