@@ -129,6 +129,36 @@ describe('Http Agent class', () => {
     });
   });
 
+  it('should register simple HTTP endpoint details with catch all var', () => {
+    const complexHttpAgent = AgentMethodRegistry.get(
+      ComplexHttpAgentClassName.value,
+    )?.get('catchAllFun');
+
+    if (!complexHttpAgent) {
+      throw new Error(
+        'ComplexHttpAgent.catchAllFun method not found in AgentMethodRegistry',
+      );
+    }
+
+    expect(complexHttpAgent.httpEndpoint).toBeDefined();
+    expect(complexHttpAgent.httpEndpoint).toEqual([
+      {
+        httpMethod: { tag: 'get' },
+        authDetails: { required: false },
+        queryVars: [],
+        corsOptions: {
+          allowedPatterns: [],
+        },
+        headerVars: [],
+        pathSuffix: [
+          { tag: 'literal', val: 'greet' },
+          { tag: 'path-variable', val: { variableName: 'name' } },
+          { tag: 'remaining-path-variable', val: { variableName: 'filePath' } },
+        ],
+      },
+    ]);
+  });
+
   it('should register simple HTTP endpoint details with left over parameters in request body', () => {
     const complexHttpAgent = AgentMethodRegistry.get(
       ComplexHttpAgentClassName.value,

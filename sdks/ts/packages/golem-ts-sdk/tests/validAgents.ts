@@ -559,6 +559,12 @@ class ComplexHttpAgent extends BaseAgent {
   async greetPost(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
+
+  // Endpoint with catch-all var
+  @endpoint({ get: '/greet/{name}/{*filePath}' })
+  async catchAllFun(name: string, filePath: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
 }
 
 // If this class is decorated with agent, it will fail

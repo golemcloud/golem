@@ -306,6 +306,14 @@ test('Agent with with http mount variable bound to UnstructuredBinary is rejecte
   );
 });
 
+test('Agent with with http mount variable with catch-all variable', async () => {
+  await expect(async () => {
+    await import('./agentWithInvalidHttpMount4');
+  }).rejects.toThrowError(
+    "HTTP mount for agent 'AgentWithInvalidHttpMount4' cannot contain catch-all path variable 'filePath'",
+  );
+});
+
 test('Agent with with http endpoint query variables referring to Principal is rejected', async () => {
   await expect(async () => {
     await import('./agentWithInvalidHttpEndpoint1');
