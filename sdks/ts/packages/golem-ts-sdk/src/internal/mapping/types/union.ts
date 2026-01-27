@@ -34,7 +34,8 @@ const AnonymousUnionTypeRegistry = new Map<string, AnalysedType>();
 type UnionCtx = Ctx & { type: Extract<TsType, { kind: "union" }> };
 
 // TODO; Refactor more here, (added only comments for now to avoid losing changes)
-export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
+export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
+  const { type, scope } = ctx;
   const hash = JSON.stringify(buildJSONFromType(type));
 
   const analysedType = AnonymousUnionTypeRegistry.get(hash);
@@ -139,15 +140,7 @@ export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCt
   // If the union is neither a tagged union nor a union of only literals, we proceed with normal union handling
   // First, we check if the union includes undefined or null types in it.
   if (includesEmptyType(type.unionTypes)) {
-    const unionTypeWithoutEmptyTypes = filterEmptyTypesFromUnion(
-      scopeName,
-      parameterInScope,
-      type.name,
-      type,
-      type.unionTypes,
-      type.typeParams,
-      type.originalTypeName
-    );
+    const unionTypeWithoutEmptyTypes = filterEmptyTypesFromUnion(ctx);
 
     if (Either.isLeft(unionTypeWithoutEmptyTypes)) {
       return Either.left(unionTypeWithoutEmptyTypes.val);
@@ -295,24 +288,19 @@ function includesEmptyType(
 }
 
 function filterEmptyTypesFromUnion(
-  scopeName: string | undefined,
-  paramNameOpt: Option.Option<string>,
-  unionTypeName: string | undefined,
-  type: TsType,
-  unionTypes: TsType[],
-  typeParams: TsType[],
-  originalTypeName: string | undefined
+    ctx: UnionCtx
 ): Either.Either<TsType, string> {
 
-  const alternateTypes = unionTypes.filter(
+  const type = ctx.type;
+  const alternateTypes = type.unionTypes.filter(
     (ut) => (ut.kind !== "undefined") && (ut.kind !== "null") && (ut.kind !== "void"),
   );
 
   if (alternateTypes.length === 0) {
-    if (Option.isSome(paramNameOpt)) {
-      const paramName = paramNameOpt.val;
+    if (Option.isSome(ctx.parameterInScope)) {
+      const paramName = ctx.parameterInScope.val;
       return Either.left(
-        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that cannot be resolved to a valid type`,
+        `Parameter \`${paramName}\` in \`${ctx.scopeName}\` has a union type that cannot be resolved to a valid type`,
       );
     }
 
@@ -326,7 +314,7 @@ function filterEmptyTypesFromUnion(
     return Either.right(alternateTypes[0]);
   }
 
-  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: typeParams, originalTypeName: originalTypeName });
+  return Either.right({ kind: "union", name: type.name, unionTypes: alternateTypes, optional: type.optional, typeParams: type.typeParams, originalTypeName: type.originalTypeName });
 }
 
 function convertUserDefinedResultToWitResult(typeName: string | undefined, resultType: UserDefinedResultType, mapper: TypeMapper): Either.Either<AnalysedType, string> {
