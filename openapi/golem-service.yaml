@@ -13792,10 +13792,10 @@ components:
         hash:
           type: string
           format: hash
-        agentTypes:
-          type: array
-          items:
-            type: string
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
         createdAt:
           type: string
           format: date-time
@@ -13805,21 +13805,31 @@ components:
       - environmentId
       - domain
       - hash
-      - agentTypes
+      - agents
       - createdAt
+    HttpApiDeploymentAgentOptions:
+      title: HttpApiDeploymentAgentOptions
+      type: object
+      properties:
+        securityScheme:
+          description: |-
+            Security scheme to use for all agent methods that require auth.
+            Failure to provide a security scheme for an agent that requires one will lead to a deployment failure.
+            If the requested security scheme does not exist in the environment, the route will be disabled at runtime.
+          type: string
     HttpApiDeploymentCreation:
       title: HttpApiDeploymentCreation
       type: object
       properties:
         domain:
           type: string
-        agentTypes:
-          type: array
-          items:
-            type: string
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
       required:
       - domain
-      - agentTypes
+      - agents
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
       type: object
@@ -13827,10 +13837,10 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        agentTypes:
-          type: array
-          items:
-            type: string
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
       required:
       - currentRevision
     HttpApiRoute:

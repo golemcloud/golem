@@ -15,7 +15,7 @@
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::http_api_definition::HttpApiDefinition;
-use crate::model::diff::http_api_deployment::HttpApiDeployment;
+use crate::model::diff::http_api_deployment::HttpApiDeploymentLegacy;
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
@@ -32,7 +32,7 @@ pub struct Deployment {
     pub http_api_definitions: BTreeMap<String, HashOf<HttpApiDefinition>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
-    pub http_api_deployments: BTreeMap<String, HashOf<HttpApiDeployment>>,
+    pub http_api_deployments: BTreeMap<String, HashOf<HttpApiDeploymentLegacy>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -43,7 +43,7 @@ pub struct DeploymentDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub http_api_definitions: BTreeMapDiff<String, HashOf<HttpApiDefinition>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub http_api_deployments: BTreeMapDiff<String, HashOf<HttpApiDeployment>>,
+    pub http_api_deployments: BTreeMapDiff<String, HashOf<HttpApiDeploymentLegacy>>,
 }
 
 impl Diffable for Deployment {

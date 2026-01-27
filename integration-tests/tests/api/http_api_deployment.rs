@@ -27,10 +27,11 @@ use golem_common::model::http_api_definition::{
     HttpApiRoute, RouteMethod, WorkerGatewayBinding,
 };
 use golem_common::model::http_api_deployment::{
-    HttpApiDeploymentCreation, HttpApiDeploymentUpdate,
+    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation, HttpApiDeploymentUpdate,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -47,7 +48,10 @@ async fn create_http_api_deployment_for_nonexitant_domain(
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: Domain("testdomain.com".to_string()),
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let result = client
@@ -74,7 +78,10 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let http_api_deployment = client
@@ -118,7 +125,10 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let http_api_deployment = client
@@ -127,13 +137,16 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
         current_revision: http_api_deployment.revision,
-        agent_types: Some(
-            [
+        agents: Some(BTreeMap::from_iter([
+            (
                 AgentTypeName("test-api".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
                 AgentTypeName("test-api-2".to_string()),
-            ]
-            .into(),
-        ),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+        ])),
     };
 
     let updated_http_api_deployment = client
@@ -142,9 +155,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     assert!(updated_http_api_deployment.id == http_api_deployment.id);
     assert!(updated_http_api_deployment.revision == http_api_deployment.revision.next()?);
-    assert!(
-        updated_http_api_deployment.agent_types == http_api_deployment_update.agent_types.unwrap()
-    );
+    assert!(updated_http_api_deployment.agents == http_api_deployment_update.agents.unwrap());
 
     {
         let fetched_http_api_deployment = client
@@ -201,7 +212,10 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let http_api_deployment = client
@@ -260,7 +274,10 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     client
@@ -293,7 +310,10 @@ async fn updates_with_wrong_revision_number_are_rejected(
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let http_api_deployment = client
@@ -302,13 +322,16 @@ async fn updates_with_wrong_revision_number_are_rejected(
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
         current_revision: http_api_deployment.revision.next()?,
-        agent_types: Some(
-            [
+        agents: Some(BTreeMap::from_iter([
+            (
                 AgentTypeName("test-api".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
                 AgentTypeName("test-api-2".to_string()),
-            ]
-            .into(),
-        ),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+        ])),
     };
 
     let result = client
@@ -335,7 +358,10 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let http_api_deployment_1 = client
@@ -414,7 +440,10 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agent_types: [AgentTypeName("ephemeral-echo-agent".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("ephemeral-echo-agent".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let http_api_deployment = client
@@ -453,7 +482,10 @@ async fn cannot_access_http_api_deployment_from_another_user(
 
     let creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let deployment = client_a
@@ -488,7 +520,10 @@ async fn cannot_delete_http_api_deployment_from_another_user(
 
     let creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let deployment = client_a
@@ -520,7 +555,10 @@ async fn delete_with_wrong_revision_is_rejected(
 
     let creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let deployment = client
@@ -553,7 +591,10 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
 
     let creation = HttpApiDeploymentCreation {
         domain,
-        agent_types: [AgentTypeName("test-api".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let deployment = client

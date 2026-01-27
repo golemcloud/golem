@@ -107,6 +107,8 @@ pub enum DeployValidationError {
     ComponentNotFound(ComponentName),
     #[error("Agent type name {0} is provided by multiple components")]
     AmbiguousAgentTypeName(AgentTypeName),
+    #[error("No security scheme configured for agent {0} but agent has methods that require auth")]
+    NoSecuritySchemeConfigured(AgentTypeName),
     #[error(
         "Method {agent_method} of agent {agent_type} used by http api at {method} {domain}/{path} is invalid: {error}"
     )]

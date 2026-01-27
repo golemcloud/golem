@@ -275,19 +275,21 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         domain: &str,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
-        let opt_deleted_revision: Option<HttpApiDeploymentRevisionIdentityRecord> =
-            self.with_ro("create - get opt deleted").fetch_optional_as(
+        let opt_deleted_revision: Option<HttpApiDeploymentRevisionIdentityRecord> = self
+            .with_ro("create - get opt deleted")
+            .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT h.http_api_deployment_id, h.domain, hr.revision_id, hr.hash, hr.agent_types
+                    SELECT h.http_api_deployment_id, h.domain, hr.revision_id, hr.hash, hr.data
                     FROM http_api_deployments h
                     JOIN http_api_deployment_revisions hr
                         ON h.http_api_deployment_id = hr.http_api_deployment_id
                             AND h.current_revision_id = hr.revision_id
                     WHERE environment_id = $1 AND domain = $2 AND deleted_at IS NOT NULL
                 "#})
-                    .bind(environment_id)
-                    .bind(domain)
-            ).await?;
+                .bind(environment_id)
+                .bind(domain),
+            )
+            .await?;
 
         if let Some(deleted_revision) = opt_deleted_revision {
             let recreated_revision = revision.for_recreation(
@@ -419,7 +421,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
-                        dr.revision_id, dr.hash, dr.agent_types,
+                        dr.revision_id, dr.hash, dr.data,
                         dr.created_at, dr.created_by, dr.deleted,
                         d.created_at as entity_created_at
                     FROM http_api_deployments d
@@ -441,7 +443,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
-                        dr.revision_id, dr.hash, dr.agent_types,
+                        dr.revision_id, dr.hash, dr.data,
                         dr.created_at, dr.created_by, dr.deleted,
                         d.created_at as entity_created_at
                     FROM http_api_deployments d
@@ -464,7 +466,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
-                        dr.revision_id, dr.hash, dr.agent_types,
+                        dr.revision_id, dr.hash, dr.data,
                         dr.created_at, dr.created_by, dr.deleted,
                         d.created_at as entity_created_at
                     FROM http_api_deployments d
@@ -486,7 +488,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
-                        dr.revision_id, dr.hash, dr.agent_types,
+                        dr.revision_id, dr.hash, dr.data,
                         dr.created_at, dr.created_by, dr.deleted,
                         d.created_at as entity_created_at
                     FROM http_api_deployments d
@@ -509,7 +511,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT had.environment_id, had.domain, hadr.http_api_deployment_id,
-                        hadr.revision_id, hadr.hash, hadr.agent_types,
+                        hadr.revision_id, hadr.hash, hadr.data,
                         hadr.created_at, hadr.created_by, hadr.deleted,
                         had.created_at as entity_created_at
                     FROM http_api_deployments had
@@ -536,7 +538,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT had.environment_id, had.domain, hadr.http_api_deployment_id,
-                        hadr.revision_id, hadr.hash, hadr.agent_types,
+                        hadr.revision_id, hadr.hash, hadr.data,
                         hadr.created_at, hadr.created_by, hadr.deleted,
                         had.created_at as entity_created_at
                     FROM http_api_deployments had
@@ -578,15 +580,15 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                     INSERT INTO http_api_deployment_revisions
-                    (http_api_deployment_id, revision_id, agent_types,
+                    (http_api_deployment_id, revision_id, data,
                         hash, created_at, created_by, deleted)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     RETURNING http_api_deployment_id, revision_id, hash,
-                        created_at, created_by, deleted, agent_types
+                        created_at, created_by, deleted, data
                 "# })
             .bind(revision.http_api_deployment_id)
             .bind(revision.revision_id)
-            .bind(revision.agent_types)
+            .bind(&revision.data)
             .bind(revision.hash)
             .bind_deletable_revision_audit(revision.audit),
         )

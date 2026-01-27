@@ -292,7 +292,7 @@ impl ApiDeploymentCommandHandler {
         &self,
         http_api_deployment: &DeploymentPlanHttpApiDeploymentEntry,
         deployable_http_api_deployment: &[HttpApiDefinitionName],
-        _diff: &diff::DiffForHashOf<diff::HttpApiDeployment>,
+        _diff: &diff::DiffForHashOf<diff::HttpApiDeploymentLegacy>,
     ) -> anyhow::Result<()> {
         log_action(
             "Updating",
