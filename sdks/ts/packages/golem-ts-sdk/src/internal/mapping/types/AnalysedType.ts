@@ -38,7 +38,9 @@ export interface NameOptionTypePair {
 }
 
 export type TypedArray = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
+
 export type EmptyType = 'null' | 'void' | 'undefined' | 'question-mark';
+
 export type CustomOrInbuilt = {tag: 'custom', okValueName: string | undefined, errValueName: string | undefined} | {tag: 'inbuilt', okEmptyType: EmptyType | undefined, errEmptyType: EmptyType | undefined};
 
 // This is similar to internal analyzed-type in wasm-rpc (golem)
@@ -202,43 +204,215 @@ export type AnalysedResourceMode = 'owned' | 'borrowed';
 
 export type AnalysedResourceId = number;
 
+export function field(name: string, typ: AnalysedType): NameTypePair {
+  return { name, typ };
+}
 
-export const  field = (name: string, typ: AnalysedType): NameTypePair => ({ name, typ });
+export function case_(name: string, typ: AnalysedType): NameOptionTypePair {
+  return { name, typ };
+}
 
-export const case_ = (name: string, typ: AnalysedType): NameOptionTypePair => ({ name, typ });
-export const optCase = (name: string, typ?: AnalysedType): NameOptionTypePair => ({ name, typ });
-export const unitCase=  (name: string): NameOptionTypePair => ({ name });
+export function optCase(name: string, typ?: AnalysedType): NameOptionTypePair {
+  return { name, typ };
+}
 
- export const bool =  (): AnalysedType => ({ kind: 'bool' });
- export const str =  (): AnalysedType => ({ kind: 'string' });
- export const chr = (): AnalysedType => ({ kind: 'chr' });
- export const f64 = (): AnalysedType => ({ kind: 'f64' });
- export const f32 = (): AnalysedType => ({ kind: 'f32' });
- export const u64 = (isBigInt: boolean): AnalysedType => ({ kind: 'u64', isBigInt });
- export const s64 = (isBigInt: boolean): AnalysedType => ({ kind: 's64' , isBigInt});
- export const u32 = (): AnalysedType => ({ kind: 'u32' });
- export const s32 = (): AnalysedType => ({ kind: 's32' });
- export const u16 = (): AnalysedType => ({ kind: 'u16' });
- export const s16 =  (): AnalysedType => ({ kind: 's16' });
- export const u8 =  (): AnalysedType => ({ kind: 'u8' });
- export const s8 =  (): AnalysedType => ({ kind: 's8' });
+export function unitCase(name: string): NameOptionTypePair {
+  return { name };
+}
 
- export const list = (name: string | undefined, typedArrayKind: TypedArray | undefined, mapType: {keyType: AnalysedType, valueType: AnalysedType} | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', typedArray: typedArrayKind, mapType: mapType,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, inner } });
- export const option = (name: string| undefined, emptyType: EmptyType, inner: AnalysedType): AnalysedType => ({ kind: 'option',  emptyType: emptyType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, inner } });
- export const tuple =  (name: string | undefined, emptyType: EmptyType | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple',   emptyType: emptyType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, items } });
- export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record',  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, fields } });
- export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, names } });
- export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
- export const variant = (name: string | undefined, taggedTypes: TaggedTypeMetadata[],  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
+export function bool(): AnalysedType {
+  return { kind: 'bool' };
+}
 
- export const result = (name: string | undefined, resultType: CustomOrInbuilt, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
-      ({ kind: 'result', resultType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, ok, err } });
+export function str(): AnalysedType {
+  return { kind: 'string' };
+}
 
+export function chr(): AnalysedType {
+  return { kind: 'chr' };
+}
 
- export const handle =  (name: string | undefined, resourceId: AnalysedResourceId, mode: AnalysedResourceMode): AnalysedType =>
-      ({ kind: 'handle', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, resourceId, mode } });
+export function f64(): AnalysedType {
+  return { kind: 'f64' };
+}
 
+export function f32(): AnalysedType {
+  return { kind: 'f32' };
+}
 
+export function u64(isBigInt: boolean): AnalysedType {
+  return { kind: 'u64', isBigInt };
+}
+
+export function s64(isBigInt: boolean): AnalysedType {
+  return { kind: 's64', isBigInt };
+}
+
+export function u32(): AnalysedType {
+  return { kind: 'u32' };
+}
+
+export function s32(): AnalysedType {
+  return { kind: 's32' };
+}
+
+export function u16(): AnalysedType {
+  return { kind: 'u16' };
+}
+
+export function s16(): AnalysedType {
+  return { kind: 's16' };
+}
+
+export function u8(): AnalysedType {
+  return { kind: 'u8' };
+}
+
+export function s8(): AnalysedType {
+  return { kind: 's8' };
+}
+
+export function list(
+  name: string | undefined,
+  typedArrayKind: TypedArray | undefined,
+  mapType: { keyType: AnalysedType; valueType: AnalysedType } | undefined,
+  inner: AnalysedType,
+): AnalysedType {
+  return {
+    kind: 'list',
+    typedArray: typedArrayKind,
+    mapType,
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      inner,
+    },
+  };
+}
+
+export function option(
+  name: string | undefined,
+  emptyType: EmptyType,
+  inner: AnalysedType,
+): AnalysedType {
+  return {
+    kind: 'option',
+    emptyType,
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      inner,
+    },
+  };
+}
+
+export function tuple(
+  name: string | undefined,
+  emptyType: EmptyType | undefined,
+  items: AnalysedType[],
+): AnalysedType {
+  return {
+    kind: 'tuple',
+    emptyType,
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      items,
+    },
+  };
+}
+
+export function record(
+  name: string | undefined,
+  fields: NameTypePair[],
+): AnalysedType {
+  return {
+    kind: 'record',
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      fields,
+    },
+  };
+}
+
+export function flags(
+  name: string | undefined,
+  names: string[],
+): AnalysedType {
+  return {
+    kind: 'flags',
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      names,
+    },
+  };
+}
+
+export function enum_(
+  name: string | undefined,
+  cases: string[],
+): AnalysedType {
+  return {
+    kind: 'enum',
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      cases,
+    },
+  };
+}
+
+export function variant(
+  name: string | undefined,
+  taggedTypes: TaggedTypeMetadata[],
+  cases: NameOptionTypePair[],
+): AnalysedType {
+  return {
+    kind: 'variant',
+    taggedTypes,
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      cases,
+    },
+  };
+}
+
+export function result(
+  name: string | undefined,
+  resultType: CustomOrInbuilt,
+  ok: AnalysedType | undefined,
+  err: AnalysedType | undefined,
+): AnalysedType {
+  return {
+    kind: 'result',
+    resultType,
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      ok,
+      err,
+    },
+  };
+}
+
+export function handle(
+  name: string | undefined,
+  resourceId: AnalysedResourceId,
+  mode: AnalysedResourceMode,
+): AnalysedType {
+  return {
+    kind: 'handle',
+    value: {
+      name: convertOptionalTypeNameToKebab(name),
+      owner: undefined,
+      resourceId,
+      mode,
+    },
+  };
+}
 
 const unionTypeMapRegistry = new Map<string, AnalysedType>();
 
