@@ -19,10 +19,10 @@ import { TypeMappingScope } from './scope';
 import { generateVariantCaseName } from './name';
 import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './stringFormat';
 import {
-  getTaggedUnion,
-  getUnionOfLiterals,
+  tryTaggedUnion,
+  tryUnionOfOnlyLiterals,
   TaggedTypeMetadata,
-  UserDefinedResultType,
+  UserDefinedResultType, LiteralUnions, TaggedUnion,
 } from './taggedUnion';
 
 type TsType = CoreType.Type;
@@ -414,7 +414,7 @@ export function handle(
   };
 }
 
-const unionTypeMapRegistry = new Map<string, AnalysedType>();
+const AnonymousUnionTypeRegistry = new Map<string, AnalysedType>();
 
 export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
   const result =
@@ -435,477 +435,550 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
 }
 
 export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
+  const rejected = rejectBoxedTypes(type);
+  if (Either.isLeft(rejected)) return rejected;
 
-  if (type.name === 'String') {
-    return Either.left(
-      "Unsupported type `String`, use `string` instead"
-    )
+  return callHandler(type.kind, ctx(type, scope));
+}
+
+function callHandler<K extends TsType["kind"]>(
+  kind: K,
+  ctx: Ctx
+): Either.Either<AnalysedType, string> {
+  const handler = handlers[kind] as Handler<K>;
+  return handler(ctx as Ctx & { type: Extract<TsType, { kind: K }> });
+}
+
+type Ctx = {
+  type: TsType;
+  scope: Option.Option<TypeMappingScope>;
+  scopeName?: string;
+  parameterInScope: Option.Option<string>;
+};
+
+function ctx(type: TsType, scope: Option.Option<TypeMappingScope>): Ctx {
+  return {
+    type,
+    scope,
+    scopeName: Option.isSome(scope) ? scope.val.name : undefined,
+    parameterInScope: Option.isSome(scope)
+      ? TypeMappingScope.paramName(scope.val)
+      : Option.none(),
+  };
+}
+
+type Handler<K extends TsType["kind"]> =
+  (ctx: Ctx & { type: Extract<TsType, { kind: K }> }) => Either.Either<AnalysedType, string>;
+
+const handlers: { [K in TsType["kind"]]: Handler<K> } = {
+  "boolean": () => Either.right(bool()),
+  "number":  () => Either.right(f64()),
+  "string":  () => Either.right(str()),
+  "bigint":  () => Either.right(u64(true)),
+
+  "null": unsupported("null"),
+  "undefined": unsupported("undefined"),
+  "void": unsupported("void"),
+
+  "tuple": handleTuple,
+  "union": handleUnion,
+  "object": handleObject,
+  "interface": handleInterface,
+  "class": unsupportedWithHint("class", "Use object instead."),
+  "promise": handlePromise,
+  "map": handleMap,
+  "literal": handleLiteral,
+  "alias": handleAlias,
+  "others": handleOthers,
+  "unresolved-type": handleUnresolved,
+  "array": handleArray,
+}
+
+function unsupported(kind: string): Handler<any> {
+  return ({ scopeName, parameterInScope }) =>
+    Either.left(
+      `Unsupported type \`${kind}\``
+      + (scopeName ? ` in ${scopeName}` : "")
+      + (Option.isSome(parameterInScope) ? ` for parameter \`${parameterInScope.val}\`` : "")
+    );
+}
+
+function unsupportedWithHint(kind: string, hint: string): Handler<any> {
+  return ({ scopeName, parameterInScope }) =>
+    Either.left(
+      `Unsupported type \`${kind}\`${scopeName ? ` in ${scopeName}` : ""}` +
+      (Option.isSome(parameterInScope) ? ` for parameter \`${parameterInScope.val}\`` : "") +
+      `. Hint: ${hint}`
+    );
+}
+
+function rejectBoxedTypes(type: TsType): Either.Either<never, string> {
+  switch (type.name) {
+    case "String":  return Either.left("Unsupported type `String`, use `string` instead");
+    case "Boolean": return Either.left("Unsupported type `Boolean`, use `boolean` instead");
+    case "BigInt":  return Either.left("Unsupported type `BigInt`, use `bigint` instead");
+    case "Number":  return Either.left("Unsupported type `Number`, use `number` instead");
+    case "Symbol":  return Either.left("Unsupported type `Symbol`, use `string` if possible");
+    case "Date":    return Either.left("Unsupported type `Date`. Use a `string` if possible");
+    case "RegExp":  return Either.left("Unsupported type `RegExp`. Use a `string` if possible");
+  }
+  return Either.right(undefined as never);
+}
+
+
+type TupleCtx = Ctx & { type: Extract<TsType, { kind: "tuple" }> };
+
+function handleTuple({ type }: TupleCtx): Either.Either<AnalysedType, string> {
+  if (!type.elements.length) {
+    return Either.left("Empty tuple types are not supported");
   }
 
-  if (type.name === 'Boolean') {
-    return Either.left(
-      "Unsupported type `Boolean`, use `boolean` instead"
-    )
-  }
+  return Either.map(
+    Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none()))),
+    items => tuple(type.name, undefined, items)
+  );
+}
 
-  if (type.name === 'BigInt') {
-    return Either.left(
-      "Unsupported type `BigInt`, use `bigint` instead"
-    )
-  }
+type UnionCtx = Ctx & { type: Extract<TsType, { kind: "union" }> };
 
-  if (type.name === 'Number') {
-    return Either.left(
-      "Unsupported type `Number`, use `number` instead"
-    )
-  }
+function handleUnion({type, scope} : UnionCtx): Either.Either<AnalysedType, string> {
+  const hash = JSON.stringify(buildJSONFromType(type));
 
-  if (type.name === 'Symbol') {
-    return Either.left(
-      "Unsupported type `Symbol`, use `string` if possible"
-    )
-  }
+  const analysedType = AnonymousUnionTypeRegistry.get(hash);
+  const isAnonymous = !type.name;
 
-  if (type.name === 'Date') {
-    return Either.left("Unsupported type `Date`. Use a `string` if possible");
-  }
+  // We reuse the previously computed analysed-type for anonymous types with the same shape
+  // This reduces the size of the generated WIT significantly
+  if (analysedType && !isAnonymous) {
 
-  if (type.name === 'RegExp') {
-    return Either.left("Unsupported type `RegExp`. Use a `string` if possible");
-  }
+    if (type.unionTypes.some((ut) => ut.kind === "null")) {
+      return Either.right(option(undefined, "null", analysedType));
+    }
 
+    if (type.unionTypes.some((ut) => ut.kind === "undefined")) {
+      return Either.right(option(undefined, "undefined", analysedType));
+    }
 
-  const scopeName = Option.isSome(scope) ? scope.val.name : undefined;
-
-  const parameterInScope: Option.Option<string> =
-    Option.isSome(scope) ? TypeMappingScope.paramName(scope.val) : Option.none();
-
-  switch (type.kind) {
-    case "boolean":
-      return Either.right(bool())
-
-    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number?utm_source=chatgpt.com#number_encoding
-    case "number":
-      return Either.right(f64())
-
-    case "string":
-      return Either.right(str())
-
-    case "bigint":
-      return Either.right(u64(true))
-
-    case "null":
-      return Either.left("Unsupported type `null` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
-
-    case "undefined":
-      return Either.left("Unsupported type `undefined` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
-
-    case "void":
-      return Either.left("Unsupported type `void` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
-
-    case "tuple":
-      if (type.elements.length === 0) {
-        return Either.left("Empty tuple types are not supported");
-      } else {
-        const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
-        return Either.map(tupleElems, (items) => tuple(type.name, undefined, items));
-      }
-
-    case "union": {
-      const hash = JSON.stringify(buildJSONFromType(type));
-
-      const analysedType = unionTypeMapRegistry.get(hash);
-
-      // We reuse the analysed only for anonymous types
-      if (analysedType && !type.name) {
-
-        if (type.unionTypes.some((ut) => ut.kind === "null")) {
-          return Either.right(option(undefined, "null", analysedType));
-        }
-
-        if (type.unionTypes.some((ut) => ut.kind === "undefined")) {
-          return Either.right(option(undefined, "undefined", analysedType));
-        }
-
-        if (type.unionTypes.some((ut) => ut.kind === "void")) {
-          return Either.right(option(undefined, "void", analysedType));
-        }
-
-
-        return Either.right(analysedType);
-      }
-
-
-      const inbuiltResultType =
-        getInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams);
-
-      if (inbuiltResultType) {
-        if (!type.name && Either.isRight(inbuiltResultType) ) {
-          unionTypeMapRegistry.set(hash, inbuiltResultType.val);
-        }
-        return inbuiltResultType;
-      }
-
-      let fieldIdx = 1;
-      const possibleTypes: NameOptionTypePair[] = [];
-
-      const unionOfOnlyLiterals =
-        getUnionOfLiterals(type.unionTypes);
-
-      if (Either.isLeft(unionOfOnlyLiterals)) {
-        return unionOfOnlyLiterals;
-      }
-
-      if (Option.isSome(unionOfOnlyLiterals.val)) {
-        const analysedType = enum_(type.name, unionOfOnlyLiterals.val.val.literals);
-
-        if (!type.name) {
-          unionTypeMapRegistry.set(hash, analysedType);
-        }
-
-        return Either.right(analysedType);
-      }
-
-      const taggedUnion =
-        getTaggedUnion(type.unionTypes);
-
-      if (Either.isLeft(taggedUnion)) {
-        return taggedUnion;
-      }
-
-      if (Option.isSome(taggedUnion.val)) {
-
-        const unionType = taggedUnion.val.val;
-
-        switch (unionType.tag) {
-          case "custom":
-            const analysedTypeEither = convertTaggedTypesToVariant(type.name, unionType.val);
-            return Either.map(analysedTypeEither, (result) => {
-
-              if (!type.name) {
-                unionTypeMapRegistry.set(hash, result);
-              }
-              return result;
-            })
-
-          case "result":
-            const userDefinedEither = convertUserDefinedResultToWitResult(type.name, unionType.val);
-
-            return Either.map(userDefinedEither, (result) => {
-              if (!type.name) {
-                unionTypeMapRegistry.set(hash, result);
-              }
-              return result;
-            })
-        }
-      }
-
-      // If the union includes undefined, we need to treat it as option
-      if (includesUndefined(type.unionTypes)) {
-        const filteredTypes = filterUndefinedTypes(
-          scope,
-          type.name,
-          type,
-          type.unionTypes,
-          type.typeParams,
-          type.originalTypeName
-        );
-
-        if (Either.isLeft(filteredTypes)) {
-          return Either.left(filteredTypes.val);
-        }
-
-        const innerTypeEither =
-          fromTsTypeInternal(filteredTypes.val, Option.none());
-
-        if (Either.isLeft(innerTypeEither)) {
-          return Either.left(innerTypeEither.val);
-        }
-
-        // Type is already optional and further loop will solve it
-        if ((Option.isSome(scope) && TypeMappingScope.isOptional(scope.val))) {
-          const innerType = innerTypeEither.val;
-
-          if (!type.name){
-            unionTypeMapRegistry.set(hash, innerType);
-          }
-          return Either.right(innerType);
-        }
-
-        if (!type.name) {
-          unionTypeMapRegistry.set(hash, innerTypeEither.val);
-        }
-
-        const emptyType = type.unionTypes.some((ut) => ut.kind === "null") ?  "null" :
-          (type.unionTypes.some((ut) => ut.kind === "undefined") ? "undefined" : "void");
-
-        const result = option(undefined, emptyType, innerTypeEither.val);
-
-        return Either.right(result)
-      }
-
-      // If union has both true and false (because ts-morph consider boolean to be a union of literal true and literal false)
-
-      const hasFalseLiteral = type.unionTypes.some(t => t.kind === 'literal' && t.literalValue === 'false');
-
-      const hasTrueLiteral = type.unionTypes.some(type => type.kind === 'literal' && type.literalValue === 'true');
-
-      let hasBoolean = hasFalseLiteral && hasTrueLiteral;
-
-      let unionTypesLiteralBoolFiltered =
-        type.unionTypes.filter(field => !(field.kind === 'literal' && (field.literalValue === 'false' || field.literalValue === 'true')));
-
-      const optional =
-        unionTypesLiteralBoolFiltered.find((field) => field.kind  === 'literal')?.optional;
-
-      unionTypesLiteralBoolFiltered.push({kind: "boolean", optional: optional ?? false})
-
-      const newUnionTypes = hasBoolean ? unionTypesLiteralBoolFiltered : type.unionTypes;
-
-      for (const t of newUnionTypes) {
-        if (t.kind === "literal") {
-          const name = t.literalValue;
-          if (!name) {
-            return Either.left(`Unable to determine the literal value`);
-          }
-          if (isNumberString(name)) {
-            return Either.left("Literals of number type are not supported");
-          }
-
-          possibleTypes.push({
-            name: trimQuotes(name),
-          });
-          continue;
-        }
-
-        const result = fromTsTypeInternal(t, Option.none());
-
-        if (Either.isLeft(result)) {
-          return result;
-        }
-
-        const name = type.name;
-
-        possibleTypes.push({
-          name: generateVariantCaseName(name, fieldIdx++),
-          typ: result.val,
-        });
-      }
-
-      const result = variant(type.name, [], possibleTypes);
-
-      if (!type.name) {
-        unionTypeMapRegistry.set(hash, result);
-      }
-
-      return Either.right(result);
+    if (type.unionTypes.some((ut) => ut.kind === "void")) {
+      return Either.right(option(undefined, "void", analysedType));
     }
 
 
-    case "object":
-      const result = Either.all(type.properties.map((prop) => {
-        const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+    return Either.right(analysedType);
+  }
 
-        const nodes: Node[] = prop.getDeclarations();
-        const node = nodes[0];
+  // Check for inbuilt result type first
+  const inbuiltResultType: Either.Either<AnalysedType, string> | undefined  =
+    tryInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams);
 
-        const entityName = type.name ?? type.kind;
+  if (inbuiltResultType) {
+    if (!isAnonymous && Either.isRight(inbuiltResultType) ) {
+      AnonymousUnionTypeRegistry.set(hash, inbuiltResultType.val);
+    }
 
-        if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsType(internalType, Option.some(TypeMappingScope.object(
-            entityName,
-            prop.getName(),
-            true
-          )));
+    return inbuiltResultType;
+  }
 
-          return Either.map(tsType, (analysedType) => {
-            return field(prop.getName(), analysedType)
-          });
-        }
+  // Union field Index
+  let fieldIdx = 1;
+  const possibleTypes: NameOptionTypePair[] = [];
 
-        const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.object(
-          entityName,
-          prop.getName(),
-          false
-        )));
+  const unionOfOnlyLiterals: Either.Either<Option.Option<LiteralUnions>, string> =
+    tryUnionOfOnlyLiterals(type.unionTypes);
 
-        return Either.map(tsType, (analysedType) => {
-          return field(prop.getName(), analysedType)
+  if (Either.isLeft(unionOfOnlyLiterals)) {
+    return unionOfOnlyLiterals;
+  }
+
+  // If the union is made up of only literals, we can convert it to enum type
+  if (Option.isSome(unionOfOnlyLiterals.val)) {
+    const analysedType = enum_(type.name, unionOfOnlyLiterals.val.val.literals);
+
+    // If it's an anonymous union, we cache it to avoid any new indices being generated for the same shape
+    if (isAnonymous) {
+      AnonymousUnionTypeRegistry.set(hash, analysedType);
+    }
+
+    return Either.right(analysedType);
+  }
+
+  // If all elements of the union are tagged types, we can convert it to variant or result
+  const taggedUnion: Either.Either<Option.Option<TaggedUnion>, string> =
+    tryTaggedUnion(type.unionTypes);
+
+  if (Either.isLeft(taggedUnion)) {
+    return taggedUnion;
+  }
+
+  // If it's a tagged union, convert to variant or result
+  if (Option.isSome(taggedUnion.val)) {
+    const taggedUnionSome = taggedUnion.val;
+    const unionType = taggedUnionSome.val;
+
+    switch (unionType.tag) {
+      case "custom":
+        const analysedTypeEither: Either.Either<AnalysedType, string> =
+          convertToVariantAnalysedType(type.name, unionType.val);
+
+        return Either.map(analysedTypeEither, (result) => {
+
+          if (!isAnonymous) {
+            AnonymousUnionTypeRegistry.set(hash, result);
+          }
+          return result;
         })
-      }));
 
-      if (Either.isLeft(result)) {
-        return Either.left(result.val);
-      }
+      // Checking if the tagged union resembles a result type
+      case "result":
+        const userDefinedResultType = unionType.val;
+        const analysedTypeForCustomResult: Either.Either<AnalysedType, string> =
+          convertUserDefinedResultToWitResult(type.name, userDefinedResultType);
 
-      const fields = result.val;
-
-      if (fields.length === 0) {
-        return Either.left(`Type ${type.name} is an object but has no properties. Object types must define at least one property.`);
-
-      }
-
-      return Either.right(record(type.name, fields))
-
-    case "class":
-      const message =
-        type.name ? `${type.name} is a class, which is not supported` : "class is not supported";
-
-      return Either.left(`${message}. Use object instead.`)
-
-    case "interface":
-      const interfaceResult = Either.all(type.properties.map((prop) => {
-        const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
-
-        const nodes: Node[] = prop.getDeclarations();
-        const node = nodes[0];
-
-        const entityName = type.name ?? type.kind;
-
-        if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsType(internalType, Option.some(TypeMappingScope.interface(
-            entityName,
-            prop.getName(),
-            true
-          )));
-
-          return Either.map(tsType, (analysedType) => {
-            return field(prop.getName(), analysedType)
-          });
-        }
-
-        const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
-          entityName,
-          prop.getName(),
-          false
-        )));
-
-        return Either.map(tsType, (analysedType) => {
-          return field(prop.getName(), analysedType)
+        return Either.map(analysedTypeForCustomResult, (result) => {
+          if (!type.name) {
+            AnonymousUnionTypeRegistry.set(hash, result);
+          }
+          return result;
         })
-      }));
+    }
+  }
 
-      if (Either.isLeft(interfaceResult)) {
-        return Either.left(interfaceResult.val);
+  // If the union is neither a tagged union nor a union of only literals, we proceed with normal union handling
+  // First, we check if the union includes undefined or null types in it.
+  if (includesEmptyType(type.unionTypes)) {
+    const unionTypeWithoutEmptyTypes = filterEmptyTypesFromUnion(
+      scope,
+      type.name,
+      type,
+      type.unionTypes,
+      type.typeParams,
+      type.originalTypeName
+    );
+
+    if (Either.isLeft(unionTypeWithoutEmptyTypes)) {
+      return Either.left(unionTypeWithoutEmptyTypes.val);
+    }
+
+    // We keep the rest of the type and retry with rest of the union types
+    const innerTypeEither: Either.Either<AnalysedType, string> =
+      fromTsTypeInternal(unionTypeWithoutEmptyTypes.val, Option.none());
+
+    if (Either.isLeft(innerTypeEither)) {
+      return Either.left(innerTypeEither.val);
+    }
+
+    // Type is already optional and further loop will solve it
+    if ((Option.isSome(scope) && TypeMappingScope.isOptional(scope.val))) {
+      const innerType = innerTypeEither.val;
+
+      if (!type.name){
+        AnonymousUnionTypeRegistry.set(hash, innerType);
       }
+      return Either.right(innerType);
+    }
 
-      const interfaceFields = interfaceResult.val;
+    if (!type.name) {
+      AnonymousUnionTypeRegistry.set(hash, innerTypeEither.val);
+    }
 
-      if (interfaceFields.length === 0) {
-        return Either.left(`Type ${type.name} is an object but has no properties. Object types must define at least one property.`);
+    const emptyType = type.unionTypes.some((ut) => ut.kind === "null") ?  "null" :
+      (type.unionTypes.some((ut) => ut.kind === "undefined") ? "undefined" : "void");
 
+    const result = option(undefined, emptyType, innerTypeEither.val);
+
+    return Either.right(result)
+  }
+
+  // If union has both true and false (because ts-morph consider boolean to be a union of literal true and literal false)
+
+  const hasFalseLiteral = type.unionTypes.some(t => t.kind === 'literal' && t.literalValue === 'false');
+
+  const hasTrueLiteral = type.unionTypes.some(type => type.kind === 'literal' && type.literalValue === 'true');
+
+  let hasBoolean = hasFalseLiteral && hasTrueLiteral;
+
+  let unionTypesLiteralBoolFiltered =
+    type.unionTypes.filter(field => !(field.kind === 'literal' && (field.literalValue === 'false' || field.literalValue === 'true')));
+
+  const optional =
+    unionTypesLiteralBoolFiltered.find((field) => field.kind  === 'literal')?.optional;
+
+  unionTypesLiteralBoolFiltered.push({kind: "boolean", optional: optional ?? false})
+
+  const newUnionTypes = hasBoolean ? unionTypesLiteralBoolFiltered : type.unionTypes;
+
+  for (const t of newUnionTypes) {
+    // Special handling of literal types
+    if (t.kind === "literal") {
+      const name = t.literalValue;
+      if (!name) {
+        return Either.left(`Unable to determine the literal value`);
       }
-
-      return Either.right(record(type.name, interfaceFields))
-
-    case "promise":
-      const inner = type.element;
-      return fromTsTypeInternal(inner, Option.none());
-
-    case "map":
-      const keyT = type.key;
-      const valT = type.value;
-
-      const key = fromTsTypeInternal(keyT, Option.none());
-      const value = fromTsTypeInternal(valT, Option.none());
-
-
-      return Either.zipWith(key, value, (k, v) =>
-        list(type.name, undefined, {keyType: k, valueType: v}, tuple(undefined, undefined, [k, v])));
-
-    case "literal":
-      const literalName = type.literalValue;
-
-      if (!literalName) {
-        return Either.left(`internal error: failed to retrieve the literal value from type of kind ${type.kind}`);
-      }
-
-      if (literalName === 'true' || literalName === 'false') {
-        return Either.right(bool());
-      }
-
-      if (isNumberString(literalName)) {
+      if (isNumberString(name)) {
         return Either.left("Literals of number type are not supported");
       }
 
-      return Either.right(enum_(type.name, [trimQuotes(literalName)]))
+      // If literals, ts-morph holds on to `\"` for string literals
+      // and hence should be trimmed off.
+      possibleTypes.push({
+        name: trimQuotes(name),
+      });
 
-    case "alias":
-      return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? "<anonymous>"}`);
+      continue;
+    }
 
-    case "others":
-      const customTypeName = type.name
+    // Since we are in union handling, we don't pass down any scope
+    const result = fromTsTypeInternal(t, Option.none());
 
-      if (!customTypeName) {
-        return Either.left("Unsupported type (anonymous) found.");
-      }
 
-      if (customTypeName === 'any') {
-        return Either.left("Unsupported type `any`. Use a specific type instead");
-      }
+    if (Either.isLeft(result)) {
+      return result;
+    }
 
-      if (customTypeName === 'Date') {
-        return Either.left("Unsupported type `Date`. Use a string in ISO 8601 format instead");
-      }
+    const name = type.name;
 
-      if (customTypeName === 'next') {
-        return Either.left("Unsupported type `Iterator`. Use `Array` type instead");
-      }
+    possibleTypes.push({
+      // Since we are using cache for just handling similar types that are anonymous,
+      // This is important for `string | number | MyCustomType` kind of unions,
+      // In the above case `MyCustomType` has a name while string and number don't have a name.
+      name: generateVariantCaseName(name, fieldIdx++),
+      typ: result.val,
+    });
+  }
 
-      if (customTypeName.includes('asyncIterator')) {
-        return Either.left(`Unsupported type \`AsyncIterator\`. Use \`Array\` type instead`);
-      }
+  const result = variant(type.name, [], possibleTypes);
 
-      if (customTypeName.includes('iterator')) {
-        return Either.left(`Unsupported type \`Iterable\`. Use \`Array\` type instead`);
-      }
+  if (!type.name) {
+    AnonymousUnionTypeRegistry.set(hash, result);
+  }
 
-      if (customTypeName.includes('asyncIterable')) {
-        return Either.left(`Unsupported type \`AsyncIterable\`. Use \`Array\` type instead`);
-      }
+  return Either.right(result);
+}
 
-      if (customTypeName === 'Record') {
-        return Either.left(`Unsupported type \`${customTypeName}\`. Use a plain object or a \`Map\` type instead`);
-      }
+type ObjectCtx = Ctx & { type: Extract<TsType, { kind: "object" }> };
 
-      if (type.recursive) {
-        return Either.left(`\`${customTypeName}\` is recursive.\nRecursive types are not supported yet. \nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.`);
-      } else {
-        return Either.left(`Unsupported type \`${customTypeName}\``);
-      }
+function handleObject({ type }: ObjectCtx): Either.Either<AnalysedType, string> {
+  const result = Either.all(type.properties.map((prop) => {
+    const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
 
-    case "unresolved-type":
-      return Either.left(`Failed to resolve type for \`${type.text}\`: ${type.error}`);
+    const nodes: Node[] = prop.getDeclarations();
+    const node = nodes[0];
 
-    case 'array':
-      const name = type.name;
+    const entityName = type.name ?? type.kind;
 
-      switch (name) {
-        case "Float64Array": return Either.right(list(undefined, 'f64', undefined, f64()));
-        case "Float32Array": return Either.right(list(undefined, 'f32', undefined, f32()));
-        case "Int8Array":    return Either.right(list(undefined, 'i8', undefined, s8()));
-        case "Uint8Array":   return Either.right(list(undefined,  'u8', undefined, u8()));
-        case "Int16Array":   return Either.right(list(undefined,  'i16', undefined, s16()));
-        case "Uint16Array":  return Either.right(list(undefined,  'u16',  undefined, u16()));
-        case "Int32Array":   return Either.right(list(undefined, 'i32', undefined, s32()));
-        case "Uint32Array":  return Either.right(list(undefined, 'u32',  undefined, u32()));
-        case "BigInt64Array":  return Either.right(list(undefined, 'big-i64', undefined, s64(true)));
-        case "BigUint64Array": return Either.right(list(undefined,'big-u64', undefined, u64(true,)));
-      }
+    if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
+      const tsType = fromTsType(internalType, Option.some(TypeMappingScope.object(
+        entityName,
+        prop.getName(),
+        true
+      )));
 
-      const arrayElementType =
-        (type.kind === "array") ? type.element : undefined;
+      return Either.map(tsType, (analysedType) => {
+        return field(prop.getName(), analysedType)
+      });
+    }
 
-      if (!arrayElementType) {
-        return Either.left("Unable to determine the array element type");
-      }
+    const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.object(
+      entityName,
+      prop.getName(),
+      false
+    )));
 
-      const elemType = fromTsTypeInternal(arrayElementType, Option.none());
+    return Either.map(tsType, (analysedType) => {
+      return field(prop.getName(), analysedType)
+    })
+  }));
 
-      return Either.map(elemType, (inner) => list(type.name, undefined, undefined, inner));
+  if (Either.isLeft(result)) {
+    return Either.left(result.val);
+  }
+
+  const fields = result.val;
+
+  if (fields.length === 0) {
+    return Either.left(`Type ${type.name} is an object but has no properties. Object types must define at least one property.`);
+
+  }
+
+  return Either.right(record(type.name, fields))
+}
+
+type InterfaceCtx = Ctx & { type: Extract<TsType, { kind: "interface" }> };
+
+function handleInterface({ type }: InterfaceCtx): Either.Either<AnalysedType, string> {
+  const interfaceResult = Either.all(type.properties.map((prop) => {
+    const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+
+    const nodes: Node[] = prop.getDeclarations();
+    const node = nodes[0];
+
+    const entityName = type.name ?? type.kind;
+
+    if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
+      const tsType = fromTsType(internalType, Option.some(TypeMappingScope.interface(
+        entityName,
+        prop.getName(),
+        true
+      )));
+
+      return Either.map(tsType, (analysedType) => {
+        return field(prop.getName(), analysedType)
+      });
+    }
+
+    const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
+      entityName,
+      prop.getName(),
+      false
+    )));
+
+    return Either.map(tsType, (analysedType) => {
+      return field(prop.getName(), analysedType)
+    })
+  }));
+
+  if (Either.isLeft(interfaceResult)) {
+    return Either.left(interfaceResult.val);
+  }
+
+  const interfaceFields = interfaceResult.val;
+
+  if (interfaceFields.length === 0) {
+    return Either.left(`Type ${type.name} is an object but has no properties. Object types must define at least one property.`);
+
+  }
+
+  return Either.right(record(type.name, interfaceFields))
+}
+
+type PromiseCtx = Ctx & { type: Extract<TsType, { kind: "promise" }> };
+
+function handlePromise({ type }: PromiseCtx): Either.Either<AnalysedType, string> {
+  const inner = type.element;
+  return fromTsTypeInternal(inner, Option.none());
+}
+
+type MapCtx = Ctx & { type: Extract<TsType, { kind: "map" }> };
+
+function handleMap({ type }: MapCtx): Either.Either<AnalysedType, string> {
+  const keyT = type.key;
+  const valT = type.value;
+
+  const key = fromTsTypeInternal(keyT, Option.none());
+  const value = fromTsTypeInternal(valT, Option.none());
+
+
+  return Either.zipWith(key, value, (k, v) =>
+    list(type.name, undefined, {keyType: k, valueType: v}, tuple(undefined, undefined, [k, v])));
+}
+
+type LiteralCtx = Ctx & { type: Extract<TsType, { kind: "literal" }> };
+
+function handleLiteral({ type }: LiteralCtx): Either.Either<AnalysedType, string> {
+  const literalName = type.literalValue;
+
+  if (!literalName) {
+    return Either.left(`internal error: failed to retrieve the literal value from type of kind ${type.kind}`);
+  }
+
+  if (literalName === 'true' || literalName === 'false') {
+    return Either.right(bool());
+  }
+
+  if (isNumberString(literalName)) {
+    return Either.left("Literals of number type are not supported");
+  }
+
+  return Either.right(enum_(type.name, [trimQuotes(literalName)]))
+}
+
+type AliasCtx = Ctx & { type: Extract<TsType, { kind: "alias" }> };
+
+function handleAlias({ type }: AliasCtx): Either.Either<AnalysedType, string> {
+  return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? "<anonymous>"}`);
+}
+
+// Types that are known but tagged as "others"
+type OthersCtx = Ctx & { type: Extract<TsType, { kind: "others" }> };
+
+function handleOthers({ type }: OthersCtx): Either.Either<AnalysedType, string> {
+  const customTypeName = type.name
+
+  if (!customTypeName) {
+    return Either.left("Unsupported type (anonymous) found.");
+  }
+
+  if (customTypeName === 'any') {
+    return Either.left("Unsupported type `any`. Use a specific type instead");
+  }
+
+  if (customTypeName === 'Date') {
+    return Either.left("Unsupported type `Date`. Use a string in ISO 8601 format instead");
+  }
+
+  if (customTypeName === 'next') {
+    return Either.left("Unsupported type `Iterator`. Use `Array` type instead");
+  }
+
+  if (customTypeName.includes('asyncIterator')) {
+    return Either.left(`Unsupported type \`AsyncIterator\`. Use \`Array\` type instead`);
+  }
+
+  if (customTypeName.includes('iterator')) {
+    return Either.left(`Unsupported type \`Iterable\`. Use \`Array\` type instead`);
+  }
+
+  if (customTypeName.includes('asyncIterable')) {
+    return Either.left(`Unsupported type \`AsyncIterable\`. Use \`Array\` type instead`);
+  }
+
+  if (customTypeName === 'Record') {
+    return Either.left(`Unsupported type \`${customTypeName}\`. Use a plain object or a \`Map\` type instead`);
+  }
+
+  if (type.recursive) {
+    return Either.left(`\`${customTypeName}\` is recursive.\nRecursive types are not supported yet. \nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.`);
+  } else {
+    return Either.left(`Unsupported type \`${customTypeName}\``);
   }
 }
 
+// Types that are fully unknown
+type UnresolvedCtx = Ctx & { type: Extract<TsType, { kind: "unresolved-type" }> };
+
+function handleUnresolved({ type }: UnresolvedCtx): Either.Either<AnalysedType, string> {
+  return Either.left(`Failed to resolve type for \`${type.text}\`: ${type.error}`);
+}
+
+type ArrayCtx = Ctx & { type: Extract<TsType, { kind: "array" }> };
+
+function handleArray({ type }: ArrayCtx): Either.Either<AnalysedType, string> {
+  const name = type.name;
+
+  switch (name) {
+    case "Float64Array": return Either.right(list(undefined, 'f64', undefined, f64()));
+    case "Float32Array": return Either.right(list(undefined, 'f32', undefined, f32()));
+    case "Int8Array":    return Either.right(list(undefined, 'i8', undefined, s8()));
+    case "Uint8Array":   return Either.right(list(undefined,  'u8', undefined, u8()));
+    case "Int16Array":   return Either.right(list(undefined,  'i16', undefined, s16()));
+    case "Uint16Array":  return Either.right(list(undefined,  'u16',  undefined, u16()));
+    case "Int32Array":   return Either.right(list(undefined, 'i32', undefined, s32()));
+    case "Uint32Array":  return Either.right(list(undefined, 'u32',  undefined, u32()));
+    case "BigInt64Array":  return Either.right(list(undefined, 'big-i64', undefined, s64(true)));
+    case "BigUint64Array": return Either.right(list(undefined,'big-u64', undefined, u64(true,)));
+  }
+
+  const arrayElementType =
+    (type.kind === "array") ? type.element : undefined;
+
+  if (!arrayElementType) {
+    return Either.left("Unable to determine the array element type");
+  }
+
+  const elemType = fromTsTypeInternal(arrayElementType, Option.none());
+
+  return Either.map(elemType, (inner) => list(type.name, undefined, undefined, inner));
+}
 
 function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undefined {
   if (Option.isSome(optScope)) {
@@ -916,7 +989,7 @@ function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undef
   return undefined;
 }
 
-function convertTaggedTypesToVariant(typeName: string | undefined, taggedTypes: TaggedTypeMetadata[]): Either.Either<AnalysedType, string> {
+function convertToVariantAnalysedType(typeName: string | undefined, taggedTypes: TaggedTypeMetadata[]): Either.Either<AnalysedType, string> {
   const possibleTypes: NameOptionTypePair[] = [];
 
   for (const taggedTypeMetadata of taggedTypes) {
@@ -950,7 +1023,6 @@ function convertTaggedTypesToVariant(typeName: string | undefined, taggedTypes: 
 
   return Either.right(variant(typeName, taggedTypes, possibleTypes));
 }
-
 
 function convertUserDefinedResultToWitResult(typeName: string | undefined, resultType: UserDefinedResultType): Either.Either<AnalysedType, string> {
   const okTypeResult = resultType.okType
@@ -989,13 +1061,13 @@ function isVoidType(t: TsType): boolean {
   return t.kind === 'void'
 }
 
-function includesUndefined(
+function includesEmptyType(
   unionTypes: TsType[]
 ): boolean {
   return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
 }
 
-function filterUndefinedTypes(
+function filterEmptyTypesFromUnion(
   scope: Option.Option<TypeMappingScope>,
   unionTypeName: string | undefined,
   type: TsType,
@@ -1035,15 +1107,15 @@ function filterUndefinedTypes(
   return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: typeParams, originalTypeName: originalTypeName });
 }
 
-export function getInbuiltResultType(
+export function tryInbuiltResultType(
   typeName: string | undefined,
   originalTypeName: string | undefined, // if aliased
   unionTypes: TsType[],
   typeParams: TsType[],
 ): Either.Either<AnalysedType, string> | undefined {
-    const isResult = typeName === 'Result' || originalTypeName === 'Result';
+    const isInbuiltResult = typeName === 'Result' || originalTypeName === 'Result';
 
-    if (isResult && unionTypes.length === 2 && unionTypes[0].name === 'Ok' && unionTypes[1].name === 'Err') {
+    if (isInbuiltResult && unionTypes.length === 2 && unionTypes[0].name === 'Ok' && unionTypes[1].name === 'Err') {
       const okType = typeParams[0];
       const errType = typeParams[1];
 

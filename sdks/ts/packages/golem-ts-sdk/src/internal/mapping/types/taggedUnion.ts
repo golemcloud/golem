@@ -77,7 +77,7 @@ export const TaggedUnion = {
 }
 
 
-export function getTaggedUnion(
+export function tryTaggedUnion(
   unionTypes: TsType[]
 ): Either.Either<Option.Option<TaggedUnion>, string> {
 
@@ -196,7 +196,7 @@ export type LiteralUnions = {
   literals: string[]
 }
 
-export function getUnionOfLiterals(
+export function tryUnionOfOnlyLiterals(
   unionTypes: TsType[]
 ): Either.Either<Option.Option<LiteralUnions>, string> {
 

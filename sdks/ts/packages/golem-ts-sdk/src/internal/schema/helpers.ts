@@ -23,7 +23,7 @@ import {
   convertVariantTypeNameToKebab,
 } from '../mapping/types/stringFormat';
 import { ParameterDetail } from '../mapping/values/dataValue';
-import { getTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
+import { tryTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
 
 const MULTIMODAL_TYPE_NAMES = [
   'Multimodal',
@@ -47,8 +47,8 @@ export function getMultimodalParamDetails(
 ): Either.Either<ParameterDetail[], string> {
   const multimodalTypes =
     type.kind === 'union'
-      ? getTaggedUnion(type.unionTypes)
-      : getTaggedUnion([type]);
+      ? tryTaggedUnion(type.unionTypes)
+      : tryTaggedUnion([type]);
 
   if (Either.isLeft(multimodalTypes)) {
     return Either.left(
