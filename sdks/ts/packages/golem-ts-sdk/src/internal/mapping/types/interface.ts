@@ -18,13 +18,13 @@ import * as Option from "../../../newTypes/option";
 import { AnalysedType, field, record } from './analysedType';
 import { Ctx } from './ctx';
 import { TypeMappingScope } from './scope';
-import { fromTsType, fromTsTypeInternal } from './typeMapping';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 type InterfaceCtx = Ctx & { type: Extract<TsType, { kind: "interface" }> };
 
-export function handleInterface({ type }: InterfaceCtx): Either.Either<AnalysedType, string> {
+export function handleInterface({ type }: InterfaceCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const interfaceResult = Either.all(type.properties.map((prop) => {
     const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
 
@@ -34,7 +34,7 @@ export function handleInterface({ type }: InterfaceCtx): Either.Either<AnalysedT
     const entityName = type.name ?? type.kind;
 
     if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-      const tsType = fromTsType(internalType, Option.some(TypeMappingScope.interface(
+      const tsType = mapper(internalType, Option.some(TypeMappingScope.interface(
         entityName,
         prop.getName(),
         true
@@ -45,7 +45,7 @@ export function handleInterface({ type }: InterfaceCtx): Either.Either<AnalysedT
       });
     }
 
-    const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
+    const tsType = mapper(internalType, Option.some(TypeMappingScope.interface(
       entityName,
       prop.getName(),
       false

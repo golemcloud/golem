@@ -3,14 +3,14 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { Ctx } from './ctx';
-import { fromTsType, fromTsTypeInternal } from './typeMapping';
 import { AnalysedType, field, record } from './analysedType';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 type ObjectCtx = Ctx & { type: Extract<TsType, { kind: "object" }> };
 
-export function handleObject({ type }: ObjectCtx): Either.Either<AnalysedType, string> {
+export function handleObject({ type }: ObjectCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const result = Either.all(type.properties.map((prop) => {
     const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
 
@@ -20,7 +20,7 @@ export function handleObject({ type }: ObjectCtx): Either.Either<AnalysedType, s
     const entityName = type.name ?? type.kind;
 
     if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-      const tsType = fromTsType(internalType, Option.some(TypeMappingScope.object(
+      const tsType =  mapper(internalType, Option.some(TypeMappingScope.object(
         entityName,
         prop.getName(),
         true
@@ -31,7 +31,7 @@ export function handleObject({ type }: ObjectCtx): Either.Either<AnalysedType, s
       });
     }
 
-    const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.object(
+    const tsType = mapper(internalType, Option.some(TypeMappingScope.object(
       entityName,
       prop.getName(),
       false

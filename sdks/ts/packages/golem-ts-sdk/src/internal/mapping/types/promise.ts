@@ -17,13 +17,13 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { Ctx } from './ctx';
 import { AnalysedType } from './analysedType';
-import { fromTsTypeInternal } from './typeMapping';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 type PromiseCtx = Ctx & { type: Extract<TsType, { kind: "promise" }> };
 
-export function handlePromise({ type }: PromiseCtx): Either.Either<AnalysedType, string> {
+export function handlePromise({ type }: PromiseCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const inner = type.element;
-  return fromTsTypeInternal(inner, Option.none());
+  return mapper(inner, Option.none());
 }

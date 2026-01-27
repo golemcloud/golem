@@ -17,7 +17,6 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { Ctx } from './ctx';
 import { AnalysedType,  list, tuple } from './analysedType';
-import { fromTsTypeInternal } from './typeMapping';
 import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
@@ -28,8 +27,8 @@ export function handleMap({ type }: MapCtx, mapper: TypeMapper): Either.Either<A
   const keyT = type.key;
   const valT = type.value;
 
-  const key = fromTsTypeInternal(keyT, Option.none());
-  const value = fromTsTypeInternal(valT, Option.none());
+  const key = mapper(keyT, Option.none());
+  const value = mapper(valT, Option.none());
 
 
   return Either.zipWith(key, value, (k, v) =>

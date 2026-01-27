@@ -16,13 +16,14 @@ import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import { Ctx } from './ctx';
 import { AnalysedType } from './analysedType';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 // Types that are known but tagged as "others"
 type OthersCtx = Ctx & { type: Extract<TsType, { kind: "others" }> };
 
-export function handleOthers({ type }: OthersCtx): Either.Either<AnalysedType, string> {
+export function handleOthers({ type }: OthersCtx, _mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const customTypeName = type.name
 
   if (!customTypeName) {

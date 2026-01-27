@@ -24,8 +24,8 @@ import {
   UserDefinedResultType, LiteralUnions, TaggedUnion, TaggedTypeMetadata,
 } from './taggedUnion';
 import { AnalysedType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
-import { fromTsTypeInternal} from './typeMapping';
 import { Ctx } from './ctx';
+import {TypeMapper} from "./typeMapper";
 
 type TsType = CoreType.Type;
 
@@ -34,7 +34,7 @@ const AnonymousUnionTypeRegistry = new Map<string, AnalysedType>();
 type UnionCtx = Ctx & { type: Extract<TsType, { kind: "union" }> };
 
 // TODO; Refactor more here, (added only comments for now to avoid losing changes)
-export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCtx): Either.Either<AnalysedType, string> {
+export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const hash = JSON.stringify(buildJSONFromType(type));
 
   const analysedType = AnonymousUnionTypeRegistry.get(hash);
@@ -62,7 +62,7 @@ export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCt
 
   // Check for inbuilt result type first
   const inbuiltResultType: Either.Either<AnalysedType, string> | undefined  =
-    tryInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams);
+    tryInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams, mapper);
 
   if (inbuiltResultType) {
     if (isAnonymous && Either.isRight(inbuiltResultType) ) {
@@ -111,7 +111,7 @@ export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCt
     switch (unionType.tag) {
       case "custom":
         const analysedTypeEither: Either.Either<AnalysedType, string> =
-          convertToVariantAnalysedType(type.name, unionType.val);
+          convertToVariantAnalysedType(type.name, unionType.val, mapper);
 
         return Either.map(analysedTypeEither, (result) => {
 
@@ -125,7 +125,7 @@ export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCt
       case "result":
         const userDefinedResultType = unionType.val;
         const analysedTypeForCustomResult: Either.Either<AnalysedType, string> =
-          convertUserDefinedResultToWitResult(type.name, userDefinedResultType);
+          convertUserDefinedResultToWitResult(type.name, userDefinedResultType, mapper);
 
         return Either.map(analysedTypeForCustomResult, (result) => {
           if (isAnonymous) {
@@ -155,7 +155,7 @@ export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCt
 
     // We keep the rest of the type and retry with rest of the union types
     const innerTypeEither: Either.Either<AnalysedType, string> =
-      fromTsTypeInternal(unionTypeWithoutEmptyTypes.val, Option.none());
+      mapper(unionTypeWithoutEmptyTypes.val, Option.none());
 
     if (Either.isLeft(innerTypeEither)) {
       return Either.left(innerTypeEither.val);
@@ -222,7 +222,7 @@ export function handleUnion({type, scope, scopeName, parameterInScope} : UnionCt
     }
 
     // Since we are in union handling, we don't pass down any scope
-    const result = fromTsTypeInternal(t, Option.none());
+    const result = mapper(t, Option.none());
 
 
     if (Either.isLeft(result)) {
@@ -251,6 +251,7 @@ export function tryInbuiltResultType(
   originalTypeName: string | undefined, // if aliased
   unionTypes: TsType[],
   typeParams: TsType[],
+  mapper: TypeMapper
 ): Either.Either<AnalysedType, string> | undefined {
   const isInbuiltResult = typeName === 'Result' || originalTypeName === 'Result';
 
@@ -266,19 +267,19 @@ export function tryInbuiltResultType(
     }
 
     if (okIsVoid) {
-      return Either.map(fromTsTypeInternal(errType, Option.none()), (err) =>
+      return Either.map(mapper(errType, Option.none()), (err) =>
         result(undefined, { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: undefined }, undefined, err)
       );
     }
 
     if (errIsVoid) {
-      return Either.map(fromTsTypeInternal(okType, Option.none()), (ok) =>
+      return Either.map(mapper(okType, Option.none()), (ok) =>
         result(undefined, { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: 'void' }, ok, undefined)
       );
     }
 
-    const okAnalysed = fromTsTypeInternal(okType, Option.none());
-    const errAnalysed = fromTsTypeInternal(errType, Option.none());
+    const okAnalysed = mapper(okType, Option.none());
+    const errAnalysed = mapper(errType, Option.none());
 
     return Either.map(Either.zipBoth(okAnalysed, errAnalysed), ([ok, err]) => {
       return result(undefined, { tag: 'inbuilt' , okEmptyType: undefined, errEmptyType: undefined}, ok, err);
@@ -328,11 +329,11 @@ function filterEmptyTypesFromUnion(
   return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: typeParams, originalTypeName: originalTypeName });
 }
 
-function convertUserDefinedResultToWitResult(typeName: string | undefined, resultType: UserDefinedResultType): Either.Either<AnalysedType, string> {
+function convertUserDefinedResultToWitResult(typeName: string | undefined, resultType: UserDefinedResultType, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const okTypeResult = resultType.okType
     ? resultType.okType[1].kind === 'void'
       ? undefined
-      : fromTsTypeInternal(resultType.okType[1], Option.none())
+      : mapper(resultType.okType[1], Option.none())
     : undefined;
 
   if (okTypeResult && Either.isLeft(okTypeResult)) {
@@ -341,7 +342,7 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
 
   const errTypeResult = resultType.errType
     ? resultType.errType[1].kind === 'void'
-      ? undefined : fromTsTypeInternal(resultType.errType[1], Option.none())
+      ? undefined : mapper(resultType.errType[1], Option.none())
     : undefined;
 
   if (errTypeResult && Either.isLeft(errTypeResult)) {
@@ -361,7 +362,7 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
   );
 }
 
-function convertToVariantAnalysedType(typeName: string | undefined, taggedTypes: TaggedTypeMetadata[]): Either.Either<AnalysedType, string> {
+function convertToVariantAnalysedType(typeName: string | undefined, taggedTypes: TaggedTypeMetadata[], mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const possibleTypes: NameOptionTypePair[] = [];
 
   for (const taggedTypeMetadata of taggedTypes) {
@@ -380,7 +381,7 @@ function convertToVariantAnalysedType(typeName: string | undefined, taggedTypes:
       })
     } else {
       const result =
-        fromTsTypeInternal(taggedTypeMetadata.valueType.val[1], Option.none());
+        mapper(taggedTypeMetadata.valueType.val[1], Option.none());
 
       if (Either.isLeft(result)) {
         return result;
