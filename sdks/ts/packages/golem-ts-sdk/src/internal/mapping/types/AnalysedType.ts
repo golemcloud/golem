@@ -549,7 +549,7 @@ function handleUnion({type, scope} : UnionCtx): Either.Either<AnalysedType, stri
 
   // We reuse the previously computed analysed-type for anonymous types with the same shape
   // This reduces the size of the generated WIT significantly
-  if (analysedType && !isAnonymous) {
+  if (analysedType && isAnonymous) {
 
     if (type.unionTypes.some((ut) => ut.kind === "null")) {
       return Either.right(option(undefined, "null", analysedType));
@@ -572,7 +572,7 @@ function handleUnion({type, scope} : UnionCtx): Either.Either<AnalysedType, stri
     tryInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams);
 
   if (inbuiltResultType) {
-    if (!isAnonymous && Either.isRight(inbuiltResultType) ) {
+    if (isAnonymous && Either.isRight(inbuiltResultType) ) {
       AnonymousUnionTypeRegistry.set(hash, inbuiltResultType.val);
     }
 
@@ -622,7 +622,7 @@ function handleUnion({type, scope} : UnionCtx): Either.Either<AnalysedType, stri
 
         return Either.map(analysedTypeEither, (result) => {
 
-          if (!isAnonymous) {
+          if (isAnonymous) {
             AnonymousUnionTypeRegistry.set(hash, result);
           }
           return result;
@@ -635,7 +635,7 @@ function handleUnion({type, scope} : UnionCtx): Either.Either<AnalysedType, stri
           convertUserDefinedResultToWitResult(type.name, userDefinedResultType);
 
         return Either.map(analysedTypeForCustomResult, (result) => {
-          if (!type.name) {
+          if (isAnonymous) {
             AnonymousUnionTypeRegistry.set(hash, result);
           }
           return result;
@@ -671,7 +671,7 @@ function handleUnion({type, scope} : UnionCtx): Either.Either<AnalysedType, stri
     if ((Option.isSome(scope) && TypeMappingScope.isOptional(scope.val))) {
       const innerType = innerTypeEither.val;
 
-      if (!type.name){
+      if (isAnonymous) {
         AnonymousUnionTypeRegistry.set(hash, innerType);
       }
       return Either.right(innerType);
