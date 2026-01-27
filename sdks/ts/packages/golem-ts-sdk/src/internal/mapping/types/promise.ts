@@ -12,27 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
+import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './stringFormat';
+import {
+  tryTaggedUnion,
+  tryUnionOfOnlyLiterals,
+  TaggedTypeMetadata,
+  UserDefinedResultType, LiteralUnions, TaggedUnion,
+} from './taggedUnion';
+import { Ctx } from './ctx';
+import { AnalysedType, fromTsTypeInternal } from './AnalysedType';
 
 type TsType = CoreType.Type;
 
-export type Ctx = {
-  type: TsType;
-  scope: Option.Option<TypeMappingScope>;
-  scopeName?: string;
-  parameterInScope: Option.Option<string>;
-};
+type PromiseCtx = Ctx & { type: Extract<TsType, { kind: "promise" }> };
 
-export function ctx(type: TsType, scope: Option.Option<TypeMappingScope>): Ctx {
-  return {
-    type,
-    scope,
-    scopeName: Option.isSome(scope) ? scope.val.name : undefined,
-    parameterInScope: Option.isSome(scope)
-      ? TypeMappingScope.paramName(scope.val)
-      : Option.none(),
-  };
+export function handlePromise({ type }: PromiseCtx): Either.Either<AnalysedType, string> {
+  const inner = type.element;
+  return fromTsTypeInternal(inner, Option.none());
 }

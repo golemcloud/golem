@@ -12,27 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Option from "../../../newTypes/option";
-import { TypeMappingScope } from './scope';
+import * as Either from "../../../newTypes/either";
+import { AnalysedType } from './AnalysedType';
+import { Ctx } from './ctx';
 
 type TsType = CoreType.Type;
 
-export type Ctx = {
-  type: TsType;
-  scope: Option.Option<TypeMappingScope>;
-  scopeName?: string;
-  parameterInScope: Option.Option<string>;
-};
+// Types that are fully unknown
+type UnresolvedCtx = Ctx & { type: Extract<TsType, { kind: "unresolved-type" }> };
 
-export function ctx(type: TsType, scope: Option.Option<TypeMappingScope>): Ctx {
-  return {
-    type,
-    scope,
-    scopeName: Option.isSome(scope) ? scope.val.name : undefined,
-    parameterInScope: Option.isSome(scope)
-      ? TypeMappingScope.paramName(scope.val)
-      : Option.none(),
-  };
+export function handleUnresolved({ type }: UnresolvedCtx): Either.Either<AnalysedType, string> {
+  return Either.left(`Failed to resolve type for \`${type.text}\`: ${type.error}`);
 }

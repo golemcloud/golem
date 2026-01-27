@@ -12,27 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
+import { AnalysedType, bool, f64, str, u64 } from './AnalysedType';
+import { Ctx } from './ctx';
 import { TypeMappingScope } from './scope';
 
-type TsType = CoreType.Type;
+export function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undefined {
+  if (Option.isSome(optScope)) {
+    const scope = optScope.val;
 
-export type Ctx = {
-  type: TsType;
-  scope: Option.Option<TypeMappingScope>;
-  scopeName?: string;
-  parameterInScope: Option.Option<string>;
-};
-
-export function ctx(type: TsType, scope: Option.Option<TypeMappingScope>): Ctx {
-  return {
-    type,
-    scope,
-    scopeName: Option.isSome(scope) ? scope.val.name : undefined,
-    parameterInScope: Option.isSome(scope)
-      ? TypeMappingScope.paramName(scope.val)
-      : Option.none(),
-  };
+    return scope.name
+  }
+  return undefined;
 }
