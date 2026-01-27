@@ -22,8 +22,11 @@ use terminal_size::terminal_size;
 use textwrap::WordSplitter;
 use tracing::debug;
 
+use tokio::sync::mpsc::UnboundedSender;
+
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::default);
+pub static CUSTOM_LOG_OUTPUT: LazyLock<RwLock<Option<UnboundedSender<String>>>> = LazyLock::new(RwLock::default);
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
 static WRAP_PADDING: usize = 2;
 
@@ -38,6 +41,7 @@ pub enum Output {
     None,
     TracingDebug,
     BufferedUntilErr,
+    Custom,
 }
 
 struct LogState {
@@ -230,6 +234,11 @@ pub fn logln_internal(message: &str) {
             Output::BufferedUntilErr => {
                 let mut buffer = LOG_STATE_BUFFER.write().unwrap();
                 buffer.push(format!("{}{}", state.calculated_indent, line));
+            }
+            Output::Custom => {
+                if let Some(tx) = &*CUSTOM_LOG_OUTPUT.read().unwrap() {
+                    let _ = tx.send(format!("{}{}", state.calculated_indent, line));
+                }
             }
         }
     }
