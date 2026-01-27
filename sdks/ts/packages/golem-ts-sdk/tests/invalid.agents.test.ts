@@ -336,7 +336,7 @@ function getAnalysedTypeInFun1(
   const type = fun1Params?.get(parameterName)!;
   return typeMapper(
     type,
-    Option.some(TypeMappingScope.method('fun1', parameterName, type.optional)),
+    TypeMappingScope.method('fun1', parameterName, type.optional),
   );
 }
 

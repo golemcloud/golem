@@ -48,13 +48,9 @@ export function serializeDefaultTsValue(
 ): Either.Either<Value, string> {
   switch (analysedType.kind) {
     case 'flags':
-      return Either.left(
-        unhandledTypeError(tsValue, 'flags', undefined),
-      );
+      return Either.left(unhandledTypeError(tsValue, 'flags', undefined));
     case 'chr':
-      return Either.left(
-        unhandledTypeError(tsValue, 'char', undefined),
-      );
+      return Either.left(unhandledTypeError(tsValue, 'char', undefined));
     case 'f32':
       if (typeof tsValue === 'number') {
         return Either.right({
@@ -128,9 +124,7 @@ export function serializeDefaultTsValue(
         return Either.left(typeMismatchInSerialize(tsValue, 'number'));
       }
     case 'handle':
-      return Either.left(
-        unhandledTypeError(tsValue, 'handle', undefined),
-      );
+      return Either.left(unhandledTypeError(tsValue, 'handle', undefined));
     case 'bool':
       return serializeBooleanTsValue(tsValue);
 

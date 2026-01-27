@@ -212,10 +212,13 @@ test('BarAgent can be successfully initiated', () => {
           ],
         };
 
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
-          () => new Error('BarAgent not found in AgentInitiatorRegistry'),
+        const agentInitiator = AgentInitiatorRegistry.lookup(
+          BarAgentCustomClassName.value,
         );
+
+        if (!agentInitiator) {
+          throw new Error('BarAgent not found in AgentInitiatorRegistry');
+        }
 
         const result = agentInitiator.initiate(dataValue, { tag: 'anonymous' });
 
@@ -948,10 +951,11 @@ function initiateFooAgent(
     (error) => new Error(error),
   );
 
-  const agentInitiator = Option.getOrThrowWith(
-    AgentInitiatorRegistry.lookup(FooAgentClassName.value),
-    () => new Error('FooAgent not found in AgentInitiatorRegistry'),
-  );
+  const agentInitiator = AgentInitiatorRegistry.lookup(FooAgentClassName.value);
+
+  if (!agentInitiator) {
+    throw new Error('FooAgent not found in AgentInitiatorRegistry');
+  }
 
   const result = agentInitiator.initiate(constructorParams, {
     tag: 'anonymous',

@@ -23,12 +23,8 @@ type TsType = CoreType.Type;
 type MapCtx = Ctx & { type: Extract<TsType, { kind: "map" }> };
 
 export function handleMap({ type }: MapCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
-  const keyT = type.key;
-  const valT = type.value;
-
-  const key = mapper(keyT, undefined);
-  const value = mapper(valT, undefined);
-
+  const key = mapper(type.key, undefined);
+  const value = mapper(type.value, undefined);
 
   return Either.zipWith(key, value, (k, v) =>
     list(type.name, undefined, {keyType: k, valueType: v}, tuple(undefined, undefined, [k, v])));
