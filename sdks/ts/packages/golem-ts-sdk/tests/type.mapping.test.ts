@@ -25,8 +25,6 @@ import {
   getUnionWithLiterals,
 } from './testUtils';
 
-import * as Option from '../src/newTypes/option';
-
 import {
   AnalysedType,
   bool,
@@ -34,8 +32,6 @@ import {
   NameTypePair,
   str,
 } from '../src/internal/mapping/types/analysedType';
-
-import { fromTsTypeInternal } from '../src/internal/mapping/types/typeMapping';
 
 // Interface type indirectly tests primitive types, union, list etc
 describe('TypeScript Interface to AnalysedType', () => {

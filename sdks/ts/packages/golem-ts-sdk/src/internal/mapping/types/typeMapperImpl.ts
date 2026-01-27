@@ -19,12 +19,13 @@ import { TypeMappingScope } from './scope';
 import { callHandler } from './handlers';
 import { ctx } from './ctx';
 import { AnalysedType, option } from './analysedType';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
+export const typeMapper: TypeMapper = (tsType: TsType, scope: Option.Option<TypeMappingScope>) => {
   const result =
-    fromTsTypeInternal(tsType, scope);
+    mapTypeInternal(tsType, scope);
 
   if (Option.isSome(scope) && TypeMappingScope.isOptional(scope.val)) {
     return Either.map(result, (analysedType) => {
@@ -40,11 +41,11 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
   return result
 }
 
-export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
+export function mapTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
   const rejected = rejectBoxedTypes(type);
   if (Either.isLeft(rejected)) return rejected;
 
-  return callHandler(type.kind, ctx(type, scope), fromTsType);
+  return callHandler(type.kind, ctx(type, scope), typeMapper);
 }
 
 
@@ -61,4 +62,6 @@ function rejectBoxedTypes(type: TsType): Either.Either<never, string> {
   return Either.right(undefined as never);
 }
 
+interface SomeModel {  }
+export namespace SomeModel { }
 

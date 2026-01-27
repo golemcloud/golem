@@ -18,13 +18,23 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import {WitType} from "golem:agent/common";
 import { TypeMappingScope } from './scope';
-import * as TypeMapping from "./typeMapping";
 import { AnalysedType } from './analysedType';
+import { typeMapper } from './typeMapperImpl';
 
 export { WitType } from "golem:rpc/types@0.2.2";
 
+/**
+ * Creates a WitType from a TypeScript Type
+ * Usage:
+ *
+ * ```ts
+ *   import * as WitType from './WitType';
+ *
+ *   WitType.fromTsType(type, scope)
+ * ```
+ */
 export const fromTsType = (type: Type.Type, scope: Option.Option<TypeMappingScope>): Either.Either<[WitType, AnalysedType], string> => {
-    const analysedTypeEither = TypeMapping.fromTsType(type, scope);
+    const analysedTypeEither = typeMapper(type, scope);
     return Either.flatMap(analysedTypeEither, (analysedType) => {
       const witType = fromAnalysedType(analysedType);
       return Either.right(([witType, analysedType]));
@@ -32,6 +42,16 @@ export const fromTsType = (type: Type.Type, scope: Option.Option<TypeMappingScop
 };
 
 
+/**
+ * Creates a WitType from an AnalysedType
+ *
+ * Usage:
+ *
+ * ```ts
+ *   import * as WitType from './WitType';
+ *   WitType.fromAnalysedType(analysedType);
+ * ```
+ */
 export const fromAnalysedType = (analysedType: AnalysedType): WitType => {
     const builder = new WitTypeBuilder();
     builder.add(analysedType);

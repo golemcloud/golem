@@ -16,7 +16,6 @@ import {
   AgentType,
   DataValue,
   AgentConstructor,
-  AgentMethod,
   AgentMode,
   Principal,
 } from 'golem:agent/common';
