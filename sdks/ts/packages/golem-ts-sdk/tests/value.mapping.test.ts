@@ -20,7 +20,6 @@ import {
   getTestListOfObjectType,
   getTupleComplexType,
   getTupleType,
-  getUnionType,
   getUnionComplexType,
   getPromiseType,
   getUnionWithOnlyLiterals,

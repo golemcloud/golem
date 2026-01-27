@@ -735,13 +735,10 @@ function handleUnion({type, scope} : UnionCtx): Either.Either<AnalysedType, stri
       return result;
     }
 
-    const name = type.name;
-
     possibleTypes.push({
-      // Since we are using cache for just handling similar types that are anonymous,
-      // This is important for `string | number | MyCustomType` kind of unions,
-      // In the above case `MyCustomType` has a name while string and number don't have a name.
-      name: generateVariantCaseName(name, fieldIdx++),
+      // Note that for untagged-unions, all elements are anonymus
+      // and we generate the name using the original union type name and field index
+      name: generateVariantCaseName(type.name, fieldIdx++),
       typ: result.val,
     });
   }

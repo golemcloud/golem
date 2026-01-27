@@ -25,9 +25,13 @@ import {
   getUnionWithLiterals,
 } from './testUtils';
 
+import * as Option from '../src/newTypes/option';
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 
-import { NameTypePair } from '../src/internal/mapping/types/AnalysedType';
+import {
+  fromTsTypeInternal,
+  NameTypePair,
+} from '../src/internal/mapping/types/AnalysedType';
 
 // Interface type indirectly tests primitive types, union, list etc
 describe('TypeScript Interface to AnalysedType', () => {
@@ -206,7 +210,6 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
 
 test('Union with literals to AnalysedType', () => {
   const [unionWithLiterals] = getUnionWithLiterals();
-
   const expectedAnalysedType = {
     kind: 'variant',
     taggedTypes: [],

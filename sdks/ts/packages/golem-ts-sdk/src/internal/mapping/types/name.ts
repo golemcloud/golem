@@ -17,13 +17,17 @@ import { convertVariantTypeNameToKebab } from './stringFormat';
 
 let variantNameGlobalIdx = 0;
 
-export function generateVariantCaseName(variantName: string | undefined, termIdx: number): string {
+export function generateVariantCaseName(originalUnionName: string | undefined, termIdx: number): string {
 
-  if (!variantName) {
+  // if the union by itself does not have a name, generate a generic one using `case` prefix
+  if (!originalUnionName) {
     variantNameGlobalIdx += 1;
     return `case${variantNameGlobalIdx}`
   }
 
-  const kebabCasedVariantName = convertVariantTypeNameToKebab(variantName);
+  // otherwise, convert the original union name to kebab-case and append the term index
+  // Example: type MyUnion = A | B | C
+  // generates: my-union0, my-union1, my-union2
+  const kebabCasedVariantName = convertVariantTypeNameToKebab(originalUnionName);
   return `${kebabCasedVariantName}${termIdx}`
 }
