@@ -1,6 +1,5 @@
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { Ctx } from './ctx';
 import { AnalysedType, field, record } from './analysedType';
@@ -20,22 +19,22 @@ export function handleObject({ type }: ObjectCtx, mapper: TypeMapper): Either.Ei
     const entityName = type.name ?? type.kind;
 
     if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-      const tsType =  mapper(internalType, Option.some(TypeMappingScope.object(
+      const tsType =  mapper(internalType, TypeMappingScope.object(
         entityName,
         prop.getName(),
         true
-      )));
+      ));
 
       return Either.map(tsType, (analysedType) => {
         return field(prop.getName(), analysedType)
       });
     }
 
-    const tsType = mapper(internalType, Option.some(TypeMappingScope.object(
+    const tsType = mapper(internalType, TypeMappingScope.object(
       entityName,
       prop.getName(),
       false
-    )));
+    ));
 
     return Either.map(tsType, (analysedType) => {
       return field(prop.getName(), analysedType)

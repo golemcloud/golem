@@ -14,7 +14,6 @@
 
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { AnalysedType, field, record } from './analysedType';
 import { Ctx } from './ctx';
 import { TypeMappingScope } from './scope';
@@ -34,22 +33,22 @@ export function handleInterface({ type }: InterfaceCtx, mapper: TypeMapper): Eit
     const entityName = type.name ?? type.kind;
 
     if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-      const tsType = mapper(internalType, Option.some(TypeMappingScope.interface(
+      const tsType = mapper(internalType,TypeMappingScope.interface(
         entityName,
         prop.getName(),
         true
-      )));
+      ));
 
       return Either.map(tsType, (analysedType) => {
         return field(prop.getName(), analysedType)
       });
     }
 
-    const tsType = mapper(internalType, Option.some(TypeMappingScope.interface(
+    const tsType = mapper(internalType, TypeMappingScope.interface(
       entityName,
       prop.getName(),
       false
-    )));
+    ));
 
     return Either.map(tsType, (analysedType) => {
       return field(prop.getName(), analysedType)

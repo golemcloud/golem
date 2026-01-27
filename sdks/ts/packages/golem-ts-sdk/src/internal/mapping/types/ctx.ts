@@ -14,25 +14,24 @@
 
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 
 type TsType = CoreType.Type;
 
 export type Ctx = {
   type: TsType;
-  scope: Option.Option<TypeMappingScope>;
+  scope: TypeMappingScope | undefined;
   scopeName?: string;
-  parameterInScope: Option.Option<string>;
+  parameterInScope: string | undefined;
 };
 
-export function ctx(type: TsType, scope: Option.Option<TypeMappingScope>): Ctx {
+export function ctx(type: TsType, scope: TypeMappingScope | undefined): Ctx {
   return {
     type,
     scope,
-    scopeName: Option.isSome(scope) ? scope.val.name : undefined,
-    parameterInScope: Option.isSome(scope)
-      ? TypeMappingScope.paramName(scope.val)
-      : Option.none(),
+    scopeName: scope?.name,
+    parameterInScope: scope
+      ? TypeMappingScope.paramName(scope)
+      : undefined
   };
 }

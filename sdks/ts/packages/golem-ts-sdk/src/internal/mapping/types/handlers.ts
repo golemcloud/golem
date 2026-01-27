@@ -14,7 +14,6 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { AnalysedType, bool, f64, str, u64 } from './analysedType';
 import { Ctx } from './ctx';
 import { handleUnion } from './union';
@@ -73,7 +72,7 @@ function unsupported(kind: string): Handler<any> {
     Either.left(
       `Unsupported type \`${kind}\``
       + (scopeName ? ` in ${scopeName}` : "")
-      + (Option.isSome(parameterInScope) ? ` for parameter \`${parameterInScope.val}\`` : "")
+      + (parameterInScope ? ` for parameter \`${parameterInScope}\`` : "")
     );
 }
 
@@ -81,7 +80,7 @@ function unsupportedWithHint(kind: string, hint: string): Handler<any> {
   return ({ scopeName, parameterInScope }) =>
     Either.left(
       `Unsupported type \`${kind}\`${scopeName ? ` in ${scopeName}` : ""}` +
-      (Option.isSome(parameterInScope) ? ` for parameter \`${parameterInScope.val}\`` : "") +
+      (parameterInScope ? ` for parameter \`${parameterInScope}\`` : "") +
       `. Hint: ${hint}`
     );
 }

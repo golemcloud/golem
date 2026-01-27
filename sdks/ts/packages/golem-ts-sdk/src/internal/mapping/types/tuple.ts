@@ -14,7 +14,6 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { AnalysedType, tuple } from './analysedType';
 import { Ctx } from './ctx';
 import { TypeMapper } from './typeMapper';
@@ -29,7 +28,7 @@ export function handleTuple({ type }: TupleCtx, mapper: TypeMapper): Either.Eith
   }
 
   return Either.map(
-    Either.all(type.elements.map(el => mapper(el, Option.none()))),
+    Either.all(type.elements.map(el => mapper(el, undefined))),
     items => tuple(type.name, undefined, items)
   );
 }

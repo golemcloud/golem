@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
 import { NameOptionTypePair } from '../types/analysedType';
@@ -58,14 +57,14 @@ export function enumMismatchInSerialize(
 // unhandled type of tsValue when converting from TS to WIT
 export function unhandledTypeError(
   tsValue: any,
-  typeName: Option.Option<string>,
-  message: Option.Option<string>,
+  typeName: string | undefined,
+  message: string | undefined,
 ): string {
   const error =
     `${safeDisplay(tsValue)}` +
-    (Option.isSome(typeName) ? ` inferred as ${typeName.val}` : '') +
+    (typeName ? ` inferred as ${typeName}` : '') +
     ` cannot be handled. `;
-  return error + (Option.isSome(message) ? `${message.val}` : '');
+  return error + (message ? `${message}` : '');
 }
 
 export function safeDisplay(tsValue: any): string {

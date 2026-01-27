@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import * as Option from '../src/newTypes/option';
 import { describe, expect } from 'vitest';
 import {
   BarAgentClassName,

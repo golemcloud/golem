@@ -75,7 +75,9 @@ export class BaseAgent {
    */
   getAgentType(): AgentType {
     if (!this.cachedAgentType) {
-      const agentType: AgentType | undefined = AgentTypeRegistry.get(this.agentClassName);
+      const agentType: AgentType | undefined = AgentTypeRegistry.get(
+        this.agentClassName,
+      );
 
       if (!agentType) {
         throw new Error(

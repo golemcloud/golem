@@ -14,7 +14,6 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { Ctx } from './ctx';
 import { AnalysedType,  list, tuple } from './analysedType';
 import { TypeMapper } from './typeMapper';
@@ -27,8 +26,8 @@ export function handleMap({ type }: MapCtx, mapper: TypeMapper): Either.Either<A
   const keyT = type.key;
   const valT = type.value;
 
-  const key = mapper(keyT, Option.none());
-  const value = mapper(valT, Option.none());
+  const key = mapper(keyT, undefined);
+  const value = mapper(valT, undefined);
 
 
   return Either.zipWith(key, value, (k, v) =>

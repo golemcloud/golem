@@ -14,7 +14,6 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { Ctx } from './ctx';
 import { AnalysedType } from './analysedType';
 import { TypeMapper } from './typeMapper';
@@ -25,5 +24,5 @@ type PromiseCtx = Ctx & { type: Extract<TsType, { kind: "promise" }> };
 
 export function handlePromise({ type }: PromiseCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const inner = type.element;
-  return mapper(inner, Option.none());
+  return mapper(inner, undefined);
 }

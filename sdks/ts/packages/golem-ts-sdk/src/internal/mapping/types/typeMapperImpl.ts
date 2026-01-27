@@ -14,7 +14,6 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { callHandler } from './handlers';
 import { ctx } from './ctx';
@@ -23,11 +22,11 @@ import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-export const typeMapper: TypeMapper = (tsType: TsType, scope: Option.Option<TypeMappingScope>) => {
+export const typeMapper: TypeMapper = (tsType: TsType, scope: TypeMappingScope | undefined) => {
   const result =
     mapTypeInternal(tsType, scope);
 
-  if (Option.isSome(scope) && TypeMappingScope.isOptional(scope.val)) {
+  if (scope && TypeMappingScope.isOptional(scope)) {
     return Either.map(result, (analysedType) => {
 
       if (analysedType.kind === 'option' && analysedType.emptyType !== 'question-mark') {
@@ -41,7 +40,7 @@ export const typeMapper: TypeMapper = (tsType: TsType, scope: Option.Option<Type
   return result
 }
 
-export function mapTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
+export function mapTypeInternal(type: TsType, scope: TypeMappingScope | undefined): Either.Either<AnalysedType, string> {
   const rejected = rejectBoxedTypes(type);
   if (Either.isLeft(rejected)) return rejected;
 

@@ -19,7 +19,6 @@ import {
   TypedArray,
 } from '../types/analysedType';
 import * as Either from '../../../newTypes/either';
-import * as Option from '../../../newTypes/option';
 import {
   customSerializationError,
   enumMismatchInSerialize,
@@ -50,11 +49,11 @@ export function serializeDefaultTsValue(
   switch (analysedType.kind) {
     case 'flags':
       return Either.left(
-        unhandledTypeError(tsValue, Option.some('flags'), Option.none()),
+        unhandledTypeError(tsValue, 'flags', undefined),
       );
     case 'chr':
       return Either.left(
-        unhandledTypeError(tsValue, Option.some('char'), Option.none()),
+        unhandledTypeError(tsValue, 'char', undefined),
       );
     case 'f32':
       if (typeof tsValue === 'number') {
@@ -130,7 +129,7 @@ export function serializeDefaultTsValue(
       }
     case 'handle':
       return Either.left(
-        unhandledTypeError(tsValue, Option.some('handle'), Option.none()),
+        unhandledTypeError(tsValue, 'handle', undefined),
       );
     case 'bool':
       return serializeBooleanTsValue(tsValue);

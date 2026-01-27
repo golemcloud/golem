@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as Option from '../src/newTypes/option';
 import { DataValue, RegisteredAgentType, Uuid } from 'golem:agent/host';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src';

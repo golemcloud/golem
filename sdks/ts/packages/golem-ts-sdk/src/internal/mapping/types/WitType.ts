@@ -15,7 +15,6 @@
 import {Type} from "@golemcloud/golem-ts-types-core";
 import {WitTypeBuilder} from "./witTypeBuilder";
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import {WitType} from "golem:agent/common";
 import { TypeMappingScope } from './scope';
 import { AnalysedType } from './analysedType';

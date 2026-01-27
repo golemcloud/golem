@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as Option from '../../../newTypes/option';
-
 export type TypeMappingScope = {
   scope: 'interface' | 'object' | 'method' | 'constructor';
   name: string;
@@ -32,14 +30,14 @@ export const TypeMappingScope = {
       scope.scope === 'method' || scope.scope === 'constructor') && scope.hasQuestionMark;
   },
 
-  paramName(scope: TypeMappingScope): Option.Option<string> {
+  paramName(scope: TypeMappingScope): string | undefined {
     if (scope.scope === 'interface' ||
       scope.scope === 'object' ||
       scope.scope === 'method' || scope.scope === 'constructor') {
-      return Option.some(scope.parameterName);
+      return scope.parameterName;
     }
 
-    return Option.none()
+    return undefined
 
   },
 

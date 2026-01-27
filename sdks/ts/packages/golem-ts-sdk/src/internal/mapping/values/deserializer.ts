@@ -15,7 +15,6 @@
 import { typeMismatchInDeserialize } from './errors';
 import { Value } from './Value';
 import { AnalysedType } from '../types/analysedType';
-import * as Option from '../../../newTypes/option';
 import { Result } from '../../../host/result';
 
 /**
@@ -431,13 +430,9 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               throw new Error(typeMismatchInDeserialize(value, 'union'));
             }
 
-            if (Option.isNone(metadata)) {
-              throw new Error(typeMismatchInDeserialize(value, 'union'));
-            }
-
             return {
               tag: tagValue,
-              [metadata.val[0]]: result,
+              [metadata[0]]: result,
             };
           } else {
             return { tag: tagValue };

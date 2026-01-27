@@ -138,11 +138,11 @@ const analysedHandler: ConstructorParamHandler = {
   handle: (agentClassName, param, baseError, collection) => {
     const typeInfoEither = WitType.fromTsType(
       param.type,
-        TypeMappingScope.constructor(
-          agentClassName,
-          param.name,
-          param.type.optional,
-        ),
+      TypeMappingScope.constructor(
+        agentClassName,
+        param.name,
+        param.type.optional,
+      ),
     );
 
     if (Either.isLeft(typeInfoEither)) {

@@ -14,7 +14,6 @@
 
 import { buildJSONFromType, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { generateVariantCaseName } from './name';
 import { isKebabCase, isNumberString, trimQuotes } from './stringFormat';
@@ -77,7 +76,7 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
   let fieldIdx = 1;
   const possibleTypes: NameOptionTypePair[] = [];
 
-  const unionOfOnlyLiterals: Either.Either<Option.Option<LiteralUnions>, string> =
+  const unionOfOnlyLiterals: Either.Either<LiteralUnions | undefined, string> =
     tryUnionOfOnlyLiterals(type.unionTypes);
 
   if (Either.isLeft(unionOfOnlyLiterals)) {
@@ -85,8 +84,8 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
   }
 
   // If the union is made up of only literals, we can convert it to enum type
-  if (Option.isSome(unionOfOnlyLiterals.val)) {
-    const analysedType = enum_(type.name, unionOfOnlyLiterals.val.val.literals);
+  if (unionOfOnlyLiterals.val) {
+    const analysedType = enum_(type.name, unionOfOnlyLiterals.val.literals);
 
     // If it's an anonymous union, we cache it to avoid any new indices being generated for the same shape
     if (isAnonymous) {
@@ -97,7 +96,7 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
   }
 
   // If all elements of the union are tagged types, we can convert it to variant or result
-  const taggedUnion: Either.Either<Option.Option<TaggedUnion>, string> =
+  const taggedUnion: Either.Either<TaggedUnion | undefined, string> =
     tryTaggedUnion(type.unionTypes);
 
   if (Either.isLeft(taggedUnion)) {
@@ -105,9 +104,8 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
   }
 
   // If it's a tagged union, convert to variant or result
-  if (Option.isSome(taggedUnion.val)) {
-    const taggedUnionSome = taggedUnion.val;
-    const unionType = taggedUnionSome.val;
+  if (taggedUnion.val) {
+    const unionType = taggedUnion.val;
 
     switch (unionType.tag) {
       case "custom":
@@ -148,14 +146,14 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
 
     // We keep the rest of the type and retry with rest of the union types
     const innerTypeEither: Either.Either<AnalysedType, string> =
-      mapper(unionTypeWithoutEmptyTypes.val, Option.none());
+      mapper(unionTypeWithoutEmptyTypes.val, undefined);
 
     if (Either.isLeft(innerTypeEither)) {
       return Either.left(innerTypeEither.val);
     }
 
     // Type is already optional and further loop will solve it
-    if ((Option.isSome(scope) && TypeMappingScope.isOptional(scope.val))) {
+    if (scope && TypeMappingScope.isOptional(scope)) {
       const innerType = innerTypeEither.val;
 
       if (isAnonymous) {
@@ -215,7 +213,7 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
     }
 
     // Since we are in union handling, we don't pass down any scope
-    const result = mapper(t, Option.none());
+    const result = mapper(t, undefined);
 
 
     if (Either.isLeft(result)) {
@@ -260,19 +258,19 @@ export function tryInbuiltResultType(
     }
 
     if (okIsVoid) {
-      return Either.map(mapper(errType, Option.none()), (err) =>
+      return Either.map(mapper(errType, undefined), (err) =>
         result(undefined, { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: undefined }, undefined, err)
       );
     }
 
     if (errIsVoid) {
-      return Either.map(mapper(okType, Option.none()), (ok) =>
+      return Either.map(mapper(okType, undefined), (ok) =>
         result(undefined, { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: 'void' }, ok, undefined)
       );
     }
 
-    const okAnalysed = mapper(okType, Option.none());
-    const errAnalysed = mapper(errType, Option.none());
+    const okAnalysed = mapper(okType, undefined);
+    const errAnalysed = mapper(errType, undefined);
 
     return Either.map(Either.zipBoth(okAnalysed, errAnalysed), ([ok, err]) => {
       return result(undefined, { tag: 'inbuilt' , okEmptyType: undefined, errEmptyType: undefined}, ok, err);
@@ -297,8 +295,9 @@ function filterEmptyTypesFromUnion(
   );
 
   if (alternateTypes.length === 0) {
-    if (Option.isSome(ctx.parameterInScope)) {
-      const paramName = ctx.parameterInScope.val;
+    if (ctx.parameterInScope) {
+      const paramName = ctx.parameterInScope;
+
       return Either.left(
         `Parameter \`${paramName}\` in \`${ctx.scopeName}\` has a union type that cannot be resolved to a valid type`,
       );
@@ -321,7 +320,7 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
   const okTypeResult = resultType.okType
     ? resultType.okType[1].kind === 'void'
       ? undefined
-      : mapper(resultType.okType[1], Option.none())
+      : mapper(resultType.okType[1], undefined)
     : undefined;
 
   if (okTypeResult && Either.isLeft(okTypeResult)) {
@@ -330,7 +329,7 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
 
   const errTypeResult = resultType.errType
     ? resultType.errType[1].kind === 'void'
-      ? undefined : mapper(resultType.errType[1], Option.none())
+      ? undefined : mapper(resultType.errType[1], undefined)
     : undefined;
 
   if (errTypeResult && Either.isLeft(errTypeResult)) {
@@ -359,17 +358,17 @@ function convertToVariantAnalysedType(typeName: string | undefined, taggedTypes:
       return Either.left(`Tagged union case names must be in kebab-case. Found: ${taggedTypeMetadata.tagLiteralName}`);
     }
 
-    if (Option.isSome(taggedTypeMetadata.valueType) && taggedTypeMetadata.valueType.val[1].kind === "literal") {
+    if (taggedTypeMetadata.valueType && taggedTypeMetadata.valueType[1].kind === "literal") {
       return Either.left("Tagged unions cannot have literal types in the value section")
     }
 
-    if (Option.isNone(taggedTypeMetadata.valueType)) {
+    if (!taggedTypeMetadata.valueType) {
       possibleTypes.push({
         name: taggedTypeMetadata.tagLiteralName
       })
     } else {
       const result =
-        mapper(taggedTypeMetadata.valueType.val[1], Option.none());
+        mapper(taggedTypeMetadata.valueType[1], undefined);
 
       if (Either.isLeft(result)) {
         return result;

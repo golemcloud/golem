@@ -57,7 +57,8 @@ async function initialize(
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
-  const initiator: AgentInitiator | undefined = AgentInitiatorRegistry.lookup(agentTypeName);
+  const initiator: AgentInitiator | undefined =
+    AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
     throw createCustomError(
@@ -112,7 +113,7 @@ async function getDefinition(): Promise<AgentType> {
     throw new Error('Failed to get agent definition: agent is not initialized');
   }
 
-  return resolvedAgent.getAgentType()
+  return resolvedAgent.getAgentType();
 }
 
 async function save(): Promise<Uint8Array> {
