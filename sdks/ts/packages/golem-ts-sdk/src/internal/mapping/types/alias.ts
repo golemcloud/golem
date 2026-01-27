@@ -16,11 +16,12 @@ import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-
 import * as Either from "../../../newTypes/either";
 import { Ctx } from './ctx';
 import { AnalysedType } from './analysedType';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 type AliasCtx = Ctx & { type: Extract<TsType, { kind: "alias" }> };
 
-export function handleAlias({ type }: AliasCtx): Either.Either<AnalysedType, string> {
+export function handleAlias({ type }: AliasCtx, _mapper: TypeMapper): Either.Either<AnalysedType, string> {
   return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? "<anonymous>"}`);
 }

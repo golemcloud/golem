@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import { isNumberString, trimQuotes } from './stringFormat';
 import { AnalysedType, bool, enum_ } from './analysedType';
 import { Ctx } from './ctx';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 type LiteralCtx = Ctx & { type: Extract<TsType, { kind: "literal" }> };
 
-export function handleLiteral({ type }: LiteralCtx): Either.Either<AnalysedType, string> {
+export function handleLiteral({ type }: LiteralCtx, _mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const literalName = type.literalValue;
 
   if (literalName) {

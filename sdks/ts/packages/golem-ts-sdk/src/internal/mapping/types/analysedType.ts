@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import { convertOptionalTypeNameToKebab} from './stringFormat';
 import {
   TaggedTypeMetadata,

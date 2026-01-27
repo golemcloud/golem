@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { AnalysedType, tuple } from './analysedType';
-import { fromTsTypeInternal } from './typeMapping';
 import { Ctx } from './ctx';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 type TupleCtx = Ctx & { type: Extract<TsType, { kind: "tuple" }> };
 
-export function handleTuple({ type }: TupleCtx): Either.Either<AnalysedType, string> {
+export function handleTuple({ type }: TupleCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   if (!type.elements.length) {
     return Either.left("Empty tuple types are not supported");
   }
 
   return Either.map(
-    Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none()))),
+    Either.all(type.elements.map(el => mapper(el, Option.none()))),
     items => tuple(type.name, undefined, items)
   );
 }

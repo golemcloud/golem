@@ -28,19 +28,21 @@ import { handleAlias } from './alias';
 import { handleOthers } from './others';
 import { handleUnresolved } from './unresolved';
 import { handleArray } from './array';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 export function callHandler<K extends TsType["kind"]>(
   kind: K,
-  ctx: Ctx
+  ctx: Ctx,
+  typeMapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
   const handler = handlers[kind] as Handler<K>;
-  return handler(ctx as Ctx & { type: Extract<TsType, { kind: K }> });
+  return handler(ctx as Ctx & { type: Extract<TsType, { kind: K }> }, typeMapper);
 }
 
 export type Handler<K extends TsType["kind"]> =
-  (ctx: Ctx & { type: Extract<TsType, { kind: K }> }) => Either.Either<AnalysedType, string>;
+  (ctx: Ctx & { type: Extract<TsType, { kind: K }> }, mapper: TypeMapper) => Either.Either<AnalysedType, string>;
 
 const handlers: { [K in TsType["kind"]]: Handler<K> } = {
   "boolean": () => Either.right(bool()),

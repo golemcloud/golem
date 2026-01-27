@@ -17,12 +17,12 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { Ctx } from './ctx';
 import { AnalysedType, f32, f64, list, s16, s32, s64, s8, u16, u32, u64, u8 } from './analysedType';
-import { fromTsTypeInternal } from './typeMapping';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 type ArrayCtx = Ctx & { type: Extract<TsType, { kind: "array" }> };
 
-export function handleArray({ type }: ArrayCtx): Either.Either<AnalysedType, string> {
+export function handleArray({ type }: ArrayCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const name = type.name;
 
   switch (name) {
@@ -45,7 +45,7 @@ export function handleArray({ type }: ArrayCtx): Either.Either<AnalysedType, str
     return Either.left("Unable to determine the array element type");
   }
 
-  const elemType = fromTsTypeInternal(arrayElementType, Option.none());
+  const elemType = mapper(arrayElementType, Option.none());
 
   return Either.map(elemType, (inner) => list(type.name, undefined, undefined, inner));
 }

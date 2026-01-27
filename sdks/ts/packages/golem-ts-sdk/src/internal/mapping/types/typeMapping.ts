@@ -44,7 +44,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
   const rejected = rejectBoxedTypes(type);
   if (Either.isLeft(rejected)) return rejected;
 
-  return callHandler(type.kind, ctx(type, scope));
+  return callHandler(type.kind, ctx(type, scope), fromTsType);
 }
 
 

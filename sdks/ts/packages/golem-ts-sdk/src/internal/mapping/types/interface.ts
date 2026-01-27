@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import { AnalysedType, field, record, str, u64 } from './analysedType';
+import { AnalysedType, field, record } from './analysedType';
 import { Ctx } from './ctx';
 import { TypeMappingScope } from './scope';
 import { fromTsType, fromTsTypeInternal } from './typeMapping';

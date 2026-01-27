@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { Ctx } from './ctx';
 import { AnalysedType,  list, tuple } from './analysedType';
 import { fromTsTypeInternal } from './typeMapping';
+import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
 type MapCtx = Ctx & { type: Extract<TsType, { kind: "map" }> };
 
-export function handleMap({ type }: MapCtx): Either.Either<AnalysedType, string> {
+export function handleMap({ type }: MapCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const keyT = type.key;
   const valT = type.value;
 
