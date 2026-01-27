@@ -3,7 +3,8 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { Ctx } from './ctx';
-import { AnalysedType, field, fromTsType, fromTsTypeInternal, record } from './AnalysedType';
+import { fromTsType, fromTsTypeInternal } from './typeMapping';
+import { AnalysedType, field, record } from './analysedType';
 
 type TsType = CoreType.Type;
 

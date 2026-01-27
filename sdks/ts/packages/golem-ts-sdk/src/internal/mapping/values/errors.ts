@@ -15,7 +15,7 @@
 import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
-import { NameOptionTypePair } from '../types/AnalysedType';
+import { NameOptionTypePair } from '../types/analysedType';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchInSerialize(

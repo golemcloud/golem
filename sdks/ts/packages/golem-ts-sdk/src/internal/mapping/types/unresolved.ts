@@ -14,7 +14,7 @@
 
 import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import { AnalysedType } from './AnalysedType';
+import { AnalysedType } from './analysedType';
 import { Ctx } from './ctx';
 
 type TsType = CoreType.Type;

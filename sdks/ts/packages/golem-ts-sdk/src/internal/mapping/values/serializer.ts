@@ -17,7 +17,7 @@ import {
   NameOptionTypePair,
   NameTypePair,
   TypedArray,
-} from '../types/AnalysedType';
+} from '../types/analysedType';
 import * as Either from '../../../newTypes/either';
 import * as Option from '../../../newTypes/option';
 import {

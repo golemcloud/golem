@@ -16,7 +16,7 @@ import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
   AnalysedType,
   NameTypePair,
-} from '../src/internal/mapping/types/AnalysedType';
+} from '../src/internal/mapping/types/analysedType';
 import { AgentClassName } from '../src';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';

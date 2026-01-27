@@ -23,7 +23,8 @@ import {
   tryUnionOfOnlyLiterals,
   UserDefinedResultType, LiteralUnions, TaggedUnion, TaggedTypeMetadata,
 } from './taggedUnion';
-import { AnalysedType, enum_, fromTsTypeInternal, NameOptionTypePair, option, result, variant } from './AnalysedType';
+import { AnalysedType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
+import { fromTsTypeInternal} from './typeMapping';
 import { Ctx } from './ctx';
 
 type TsType = CoreType.Type;

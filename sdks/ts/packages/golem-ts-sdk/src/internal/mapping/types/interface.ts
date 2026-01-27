@@ -15,12 +15,10 @@
 import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import { AnalysedType, bool, f64, field, fromTsType, fromTsTypeInternal, record, str, u64 } from './AnalysedType';
+import { AnalysedType, field, record, str, u64 } from './analysedType';
 import { Ctx } from './ctx';
-import { handleUnion } from './union';
-import { handleTuple } from './tuple';
-import { handleObject } from './object';
 import { TypeMappingScope } from './scope';
+import { fromTsType, fromTsTypeInternal } from './typeMapping';
 
 type TsType = CoreType.Type;
 

@@ -17,13 +17,14 @@ import {WitTypeBuilder} from "./witTypeBuilder";
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import {WitType} from "golem:agent/common";
-import * as AnalysedType from "./AnalysedType";
 import { TypeMappingScope } from './scope';
+import * as TypeMapping from "./typeMapping";
+import { AnalysedType } from './analysedType';
 
 export { WitType } from "golem:rpc/types@0.2.2";
 
-export const fromTsType = (type: Type.Type, scope: Option.Option<TypeMappingScope>): Either.Either<[WitType, AnalysedType.AnalysedType], string> => {
-    const analysedTypeEither = AnalysedType.fromTsType(type, scope);
+export const fromTsType = (type: Type.Type, scope: Option.Option<TypeMappingScope>): Either.Either<[WitType, AnalysedType], string> => {
+    const analysedTypeEither = TypeMapping.fromTsType(type, scope);
     return Either.flatMap(analysedTypeEither, (analysedType) => {
       const witType = fromAnalysedType(analysedType);
       return Either.right(([witType, analysedType]));
@@ -31,7 +32,7 @@ export const fromTsType = (type: Type.Type, scope: Option.Option<TypeMappingScop
 };
 
 
-export const fromAnalysedType = (analysedType: AnalysedType.AnalysedType): WitType => {
+export const fromAnalysedType = (analysedType: AnalysedType): WitType => {
     const builder = new WitTypeBuilder();
     builder.add(analysedType);
     return builder.build();

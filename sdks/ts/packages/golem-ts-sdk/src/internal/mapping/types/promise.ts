@@ -12,19 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import { TypeMappingScope } from './scope';
-import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './stringFormat';
-import {
-  tryTaggedUnion,
-  tryUnionOfOnlyLiterals,
-  TaggedTypeMetadata,
-  UserDefinedResultType, LiteralUnions, TaggedUnion,
-} from './taggedUnion';
 import { Ctx } from './ctx';
-import { AnalysedType, fromTsTypeInternal } from './AnalysedType';
+import { AnalysedType } from './analysedType';
+import { fromTsTypeInternal } from './typeMapping';
 
 type TsType = CoreType.Type;
 

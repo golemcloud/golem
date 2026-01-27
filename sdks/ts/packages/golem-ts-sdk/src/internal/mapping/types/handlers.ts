@@ -15,7 +15,7 @@
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import { AnalysedType, bool, f64, str, u64 } from './AnalysedType';
+import { AnalysedType, bool, f64, str, u64 } from './analysedType';
 import { Ctx } from './ctx';
 import { handleUnion } from './union';
 import { handleTuple } from './tuple';

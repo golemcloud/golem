@@ -22,7 +22,7 @@ import {
   EmptyType,
   result,
   tuple,
-} from '../mapping/types/AnalysedType';
+} from '../mapping/types/analysedType';
 import {
   getBinaryDescriptor,
   getMultimodalParamDetails,

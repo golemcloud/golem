@@ -14,17 +14,8 @@
 
 import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
-import { TypeMappingScope } from './scope';
-import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './stringFormat';
-import {
-  tryTaggedUnion,
-  tryUnionOfOnlyLiterals,
-  TaggedTypeMetadata,
-  UserDefinedResultType, LiteralUnions, TaggedUnion,
-} from './taggedUnion';
 import { Ctx } from './ctx';
-import { AnalysedType } from './AnalysedType';
+import { AnalysedType } from './analysedType';
 
 type TsType = CoreType.Type;
 

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 

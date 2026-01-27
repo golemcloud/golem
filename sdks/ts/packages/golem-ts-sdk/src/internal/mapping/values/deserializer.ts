@@ -14,7 +14,7 @@
 
 import { typeMismatchInDeserialize } from './errors';
 import { Value } from './Value';
-import { AnalysedType } from '../types/AnalysedType';
+import { AnalysedType } from '../types/analysedType';
 import * as Option from '../../../newTypes/option';
 import { Result } from '../../../host/result';
 
