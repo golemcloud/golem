@@ -1,7 +1,7 @@
 [package]
 name = "golem-worker-service"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
@@ -44,6 +44,7 @@ bigdecimal = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+cookie = { workspace = true }
 darling = { workspace = true }
 derive_more = { workspace = true }
 desert_rust = { workspace = true }

@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod handler;
 mod identity_provider;
 mod identity_provider_metadata;
+mod model;
 mod open_id_client;
+pub mod session_store;
 
 pub use identity_provider::*;
 pub use open_id_client::*;

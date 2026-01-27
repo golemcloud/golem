@@ -12,13 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::ScanCursor;
-use golem_common::model::worker::WorkerMetadataDto;
-use poem_openapi::Object;
-use std::fmt::Debug;
+use golem_common::model::security_scheme::SecuritySchemeId;
+use openidconnect::{CsrfToken, Nonce};
+use url::Url;
+use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
-pub struct WorkersMetadataResponse {
-    pub workers: Vec<WorkerMetadataDto>,
-    pub cursor: Option<ScanCursor>,
+pub struct SessionId(pub Uuid);
+
+#[derive(Debug)]
+pub struct PendingOidcLogin {
+    pub scheme_id: SecuritySchemeId,
+    pub original_uri: String,
+    pub nonce: Nonce,
+}
+
+pub struct AuthorizationUrl {
+    pub url: Url,
+    pub csrf_state: CsrfToken,
+    pub nonce: Nonce,
 }

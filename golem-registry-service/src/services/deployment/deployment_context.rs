@@ -31,8 +31,8 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_service_base::custom_api::{
-    ConstructorParameter, CorsOptions, OriginPattern, PathSegment, RequestBodySchema,
-    RouteBehaviour,
+    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OriginPattern,
+    PathSegment, RequestBodySchema, RouteBehaviour,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -294,7 +294,7 @@ impl DeploymentContext {
                     method: http_endpoint.http_method.clone(),
                     path: path_segments.clone(),
                     body,
-                    behaviour: RouteBehaviour::CallAgent {
+                    behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                         component_id: implementer.component_id,
                         component_revision: implementer.component_revision,
                         agent_type: agent.type_name.clone(),
@@ -303,7 +303,7 @@ impl DeploymentContext {
                         constructor_parameters: constructor_parameters.clone(),
                         method_parameters,
                         expected_agent_response: agent_method.output_schema.clone(),
-                    },
+                    }),
                     security_scheme: None,
                     cors,
                 };
@@ -349,10 +349,10 @@ impl DeploymentContext {
                     method: HttpMethod::Options(Empty {}),
                     path: path_segments,
                     body: RequestBodySchema::Unused,
-                    behaviour: RouteBehaviour::CorsPreflight {
+                    behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                         allowed_origins,
                         allowed_methods,
-                    },
+                    }),
                     security_scheme: None,
                     cors: CorsOptions {
                         allowed_patterns: vec![],

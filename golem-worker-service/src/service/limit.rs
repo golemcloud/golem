@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::account::AccountId;
 use golem_common::model::WorkerId;
-use golem_common::{error_forwarding, SafeDisplay};
+use golem_common::model::account::AccountId;
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use std::sync::Arc;
 

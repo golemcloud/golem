@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod api;
+pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
 pub mod grpcapi;
@@ -21,9 +22,9 @@ pub mod model;
 pub mod path;
 pub mod service;
 
+use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::service::Services;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
@@ -33,7 +34,7 @@ use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemet
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 #[cfg(test)]
 test_r::enable!();
@@ -62,9 +63,7 @@ impl WorkerService {
         config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
-        let services: Services = Services::new(&config)
-            .await
-            .map_err(|err| anyhow!(err).context("Service initialization"))?;
+        let services: Services = Services::new(&config).await?;
 
         Ok(Self {
             config,

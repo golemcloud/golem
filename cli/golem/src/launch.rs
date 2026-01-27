@@ -40,7 +40,9 @@ use golem_worker_executor::services::golem_config::{
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
     ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
 };
-use golem_worker_service::config::{RouteResolverConfig, WorkerServiceConfig};
+use golem_worker_service::config::{
+    RouteResolverConfig, SqliteSessionStoreConfig, WorkerServiceConfig,
+};
 use golem_worker_service::WorkerService;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
@@ -325,18 +327,21 @@ fn worker_service_config(
             port: 0,
             ..Default::default()
         },
-        gateway_session_storage: golem_worker_service::config::GatewaySessionStorageConfig::Sqlite(
-            DbSqliteConfig {
-                database: args
-                    .data_dir
-                    .join("gateway-sessions.db")
-                    .to_string_lossy()
-                    .to_string(),
-                max_connections: 4,
-                foreign_keys: false,
+        gateway_session_storage: golem_worker_service::config::SessionStoreConfig::Sqlite(
+            SqliteSessionStoreConfig {
+                pending_login_expiration: Duration::from_hours(1),
+                cleanup_interval: Duration::from_mins(5),
+                sqlite_config: DbSqliteConfig {
+                    database: args
+                        .data_dir
+                        .join("gateway-sessions.db")
+                        .to_string_lossy()
+                        .to_string(),
+                    max_connections: 4,
+                    foreign_keys: false,
+                },
             },
         ),
-        blob_storage: blob_storage_config(args),
         routing_table: RoutingTableConfig {
             host: args.router_addr.clone(),
             port: shard_manager_run_details.grpc_port,
