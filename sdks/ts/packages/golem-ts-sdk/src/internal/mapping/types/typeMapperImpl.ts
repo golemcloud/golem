@@ -61,7 +61,3 @@ function rejectBoxedTypes(type: TsType): Either.Either<never, string> {
   }
   return Either.right(undefined as never);
 }
-
-interface SomeModel {  }
-export namespace SomeModel { }
-

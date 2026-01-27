@@ -227,4 +227,3 @@ export function tryUnionOfOnlyLiterals(
 
   return Either.right(Option.some({ literals }));
 }
-
