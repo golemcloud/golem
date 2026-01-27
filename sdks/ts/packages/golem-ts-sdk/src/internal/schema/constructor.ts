@@ -15,7 +15,6 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { ClassMetadata, ConstructorArg } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import * as Option from '../../newTypes/option';
 import * as WitType from '../mapping/types/WitType';
 
 import { DataSchema } from 'golem:agent/common';
@@ -139,13 +138,11 @@ const analysedHandler: ConstructorParamHandler = {
   handle: (agentClassName, param, baseError, collection) => {
     const typeInfoEither = WitType.fromTsType(
       param.type,
-      Option.some(
         TypeMappingScope.constructor(
           agentClassName,
           param.name,
           param.type.optional,
         ),
-      ),
     );
 
     if (Either.isLeft(typeInfoEither)) {

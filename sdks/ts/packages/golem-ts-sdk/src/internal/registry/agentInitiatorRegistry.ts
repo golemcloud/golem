@@ -37,8 +37,8 @@ class AgentInitiatorRegistryImpl {
     this.registry.set(agentTypeName.value, agentInitiator);
   }
 
-  lookup(agentTypeName: string): Option.Option<AgentInitiator> {
-    return Option.fromNullable(this.registry.get(agentTypeName));
+  lookup(agentTypeName: string): AgentInitiator | undefined {
+    return this.registry.get(agentTypeName);
   }
 
   entries(): IterableIterator<[string, AgentInitiator]> {

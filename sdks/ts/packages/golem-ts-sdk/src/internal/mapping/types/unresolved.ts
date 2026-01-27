@@ -20,7 +20,6 @@ import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-// Types that are fully unknown
 type UnresolvedCtx = Ctx & { type: Extract<TsType, { kind: "unresolved-type" }> };
 
 export function handleUnresolved({ type }: UnresolvedCtx, _mapper: TypeMapper): Either.Either<AnalysedType, string> {
