@@ -22,30 +22,19 @@ import {
   tryUnionOfOnlyLiteral,
   UserDefinedResultType, UnionOfLiteral, TaggedUnion, TaggedTypeMetadata,
 } from './taggedUnion';
-import { AnalysedType, EmptyType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
+import { AnalysedType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
 import { Ctx } from './ctx';
 import {TypeMapper} from "./typeMapper";
 import { Try } from '../../try';
 
 type TsType = CoreType.Type;
 
-// It keeps track of the "generated" `AnalysedType` mainly for anonymous types.
-// The key `string` simply can be string representation of the type.
-// This is only used in `union` types. The reason can b explained with an example.
-//
-// In the below example, the argument to the function is an anonymous union
-// function foo(x: string | number);
-
-// Union handler ensures to convert `string | number` is converted to `variant { case0(string), case1(number) }` in WIT.
-// But `union` handler updates a cache of this `AnalysedType` for anonymous union,
-// which helps with reusing the same variant whenever `string | number` appears in the code
-// instead of unlimited generation of case indices
 const AnonymousUnionTypeRegistry = new Map<string, AnalysedType>();
 
 type UnionCtx = Ctx & { type: Extract<TsType, { kind: "union" }> };
 
 // TODO; Refactor more here, (added only comments for now to avoid losing changes)
-export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
+export function handleUnion1(ctx : UnionCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const { type, scope } = ctx;
   const hash = JSON.stringify(buildJSONFromType(type));
 
@@ -248,6 +237,123 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
 
   return Either.right(result);
 }
+
+export function handleUnion(
+  ctx: UnionCtx,
+  mapper: TypeMapper
+): Either.Either<AnalysedType, string> {
+  const { type, scope } = ctx;
+
+  const cacheKey = hashUnion(type);
+  const isAnonymous = !type.name;
+
+  // Reuse cached anonymous unions
+  const cached = reuseAnonymousUnionCache(ctx, cacheKey);
+  if (cached) return cached;
+
+  // Inbuilt Result<T, E>
+  const inbuiltResult = tryInbuiltResultType(
+    type.name,
+    type.originalTypeName,
+    type.unionTypes,
+    type.typeParams,
+    mapper
+  );
+  if (inbuiltResult) {
+    cacheIfAnonymous(cacheKey, isAnonymous, inbuiltResult);
+    return inbuiltResult;
+  }
+
+  // 3️⃣ Union of only literals → enum
+  const enumResult = tryEnumUnion(type, cacheKey);
+  if (enumResult) return enumResult;
+
+  // 4️⃣ Tagged union → variant / result
+  const taggedResult = tryTaggedUnionConversion(type, mapper, cacheKey);
+  if (taggedResult) return taggedResult;
+
+  // 5️⃣ Optional union (null | undefined | void)
+  const optionalResult = tryOptionalUnion(ctx, mapper, cacheKey);
+  if (optionalResult) return optionalResult;
+
+  // 6️⃣ Normalize boolean literal unions
+  const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
+
+  // 7️⃣ Fallback: plain variant
+  return buildPlainVariant(type, normalizedUnionTypes, mapper, cacheKey);
+}
+
+
+function hashUnion(type: TsType): string {
+  return JSON.stringify(buildJSONFromType(type));
+}
+
+function cacheIfAnonymous(
+  key: string,
+  isAnonymous: boolean,
+  result: Either.Either<AnalysedType, string>
+) {
+  if (isAnonymous && Either.isRight(result)) {
+    AnonymousUnionTypeRegistry.set(key, result.val);
+  }
+}
+
+// It keeps track of the "generated" `AnalysedType` mainly for anonymous union types.
+// The key `string` in Map simply can be string representation of the type.
+// The reason can be explained with an example.
+//
+// In the below function, the argument to the function is an anonymous union
+//
+// ```ts
+//   function foo(x: string | number);
+// ```
+// Union handler ensures to convert `string | number` is converted to `variant { case0(string), case1(number) }` in WIT.
+// But `union` handler also updates a cache of this `AnalysedType`
+// which ensures with reusing the same WIT variant whenever `string | number` appears in the code
+// instead of unlimited generation of case indices
+function reuseAnonymousUnionCache(
+  ctx: UnionCtx,
+  key: string
+): Either.Either<AnalysedType, string> | undefined {
+  const type = ctx.type;
+
+  if (type.name) return;
+
+  const cachedAnalysedType: AnalysedType | undefined = AnonymousUnionTypeRegistry.get(key);
+  if (!cachedAnalysedType) return;
+
+  const emptyKind =
+    type.unionTypes.find(t => t.kind === "null")?.kind ??
+    type.unionTypes.find(t => t.kind === "undefined")?.kind ??
+    type.unionTypes.find(t => t.kind === "void")?.kind;
+
+  return emptyKind
+    ? Either.right(option(undefined, emptyKind, cachedAnalysedType))
+    : Either.right(cachedAnalysedType);
+}
+
+function tryEnumUnion(
+  type: TsType,
+  cacheKey: string
+): Either.Either<AnalysedType, string> | undefined {
+  const literals: Try<UnionOfLiteral> = tryUnionOfOnlyLiteral(type.unionTypes);
+
+  // This happens because it is found that every term is a literal,
+  // but there is some error specific to any of the literals,
+  // and keep the error
+  if (Either.isLeft(literals)) return literals;
+
+  // Not a literal
+  if (!literals.val) return;
+
+  // Union of only literals are converted to WIT enum
+  const result = enum_(type.name, literals.val.literals);
+
+  if (!type.name) AnonymousUnionTypeRegistry.set(cacheKey, result);
+
+  return Either.right(result);
+}
+
 
 export function tryInbuiltResultType(
   typeName: string | undefined,
