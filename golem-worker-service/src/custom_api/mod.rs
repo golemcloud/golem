@@ -12,13 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::ScanCursor;
-use golem_common::model::worker::WorkerMetadataDto;
-use poem_openapi::Object;
-use std::fmt::Debug;
+pub mod api_definition_lookup;
+pub mod call_agent;
+mod cors;
+pub mod error;
+pub mod model;
+pub mod poem_endpoint;
+pub mod request_handler;
+pub mod route_resolver;
+pub mod router;
+pub mod security;
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
-pub struct WorkersMetadataResponse {
-    pub workers: Vec<WorkerMetadataDto>,
-    pub cursor: Option<ScanCursor>,
+use self::poem_endpoint::CustomApiPoemEndpoint;
+use crate::bootstrap::Services;
+pub use model::*;
+
+pub fn make_custom_api_endpoint(services: &Services) -> CustomApiPoemEndpoint {
+    CustomApiPoemEndpoint::new(services.request_handler.clone())
 }

@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::ScanCursor;
-use golem_common::model::worker::WorkerMetadataDto;
-use poem_openapi::Object;
-use std::fmt::Debug;
+pub mod handler;
+mod identity_provider;
+mod identity_provider_metadata;
+mod model;
+mod open_id_client;
+pub mod session_store;
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
-pub struct WorkersMetadataResponse {
-    pub workers: Vec<WorkerMetadataDto>,
-    pub cursor: Option<ScanCursor>,
-}
+pub use identity_provider::*;
+pub use open_id_client::*;

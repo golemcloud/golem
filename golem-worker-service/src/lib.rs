@@ -13,24 +13,18 @@
 // limitations under the License.
 
 pub mod api;
+pub mod bootstrap;
 pub mod config;
-pub mod gateway_execution;
-// pub mod gateway_middleware;
-pub mod gateway_router;
-// pub mod gateway_security;
-pub mod getter;
+pub mod custom_api;
 pub mod grpcapi;
-pub mod headers;
-pub mod http_invocation_context;
 pub mod metrics;
 pub mod model;
 pub mod path;
 pub mod service;
-// pub mod swagger_ui;
 
+use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::service::Services;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
@@ -40,7 +34,7 @@ use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemet
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 #[cfg(test)]
 test_r::enable!();
@@ -69,9 +63,7 @@ impl WorkerService {
         config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
-        let services: Services = Services::new(&config)
-            .await
-            .map_err(|err| anyhow!(err).context("Service initialization"))?;
+        let services: Services = Services::new(&config).await?;
 
         Ok(Self {
             config,
@@ -180,7 +172,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let route = Route::new()
-            .nest("/", api::custom_http_request_api(&self.services))
+            .nest("/", custom_api::make_custom_api_endpoint(&self.services))
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())

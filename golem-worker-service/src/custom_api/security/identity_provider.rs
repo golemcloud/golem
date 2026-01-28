@@ -13,67 +13,66 @@
 // limitations under the License.
 
 use super::identity_provider_metadata::GolemIdentityProviderMetadata;
-use crate::gateway_security::open_id_client::OpenIdClient;
+use super::model::AuthorizationUrl;
+use super::open_id_client::OpenIdClient;
 use async_trait::async_trait;
+use golem_common::IntoAnyhow;
 use golem_common::model::security_scheme::Provider;
-use golem_common::SafeDisplay;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use openidconnect::core::{
     CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
     CoreTokenResponse,
 };
 use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope};
-use std::fmt::{Display, Formatter};
 use tracing::debug;
-use url::Url;
 
-// A high level abstraction of an identity-provider, that expose
-// necessary functionalities that gets called at various points in gateway security integration.
+#[derive(Debug, thiserror::Error)]
+pub enum IdentityProviderError {
+    #[error("Failed to initialize client: {0}")]
+    ClientInitError(String),
+    #[error("Invalid issuer URL: {0}")]
+    InvalidIssuerUrl(String),
+    #[error("Failed to discover provider metadata: {0}")]
+    FailedToDiscoverProviderMetadata(String),
+    #[error("Failed to exchange code for tokens: {0}")]
+    FailedToExchangeCodeForTokens(String),
+    #[error("ID token verification error: {0}")]
+    IdTokenVerificationError(String),
+}
+
+impl IntoAnyhow for IdentityProviderError {
+    fn into_anyhow(self) -> anyhow::Error {
+        anyhow::Error::from(self).context("IdentityProviderError")
+    }
+}
+
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
-    // Fetches the provider metadata from the issuer url, and this must be called
-    // during the registration of the security scheme with golem.
-    // The security scheme regisration stores the provider metadata, along with the security scheme
-    // in the security scheme store of Golem
     async fn get_provider_metadata(
         &self,
         provider: &Provider,
     ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError>;
 
-    // Exchange of Code token happens during the auth_call_back phase of the OpenID workflow
-    // In other words, this gets called only during the execution of static binding backing auth_call_back endpoint.
     async fn exchange_code_for_tokens(
         &self,
         client: &OpenIdClient,
         code: &AuthorizationCode,
     ) -> Result<CoreTokenResponse, IdentityProviderError>;
 
-    // A client can be created given provider-metadata at any phase of the security workflow in API Gateway.
-    // It can be created to create the authorisation URL to redirect user to the provider's login page
-    // Or It can be created before exchange of token during the execution of static binding backing auth_call_back endpoint.
     async fn get_client(
         &self,
         security_scheme: &SecuritySchemeDetails,
     ) -> Result<OpenIdClient, IdentityProviderError>;
 
-    // Get IDToken verifier
-    // For the most part, this is an internal detail to openidconnect, however,
-    // to test verifying claims using our own key pairs, this can be exposed
     fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a>;
 
-    // Claims are fetched from the ID token, and this gets called during the execution of static binding backing auth_call_back endpoint.
-    // If needed this can be called just before serving the protected route, to fetch the claims from the ID token as a middleware
-    // and feed it to the protected route handler through Rib. In any case, claims needs to be stored in a session
-    // as the OAuth2 workflow in OpenID gets initiated by the gateway and not the client user-agent.
     fn get_claims(
         &self,
         client: &CoreIdTokenVerifier,
-        core_token_response: CoreTokenResponse,
+        core_token_response: &CoreTokenResponse,
         nonce: &Nonce,
     ) -> Result<CoreIdTokenClaims, IdentityProviderError>;
 
-    // This gets called during the redirect to the provider's login page,
-    // and this is the first step in the OAuth2 workflow in serving a protected route.
     fn get_authorization_url(
         &self,
         client: &OpenIdClient,
@@ -83,67 +82,24 @@ pub trait IdentityProvider: Send + Sync {
     ) -> AuthorizationUrl;
 }
 
-pub struct AuthorizationUrl {
-    pub url: Url,
-    pub csrf_state: CsrfToken,
-    pub nonce: Nonce,
-}
-
-#[derive(Debug, Clone)]
-pub enum IdentityProviderError {
-    ClientInitError(String),
-    InvalidIssuerUrl(String),
-    FailedToDiscoverProviderMetadata(String),
-    FailedToExchangeCodeForTokens(String),
-    IdTokenVerificationError(String),
-}
-
-// To satisfy thiserror
-// https://github.com/golemcloud/golem/issues/1071
-impl Display for IdentityProviderError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_safe_string())
-    }
-}
-
-impl SafeDisplay for IdentityProviderError {
-    fn to_safe_string(&self) -> String {
-        match self {
-            IdentityProviderError::ClientInitError(err) => format!("ClientInitError: {err}"),
-            IdentityProviderError::InvalidIssuerUrl(err) => format!("InvalidIssuerUrl: {err}"),
-            IdentityProviderError::FailedToDiscoverProviderMetadata(err) => {
-                format!("FailedToDiscoverProviderMetadata: {err}")
-            }
-            IdentityProviderError::FailedToExchangeCodeForTokens(err) => {
-                format!("FailedToExchangeCodeForTokens: {err}")
-            }
-            IdentityProviderError::IdTokenVerificationError(err) => {
-                format!("IdTokenVerificationError: {err}")
-            }
-        }
-    }
-}
-
 pub struct DefaultIdentityProvider;
 
 #[async_trait]
 impl IdentityProvider for DefaultIdentityProvider {
-    // To be called during API definition registration to then store them in the database
     async fn get_provider_metadata(
         &self,
         provider: &Provider,
     ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
-        let provide_metadata = CoreProviderMetadata::discover_async(
+        let provider_metadata = CoreProviderMetadata::discover_async(
             provider.issuer_url(),
             openidconnect::reqwest::async_http_client,
         )
         .await
         .map_err(|err| IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string()))?;
 
-        Ok(provide_metadata)
+        Ok(provider_metadata)
     }
 
-    // To be called during call_back authentication URL which is a injected URL
     async fn exchange_code_for_tokens(
         &self,
         client: &OpenIdClient,
@@ -189,7 +145,7 @@ impl IdentityProvider for DefaultIdentityProvider {
     fn get_claims(
         &self,
         id_token_verifier: &CoreIdTokenVerifier,
-        core_token_response: CoreTokenResponse,
+        core_token_response: &CoreTokenResponse,
         nonce: &Nonce,
     ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
         let id_token_claims: &CoreIdTokenClaims = core_token_response

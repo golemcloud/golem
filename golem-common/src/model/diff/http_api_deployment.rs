@@ -12,13 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::BTreeMapDiff;
 use crate::model::diff::{hash_from_serialized_value, BTreeSetDiff, Diffable, Hash, Hashable};
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDeploymentAgentOptions {
+    pub security_scheme: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDeploymentAgentOptionsDiff {
+    pub security_scheme_changed: bool,
+}
+
+impl Diffable for HttpApiDeploymentAgentOptions {
+    type DiffResult = HttpApiDeploymentAgentOptionsDiff;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let security_scheme_changed = new.security_scheme != current.security_scheme;
+
+        if security_scheme_changed {
+            Some(HttpApiDeploymentAgentOptionsDiff {
+                security_scheme_changed,
+            })
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HttpApiDeployment {
-    pub agent_types: BTreeSet<String>,
+    pub agents: BTreeMap<String, HttpApiDeploymentAgentOptions>,
 }
 
 impl Hashable for HttpApiDeployment {
@@ -28,6 +57,25 @@ impl Hashable for HttpApiDeployment {
 }
 
 impl Diffable for HttpApiDeployment {
+    type DiffResult = BTreeMapDiff<String, HttpApiDeploymentAgentOptions>;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        new.agents.diff_with_current(&current.agents)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HttpApiDeploymentLegacy {
+    pub agent_types: BTreeSet<String>,
+}
+
+impl Hashable for HttpApiDeploymentLegacy {
+    fn hash(&self) -> Hash {
+        hash_from_serialized_value(self)
+    }
+}
+
+impl Diffable for HttpApiDeploymentLegacy {
     type DiffResult = BTreeSetDiff<String>;
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {

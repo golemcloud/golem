@@ -16,10 +16,10 @@ use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
 use crate::service::limit::LimitServiceError;
 use crate::service::worker::CallWorkerExecutorError;
+use golem_common::SafeDisplay;
+use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentFilePath, ComponentId};
-use golem_common::model::WorkerId;
-use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -84,9 +84,9 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::Work
 impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::worker_error::Error {
     fn from(error: WorkerServiceError) -> Self {
         use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
-        use golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error as GrpcError;
         use golem_api_grpc::proto::golem::worker::v1::UnknownError;
         use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
+        use golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error as GrpcError;
 
         match error {
             WorkerServiceError::ComponentNotFound(_)

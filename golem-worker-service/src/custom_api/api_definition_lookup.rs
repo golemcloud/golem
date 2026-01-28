@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use golem_common::model::domain_registration::Domain;
-use golem_common::{error_forwarding, SafeDisplay};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::custom_api::CompiledRoutes;
 use std::sync::Arc;

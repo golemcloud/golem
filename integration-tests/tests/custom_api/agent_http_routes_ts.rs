@@ -18,14 +18,16 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
+};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
 use reqwest::Url;
 use serde_json::json;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
@@ -75,9 +77,15 @@ async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resul
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agent_types: BTreeSet::from_iter([
-            AgentTypeName("http-agent".into()),
-            AgentTypeName("cors-agent".into()),
+        agents: BTreeMap::from_iter([
+            (
+                AgentTypeName("http-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("cors-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
         ]),
     };
 

@@ -12,9 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod identity_provider;
-mod identity_provider_metadata;
-mod open_id_client;
+use golem_common::model::security_scheme::SecuritySchemeId;
+use openidconnect::{CsrfToken, Nonce};
+use url::Url;
+use uuid::Uuid;
 
-pub use identity_provider::*;
-pub use open_id_client::*;
+pub struct SessionId(pub Uuid);
+
+#[derive(Debug)]
+pub struct PendingOidcLogin {
+    pub scheme_id: SecuritySchemeId,
+    pub original_uri: String,
+    pub nonce: Nonce,
+}
+
+pub struct AuthorizationUrl {
+    pub url: Url,
+    pub csrf_state: CsrfToken,
+    pub nonce: Nonce,
+}

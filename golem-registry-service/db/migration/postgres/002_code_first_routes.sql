@@ -17,7 +17,10 @@ DELETE FROM component_plugin_installations;
 DELETE FROM component_revisions;
 DELETE FROM components;
 
-ALTER TABLE http_api_deployment_revisions RENAME COLUMN http_api_definitions TO agent_types;
+ALTER TABLE http_api_deployment_revisions RENAME COLUMN http_api_definitions TO data;
+ALTER TABLE http_api_deployment_revisions
+  ALTER COLUMN data TYPE BYTEA
+  USING data::bytea;
 
 DROP TABLE deployment_compiled_http_api_definition_routes;
 DROP TABLE deployment_domain_http_api_definitions;

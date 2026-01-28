@@ -26,14 +26,16 @@ use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
     HttpApiRoute, RouteMethod, WorkerGatewayBinding,
 };
-use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
+};
 use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use reqwest::header::HeaderValue;
 use reqwest::Client;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
@@ -157,7 +159,10 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agent_types: [AgentTypeName("placeholder-agent".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("placeholder-agent".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     client
