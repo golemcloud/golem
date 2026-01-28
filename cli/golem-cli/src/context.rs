@@ -312,11 +312,11 @@ impl Context {
         };
 
         let template_sdk_overrides = SdkOverrides {
-            rust_path: global_flags
+            golem_rust_path: global_flags
                 .golem_rust_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            rust_version: global_flags.golem_rust_version.clone(),
+            golem_rust_version: global_flags.golem_rust_version.clone(),
             ts_packages_path: global_flags.golem_ts_packages_path.clone(),
             ts_version: global_flags.golem_ts_version.clone(),
         };
@@ -482,7 +482,7 @@ impl Context {
                             ApplicationEnvironmentConfigId {
                                 application_name: env.application_name.clone(),
                                 environment_name: env.environment_name.clone(),
-                                server_url: BUILTIN_LOCAL_URL.parse().unwrap(),
+                                server_url: BUILTIN_LOCAL_URL.parse()?,
                             },
                         ),
                     })
