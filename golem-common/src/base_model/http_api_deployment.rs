@@ -12,27 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::security_scheme::SecuritySchemeName;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 newtype_uuid!(HttpApiDeploymentId);
 
 declare_revision!(HttpApiDeploymentRevision);
 
 declare_structs! {
+    #[derive(Default)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(transparent))]
+    pub struct HttpApiDeploymentAgentOptions {
+        /// Security scheme to use for all agent methods that require auth.
+        /// Failure to provide a security scheme for an agent that requires one will lead to a deployment failure.
+        /// If the requested security scheme does not exist in the environment, the route will be disabled at runtime.
+        pub security_scheme: Option<SecuritySchemeName>
+    }
+
     pub struct HttpApiDeploymentCreation {
         pub domain: Domain,
-        pub agent_types: BTreeSet<AgentTypeName>
+        pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>
     }
 
     pub struct HttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
-        pub agent_types: Option<BTreeSet<AgentTypeName>>
+        pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
 
     pub struct HttpApiDeployment {
@@ -41,7 +52,7 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub domain: Domain,
         pub hash: diff::Hash,
-        pub agent_types: BTreeSet<AgentTypeName>,
+        pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         pub created_at: DateTime<chrono::Utc>,
     }
 }

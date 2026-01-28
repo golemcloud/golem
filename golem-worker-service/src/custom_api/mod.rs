@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod agent_response_mapping;
 pub mod api_definition_lookup;
+pub mod call_agent;
+mod cors;
+pub mod error;
 pub mod model;
-mod parameter_parsing;
 pub mod poem_endpoint;
-pub mod request;
 pub mod request_handler;
 pub mod route_resolver;
 pub mod router;
 pub mod security;
 
 use self::poem_endpoint::CustomApiPoemEndpoint;
-use crate::service::Services;
+use crate::bootstrap::Services;
 pub use model::*;
 
 pub fn make_custom_api_endpoint(services: &Services) -> CustomApiPoemEndpoint {

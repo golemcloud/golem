@@ -239,20 +239,28 @@ pub struct CompiledRoute {
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RouteBehaviour {
-    CallAgent {
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        agent_type: AgentTypeName,
-        constructor_parameters: Vec<ConstructorParameter>,
-        phantom: bool,
-        method_name: String,
-        method_parameters: Vec<MethodParameter>,
-        expected_agent_response: DataSchema,
-    },
-    CorsPreflight {
-        allowed_origins: BTreeSet<OriginPattern>,
-        allowed_methods: BTreeSet<HttpMethod>,
-    },
+    CallAgent(CallAgentBehaviour),
+    CorsPreflight(CorsPreflightBehaviour),
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct CallAgentBehaviour {
+    pub component_id: ComponentId,
+    pub component_revision: ComponentRevision,
+    pub agent_type: AgentTypeName,
+    pub constructor_parameters: Vec<ConstructorParameter>,
+    pub phantom: bool,
+    pub method_name: String,
+    pub method_parameters: Vec<MethodParameter>,
+    pub expected_agent_response: DataSchema,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct CorsPreflightBehaviour {
+    pub allowed_origins: BTreeSet<OriginPattern>,
+    pub allowed_methods: BTreeSet<HttpMethod>,
 }
 
 #[derive(Debug, Clone)]

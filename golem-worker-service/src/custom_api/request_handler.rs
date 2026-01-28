@@ -12,113 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::agent_response_mapping::interpret_agent_response;
-use super::parameter_parsing::{
-    parse_path_segment_value, parse_path_segment_value_to_component_model,
-    parse_query_or_header_value, parse_request_body,
-};
-use super::request::RichRequest;
-use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverError};
-use super::{ParsedRequestBody, ResponseBody, RouteExecutionResult};
-use crate::service::worker::{WorkerService, WorkerServiceError};
+use super::call_agent::CallAgentHandler;
+use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
+use super::error::RequestHandlerError;
+use super::model::RichRequest;
+use super::model::RichRouteBehaviour;
+use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
+use super::security::handler::OidcHandler;
+use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use anyhow::anyhow;
-use golem_common::model::agent::{
-    AgentId, BinaryReference, BinaryReferenceValue, DataValue, ElementValue, ElementValues,
-    UntypedDataValue, UntypedElementValue,
-};
-use golem_common::model::{IdempotencyKey, WorkerId};
-use golem_common::{error_forwarding, SafeDisplay};
-use golem_service_base::custom_api::{ConstructorParameter, MethodParameter, RouteBehaviour};
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::custom_api::CorsPreflightBehaviour;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::IntoValue;
-use golem_wasm::ValueAndType;
-use http::StatusCode;
-use poem::{Request, Response, ResponseBuilder};
-use std::collections::HashMap;
+use poem::{Request, Response};
 use std::sync::Arc;
-use tracing::debug;
-use uuid::Uuid;
-
-#[derive(Debug, thiserror::Error)]
-pub enum RequestHandlerError {
-    #[error("Failed parsing value; Provided: {value}; Expected type: {expected}")]
-    ValueParsingFailed {
-        value: String,
-        expected: &'static str,
-    },
-    #[error("Expected {expected} values to be provided, but found none")]
-    MissingValue { expected: &'static str },
-    #[error("Expected {expected} values to be provided, but found too many")]
-    TooManyValues { expected: &'static str },
-    #[error("Header value of {header_name} is not valid ascii")]
-    HeaderIsNotAscii { header_name: String },
-    #[error("Request body was not valid json: {error}")]
-    BodyIsNotValidJson { error: String },
-    #[error("Failed parsing json body: [{formatted}]", formatted=.errors.join(","))]
-    JsonBodyParsingFailed { errors: Vec<String> },
-    #[error("Agent response did not match expected type: {error}")]
-    AgentResponseTypeMismatch { error: String },
-    #[error("Mime type {mime_type} is not supported. Allowed mime types: [{formatted_mime_types}]", formatted_mime_types=.allowed_mime_types.join(","))]
-    UnsupportedMimeType {
-        mime_type: String,
-        allowed_mime_types: Vec<String>,
-    },
-    #[error("Invariant violated: {msg}")]
-    InvariantViolated { msg: &'static str },
-    #[error("Resolving route failed: {0}")]
-    ResolvingRouteFailed(#[from] RouteResolverError),
-    #[error("Invocation failed: {0}")]
-    AgentInvocationFailed(#[from] WorkerServiceError),
-    #[error(transparent)]
-    InternalError(#[from] anyhow::Error),
-}
-
-impl RequestHandlerError {
-    pub fn invariant_violated(msg: &'static str) -> Self {
-        Self::InvariantViolated { msg }
-    }
-}
-
-impl SafeDisplay for RequestHandlerError {
-    fn to_safe_string(&self) -> String {
-        match self {
-            Self::ValueParsingFailed { .. } => self.to_string(),
-            Self::MissingValue { .. } => self.to_string(),
-            Self::TooManyValues { .. } => self.to_string(),
-            Self::HeaderIsNotAscii { .. } => self.to_string(),
-            Self::BodyIsNotValidJson { .. } => self.to_string(),
-            Self::JsonBodyParsingFailed { .. } => self.to_string(),
-            Self::AgentResponseTypeMismatch { .. } => self.to_string(),
-            Self::UnsupportedMimeType { .. } => self.to_string(),
-
-            Self::InvariantViolated { .. } => "internal error".to_string(),
-
-            Self::ResolvingRouteFailed(inner) => {
-                format!("Resolving route failed: {}", inner.to_safe_string())
-            }
-            Self::AgentInvocationFailed(inner) => {
-                format!("Invocation failed: {}", inner.to_safe_string())
-            }
-
-            Self::InternalError(_) => "internal error".to_string(),
-        }
-    }
-}
-
-error_forwarding!(RequestHandlerError);
+use tracing::{Instrument, debug};
 
 pub struct RequestHandler {
     route_resolver: Arc<RouteResolver>,
-    worker_service: Arc<WorkerService>,
+    call_agent_handler: Arc<CallAgentHandler>,
+    oidc_handler: Arc<OidcHandler>,
 }
 
 #[allow(irrefutable_let_patterns)]
 impl RequestHandler {
-    pub fn new(route_resolver: Arc<RouteResolver>, worker_service: Arc<WorkerService>) -> Self {
+    pub fn new(
+        route_resolver: Arc<RouteResolver>,
+        call_agent_handler: Arc<CallAgentHandler>,
+        oidc_handler: Arc<OidcHandler>,
+    ) -> Self {
         Self {
             route_resolver,
-            worker_service,
+            call_agent_handler,
+            oidc_handler,
         }
     }
 
@@ -127,10 +52,41 @@ impl RequestHandler {
 
         let matching_route = self.route_resolver.resolve_matching_route(&request).await?;
         let mut request = RichRequest::new(request);
-        let execution_result = self.execute_route(&mut request, &matching_route).await?;
-        let response =
-            route_execution_result_to_response(execution_result, &request, &matching_route)?;
+
+        let execution_result = self
+            .execute_route_and_middlewares(&mut request, &matching_route)
+            .instrument(tracing::span!(
+                tracing::Level::INFO,
+                "handle_route",
+                domain = %matching_route.domain,
+                method = %matching_route.route.method,
+                route = %matching_route.route.path.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
+            ))
+            .await?;
+
+        let response = route_execution_result_to_response(execution_result)?;
+
         Ok(response)
+    }
+
+    async fn execute_route_and_middlewares(
+        &self,
+        request: &mut RichRequest,
+        resolved_route: &ResolvedRouteEntry,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        if let Some(short_circuit) = self
+            .oidc_handler
+            .apply_oidc_incoming_middleware(request, resolved_route)
+            .await?
+        {
+            return Ok(short_circuit);
+        }
+
+        let mut result = self.execute_route(request, resolved_route).await?;
+
+        apply_cors_outgoing_middleware(&mut result, request, resolved_route).await?;
+
+        Ok(result)
     }
 
     async fn execute_route(
@@ -139,297 +95,34 @@ impl RequestHandler {
         resolved_route: &ResolvedRouteEntry,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         match &resolved_route.route.behavior {
-            RouteBehaviour::CallAgent { .. } => {
-                self.execute_call_agent(request, resolved_route).await
+            RichRouteBehaviour::CallAgent(behaviour) => {
+                self.call_agent_handler
+                    .handle_call_agent_behaviour(request, resolved_route, behaviour)
+                    .await
             }
 
-            RouteBehaviour::CorsPreflight {
+            RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                 allowed_origins,
                 allowed_methods,
-            } => {
-                let origin = request.origin()?.ok_or(RequestHandlerError::MissingValue {
-                    expected: "Origin header",
-                })?;
+            }) => handle_cors_preflight_behaviour(request, allowed_origins, allowed_methods),
 
-                let origin_allowed = allowed_origins
-                    .iter()
-                    .any(|pattern| pattern.matches(origin));
-                if !origin_allowed {
-                    return Ok(RouteExecutionResult {
-                        status: StatusCode::FORBIDDEN,
-                        headers: HashMap::new(),
-                        body: ResponseBody::NoBody,
-                    });
-                }
-
-                let allow_methods = allowed_methods
-                    .iter()
-                    .map(|m| {
-                        let converted = http::Method::try_from(m.clone()).map_err(|_| {
-                            RequestHandlerError::invariant_violated("HttpMethod conversion error")
-                        })?;
-                        let rendered = converted.to_string();
-                        Ok::<_, RequestHandlerError>(rendered)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                    .join(", ");
-
-                let mut headers = HashMap::new();
-
-                headers.insert(
-                    http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    origin.to_string(),
-                );
-                headers.insert(http::header::ACCESS_CONTROL_ALLOW_METHODS, allow_methods);
-                headers.insert(
-                    http::header::ACCESS_CONTROL_ALLOW_HEADERS,
-                    "Content-Type, Authorization".to_string(),
-                );
-                headers.insert(http::header::ACCESS_CONTROL_MAX_AGE, "3600".to_string());
-                headers.insert(http::header::VARY, "Origin".to_string());
-
-                Ok(RouteExecutionResult {
-                    status: StatusCode::NO_CONTENT,
-                    headers,
-                    body: ResponseBody::NoBody,
-                })
+            RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour { security_scheme }) => {
+                self.oidc_handler
+                    .handle_oidc_callback_behaviour(request, security_scheme)
+                    .await
             }
         }
-    }
-
-    async fn execute_call_agent(
-        &self,
-        request: &mut RichRequest,
-        resolved_route: &ResolvedRouteEntry,
-    ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let RouteBehaviour::CallAgent {
-            expected_agent_response,
-            ..
-        } = &resolved_route.route.behavior
-        else {
-            unreachable!()
-        };
-
-        let worker_id = self.build_worker_id(resolved_route)?;
-
-        let parsed_body = parse_request_body(request, &resolved_route.route.body).await?;
-
-        let method_params = self.resolve_method_arguments(resolved_route, request, parsed_body)?;
-
-        debug!("Invoking agent {worker_id}");
-
-        let agent_response = self
-            .invoke_agent(&worker_id, resolved_route, method_params)
-            .await?;
-
-        debug!("Received agent response: {agent_response:?}");
-
-        debug!(
-            "Json agent response: {}",
-            agent_response.clone().unwrap().to_json_value().unwrap()
-        );
-
-        let route_result = interpret_agent_response(agent_response, expected_agent_response)?;
-
-        debug!("Returning call agent route result: {route_result:?}");
-
-        Ok(route_result)
-    }
-
-    fn build_worker_id(
-        &self,
-        resolved_route: &ResolvedRouteEntry,
-    ) -> Result<WorkerId, RequestHandlerError> {
-        let RouteBehaviour::CallAgent {
-            component_id,
-            agent_type,
-            constructor_parameters,
-            phantom,
-            ..
-        } = &resolved_route.route.behavior
-        else {
-            unreachable!()
-        };
-
-        let mut values = Vec::with_capacity(constructor_parameters.len());
-
-        for param in constructor_parameters {
-            match param {
-                ConstructorParameter::Path {
-                    path_segment_index,
-                    parameter_type,
-                } => {
-                    let raw = resolved_route.captured_path_parameters
-                        [usize::from(*path_segment_index)]
-                    .clone();
-
-                    let value = parse_path_segment_value_to_component_model(raw, parameter_type)?;
-
-                    values.push(ElementValue::ComponentModel(ValueAndType::new(
-                        value,
-                        parameter_type.clone().into(),
-                    )));
-                }
-            }
-        }
-
-        let data_value = DataValue::Tuple(ElementValues { elements: values });
-
-        let phantom_id = phantom.then(Uuid::new_v4);
-
-        let agent_id = AgentId::new(agent_type.clone(), data_value, phantom_id);
-
-        Ok(WorkerId {
-            component_id: *component_id,
-            worker_name: agent_id.to_string(),
-        })
-    }
-
-    fn resolve_method_arguments(
-        &self,
-        resolved_route: &ResolvedRouteEntry,
-        request: &RichRequest,
-        mut body: ParsedRequestBody,
-    ) -> Result<Vec<UntypedElementValue>, RequestHandlerError> {
-        let RouteBehaviour::CallAgent {
-            method_parameters, ..
-        } = &resolved_route.route.behavior
-        else {
-            unreachable!()
-        };
-
-        let query_params = request.query_params();
-        let headers = request.headers();
-
-        let mut values = Vec::with_capacity(method_parameters.len());
-
-        for param in method_parameters {
-            let value = match param {
-                MethodParameter::Path {
-                    path_segment_index,
-                    parameter_type,
-                } => {
-                    let raw = resolved_route.captured_path_parameters[usize::from(*path_segment_index)].clone();
-
-                    parse_path_segment_value(raw, parameter_type)?
-                }
-
-                MethodParameter::Query {
-                    query_parameter_name,
-                    parameter_type,
-                } => {
-                    let empty = Vec::new();
-                    let vals = query_params.get(query_parameter_name).unwrap_or(&empty);
-
-                    parse_query_or_header_value(vals, parameter_type)?
-                }
-
-                MethodParameter::Header {
-                    header_name,
-                    parameter_type,
-                } => {
-                    let vals = headers
-                        .get_all(header_name)
-                        .iter()
-                        .map(|h| {
-                            h.to_str().map(String::from).map_err(|_| {
-                                RequestHandlerError::HeaderIsNotAscii {
-                                    header_name: header_name.clone(),
-                                }
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-
-                    parse_query_or_header_value(&vals, parameter_type)?
-                }
-
-                MethodParameter::JsonObjectBodyField { field_index } => {
-                    match &body {
-                        ParsedRequestBody::JsonBody(golem_wasm::Value::Record(fields)) => {
-                            UntypedElementValue::ComponentModel(fields[usize::from(*field_index)].clone())
-                        }
-
-                        ParsedRequestBody::JsonBody(_) => {
-                            return Err(RequestHandlerError::invariant_violated(
-                                "Inconsistent API definition: JSON field parameter but body is not an object",
-                            ))
-                        }
-
-                        _ => return Err(RequestHandlerError::invariant_violated(
-                            "JSON body parameter used but no JSON body schema",
-                        )),
-                    }
-                }
-
-                MethodParameter::UnstructuredBinaryBody => {
-                    match &mut body {
-                        ParsedRequestBody::UnstructuredBinary(binary_source) => {
-                            let binary_source = binary_source.take().ok_or_else(|| RequestHandlerError::invariant_violated(
-                                "Parsed body was already consumed",
-                            ))?;
-
-                            UntypedElementValue::UnstructuredBinary(BinaryReferenceValue { value: BinaryReference::Inline(binary_source) })
-                        }
-
-                        _ => return Err(RequestHandlerError::invariant_violated(
-                            "Binary body parameter used but no binary body schema",
-                        )),
-                    }
-                }
-            };
-
-            values.push(value);
-        }
-
-        Ok(values)
-    }
-
-    async fn invoke_agent(
-        &self,
-        worker_id: &WorkerId,
-        resolved_route: &ResolvedRouteEntry,
-        params: Vec<UntypedElementValue>,
-    ) -> Result<Option<golem_wasm::ValueAndType>, RequestHandlerError> {
-        let RouteBehaviour::CallAgent { method_name, .. } = &resolved_route.route.behavior else {
-            unreachable!()
-        };
-
-        let method_params_data_value = UntypedDataValue::Tuple(params);
-
-        self.worker_service
-            .invoke_and_await_owned_agent(
-                worker_id,
-                Some(IdempotencyKey::fresh()),
-                "golem:agent/guest.{invoke}".to_string(),
-                vec![
-                    golem_wasm::protobuf::Val::from(method_name.clone().into_value()),
-                    golem_wasm::protobuf::Val::from(method_params_data_value.into_value()),
-                    golem_wasm::protobuf::Val::from(
-                        golem_common::model::agent::Principal::anonymous().into_value(),
-                    ),
-                ],
-                None,
-                resolved_route.route.environment_id,
-                resolved_route.route.account_id,
-                AuthCtx::impersonated_user(resolved_route.route.account_id),
-            )
-            .await
-            .map_err(Into::into)
     }
 }
 
 fn route_execution_result_to_response(
     result: RouteExecutionResult,
-    request: &RichRequest,
-    resolved_route: &ResolvedRouteEntry,
 ) -> Result<Response, RequestHandlerError> {
     let mut response_builder = Response::builder().status(result.status);
 
     for (name, value) in result.headers {
         response_builder = response_builder.header(name, value);
     }
-
-    response_builder = apply_cors_headers(response_builder, request, resolved_route)?;
 
     match result.body {
         ResponseBody::NoBody => Ok(response_builder.finish()),
@@ -448,35 +141,4 @@ fn route_execution_result_to_response(
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
     }
-}
-
-fn apply_cors_headers(
-    mut builder: ResponseBuilder,
-    request: &RichRequest,
-    resolved_route: &ResolvedRouteEntry,
-) -> Result<ResponseBuilder, RequestHandlerError> {
-    let cors = &resolved_route.route.cors;
-
-    if cors.allowed_patterns.is_empty() {
-        return Ok(builder);
-    }
-
-    let origin = match request.origin()? {
-        Some(o) => o,
-        None => return Ok(builder), // non-CORS request
-    };
-
-    if !cors
-        .allowed_patterns
-        .iter()
-        .any(|pattern| pattern.matches(origin))
-    {
-        return Ok(builder);
-    }
-
-    builder = builder.header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
-    builder = builder.header(http::header::VARY, "Origin");
-    builder = builder.header(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
-
-    Ok(builder)
 }

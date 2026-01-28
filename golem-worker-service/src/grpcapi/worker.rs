@@ -16,22 +16,22 @@ use super::error::WorkerTraceErrorKind;
 use super::{bad_request_error, validate_protobuf_worker_id};
 use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::common::Empty;
+use golem_api_grpc::proto::golem::worker::InvokeResultTyped;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
+    CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
     complete_promise_response, fork_worker_response, invoke_and_await_response, invoke_response,
     launch_new_worker_response, resume_worker_response, revert_worker_response,
-    update_worker_response, CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest,
-    ForkWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError as GrpcWorkerError,
+    update_worker_response,
 };
-use golem_api_grpc::proto::golem::worker::InvokeResultTyped;
+use golem_common::model::WorkerId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
-use golem_common::model::WorkerId;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::{
     proto_component_id_string, proto_idempotency_key_string,

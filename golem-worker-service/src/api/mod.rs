@@ -18,7 +18,7 @@ mod worker;
 
 use crate::api::agents::AgentsApi;
 use crate::api::worker::WorkerApi;
-use crate::service::Services;
+use crate::bootstrap::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
 

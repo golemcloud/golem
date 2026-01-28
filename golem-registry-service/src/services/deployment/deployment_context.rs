@@ -29,10 +29,10 @@ use golem_common::model::agent::{
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
 use golem_service_base::custom_api::{
-    ConstructorParameter, CorsOptions, OriginPattern, PathSegment, RequestBodySchema,
-    RouteBehaviour,
+    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OriginPattern,
+    PathSegment, RequestBodySchema, RouteBehaviour,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -125,7 +125,7 @@ impl DeploymentContext {
         let mut errors = Vec::new();
 
         for deployment in self.http_api_deployments.values() {
-            for agent_type in &deployment.agent_types {
+            for (agent_type, agent_options) in &deployment.agents {
                 let registered_agent_type = ok_or_continue!(
                     registered_agent_types.get(agent_type).ok_or(
                         DeployValidationError::HttpApiDeploymentMissingAgentType {
@@ -160,6 +160,7 @@ impl DeploymentContext {
                         http_mount,
                         &registered_agent_type.agent_type.methods,
                         constructor_parameters,
+                        agent_options,
                         &mut errors,
                     );
 
@@ -188,6 +189,7 @@ impl DeploymentContext {
         http_mount: &HttpMountDetails,
         agent_methods: &[AgentMethod],
         constructor_parameters: Vec<ConstructorParameter>,
+        agent_options: &HttpApiDeploymentAgentOptions,
         errors: &mut Vec<DeployValidationError>,
     ) -> Vec<UnboundCompiledRoute> {
         let mut compiled_routes: HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute> =
@@ -288,13 +290,39 @@ impl DeploymentContext {
                     }
                 }
 
+                let mut auth_required = false;
+                if let Some(auth_details) = &http_mount.auth_details {
+                    auth_required = auth_details.required;
+                }
+                if let Some(auth_details) = &http_endpoint.auth_details {
+                    auth_required = auth_details.required;
+                }
+
+                let security_scheme = if auth_required {
+                    let security_scheme = ok_or_continue!(
+                        agent_options.security_scheme.clone().ok_or(
+                            DeployValidationError::NoSecuritySchemeConfigured(
+                                agent.type_name.clone()
+                            )
+                        ),
+                        errors
+                    );
+
+                    Some(security_scheme)
+                } else {
+                    None
+                };
+
+                // TODO: check whether a security scheme with this name currently exists in the environment
+                // and emit a warning to the cli if it doesn't.
+
                 let compiled = UnboundCompiledRoute {
                     route_id,
                     domain: deployment.domain.clone(),
                     method: http_endpoint.http_method.clone(),
                     path: path_segments.clone(),
                     body,
-                    behaviour: RouteBehaviour::CallAgent {
+                    behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                         component_id: implementer.component_id,
                         component_revision: implementer.component_revision,
                         agent_type: agent.type_name.clone(),
@@ -303,8 +331,8 @@ impl DeploymentContext {
                         constructor_parameters: constructor_parameters.clone(),
                         method_parameters,
                         expected_agent_response: agent_method.output_schema.clone(),
-                    },
-                    security_scheme: None,
+                    }),
+                    security_scheme,
                     cors,
                 };
 
@@ -349,10 +377,10 @@ impl DeploymentContext {
                     method: HttpMethod::Options(Empty {}),
                     path: path_segments,
                     body: RequestBodySchema::Unused,
-                    behaviour: RouteBehaviour::CorsPreflight {
+                    behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                         allowed_origins,
                         allowed_methods,
-                    },
+                    }),
                     security_scheme: None,
                     cors: CorsOptions {
                         allowed_patterns: vec![],

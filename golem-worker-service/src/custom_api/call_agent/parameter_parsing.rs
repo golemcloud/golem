@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::request::RichRequest;
-use super::request_handler::RequestHandlerError;
 use super::ParsedRequestBody;
+use crate::custom_api::error::RequestHandlerError;
+use crate::custom_api::model::RichRequest;
 use anyhow::anyhow;
 use golem_common::model::agent::{BinarySource, BinaryType, UntypedElementValue};
 use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType, RequestBodySchema};
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 pub fn parse_path_segment_value(
     value: String,
@@ -263,13 +263,13 @@ async fn parse_binary_body(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    if let Some(allowed) = allowed_mime_types {
-        if !allowed.iter().any(|allowed| allowed == &mime_type) {
-            return Err(RequestHandlerError::UnsupportedMimeType {
-                mime_type,
-                allowed_mime_types: allowed.clone(),
-            });
-        }
+    if let Some(allowed) = allowed_mime_types
+        && !allowed.iter().any(|allowed| allowed == &mime_type)
+    {
+        return Err(RequestHandlerError::UnsupportedMimeType {
+            mime_type,
+            allowed_mime_types: allowed.clone(),
+        });
     }
 
     Ok(ParsedRequestBody::UnstructuredBinary(Some(BinarySource {
@@ -528,7 +528,7 @@ mod request_body_tests {
     use super::*;
     use assert2::{assert, let_assert};
     use golem_service_base::custom_api::RequestBodySchema;
-    use golem_wasm::analysis::{analysed_type, NameTypePair};
+    use golem_wasm::analysis::{NameTypePair, analysed_type};
     use http::Method;
     use poem::{Body, Request};
     use serde_json::json;

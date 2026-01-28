@@ -15,7 +15,10 @@
 use super::{CompiledRoute, CompiledRoutes};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
-use crate::custom_api::{ConstructorParameter, MethodParameter, OriginPattern, QueryOrHeaderType};
+use crate::custom_api::{
+    CallAgentBehaviour, ConstructorParameter, CorsPreflightBehaviour, MethodParameter,
+    OriginPattern, QueryOrHeaderType,
+};
 use golem_api_grpc::proto;
 use golem_common::model::agent::{AgentTypeName, HttpMethod};
 use golem_common::model::security_scheme::SecuritySchemeName;
@@ -158,7 +161,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
         use proto::golem::customapi::route_behaviour::Kind;
 
         match value.kind.ok_or("RouteBehaviour.kind missing")? {
-            Kind::CallAgent(agent) => Ok(RouteBehaviour::CallAgent {
+            Kind::CallAgent(agent) => Ok(RouteBehaviour::CallAgent(CallAgentBehaviour {
                 component_id: agent
                     .component_id
                     .ok_or("Missing component_id")?
@@ -181,19 +184,21 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .expected_agent_response
                     .ok_or("Missing expected_agent_response")?
                     .try_into()?,
-            }),
-            Kind::CorsPreflight(cors_preflight) => Ok(RouteBehaviour::CorsPreflight {
-                allowed_origins: cors_preflight
-                    .allowed_origins
-                    .into_iter()
-                    .map(OriginPattern)
-                    .collect(),
-                allowed_methods: cors_preflight
-                    .allowed_methods
-                    .into_iter()
-                    .map(HttpMethod::try_from)
-                    .collect::<Result<BTreeSet<_>, _>>()?,
-            }),
+            })),
+            Kind::CorsPreflight(cors_preflight) => {
+                Ok(RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
+                    allowed_origins: cors_preflight
+                        .allowed_origins
+                        .into_iter()
+                        .map(OriginPattern)
+                        .collect(),
+                    allowed_methods: cors_preflight
+                        .allowed_methods
+                        .into_iter()
+                        .map(HttpMethod::try_from)
+                        .collect::<Result<BTreeSet<_>, _>>()?,
+                }))
+            }
         }
     }
 }
@@ -203,7 +208,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
         use proto::golem::customapi::route_behaviour::Kind;
 
         match value {
-            RouteBehaviour::CallAgent {
+            RouteBehaviour::CallAgent(CallAgentBehaviour {
                 component_id,
                 component_revision,
                 agent_type,
@@ -212,7 +217,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 method_name,
                 method_parameters,
                 expected_agent_response,
-            } => Self {
+            }) => Self {
                 kind: Some(Kind::CallAgent(
                     proto::golem::customapi::route_behaviour::CallAgent {
                         component_id: Some(component_id.into()),
@@ -229,10 +234,10 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
-            RouteBehaviour::CorsPreflight {
+            RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                 allowed_origins,
                 allowed_methods,
-            } => Self {
+            }) => Self {
                 kind: Some(Kind::CorsPreflight(
                     proto::golem::customapi::route_behaviour::CorsPreflight {
                         allowed_origins: allowed_origins.into_iter().map(|ao| ao.0).collect(),

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::request_handler::RequestHandlerError;
-use super::{ResponseBody, RouteExecutionResult};
+use crate::custom_api::error::RequestHandlerError;
+use crate::custom_api::{ResponseBody, RouteExecutionResult};
 use anyhow::anyhow;
 use golem_common::model::agent::{
     AgentError, BinaryReference, DataSchema, DataValue, ElementValue, ElementValues,

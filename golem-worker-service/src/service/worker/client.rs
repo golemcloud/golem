@@ -30,6 +30,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest,
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
+use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -39,7 +40,6 @@ use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
-use golem_common::model::RetryConfig;
 use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
@@ -48,14 +48,14 @@ use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
+use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::protobuf::Val as ProtoVal;
-use golem_wasm::ValueAndType;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
-use tonic::transport::Channel;
 use tonic::Code;
+use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[async_trait]

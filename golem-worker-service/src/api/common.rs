@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::request_handler::RequestHandlerError;
+use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::route_resolver::RouteResolverError;
 use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
 use crate::service::limit::LimitServiceError;
 use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
+use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
-use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthorizationError;
-use poem_openapi::payload::Json;
 use poem_openapi::ApiResponse;
+use poem_openapi::payload::Json;
 use serde::{Deserialize, Serialize};
 
 /// Detail in case the error was caused by the worker failing
@@ -275,23 +275,26 @@ impl From<RequestHandlerError> for ApiEndpointError {
             | RequestHandlerError::HeaderIsNotAscii { .. }
             | RequestHandlerError::BodyIsNotValidJson { .. }
             | RequestHandlerError::JsonBodyParsingFailed { .. }
-            | RequestHandlerError::UnsupportedMimeType { .. } => Self::bad_request(value),
-
-            RequestHandlerError::ResolvingRouteFailed(
+            | RequestHandlerError::UnsupportedMimeType { .. }
+            | RequestHandlerError::ResolvingRouteFailed(
                 RouteResolverError::CouldNotGetDomainFromRequest(_)
                 | RouteResolverError::MalformedPath(_),
             ) => Self::bad_request(value),
-            RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
-                Self::internal(value)
-            }
+
             RequestHandlerError::ResolvingRouteFailed(RouteResolverError::NoMatchingRoute) => {
                 Self::not_found(value)
             }
 
+            RequestHandlerError::OidcTokenExchangeFailed
+            | RequestHandlerError::UnknownOidcState => Self::forbidden(value),
+
             RequestHandlerError::AgentResponseTypeMismatch { .. }
             | RequestHandlerError::InvariantViolated { .. }
             | RequestHandlerError::AgentInvocationFailed(_)
-            | RequestHandlerError::InternalError(_) => Self::internal(value),
+            | RequestHandlerError::InternalError(_)
+            | RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
+                Self::internal(value)
+            }
         }
     }
 }
