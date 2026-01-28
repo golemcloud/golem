@@ -130,3 +130,9 @@ export function all<T, E>(results: Either<T, E>[]): Either<T[], E> {
   }
   return right(vals);
 }
+
+export function mapOrReturn<T>(
+  e: Either<T, string>
+): T | Either<never, string> {
+  return isLeft(e) ? e : e.val;
+}

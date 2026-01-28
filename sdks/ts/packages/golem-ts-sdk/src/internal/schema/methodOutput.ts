@@ -33,6 +33,7 @@ import {
   TypeInfoInternal,
 } from '../typeInfoInternal';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
+import { Try } from '../try';
 
 export function resolveMethodReturnDataSchema(
   agentClassName: string,
@@ -104,7 +105,7 @@ type VoidLike =
 
 function tryVoidLike(
   type: Type.Type,
-): Either.Either<VoidLike | undefined, string> {
+): Try<VoidLike> {
   switch (type.kind) {
     case 'void':
     case 'undefined':
@@ -126,7 +127,7 @@ function tryResultWithVoid(
   type: Type.Type,
   originalTypename: string | undefined,
   resultTypeParams: Type.Type[],
-): Either.Either<VoidLike | undefined, string> {
+): Try<VoidLike> {
   const isResultType = type.name === 'Result' || originalTypename === 'Result';
   if (!isResultType || !resultTypeParams) return Either.right(undefined);
 

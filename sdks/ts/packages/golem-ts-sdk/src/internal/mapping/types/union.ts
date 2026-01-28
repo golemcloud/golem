@@ -19,12 +19,13 @@ import { generateVariantCaseName } from './name';
 import { isKebabCase, isNumberString, trimQuotes } from './stringFormat';
 import {
   tryTaggedUnion,
-  tryUnionOfOnlyLiterals,
-  UserDefinedResultType, LiteralUnions, TaggedUnion, TaggedTypeMetadata,
+  tryUnionOfOnlyLiteral,
+  UserDefinedResultType, UnionOfLiteral, TaggedUnion, TaggedTypeMetadata,
 } from './taggedUnion';
-import { AnalysedType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
+import { AnalysedType, EmptyType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
 import { Ctx } from './ctx';
 import {TypeMapper} from "./typeMapper";
+import { Try } from '../../try';
 
 type TsType = CoreType.Type;
 
@@ -76,8 +77,8 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
   let fieldIdx = 1;
   const possibleTypes: NameOptionTypePair[] = [];
 
-  const unionOfOnlyLiterals: Either.Either<LiteralUnions | undefined, string> =
-    tryUnionOfOnlyLiterals(type.unionTypes);
+  const unionOfOnlyLiterals: Try<UnionOfLiteral> =
+    tryUnionOfOnlyLiteral(type.unionTypes);
 
   if (Either.isLeft(unionOfOnlyLiterals)) {
     return unionOfOnlyLiterals;
@@ -96,7 +97,7 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
   }
 
   // If all elements of the union are tagged types, we can convert it to variant or result
-  const taggedUnion: Either.Either<TaggedUnion | undefined, string> =
+  const taggedUnion: Try<TaggedUnion> =
     tryTaggedUnion(type.unionTypes);
 
   if (Either.isLeft(taggedUnion)) {

@@ -16,6 +16,7 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import { isNumberString, trimQuotes } from './stringFormat';
 import { TagKeyWords } from './keywords';
+import { Try } from '../../try';
 
 export type TsType = Type.Type;
 
@@ -78,7 +79,7 @@ export const TaggedUnion = {
 
 export function tryTaggedUnion(
   unionTypes: TsType[]
-): Either.Either<TaggedUnion | undefined, string> {
+): Try<TaggedUnion> {
 
   const taggedTypeMetadata: TaggedTypeMetadata[] = [];
 
@@ -133,7 +134,7 @@ export function tryTaggedUnion(
     }
   }
 
-  const eitherType = getResultType(taggedTypeMetadata);
+  const eitherType = tryResultType(taggedTypeMetadata);
 
   if (Either.isLeft(eitherType)) {
     return eitherType;
@@ -158,7 +159,7 @@ export function tryTaggedUnion(
   return Either.right({tag: 'custom', val: taggedTypeMetadata});
 }
 
-function getResultType(taggedTypes: TaggedTypeMetadata[]): Either.Either<UserDefinedResultType | undefined, string> {
+function tryResultType(taggedTypes: TaggedTypeMetadata[]): Try<UserDefinedResultType> {
   if (taggedTypes.length !== 2) {
     return Either.right(undefined);
   }
@@ -191,13 +192,13 @@ function getResultType(taggedTypes: TaggedTypeMetadata[]): Either.Either<UserDef
 }
 
 
-export type LiteralUnions = {
+export type UnionOfLiteral = {
   literals: string[]
 }
 
-export function tryUnionOfOnlyLiterals(
+export function tryUnionOfOnlyLiteral(
   unionTypes: TsType[]
-): Either.Either<LiteralUnions | undefined, string> {
+): Try<UnionOfLiteral> {
 
   const literals: string[] = [];
 
