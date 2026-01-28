@@ -15,13 +15,13 @@
 import { WitValue } from 'golem:rpc/types@0.2.2';
 import * as Either from '../../../newTypes/either';
 import * as Value from './Value';
-import { AnalysedType } from '../types/AnalysedType';
 import {
   serializeBinaryReferenceTsValue,
   serializeDefaultTsValue,
   serializeTextReferenceTsValue,
 } from './serializer';
 import { deserialize } from './deserializer';
+import { AnalysedType } from '../types/analysedType';
 
 export { WitValue } from 'golem:rpc/types@0.2.2';
 

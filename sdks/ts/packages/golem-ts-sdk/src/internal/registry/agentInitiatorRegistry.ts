@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as Option from '../../newTypes/option';
 import { AgentInitiator } from '../agentInitiator';
 import { AgentClassName } from '../../agentClassName';
 
@@ -37,8 +36,8 @@ class AgentInitiatorRegistryImpl {
     this.registry.set(agentTypeName.value, agentInitiator);
   }
 
-  lookup(agentTypeName: string): Option.Option<AgentInitiator> {
-    return Option.fromNullable(this.registry.get(agentTypeName));
+  lookup(agentTypeName: string): AgentInitiator | undefined {
+    return this.registry.get(agentTypeName);
   }
 
   entries(): IterableIterator<[string, AgentInitiator]> {

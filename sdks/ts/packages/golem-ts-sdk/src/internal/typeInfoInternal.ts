@@ -19,11 +19,10 @@ import {
   TextDescriptor,
   WitType,
 } from 'golem:agent/common';
-import { AnalysedType } from './mapping/types/AnalysedType';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { ParameterDetail } from './mapping/values/dataValue';
 import * as Either from '../newTypes/either';
-import { TaggedUnion } from './mapping/types/taggedUnion';
+import { AnalysedType } from './mapping/types/analysedType';
 
 // An internal representation of a type
 // This type can represent the type of a constructor parameter,

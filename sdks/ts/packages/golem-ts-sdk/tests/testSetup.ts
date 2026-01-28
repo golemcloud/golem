@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as Option from '../src/newTypes/option';
 import { DataValue, RegisteredAgentType, Uuid } from 'golem:agent/host';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src';
@@ -21,11 +20,14 @@ import { AgentId } from 'golem:rpc/types@0.2.2';
 vi.mock('golem:agent/host', () => ({
   getAgentType: (agentTypeName: string): RegisteredAgentType | undefined => {
     if (agentTypeName == 'FooAgent') {
+      const agentType = AgentTypeRegistry.get(new AgentClassName('FooAgent'));
+
+      if (!agentType) {
+        throw new Error('Missing FooAgent in registry');
+      }
+
       return {
-        agentType: Option.getOrThrowWith(
-          AgentTypeRegistry.get(new AgentClassName('FooAgent')),
-          () => new Error('Missing FooAgent'),
-        ),
+        agentType: agentType,
         implementedBy: {
           uuid: {
             lowBits: BigInt(0),

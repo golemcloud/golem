@@ -14,17 +14,17 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import * as Option from "../../../newTypes/option";
 import { isNumberString, trimQuotes } from './stringFormat';
 import { TagKeyWords } from './keywords';
+import { Try } from '../../try';
 
 export type TsType = Type.Type;
 
 //  { tag: 'a', val: string }
-//  is { tagLiteral: 'a', valueType: Option.some(['val', string]) }
+//  is { tagLiteralName: 'a', valueType: ['val', string] }
 export type TaggedTypeMetadata = {
   tagLiteralName: string
-  valueType: Option.Option<[string, Type.Type]>,
+  valueType: [string, Type.Type] | undefined,
 }
 
 export type UserDefinedResultType = {okType?: [string, TsType], errType?: [string, TsType]};
@@ -48,23 +48,23 @@ export const TaggedUnion = {
       if (tu.val.okType) {
         taggedTypes.push({
           tagLiteralName: 'ok',
-          valueType: tu.val.okType ? Option.some(tu.val.okType) : Option.none()
+          valueType: tu.val.okType ? tu.val.okType : undefined
         });
       } else {
         taggedTypes.push({
           tagLiteralName: 'ok',
-          valueType: Option.none()
+          valueType: undefined
         });
       }
       if (tu.val.errType) {
         taggedTypes.push({
           tagLiteralName: 'err',
-          valueType: tu.val.errType ? Option.some(tu.val.errType) : Option.none()
+          valueType: tu.val.errType ? tu.val.errType : undefined
         });
       } else {
         taggedTypes.push({
           tagLiteralName: 'err',
-          valueType: Option.none()
+          valueType: undefined
         });
       }
       return taggedTypes;
@@ -77,9 +77,9 @@ export const TaggedUnion = {
 }
 
 
-export function getTaggedUnion(
+export function tryTaggedUnion(
   unionTypes: TsType[]
-): Either.Either<Option.Option<TaggedUnion>, string> {
+): Try<TaggedUnion> {
 
   const taggedTypeMetadata: TaggedTypeMetadata[] = [];
 
@@ -87,21 +87,21 @@ export function getTaggedUnion(
     if (ut.kind === "object") {
 
       if (ut.properties.length > 2) {
-        return Either.right(Option.none());
+        return Either.right(undefined);
       }
 
       const tag =
         ut.properties.find((type) => type.getName() === "tag");
 
       if (!tag) {
-        return Either.right(Option.none());
+        return Either.right(undefined);
       }
 
       const tagType =
         tag.getTypeAtLocation(tag.getValueDeclarationOrThrow());
 
       if (tagType.kind !== "literal" || !tagType.literalValue) {
-        return Either.right(Option.none());
+        return Either.right(undefined);
       }
 
       const tagValue = tagType.literalValue;
@@ -114,7 +114,7 @@ export function getTaggedUnion(
       if (!nextSymbol){
         taggedTypeMetadata.push({
           tagLiteralName: tagValueTrimmed,
-          valueType: Option.none()
+          valueType: undefined
         });
       } else {
         const nodes = nextSymbol.getDeclarations();
@@ -126,22 +126,22 @@ export function getTaggedUnion(
 
         taggedTypeMetadata.push({
           tagLiteralName: tagValueTrimmed,
-          valueType: Option.some([nextSymbol.getName(), propType])
+          valueType: [nextSymbol.getName(), propType]
         });
       }
     } else {
-      return Either.right(Option.none())
+      return Either.right(undefined)
     }
   }
 
-  const eitherType = getResultType(taggedTypeMetadata);
+  const eitherType = tryResultType(taggedTypeMetadata);
 
   if (Either.isLeft(eitherType)) {
     return eitherType;
   }
 
-  if (Option.isSome(eitherType.val)) {
-    return Either.right(Option.some({tag: 'result', val: eitherType.val.val}));
+  if (eitherType.val) {
+    return Either.right({tag: 'result', val: eitherType.val});
   }
 
   const keys = taggedTypeMetadata
@@ -156,27 +156,27 @@ export function getTaggedUnion(
     );
   }
 
-  return Either.right(Option.some({tag: 'custom', val: taggedTypeMetadata}));
+  return Either.right({tag: 'custom', val: taggedTypeMetadata});
 }
 
-function getResultType(taggedTypes: TaggedTypeMetadata[]): Either.Either<Option.Option<UserDefinedResultType>, string> {
+function tryResultType(taggedTypes: TaggedTypeMetadata[]): Try<UserDefinedResultType> {
   if (taggedTypes.length !== 2) {
-    return Either.right(Option.none());
+    return Either.right(undefined);
   }
 
   const okTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'ok');
   const errTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'err');
 
   if (!okTypeMetadata || !errTypeMetadata) {
-    return Either.right(Option.none());
+    return Either.right(undefined);
   }
 
-  const okType = Option.isSome(okTypeMetadata.valueType) ? okTypeMetadata.valueType.val : undefined;
-  const errType = Option.isSome(errTypeMetadata.valueType) ? errTypeMetadata.valueType.val : undefined;
+  const okType = okTypeMetadata.valueType;
+  const errType = errTypeMetadata.valueType;
 
 
   if (!okType || !errType) {
-    return Either.right(Option.none());
+    return Either.right(undefined);
   }
 
 
@@ -188,17 +188,17 @@ function getResultType(taggedTypes: TaggedTypeMetadata[]): Either.Either<Option.
     return Either.left("The value corresponding to the tag 'err' cannot be optional. Avoid using the tag names `ok , `err`. Alternatively,  make the value type non optional");
   }
 
-  return Either.right(Option.some({ okType, errType }));
+  return Either.right({ okType, errType });
 }
 
 
-export type LiteralUnions = {
+export type UnionOfLiteral = {
   literals: string[]
 }
 
-export function getUnionOfLiterals(
+export function tryUnionOfOnlyLiteral(
   unionTypes: TsType[]
-): Either.Either<Option.Option<LiteralUnions>, string> {
+): Try<UnionOfLiteral> {
 
   const literals: string[] = [];
 
@@ -206,11 +206,11 @@ export function getUnionOfLiterals(
     if (ut.kind === "literal" && ut.literalValue) {
       const literalValue = ut.literalValue;
       if (isNumberString(literalValue)) {
-        return Either.right(Option.none());
+        return Either.right(undefined);
       }
 
       if (literalValue === 'true' || literalValue === 'false') {
-        return Either.right(Option.none());
+        return Either.right(undefined);
       }
 
       const literalValueTrimmed = trimQuotes(literalValue);
@@ -221,10 +221,9 @@ export function getUnionOfLiterals(
 
       literals.push(literalValueTrimmed);
     } else {
-      return Either.right(Option.none());
+      return Either.right(undefined);
     }
   }
 
-  return Either.right(Option.some({ literals }));
+  return Either.right({ literals });
 }
-

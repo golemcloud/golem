@@ -1,6 +1,5 @@
 import { describe } from 'vitest';
 import { AgentType } from 'golem:agent/common';
-import * as Option from '../src/newTypes/option';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import {
   ComplexHttpAgentClassName,
@@ -10,10 +9,11 @@ import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistr
 
 describe('Http Agent class', () => {
   it('should register HTTP mount details with only mount', () => {
-    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
-      AgentTypeRegistry.get(SimpleHttpAgentClassName),
-      () => new Error('SimpleHttpAgent not found in AgentTypeRegistry'),
-    );
+    const simpleHttpAgent = AgentTypeRegistry.get(SimpleHttpAgentClassName);
+
+    if (!simpleHttpAgent) {
+      throw new Error('SimpleHttpAgent not found in AgentTypeRegistry');
+    }
 
     expect(simpleHttpAgent.httpMount).toBeDefined();
     expect(simpleHttpAgent.httpMount?.pathPrefix).toEqual([
@@ -66,10 +66,11 @@ describe('Http Agent class', () => {
   });
 
   it('should register HTTP mount details with all details', () => {
-    const simpleHttpAgent: AgentType = Option.getOrThrowWith(
-      AgentTypeRegistry.get(ComplexHttpAgentClassName),
-      () => new Error('ComplexHttpAgent not found in AgentTypeRegistry'),
-    );
+    const simpleHttpAgent = AgentTypeRegistry.get(ComplexHttpAgentClassName);
+
+    if (!simpleHttpAgent) {
+      throw new Error('SimpleHttpAgent not found in AgentTypeRegistry');
+    }
 
     const expectedPathPrefix = [
       {

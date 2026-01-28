@@ -12,4 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export const TagKeyWords = ["ok", "err", "none", "some"];
+import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import * as Either from "../../../newTypes/either";
+import { Ctx } from './ctx';
+import { AnalysedType } from './analysedType';
+import { TypeMapper } from './typeMapper';
+
+type TsType = CoreType.Type;
+
+type AliasCtx = Ctx & { type: Extract<TsType, { kind: "alias" }> };
+
+export function handleAlias({ type }: AliasCtx, _mapper: TypeMapper): Either.Either<AnalysedType, string> {
+  return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? "<anonymous>"}`);
+}

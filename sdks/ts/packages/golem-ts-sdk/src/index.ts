@@ -17,9 +17,9 @@ import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal, DataValue } from 'golem:agent/common';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
+import { AgentInitiator } from './internal/agentInitiator';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -43,7 +43,7 @@ export * from './host/guard';
 export * from './host/result';
 export * from './host/transaction';
 
-let resolvedAgent: Option.Option<ResolvedAgent> = Option.none();
+let resolvedAgent: ResolvedAgent | undefined = undefined;
 
 async function initialize(
   agentTypeName: string,
@@ -53,22 +53,23 @@ async function initialize(
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
-  if (Option.isSome(resolvedAgent)) {
+  if (resolvedAgent) {
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
-  const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
+  const initiator: AgentInitiator | undefined =
+    AgentInitiatorRegistry.lookup(agentTypeName);
 
-  if (Option.isNone(initiator)) {
+  if (!initiator) {
     throw createCustomError(
       `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`,
     );
   }
 
-  const initiateResult = initiator.val.initiate(input, principal);
+  const initiateResult = initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
-    resolvedAgent = Option.some(initiateResult.val);
+    resolvedAgent = initiateResult.val;
   } else {
     throw initiateResult.val;
   }
@@ -79,13 +80,13 @@ async function invoke(
   input: DataValue,
   principal: Principal,
 ): Promise<DataValue> {
-  if (Option.isNone(resolvedAgent)) {
+  if (!resolvedAgent) {
     throw createCustomError(
       `Failed to invoke method ${methodName}: agent is not initialized`,
     );
   }
 
-  const result = await resolvedAgent.val.invoke(methodName, input, principal);
+  const result = await resolvedAgent.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
     return result.val;
@@ -108,18 +109,19 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
 }
 
 async function getDefinition(): Promise<AgentType> {
-  return Option.getOrThrowWith(
-    resolvedAgent,
-    () => new Error('Failed to get agent definition: agent is not initialized'),
-  ).getAgentType();
+  if (!resolvedAgent) {
+    throw new Error('Failed to get agent definition: agent is not initialized');
+  }
+
+  return resolvedAgent.getAgentType();
 }
 
 async function save(): Promise<Uint8Array> {
-  if (Option.isNone(resolvedAgent)) {
+  if (!resolvedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const agentSnapshot = await resolvedAgent.val.saveSnapshot();
+  const agentSnapshot = await resolvedAgent.saveSnapshot();
 
   const totalLength = 1 + agentSnapshot.length;
   const fullSnapshot = new Uint8Array(totalLength);
@@ -131,7 +133,7 @@ async function save(): Promise<Uint8Array> {
 }
 
 async function load(bytes: Uint8Array): Promise<void> {
-  if (Option.isSome(resolvedAgent)) {
+  if (resolvedAgent) {
     throw `Agent is already initialized in this container`;
   }
 
@@ -148,12 +150,12 @@ async function load(bytes: Uint8Array): Promise<void> {
 
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
-  if (Option.isNone(initiator)) {
+  if (!initiator) {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
   // TODO; pass principal?
-  const initiateResult = initiator.val.initiate(agentParameters, {
+  const initiateResult = initiator.initiate(agentParameters, {
     tag: 'anonymous',
   });
 
@@ -161,7 +163,7 @@ async function load(bytes: Uint8Array): Promise<void> {
     const agent = initiateResult.val;
     await agent.loadSnapshot(agentSnapshot);
 
-    resolvedAgent = Option.some(agent);
+    resolvedAgent = agent;
   } else {
     // Throwing a String because the load WIT function returns result<_, string>
     let errorString = 'Failed to construct agent';

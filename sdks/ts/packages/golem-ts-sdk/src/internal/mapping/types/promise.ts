@@ -12,4 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export const TagKeyWords = ["ok", "err", "none", "some"];
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import * as Either from "../../../newTypes/either";
+import { Ctx } from './ctx';
+import { AnalysedType } from './analysedType';
+import { TypeMapper } from './typeMapper';
+
+type TsType = CoreType.Type;
+
+type PromiseCtx = Ctx & { type: Extract<TsType, { kind: "promise" }> };
+
+export function handlePromise({ type }: PromiseCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
+  const inner = type.element;
+  return mapper(inner, undefined);
+}

@@ -13,34 +13,29 @@
 // limitations under the License.
 
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import * as Option from '../src/newTypes/option';
 import { describe, expect } from 'vitest';
 import {
   BarAgentClassName,
   FooAgentClassName,
   EphemeralAgentClassName,
 } from './testUtils';
-import {
-  AgentType,
-  DataSchema,
-  DataValue,
-  ElementSchema,
-} from 'golem:agent/common';
+import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 import { FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { toWitValue, Value } from '../src/internal/mapping/values/Value';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from 'golem:agent/host';
-import { AgentClassName, AgentId } from '../src';
+import { AgentClassName } from '../src';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
-  const barAgent: AgentType = Option.getOrThrowWith(
-    AgentTypeRegistry.get(BarAgentClassName),
-    () => new Error('BarAgent not found in AgentTypeRegistry'),
-  );
+  const barAgent = AgentTypeRegistry.get(BarAgentClassName);
+
+  if (!barAgent) {
+    throw new Error('BarAgent not found in AgentTypeRegistry');
+  }
 
   const barAgentConstructor = barAgent.constructor;
 
@@ -59,10 +54,12 @@ describe('Agent decorator should register the agent class and its methods into A
   it('should implement getAgentType properly', () => {
     const agent = new FooAgent('input');
     const agentType = agent.getAgentType();
-    const knownAgentType = Option.getOrThrowWith(
-      AgentTypeRegistry.get(FooAgentClassName),
-      () => new Error('FooAgent not found in AgentTypeRegistry'),
-    );
+    const knownAgentType = AgentTypeRegistry.get(FooAgentClassName);
+
+    if (!knownAgentType) {
+      throw new Error('FooAgent not found in AgentTypeRegistry');
+    }
+
     expect(agentType).toEqual(knownAgentType);
   });
 
@@ -752,10 +749,11 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('captures all methods and constructor with correct number of parameters', () => {
-    const simpleAgent = Option.getOrThrowWith(
-      AgentTypeRegistry.get(FooAgentClassName),
-      () => new Error('FooAgent not found in AgentTypeRegistry'),
-    );
+    const simpleAgent = AgentTypeRegistry.get(FooAgentClassName);
+
+    if (!simpleAgent) {
+      throw new Error('FooAgent not found in AgentTypeRegistry');
+    }
 
     // Ensures no functions or constructors are skipped
     expect(barAgent.methods.length).toEqual(25);
@@ -766,10 +764,11 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should not capture overridden functions in base agents as agent methods', () => {
-    const simpleAgent = Option.getOrThrowWith(
-      AgentTypeRegistry.get(FooAgentClassName),
-      () => new Error('FooAgent not found in AgentTypeRegistry'),
-    );
+    const simpleAgent = AgentTypeRegistry.get(FooAgentClassName);
+
+    if (!simpleAgent) {
+      throw new Error('FooAgent not found in AgentTypeRegistry');
+    }
 
     const forbidden = [
       'get-id',
@@ -786,10 +785,11 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should set durability mode to ephemeral in the registered AgentType when set in decorator options', () => {
-    const ephemeralAgent = Option.getOrThrowWith(
-      AgentTypeRegistry.get(EphemeralAgentClassName),
-      () => new Error('EphemeralAgent not found in AgentTypeRegistry'),
-    );
+    const ephemeralAgent = AgentTypeRegistry.get(EphemeralAgentClassName);
+
+    if (!ephemeralAgent) {
+      throw new Error('EphemeralAgent not found in AgentTypeRegistry');
+    }
 
     expect(ephemeralAgent.mode).toEqual('ephemeral');
   });
@@ -807,10 +807,12 @@ describe('Annotated FooAgent class', () => {
     expect(FooAgent.newPhantom).toBeTypeOf('function');
   });
   it("can return it's phantomId", () => {
-    const initiator = Option.getOrThrowWith(
-      AgentInitiatorRegistry.lookup('FooAgent'),
-      () => new Error('FooAgent not found in AgentInitiatorRegistry'),
-    );
+    const initiator = AgentInitiatorRegistry.lookup('FooAgent');
+
+    if (!initiator) {
+      throw new Error('FooAgent not found in AgentInitiatorRegistry');
+    }
+
     const value: Value = { kind: 'string', value: 'hello' };
 
     const uuid: Uuid = {
@@ -833,10 +835,11 @@ describe('Annotated FooAgent class', () => {
     expect(foo.phantomId()).toEqual(uuid);
   });
   it('get is implemented by the decorator', async () => {
-    const agentType = Option.getOrThrowWith(
-      AgentTypeRegistry.get(new AgentClassName('FooAgent')),
-      () => new Error('FooAgent not found in AgentTypeRegistry'),
-    );
+    const agentType = AgentTypeRegistry.get(new AgentClassName('FooAgent'));
+
+    if (!agentType) {
+      throw new Error('FooAgent not found in AgentTypeRegistry');
+    }
 
     const client = FooAgent.get('example');
     expect(client).toBeDefined();
@@ -854,15 +857,15 @@ describe('Agent with principal auto injected', async () => {
   await import('./agentsWithPrincipalAutoInjection');
 
   it("should never include anything about principal in the agent's constructor or method schemas", () => {
-    const agentType = Option.getOrThrowWith(
-      AgentTypeRegistry.get(
-        new AgentClassName('AgentWithPrincipalAutoInjection1'),
-      ),
-      () =>
-        new Error(
-          'AgentWithPrincipalAutoInjection not found in AgentTypeRegistry',
-        ),
+    const agentType = AgentTypeRegistry.get(
+      new AgentClassName('AgentWithPrincipalAutoInjection1'),
     );
+
+    if (!agentType) {
+      throw new Error(
+        'AgentWithPrincipalAutoInjection not found in AgentTypeRegistry',
+      );
+    }
 
     const constructorParamNames = agentType.constructor.inputSchema.val.map(
       ([name]) => name,
@@ -879,10 +882,11 @@ describe('Agent with principal auto injected', async () => {
 
 describe('Annotated SingletonAgent class', () => {
   it('can be constructed', async () => {
-    const initiator = Option.getOrThrowWith(
-      AgentInitiatorRegistry.lookup('SingletonAgent'),
-      () => new Error('SingletonAgent not found in AgentInitiatorRegistry'),
-    );
+    const initiator = AgentInitiatorRegistry.lookup('SingletonAgent');
+
+    if (!initiator) {
+      throw new Error('SingletonAgent not found in AgentInitiatorRegistry');
+    }
 
     const params: DataValue = {
       tag: 'tuple',

@@ -12,4 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export const TagKeyWords = ["ok", "err", "none", "some"];
+
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { TypeMappingScope } from './scope';
+
+type TsType = CoreType.Type;
+
+export type Ctx = {
+  type: TsType;
+  scope: TypeMappingScope | undefined;
+  scopeName?: string;
+  parameterInScope: string | undefined;
+};
+
+export function ctx(type: TsType, scope: TypeMappingScope | undefined): Ctx {
+  return {
+    type,
+    scope,
+    scopeName: scope?.name,
+    parameterInScope: scope
+      ? TypeMappingScope.paramName(scope)
+      : undefined
+  };
+}

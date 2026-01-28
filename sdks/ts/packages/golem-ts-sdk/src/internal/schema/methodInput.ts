@@ -14,7 +14,6 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import * as Option from '../../newTypes/option';
 import { DataSchema, ElementSchema } from 'golem:agent/common';
 import * as WitType from '../mapping/types/WitType';
 import { MethodParams } from '@golemcloud/golem-ts-types-core';
@@ -212,12 +211,11 @@ function processMethodParameter(
   return Either.map(
     WitType.fromTsType(
       parameterType,
-      Option.some(
-        TypeMappingScope.method(
-          methodName,
-          parameterName,
-          parameterType.optional,
-        ),
+
+      TypeMappingScope.method(
+        methodName,
+        parameterName,
+        parameterType.optional,
       ),
     ),
     (typeInfo) => {

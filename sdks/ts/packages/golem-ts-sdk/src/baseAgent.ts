@@ -15,7 +15,6 @@
 import { AgentType, Principal } from 'golem:agent/common';
 import { AgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-import * as Option from './newTypes/option';
 import { AgentClassName } from './agentClassName';
 import { Datetime } from 'golem:rpc/types@0.2.2';
 import { Uuid } from 'golem:agent/host';
@@ -76,17 +75,20 @@ export class BaseAgent {
    */
   getAgentType(): AgentType {
     if (!this.cachedAgentType) {
-      const agentType = AgentTypeRegistry.get(this.agentClassName);
+      const agentType: AgentType | undefined = AgentTypeRegistry.get(
+        this.agentClassName,
+      );
 
-      if (Option.isNone(agentType)) {
+      if (!agentType) {
         throw new Error(
           `Agent type metadata is not available for \`${this.constructor.name}\`. ` +
             `Ensure the class is decorated with @agent()`,
         );
       }
 
-      this.cachedAgentType = agentType.val;
+      this.cachedAgentType = agentType;
     }
+
     return this.cachedAgentType;
   }
 

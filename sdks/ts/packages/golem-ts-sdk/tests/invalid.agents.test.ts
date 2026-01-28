@@ -16,11 +16,11 @@
 
 import { describe, expect } from 'vitest';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
+import * as AnalysedType from '../src/internal/mapping/types/analysedType';
 import { TypeMappingScope } from '../src/internal/mapping/types/scope';
-import * as Option from '../src/newTypes/option';
 import * as Either from '../src/newTypes/either';
 import { agent, AgentId, BaseAgent } from '../src';
+import { typeMapper } from '../src/internal/mapping/types/typeMapperImpl';
 
 const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
 const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
@@ -160,19 +160,19 @@ describe('Invalid types in agents', () => {
     const fun13ReturnType = invalidAgent?.methods.get('fun13')?.returnType;
     const fun14ReturnType = invalidAgent?.methods.get('fun14')?.returnType;
 
-    const fun2Type = AnalysedType.fromTsType(fun2ReturnType!, Option.none());
-    const fun3Type = AnalysedType.fromTsType(fun3ReturnType!, Option.none());
-    const fun4Type = AnalysedType.fromTsType(fun4ReturnType!, Option.none());
-    const fun5Type = AnalysedType.fromTsType(fun5ReturnType!, Option.none());
-    const fun6Type = AnalysedType.fromTsType(fun6ReturnType!, Option.none());
-    const fun7Type = AnalysedType.fromTsType(fun7ReturnType!, Option.none());
-    const fun8Type = AnalysedType.fromTsType(fun8ReturnType!, Option.none());
-    const fun9Type = AnalysedType.fromTsType(fun9ReturnType!, Option.none());
-    const fun10Type = AnalysedType.fromTsType(fun10ReturnType!, Option.none());
-    const fun11Type = AnalysedType.fromTsType(fun11ReturnType!, Option.none());
-    const fun12Type = AnalysedType.fromTsType(fun12ReturnType!, Option.none());
-    const fun13Type = AnalysedType.fromTsType(fun13ReturnType!, Option.none());
-    const fun14Type = AnalysedType.fromTsType(fun14ReturnType!, Option.none());
+    const fun2Type = typeMapper(fun2ReturnType!, undefined);
+    const fun3Type = typeMapper(fun3ReturnType!, undefined);
+    const fun4Type = typeMapper(fun4ReturnType!, undefined);
+    const fun5Type = typeMapper(fun5ReturnType!, undefined);
+    const fun6Type = typeMapper(fun6ReturnType!, undefined);
+    const fun7Type = typeMapper(fun7ReturnType!, undefined);
+    const fun8Type = typeMapper(fun8ReturnType!, undefined);
+    const fun9Type = typeMapper(fun9ReturnType!, undefined);
+    const fun10Type = typeMapper(fun10ReturnType!, undefined);
+    const fun11Type = typeMapper(fun11ReturnType!, undefined);
+    const fun12Type = typeMapper(fun12ReturnType!, undefined);
+    const fun13Type = typeMapper(fun13ReturnType!, undefined);
+    const fun14Type = typeMapper(fun14ReturnType!, undefined);
 
     expect(fun2Type.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
@@ -334,9 +334,9 @@ function getAnalysedTypeInFun1(
   parameterName: string,
 ): Either.Either<AnalysedType.AnalysedType, string> {
   const type = fun1Params?.get(parameterName)!;
-  return AnalysedType.fromTsType(
+  return typeMapper(
     type,
-    Option.some(TypeMappingScope.method('fun1', parameterName, type.optional)),
+    TypeMappingScope.method('fun1', parameterName, type.optional),
   );
 }
 

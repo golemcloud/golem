@@ -16,7 +16,6 @@ import {
   AgentType,
   DataValue,
   AgentConstructor,
-  AgentMethod,
   AgentMode,
   Principal,
 } from 'golem:agent/common';
@@ -30,7 +29,6 @@ import {
 import { BaseAgent } from '../baseAgent';
 import { AgentTypeRegistry } from '../internal/registry/agentTypeRegistry';
 import * as Either from '../newTypes/either';
-import * as Option from '../newTypes/option';
 import { AgentClassName } from '../agentClassName';
 import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegistry';
 import { createCustomError } from '../internal/agentError';
@@ -204,17 +202,17 @@ export function agent(options?: AgentDecoratorOptions) {
       return ctor;
     }
 
-    let classMetadata = Option.getOrElse(
-      Option.fromNullable(TypeMetadata.get(ctor.name)),
-      () => {
-        const availableAgents = Array.from(TypeMetadata.getAll().entries())
-          .map(([key, _]) => key)
-          .join(', ');
-        throw new Error(
-          `Agent class ${agentClassName.value} is not registered. Available agents are ${availableAgents}. Please ensure the class ${ctor.name} is decorated with @agent()`,
-        );
-      },
-    );
+    const classMetadata = TypeMetadata.get(ctor.name);
+
+    if (!classMetadata) {
+      const availableAgents = Array.from(TypeMetadata.getAll().entries())
+        .map(([key, _]) => key)
+        .join(', ');
+
+      throw new Error(
+        `Agent class ${agentClassName.value} is not registered. Available agents are ${availableAgents}. Please ensure the class ${ctor.name} is decorated with @agent()`,
+      );
+    }
 
     const constructorDataSchema = getAgentConstructorSchema(
       agentClassName.value,
