@@ -19,7 +19,7 @@ use golem_common::model::agent::{AgentError, AgentId, DataValue, UntypedDataValu
 use golem_common::model::WorkerId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::{FromValue, IntoValueAndType, Value};
+use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value};
 use std::sync::Arc;
 
 pub struct AgentsService {
@@ -133,6 +133,9 @@ impl AgentsService {
                         vec![
                             request.method_name.into_value_and_type(),
                             method_parameters.into_value_and_type(),
+                            // Fixme: this needs to come from the invocation that caused this agent to be created
+                            golem_common::model::agent::Principal::anonymous()
+                                .into_value_and_type(),
                         ],
                         None,
                         auth,
