@@ -13,12 +13,6 @@ environment_auth_details_cache_eviction_period = "1m"
 environment_auth_details_cache_max_capacity = 1024
 environment_auth_details_cache_ttl = "10m"
 
-[blob_storage]
-type = "LocalFileSystem"
-
-[blob_storage.config]
-root = "../data/blob_storage"
-
 [component_service]
 component_cache_max_capacity = 1024
 
@@ -29,6 +23,7 @@ type = "Redis"
 database = 0
 host = "localhost"
 key_prefix = ""
+pending_login_expiration = "1h"
 pool_size = 8
 port = 6380
 tracing = false

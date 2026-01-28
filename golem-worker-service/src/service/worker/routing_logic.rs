@@ -16,11 +16,11 @@ use crate::service::worker::WorkerServiceError;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use golem_common::SafeDisplay;
 use golem_common::model::RetryConfig;
 use golem_common::model::{Pod, ShardId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
-use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
@@ -29,11 +29,11 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use tokio::task::JoinSet;
-use tokio::time::{sleep, Instant};
-use tonic::transport::Channel;
+use tokio::time::{Instant, sleep};
 use tonic::Status;
+use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::{debug, error, info, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info, trace, warn};
 
 #[async_trait]
 pub trait RoutingLogic {

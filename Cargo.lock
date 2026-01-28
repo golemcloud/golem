@@ -4935,6 +4935,7 @@ dependencies = [
  "bytes 1.11.0",
  "chrono",
  "conditional-trait-gen",
+ "cookie",
  "criterion",
  "darling 0.20.11",
  "derive_more",

@@ -31,7 +31,9 @@ use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
     HttpApiRoute, RouteMethod, WorkerGatewayBinding,
 };
-use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::collections::BTreeMap;
@@ -252,7 +254,10 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agent_types: [AgentTypeName("shopping-cart".to_string())].into(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("shopping-cart".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
     };
 
     let http_api_deployment = client

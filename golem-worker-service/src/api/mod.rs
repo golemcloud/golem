@@ -14,13 +14,11 @@
 
 pub mod agents;
 pub mod common;
-mod custom_http_request;
 mod worker;
 
-use self::custom_http_request::CustomHttpRequestApi;
 use crate::api::agents::AgentsApi;
 use crate::api::worker::WorkerApi;
-use crate::service::Services;
+use crate::bootstrap::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
 
@@ -43,8 +41,4 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
         "Golem API",
         "1.0",
     )
-}
-
-pub fn custom_http_request_api(services: &Services) -> CustomHttpRequestApi {
-    CustomHttpRequestApi::new(services.request_handler.clone())
 }

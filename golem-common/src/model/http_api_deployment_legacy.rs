@@ -17,8 +17,8 @@ use crate::model::diff;
 pub use crate::base_model::http_api_deployment_legacy::*;
 
 impl LegacyHttpApiDeployment {
-    pub fn to_diffable(&self) -> diff::HttpApiDeployment {
-        diff::HttpApiDeployment {
+    pub fn to_diffable(&self) -> diff::HttpApiDeploymentLegacy {
+        diff::HttpApiDeploymentLegacy {
             agent_types: self
                 .api_definitions
                 .iter()

@@ -737,7 +737,9 @@ pub struct HttpEndpointDetails {
     pub cors_options: CorsOptions,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -790,7 +792,9 @@ impl TryFrom<HttpMethod> for http::Method {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)

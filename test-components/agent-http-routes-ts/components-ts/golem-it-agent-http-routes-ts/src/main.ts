@@ -6,7 +6,7 @@ import {
     UnstructuredBinary,
 } from '@golemcloud/golem-ts-sdk';
 
-@agent({ mount: '/agents/{agentName}' })
+@agent({ mount: '/http-agents/{agentName}' })
 class HttpAgent extends BaseAgent {
 
   constructor(readonly agentName: string) {
@@ -110,5 +110,42 @@ class HttpAgent extends BaseAgent {
   @endpoint({ get: "/resp/binary" })
   binaryResponse(): UnstructuredBinary {
     return UnstructuredBinary.fromInline(new Uint8Array([1, 2, 3, 4]), 'application/octet-stream')
+  }
+}
+
+@agent({
+  mount: '/cors-agents/{agentName}',
+  cors: ["https://mount.example.com"]
+})
+class CorsAgent extends BaseAgent {
+
+  constructor(readonly agentName: string) {
+    super();
+  }
+
+  // GET endpoint adds additional CORS on top of mount
+  @endpoint({
+    get: "/wildcard",
+    cors: ["*"]  // union with mount CORS
+  })
+  wildcard(): { ok: boolean } {
+    return { ok: true };
+  }
+
+  // GET endpoint inherits mount CORS if empty
+  @endpoint({
+    get: "/inherited"
+  })
+  inherited(): { ok: boolean } {
+    return { ok: true };
+  }
+
+  // POST endpoint requiring preflight
+  @endpoint({
+    post: "/preflight-required",
+    cors: ["https://app.example.com"]
+  })
+  preflight(body: { name: string }): { received: string } {
+    return { received: body.name };
   }
 }
