@@ -34,31 +34,44 @@ type UnionCtx = Ctx & { type: Extract<TsType, { kind: "union" }> };
 
 export function handleUnion(
   ctx: UnionCtx,
-  mapper: TypeMapper
+  mapper: TypeMapper,
+): Either.Either<AnalysedType, string> {
+
+  const unionType = ctx.type;
+
+  const isAnonymous = !unionType.name;
+
+  const cacheKey = isAnonymous ? hashUnion(unionType) : undefined;
+
+  const analysedType = handleUnionInternal(ctx, mapper, cacheKey);
+
+  cacheAnonymousUnionType(cacheKey, analysedType);
+
+  return analysedType
+}
+
+export function handleUnionInternal(
+  ctx: UnionCtx,
+  mapper: TypeMapper,
+  cacheKey: string | undefined
 ): Either.Either<AnalysedType, string> {
   const { type } = ctx;
 
-  const cacheKey = hashUnion(type);
-  const isAnonymous = !type.name;
-
   // Reuse cached anonymous unions
-  const cached = reuseAnonymousUnionCache(ctx, cacheKey);
+  const cached = reuseAnonymousUnionCache(cacheKey);
   if (cached) return cached;
 
   // Try if it's inbuilt Result<T, E>
   const inbuiltResult = tryInbuiltResultType(ctx, mapper);
-  if (inbuiltResult) {
-    cacheIfAnonymous(cacheKey, isAnonymous, inbuiltResult);
-    return inbuiltResult;
-  }
+  if (inbuiltResult) return inbuiltResult;
 
   // Try if its union of only literals, and if so convert to enum
-  const enumResult = tryEnumUnion(ctx, cacheKey);
+  const enumResult = tryEnumUnion(ctx);
   if (enumResult) return enumResult;
 
   // Try if all variants in union are tagged. Example: `{tag : 'a", val: 1} | {tag: 'b', val: 2}`.
   // If they are tagged, it further `process` it such as verifying if it corresponds to `result` type
-  const taggedResult = tryTaggedUnionAndProcess(ctx, mapper, cacheKey);
+  const taggedResult = tryTaggedUnionAndProcess(ctx, mapper);
   if (taggedResult) return taggedResult;
 
   // Try Optional union (null | undefined | void) and convert to `option` WIT
@@ -69,23 +82,20 @@ export function handleUnion(
   const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
 
   // Otherwise plain variant
-  return buildPlainVariant(type, normalizedUnionTypes, mapper, cacheKey);
+  return buildPlainVariant(type, normalizedUnionTypes, mapper);
 }
 
 
 export function hashUnion(type: TsType): string {
-  const jsonRep = JSON.stringify(buildJSONFromType(type));
-  //console.log('jsonRep', jsonRep);
-  return jsonRep;
+  return JSON.stringify(buildJSONFromType(type));
 }
 
-function cacheIfAnonymous(
-  key: string,
-  isAnonymous: boolean,
+function cacheAnonymousUnionType(
+  cacheKey: string | undefined,
   result: Either.Either<AnalysedType, string>
 ) {
-  if (isAnonymous && Either.isRight(result)) {
-    AnonymousUnionTypeRegistry.set(key, result.val);
+  if (cacheKey && Either.isRight(result)) {
+    AnonymousUnionTypeRegistry.set(cacheKey, result.val);
   }
 }
 
@@ -103,14 +113,13 @@ function cacheIfAnonymous(
 // which ensures with reusing the same WIT variant whenever `string | number` appears in the code
 // instead of unlimited generation of case indices
 function reuseAnonymousUnionCache(
-  ctx: UnionCtx,
-  key: string
+  cacheKey: string | undefined
 ): Either.Either<AnalysedType, string> | undefined {
-  const type = ctx.type;
 
-  if (type.name) return;
+  if (!cacheKey) return;
 
-  const cachedAnalysedType: AnalysedType | undefined = AnonymousUnionTypeRegistry.get(key);
+  const cachedAnalysedType: AnalysedType | undefined = AnonymousUnionTypeRegistry.get(cacheKey);
+
   if (!cachedAnalysedType) return;
 
   return Either.right(cachedAnalysedType);
@@ -118,7 +127,6 @@ function reuseAnonymousUnionCache(
 
 function tryEnumUnion(
   ctx: UnionCtx,
-  cacheKey: string
 ): Either.Either<AnalysedType, string> | undefined {
   const type = ctx.type;
 
@@ -134,8 +142,6 @@ function tryEnumUnion(
 
   // Union of only literals are converted to WIT enum
   const result = enum_(type.name, literals.val.literals);
-
-  if (!type.name) AnonymousUnionTypeRegistry.set(cacheKey, result);
 
   return Either.right(result);
 }
@@ -187,7 +193,6 @@ export function tryInbuiltResultType(
 function tryTaggedUnionAndProcess(
   ctx: UnionCtx,
   mapper: TypeMapper,
-  cacheKey: string
 ): Either.Either<AnalysedType, string> | undefined {
   const type = ctx.type;
 
@@ -204,10 +209,7 @@ function tryTaggedUnionAndProcess(
       ? convertUserDefinedResultToWitResult(type.name, tagged.val.val, mapper)
       : convertToVariantAnalysedType(type.name, tagged.val.val, mapper)
 
-  return Either.map(result, analysed => {
-    if (!type.name) AnonymousUnionTypeRegistry.set(cacheKey, analysed);
-    return analysed;
-  });
+  return result;
 }
 
 function tryOptionalUnion(
@@ -319,7 +321,6 @@ function buildPlainVariant(
   type: TsType,
   unionTypes: TsType[],
   mapper: TypeMapper,
-  cacheKey: string
 ): Either.Either<AnalysedType, string> {
   let fieldIdx = 1;
   const cases: NameOptionTypePair[] = [];
@@ -350,7 +351,6 @@ function buildPlainVariant(
   }
 
   const result = variant(type.name, [], cases);
-  if (!type.name) AnonymousUnionTypeRegistry.set(cacheKey, result);
 
   return Either.right(result);
 }
