@@ -47,35 +47,29 @@ export function handleUnion(
   if (cached) return cached;
 
   // Try if it's inbuilt Result<T, E>
-  const inbuiltResult = tryInbuiltResultType(
-    type.name,
-    type.originalTypeName,
-    type.unionTypes,
-    type.typeParams,
-    mapper
-  );
+  const inbuiltResult = tryInbuiltResultType(ctx, mapper);
   if (inbuiltResult) {
     cacheIfAnonymous(cacheKey, isAnonymous, inbuiltResult);
     return inbuiltResult;
   }
 
-  // Try if its union of only literals converted to enum
+  // Try if its union of only literals, and if so convert to enum
   const enumResult = tryEnumUnion(ctx, cacheKey);
   if (enumResult) return enumResult;
 
-  // Try if all variants in union are tagged
-  // If they are tagged, it needs to verify if it corresponds to `result` type etc
+  // Try if all variants in union are tagged. Example: `{tag : 'a", val: 1} | {tag: 'b', val: 2}`.
+  // If they are tagged, it further `process` it such as verifying if it corresponds to `result` type
   const taggedResult = tryTaggedUnionAndProcess(ctx, mapper, cacheKey);
   if (taggedResult) return taggedResult;
 
-  // Try Optional union (null | undefined | void)
+  // Try Optional union (null | undefined | void) and convert to `option` WIT
   const optionalResult = tryOptionalUnion(ctx, mapper, cacheKey);
   if (optionalResult) return optionalResult;
 
-  // Normalize boolean literal unions
+  // Normalize union types if it consist of `true`, `false` literals
   const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
 
-  // Fallback: plain variant
+  // Otherwise plain variant
   return buildPlainVariant(type, normalizedUnionTypes, mapper, cacheKey);
 }
 
@@ -154,12 +148,15 @@ function tryEnumUnion(
 }
 
 export function tryInbuiltResultType(
-  typeName: string | undefined,
-  originalTypeName: string | undefined, // if aliased
-  unionTypes: TsType[],
-  typeParams: TsType[],
+  ctx: UnionCtx,
   mapper: TypeMapper
 ): Either.Either<AnalysedType, string> | undefined {
+  const type = ctx.type;
+  const typeName = type.name;
+  const originalTypeName = type.originalTypeName;
+  const unionTypes = type.unionTypes;
+  const typeParams = type.typeParams;
+
   const isInbuiltResult = typeName === 'Result' || originalTypeName === 'Result';
 
   if (isInbuiltResult && unionTypes.length === 2 && unionTypes[0].name === 'Ok' && unionTypes[1].name === 'Err') {
