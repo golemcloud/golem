@@ -159,7 +159,13 @@ export async function invokeAgent(
     );
 
     if (!response.ok) {
-        throw new Error(`Agent invocation failed: ${response.statusText}`);
+        const body = await response.text().catch(() => undefined);
+        if (body) {
+            throw new Error(`Agent invocation failed: ${response.statusText}, ${body}`);
+        } else {
+            throw new Error(`Agent invocation failed: ${response.statusText}`);
+        }
+
     }
 
     return await (response.json() as Promise<AgentInvocationResult>);
