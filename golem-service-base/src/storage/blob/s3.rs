@@ -58,15 +58,29 @@ impl S3BlobStorage {
             config_builder = config_builder.endpoint_url(endpoint_url);
         }
 
-        if config.use_minio_credentials {
-            let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
+        if let Some(credentials) = config.aws_credentials.clone() {
+            let creds = Credentials::new(
+                credentials.access_key_id,
+                credentials.secret_access_key,
+                None,
+                None,
+                credentials.provider_name.leak(),
+            );
             config_builder = config_builder.credentials_provider(creds);
         }
 
         let sdk_config = config_builder.load().await;
 
+        let s3_config: aws_sdk_s3::config::Config = (&sdk_config).into();
+
+        let s3_config = if let Some(path_style) = &config.aws_path_style {
+            s3_config.to_builder().force_path_style(*path_style).build()
+        } else {
+            s3_config
+        };
+
         Self {
-            client: aws_sdk_s3::Client::new(&sdk_config),
+            client: aws_sdk_s3::Client::from_conf(s3_config),
             config,
         }
     }

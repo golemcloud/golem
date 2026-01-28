@@ -262,7 +262,6 @@ without_time = false
 # oplog_payload_bucket = "oplog-payload"
 # plugin_wasm_files_bucket = "golem-plugin-wasm-files"
 # region = "us-east-1"
-# use_minio_credentials = false
 # 
 # [blob_storage.config.retries]
 # max_attempts = 3
