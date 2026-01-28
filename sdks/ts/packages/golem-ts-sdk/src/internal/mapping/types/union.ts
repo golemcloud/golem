@@ -14,229 +14,24 @@
 
 import { buildJSONFromType, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import { TypeMappingScope } from './scope';
-import { generateVariantTermName } from './name';
 import { isKebabCase, isNumberString, trimQuotes } from './stringFormat';
 import {
   tryTaggedUnion,
   tryUnionOfOnlyLiteral,
-  UserDefinedResultType, UnionOfLiteral, TaggedUnion, TaggedTypeMetadata,
+  UserDefinedResultType, UnionOfLiteral, TaggedTypeMetadata,
 } from './taggedUnion';
 import { AnalysedType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
 import { Ctx } from './ctx';
 import {TypeMapper} from "./typeMapper";
 import { Try } from '../../try';
+import { TypeMappingScope } from './scope';
+import { generateVariantTermName } from './name';
 
 type TsType = CoreType.Type;
 
 const AnonymousUnionTypeRegistry = new Map<string, AnalysedType>();
 
 type UnionCtx = Ctx & { type: Extract<TsType, { kind: "union" }> };
-
-// TODO; Refactor more here, (added only comments for now to avoid losing changes)
-export function handleUnion1(ctx : UnionCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
-  const { type, scope } = ctx;
-  const hash = JSON.stringify(buildJSONFromType(type));
-
-  const analysedType = AnonymousUnionTypeRegistry.get(hash);
-  const isAnonymous = !type.name;
-
-  // We reuse the previously computed analysed-type for anonymous types with the same shape
-  // This reduces the size of the generated WIT significantly
-  if (analysedType && isAnonymous) {
-
-    if (type.unionTypes.some((ut) => ut.kind === "null")) {
-      return Either.right(option(undefined, "null", analysedType));
-    }
-
-    if (type.unionTypes.some((ut) => ut.kind === "undefined")) {
-      return Either.right(option(undefined, "undefined", analysedType));
-    }
-
-    if (type.unionTypes.some((ut) => ut.kind === "void")) {
-      return Either.right(option(undefined, "void", analysedType));
-    }
-
-
-    return Either.right(analysedType);
-  }
-
-  // Check for inbuilt result type first
-  const inbuiltResultType: Either.Either<AnalysedType, string> | undefined  =
-    tryInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams, mapper);
-
-  if (inbuiltResultType) {
-    if (isAnonymous && Either.isRight(inbuiltResultType) ) {
-      AnonymousUnionTypeRegistry.set(hash, inbuiltResultType.val);
-    }
-
-    return inbuiltResultType;
-  }
-
-  // Union field Index
-  let fieldIdx = 1;
-  const possibleTypes: NameOptionTypePair[] = [];
-
-  const unionOfOnlyLiterals: Try<UnionOfLiteral> =
-    tryUnionOfOnlyLiteral(type.unionTypes);
-
-  if (Either.isLeft(unionOfOnlyLiterals)) {
-    return unionOfOnlyLiterals;
-  }
-
-  // If the union is made up of only literals, we can convert it to enum type
-  if (unionOfOnlyLiterals.val) {
-    const analysedType = enum_(type.name, unionOfOnlyLiterals.val.literals);
-
-    // If it's an anonymous union, we cache it to avoid any new indices being generated for the same shape
-    if (isAnonymous) {
-      AnonymousUnionTypeRegistry.set(hash, analysedType);
-    }
-
-    return Either.right(analysedType);
-  }
-
-  // If all elements of the union are tagged types, we can convert it to variant or result
-  const taggedUnion: Try<TaggedUnion> =
-    tryTaggedUnion(type.unionTypes);
-
-  if (Either.isLeft(taggedUnion)) {
-    return taggedUnion;
-  }
-
-  // If it's a tagged union, convert to variant or result
-  if (taggedUnion.val) {
-    const unionType = taggedUnion.val;
-
-    switch (unionType.tag) {
-      case "custom":
-        const analysedTypeEither: Either.Either<AnalysedType, string> =
-          convertToVariantAnalysedType(type.name, unionType.val, mapper);
-
-        return Either.map(analysedTypeEither, (result) => {
-
-          if (isAnonymous) {
-            AnonymousUnionTypeRegistry.set(hash, result);
-          }
-          return result;
-        })
-
-      // Checking if the tagged union resembles a result type
-      case "result":
-        const userDefinedResultType = unionType.val;
-        const analysedTypeForCustomResult: Either.Either<AnalysedType, string> =
-          convertUserDefinedResultToWitResult(type.name, userDefinedResultType, mapper);
-
-        return Either.map(analysedTypeForCustomResult, (result) => {
-          if (isAnonymous) {
-            AnonymousUnionTypeRegistry.set(hash, result);
-          }
-          return result;
-        })
-    }
-  }
-
-  // If the union is neither a tagged union nor a union of only literals, we proceed with normal union handling
-  // First, we check if the union includes undefined or null types in it.
-  if (includesEmptyType(type.unionTypes)) {
-    const unionTypeWithoutEmptyTypes = filterEmptyTypesFromUnion(ctx);
-
-    if (Either.isLeft(unionTypeWithoutEmptyTypes)) {
-      return Either.left(unionTypeWithoutEmptyTypes.val);
-    }
-
-    // We keep the rest of the type and retry with rest of the union types
-    const innerTypeEither: Either.Either<AnalysedType, string> =
-      mapper(unionTypeWithoutEmptyTypes.val, undefined);
-
-    if (Either.isLeft(innerTypeEither)) {
-      return Either.left(innerTypeEither.val);
-    }
-
-    // Type is already optional and further loop will solve it
-    if (scope && TypeMappingScope.isOptional(scope)) {
-      const innerType = innerTypeEither.val;
-
-      if (isAnonymous) {
-        AnonymousUnionTypeRegistry.set(hash, innerType);
-      }
-      return Either.right(innerType);
-    }
-
-    if (!type.name) {
-      AnonymousUnionTypeRegistry.set(hash, innerTypeEither.val);
-    }
-
-    const emptyType = type.unionTypes.some((ut) => ut.kind === "null") ?  "null" :
-      (type.unionTypes.some((ut) => ut.kind === "undefined") ? "undefined" : "void");
-
-    const result = option(undefined, emptyType, innerTypeEither.val);
-
-    return Either.right(result)
-  }
-
-  // If union has both true and false (because ts-morph consider boolean to be a union of literal true and literal false)
-
-  const hasFalseLiteral = type.unionTypes.some(t => t.kind === 'literal' && t.literalValue === 'false');
-
-  const hasTrueLiteral = type.unionTypes.some(type => type.kind === 'literal' && type.literalValue === 'true');
-
-  let hasBoolean = hasFalseLiteral && hasTrueLiteral;
-
-  let unionTypesLiteralBoolFiltered =
-    type.unionTypes.filter(field => !(field.kind === 'literal' && (field.literalValue === 'false' || field.literalValue === 'true')));
-
-  const optional =
-    unionTypesLiteralBoolFiltered.find((field) => field.kind  === 'literal')?.optional;
-
-  unionTypesLiteralBoolFiltered.push({kind: "boolean", optional: optional ?? false})
-
-  const newUnionTypes = hasBoolean ? unionTypesLiteralBoolFiltered : type.unionTypes;
-
-  for (const t of newUnionTypes) {
-    // Special handling of literal types
-    if (t.kind === "literal") {
-      const name = t.literalValue;
-      if (!name) {
-        return Either.left(`Unable to determine the literal value`);
-      }
-      if (isNumberString(name)) {
-        return Either.left("Literals of number type are not supported");
-      }
-
-      // If literals, ts-morph holds on to `\"` for string literals
-      // and hence should be trimmed off.
-      possibleTypes.push({
-        name: trimQuotes(name),
-      });
-
-      continue;
-    }
-
-    // Since we are in union handling, we don't pass down any scope
-    const result = mapper(t, undefined);
-
-
-    if (Either.isLeft(result)) {
-      return result;
-    }
-
-    possibleTypes.push({
-      // Note that for untagged-unions, all elements are anonymus
-      // and we generate the name using the original union type name and field index
-      name: generateVariantTermName(type.name, fieldIdx++),
-      typ: result.val,
-    });
-  }
-
-  const result = variant(type.name, [], possibleTypes);
-
-  if (!type.name) {
-    AnonymousUnionTypeRegistry.set(hash, result);
-  }
-
-  return Either.right(result);
-}
 
 export function handleUnion(
   ctx: UnionCtx,
@@ -251,7 +46,7 @@ export function handleUnion(
   const cached = reuseAnonymousUnionCache(ctx, cacheKey);
   if (cached) return cached;
 
-  // Inbuilt Result<T, E>
+  // Try if it's inbuilt Result<T, E>
   const inbuiltResult = tryInbuiltResultType(
     type.name,
     type.originalTypeName,
@@ -264,22 +59,23 @@ export function handleUnion(
     return inbuiltResult;
   }
 
-  // 3️⃣ Union of only literals → enum
-  const enumResult = tryEnumUnion(type, cacheKey);
+  // Try if its union of only literals converted to enum
+  const enumResult = tryEnumUnion(ctx, cacheKey);
   if (enumResult) return enumResult;
 
-  // 4️⃣ Tagged union → variant / result
-  const taggedResult = tryTaggedUnionConversion(type, mapper, cacheKey);
+  // Try if all variants in union are tagged
+  // If they are tagged, it needs to verify if it corresponds to `result` type etc
+  const taggedResult = tryTaggedUnionAndProcess(ctx, mapper, cacheKey);
   if (taggedResult) return taggedResult;
 
-  // 5️⃣ Optional union (null | undefined | void)
+  // Try Optional union (null | undefined | void)
   const optionalResult = tryOptionalUnion(ctx, mapper, cacheKey);
   if (optionalResult) return optionalResult;
 
-  // 6️⃣ Normalize boolean literal unions
+  // Normalize boolean literal unions
   const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
 
-  // 7️⃣ Fallback: plain variant
+  // Fallback: plain variant
   return buildPlainVariant(type, normalizedUnionTypes, mapper, cacheKey);
 }
 
@@ -322,6 +118,7 @@ function reuseAnonymousUnionCache(
   const cachedAnalysedType: AnalysedType | undefined = AnonymousUnionTypeRegistry.get(key);
   if (!cachedAnalysedType) return;
 
+  // May not be required
   const emptyKind =
     type.unionTypes.find(t => t.kind === "null")?.kind ??
     type.unionTypes.find(t => t.kind === "undefined")?.kind ??
@@ -333,9 +130,11 @@ function reuseAnonymousUnionCache(
 }
 
 function tryEnumUnion(
-  type: TsType,
+  ctx: UnionCtx,
   cacheKey: string
 ): Either.Either<AnalysedType, string> | undefined {
+  const type = ctx.type;
+
   const literals: Try<UnionOfLiteral> = tryUnionOfOnlyLiteral(type.unionTypes);
 
   // This happens because it is found that every term is a literal,
@@ -353,7 +152,6 @@ function tryEnumUnion(
 
   return Either.right(result);
 }
-
 
 export function tryInbuiltResultType(
   typeName: string | undefined,
@@ -396,6 +194,96 @@ export function tryInbuiltResultType(
   }
 }
 
+function tryTaggedUnionAndProcess(
+  ctx: UnionCtx,
+  mapper: TypeMapper,
+  cacheKey: string
+): Either.Either<AnalysedType, string> | undefined {
+  const type = ctx.type;
+
+  const tagged = tryTaggedUnion(type.unionTypes);
+
+  if (Either.isLeft(tagged)) return tagged;
+
+  if (!tagged.val) return;
+
+  // If the tagged union resembles `Result` type, convert to `result` WIT,
+  // else convert to simple `variant` WIT with each variant name corresponds to tag name.
+  const result =
+    tagged.val.tag === "result"
+      ? convertUserDefinedResultToWitResult(type.name, tagged.val.val, mapper)
+      : convertToVariantAnalysedType(type.name, tagged.val.val, mapper)
+
+  return Either.map(result, analysed => {
+    if (!type.name) AnonymousUnionTypeRegistry.set(cacheKey, analysed);
+    return analysed;
+  });
+}
+
+function tryOptionalUnion(
+  ctx: UnionCtx,
+  mapper: TypeMapper,
+  cacheKey: string
+): Either.Either<AnalysedType, string> | undefined {
+  if (!includesEmptyType(ctx.type.unionTypes)) return;
+
+  const stripped = filterEmptyTypesFromUnion(ctx);
+  if (Either.isLeft(stripped)) return stripped;
+
+  // Get the `AnalysedType` without taking `EmptyType` into account,
+  // which is also mostly a variant/result type, unless
+  // the number of types in union other than empty type is equal to 1.
+  const innerAnalysedType = mapper(stripped.val, undefined);
+  if (Either.isLeft(innerAnalysedType)) return innerAnalysedType;
+
+  // TODO; verify this early return
+  // If the scope of this type is already under a `?`. Example: `interface Foo { input?: string | number }`
+  if (ctx.scope && TypeMappingScope.isOptional(ctx.scope)) {
+    if (!ctx.type.name) AnonymousUnionTypeRegistry.set(cacheKey, innerAnalysedType.val);
+    return Either.right(innerAnalysedType.val);
+  }
+
+  const emptyKind =
+    ctx.type.unionTypes.find(t => t.kind === "null")?.kind ??
+    ctx.type.unionTypes.find(t => t.kind === "undefined")?.kind ??
+    "void";
+
+  return Either.right(option(undefined, emptyKind, innerAnalysedType.val));
+}
+
+// In typescript type-system, and hence in ts-morph
+// a boolean is already `true | false`. So if we see this, then it's not a user defined
+// union type but actual boolean. This is handled below, along with the possibility
+// of existence of these literal `true` or `false` alongside other terms.
+// Example: `true | "x"`, `false` etc is left untouched. If both of them exist,
+// remove these true and false from the union, and add the actual type `boolean` into the list.
+// But when doing this we ensure to keep the optionality aspect which is very subtle
+// In TypeScript, these are equivalent:
+// ```ts
+//  x?: boolean
+//  x: boolean | undefined
+//
+// ```
+// But ts-morph does not always attach optional to undefined
+// Instead it often encodes optionality like this:
+// `true | false | undefined`
+// At this point the `optional` flag may end up attached to one of the union members - often a literal
+// and we re-attach this to the new type `boolean`.
+function normalizeBooleanUnion(types: TsType[]): TsType[] {
+  const hasTrue = types.some(t => t.kind === "literal" && t.literalValue === "true");
+  const hasFalse = types.some(t => t.kind === "literal" && t.literalValue === "false");
+
+  if (!hasTrue || !hasFalse) return types;
+
+  const withoutBoolLiterals = types.filter(
+    t => !(t.kind === "literal" && (t.literalValue === "true" || t.literalValue === "false"))
+  );
+
+  const optional = withoutBoolLiterals.find(t => t.kind === "literal")?.optional ?? false;
+
+  return [...withoutBoolLiterals, { kind: "boolean", optional }];
+}
+
 
 function includesEmptyType(
   unionTypes: TsType[]
@@ -403,6 +291,7 @@ function includesEmptyType(
   return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
 }
 
+// Filter out any empty type, but fails if there is nothing remaining.
 function filterEmptyTypesFromUnion(
     ctx: UnionCtx
 ): Either.Either<TsType, string> {
@@ -432,6 +321,46 @@ function filterEmptyTypesFromUnion(
   }
 
   return Either.right({ kind: "union", name: type.name, unionTypes: alternateTypes, optional: type.optional, typeParams: type.typeParams, originalTypeName: type.originalTypeName });
+}
+
+function buildPlainVariant(
+  type: TsType,
+  unionTypes: TsType[],
+  mapper: TypeMapper,
+  cacheKey: string
+): Either.Either<AnalysedType, string> {
+  let fieldIdx = 1;
+  const cases: NameOptionTypePair[] = [];
+
+  for (const t of unionTypes) {
+    if (t.kind === "literal") {
+      if (!t.literalValue) {
+        return Either.left("Unable to determine the literal value");
+      }
+      if (isNumberString(t.literalValue)) {
+        return Either.left("Literals of number type are not supported");
+      }
+
+      // If they are literal types, the type info keeps the quotes as it is apparently.
+      // We just remove it.
+      cases.push({ name: trimQuotes(t.literalValue) });
+      continue;
+    }
+
+    const analysed = mapper(t, undefined);
+    if (Either.isLeft(analysed)) return analysed;
+
+    cases.push({
+      // Refer documentation of `generateVariantTermName`
+      name: generateVariantTermName(type.name, fieldIdx++),
+      typ: analysed.val,
+    });
+  }
+
+  const result = variant(type.name, [], cases);
+  if (!type.name) AnonymousUnionTypeRegistry.set(cacheKey, result);
+
+  return Either.right(result);
 }
 
 function convertUserDefinedResultToWitResult(typeName: string | undefined, resultType: UserDefinedResultType, mapper: TypeMapper): Either.Either<AnalysedType, string> {
