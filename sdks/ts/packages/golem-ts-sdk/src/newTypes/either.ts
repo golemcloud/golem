@@ -132,7 +132,7 @@ export function all<T, E>(results: Either<T, E>[]): Either<T[], E> {
 }
 
 export function mapOrReturn<T>(
-  e: Either<T, string>
+  e: Either<T, string>,
 ): T | Either<never, string> {
   return isLeft(e) ? e : e.val;
 }

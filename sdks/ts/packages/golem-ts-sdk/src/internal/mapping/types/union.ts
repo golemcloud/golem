@@ -29,6 +29,17 @@ import { Try } from '../../try';
 
 type TsType = CoreType.Type;
 
+// It keeps track of the "generated" `AnalysedType` mainly for anonymous types.
+// The key `string` simply can be string representation of the type.
+// This is only used in `union` types. The reason can b explained with an example.
+//
+// In the below example, the argument to the function is an anonymous union
+// function foo(x: string | number);
+
+// Union handler ensures to convert `string | number` is converted to `variant { case0(string), case1(number) }` in WIT.
+// But `union` handler updates a cache of this `AnalysedType` for anonymous union,
+// which helps with reusing the same variant whenever `string | number` appears in the code
+// instead of unlimited generation of case indices
 const AnonymousUnionTypeRegistry = new Map<string, AnalysedType>();
 
 type UnionCtx = Ctx & { type: Extract<TsType, { kind: "union" }> };

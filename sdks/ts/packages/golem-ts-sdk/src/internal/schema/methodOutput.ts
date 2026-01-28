@@ -103,9 +103,7 @@ type VoidLike =
   | { kind: 'void'; schema: DataSchema }
   | { kind: 'result-with-void'; analysed: AnalysedType };
 
-function tryVoidLike(
-  type: Type.Type,
-): Try<VoidLike> {
+function tryVoidLike(type: Type.Type): Try<VoidLike> {
   switch (type.kind) {
     case 'void':
     case 'undefined':
