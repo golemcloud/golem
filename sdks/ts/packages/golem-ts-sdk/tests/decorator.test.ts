@@ -19,19 +19,14 @@ import {
   FooAgentClassName,
   EphemeralAgentClassName,
 } from './testUtils';
-import {
-  AgentType,
-  DataSchema,
-  DataValue,
-  ElementSchema,
-} from 'golem:agent/common';
+import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 import { FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { toWitValue, Value } from '../src/internal/mapping/values/Value';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from 'golem:agent/host';
-import { AgentClassName, AgentId } from '../src';
+import { AgentClassName } from '../src';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail

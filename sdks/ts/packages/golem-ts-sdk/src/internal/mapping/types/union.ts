@@ -20,11 +20,10 @@ import {
   tryUnionOfOnlyLiteral,
   UserDefinedResultType, UnionOfLiteral, TaggedTypeMetadata,
 } from './taggedUnion';
-import { AnalysedType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
+import { AnalysedType, EmptyType, enum_, NameOptionTypePair, option, result, variant } from './analysedType';
 import { Ctx } from './ctx';
 import {TypeMapper} from "./typeMapper";
 import { Try } from '../../try';
-import { TypeMappingScope } from './scope';
 import { generateVariantTermName } from './name';
 
 type TsType = CoreType.Type;
@@ -37,7 +36,7 @@ export function handleUnion(
   ctx: UnionCtx,
   mapper: TypeMapper
 ): Either.Either<AnalysedType, string> {
-  const { type, scope } = ctx;
+  const { type } = ctx;
 
   const cacheKey = hashUnion(type);
   const isAnonymous = !type.name;
@@ -63,7 +62,7 @@ export function handleUnion(
   if (taggedResult) return taggedResult;
 
   // Try Optional union (null | undefined | void) and convert to `option` WIT
-  const optionalResult = tryOptionalUnion(ctx, mapper, cacheKey);
+  const optionalResult = tryOptionalUnion(ctx, mapper);
   if (optionalResult) return optionalResult;
 
   // Normalize union types if it consist of `true`, `false` literals
@@ -74,8 +73,10 @@ export function handleUnion(
 }
 
 
-function hashUnion(type: TsType): string {
-  return JSON.stringify(buildJSONFromType(type));
+export function hashUnion(type: TsType): string {
+  const jsonRep = JSON.stringify(buildJSONFromType(type));
+  //console.log('jsonRep', jsonRep);
+  return jsonRep;
 }
 
 function cacheIfAnonymous(
@@ -112,15 +113,7 @@ function reuseAnonymousUnionCache(
   const cachedAnalysedType: AnalysedType | undefined = AnonymousUnionTypeRegistry.get(key);
   if (!cachedAnalysedType) return;
 
-  // May not be required
-  const emptyKind =
-    type.unionTypes.find(t => t.kind === "null")?.kind ??
-    type.unionTypes.find(t => t.kind === "undefined")?.kind ??
-    type.unionTypes.find(t => t.kind === "void")?.kind;
-
-  return emptyKind
-    ? Either.right(option(undefined, emptyKind, cachedAnalysedType))
-    : Either.right(cachedAnalysedType);
+  return Either.right(cachedAnalysedType);
 }
 
 function tryEnumUnion(
@@ -220,32 +213,24 @@ function tryTaggedUnionAndProcess(
 function tryOptionalUnion(
   ctx: UnionCtx,
   mapper: TypeMapper,
-  cacheKey: string
 ): Either.Either<AnalysedType, string> | undefined {
-  if (!includesEmptyType(ctx.type.unionTypes)) return;
+  const emptyType: EmptyType | undefined =
+    getFirstEmptyType(ctx.type.unionTypes);
+
+  if (!emptyType) return;
 
   const stripped = filterEmptyTypesFromUnion(ctx);
+
   if (Either.isLeft(stripped)) return stripped;
 
   // Get the `AnalysedType` without taking `EmptyType` into account,
   // which is also mostly a variant/result type, unless
   // the number of types in union other than empty type is equal to 1.
-  const innerAnalysedType = mapper(stripped.val, undefined);
+  const innerAnalysedType: Either.Either<AnalysedType, string> = mapper(stripped.val, undefined);
+
   if (Either.isLeft(innerAnalysedType)) return innerAnalysedType;
 
-  // TODO; verify this early return
-  // If the scope of this type is already under a `?`. Example: `interface Foo { input?: string | number }`
-  if (ctx.scope && TypeMappingScope.isOptional(ctx.scope)) {
-    if (!ctx.type.name) AnonymousUnionTypeRegistry.set(cacheKey, innerAnalysedType.val);
-    return Either.right(innerAnalysedType.val);
-  }
-
-  const emptyKind =
-    ctx.type.unionTypes.find(t => t.kind === "null")?.kind ??
-    ctx.type.unionTypes.find(t => t.kind === "undefined")?.kind ??
-    "void";
-
-  return Either.right(option(undefined, emptyKind, innerAnalysedType.val));
+  return Either.right(option(undefined, emptyType, innerAnalysedType.val));
 }
 
 // In typescript type-system, and hence in ts-morph
@@ -282,10 +267,20 @@ function normalizeBooleanUnion(types: TsType[]): TsType[] {
 }
 
 
-function includesEmptyType(
+function getFirstEmptyType(
   unionTypes: TsType[]
-): boolean {
-  return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
+): EmptyType | undefined {
+  for (const t of unionTypes) {
+    switch (t.kind) {
+      case "null":
+        return "null";
+      case "undefined":
+        return "undefined";
+      case "void":
+        return "void";
+    }
+  }
+  return undefined;
 }
 
 // Filter out any empty type, but fails if there is nothing remaining.

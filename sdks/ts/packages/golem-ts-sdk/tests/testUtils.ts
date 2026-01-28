@@ -111,7 +111,7 @@ export function getRecordFieldsFromAnalysedType(
   return analysedType.kind === 'record' ? analysedType.value.fields : undefined;
 }
 
-function fetchTypeFromBarAgent(
+export function fetchTypeFromBarAgent(
   typeNameInTestData: string,
 ): [AnalysedType, Type.Type] {
   const complexAgentMetadata = TypeMetadata.get(BarAgentClassName.value);
