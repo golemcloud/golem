@@ -12,48 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::api_definition::UnboundCompiledRoute;
-use crate::model::component::Component;
+use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use futures::TryFutureExt;
-use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{
-    AgentMethod, AgentType, AgentTypeName, HttpMountDetails, RegisteredAgentType,
-    RegisteredAgentTypeImplementer,
-};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
-use golem_common::model::diff::{self, HashOf, Hashable};
+use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
-use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::custom_api::RouteBehaviour;
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
-use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-
-macro_rules! ok_or_continue {
-    ($expr:expr, $errors:ident) => {{
-        match ($expr) {
-            Ok(v) => v,
-            Err(e) => {
-                $errors.push(e);
-                continue;
-            }
-        }
-    }};
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentWriteError {
@@ -127,6 +107,26 @@ pub enum DeployValidationError {
     ComponentNotFound(ComponentName),
     #[error("Agent type name {0} is provided by multiple components")]
     AmbiguousAgentTypeName(AgentTypeName),
+    #[error(
+        "Method {agent_method} of agent {agent_type} used by http api at {method} {domain}/{path} is invalid: {error}"
+    )]
+    HttpApiDeploymentAgentMethodInvalid {
+        domain: Domain,
+        method: String,
+        path: String,
+        agent_type: AgentTypeName,
+        agent_method: String,
+        error: String,
+    },
+    #[error(
+        "Method constructor of agent {agent_type} mounted by by http api at {domain}/{path} is invalid: {error}"
+    )]
+    HttpApiDeploymentAgentConstructorInvalid {
+        domain: Domain,
+        path: String,
+        agent_type: AgentTypeName,
+        error: String,
+    },
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -358,176 +358,5 @@ impl DeploymentWriteService {
             .transpose()?;
 
         Ok(deployment)
-    }
-}
-
-#[derive(Debug)]
-struct DeploymentContext {
-    components: BTreeMap<ComponentName, Component>,
-    http_api_deployments: BTreeMap<Domain, HttpApiDeployment>,
-}
-
-impl DeploymentContext {
-    fn new(components: Vec<Component>, http_api_deployments: Vec<HttpApiDeployment>) -> Self {
-        Self {
-            components: components
-                .into_iter()
-                .map(|c| (c.component_name.clone(), c))
-                .collect(),
-            http_api_deployments: http_api_deployments
-                .into_iter()
-                .map(|had| (had.domain.clone(), had))
-                .collect(),
-        }
-    }
-
-    fn hash(&self) -> diff::Hash {
-        let diffable = diff::Deployment {
-            components: self
-                .components
-                .iter()
-                .map(|(k, v)| (k.0.clone(), HashOf::from_hash(v.hash)))
-                .collect(),
-            // Fixme: code-first routes
-            http_api_definitions: BTreeMap::new(),
-            http_api_deployments: self
-                .http_api_deployments
-                .iter()
-                .map(|(k, v)| (k.0.clone(), HashOf::from_hash(v.hash)))
-                .collect(),
-        };
-        diffable.hash()
-    }
-
-    fn extract_registered_agent_types(
-        &self,
-    ) -> Result<HashMap<AgentTypeName, RegisteredAgentType>, DeploymentWriteError> {
-        let mut agent_types = HashMap::new();
-
-        for component in self.components.values() {
-            for agent_type in component.metadata.agent_types() {
-                let agent_type_name = agent_type.type_name.to_wit_naming();
-                let registered_agent_type = RegisteredAgentType {
-                    agent_type: agent_type.clone(),
-                    implemented_by: RegisteredAgentTypeImplementer {
-                        component_id: component.id,
-                        component_revision: component.revision,
-                    },
-                };
-
-                if agent_types
-                    .insert(agent_type_name, registered_agent_type)
-                    .is_some()
-                {
-                    return Err(DeploymentWriteError::DeploymentValidationFailed(vec![
-                        DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()),
-                    ]));
-                };
-            }
-        }
-        Ok(agent_types)
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn compile_http_api_routes(
-        &self,
-        registered_agent_types: &HashMap<AgentTypeName, RegisteredAgentType>,
-    ) -> Result<Vec<UnboundCompiledRoute>, DeploymentWriteError> {
-        let mut current_route_id = 0i32;
-        let mut compiled_routes = Vec::new();
-        let mut errors = Vec::new();
-
-        for deployment in self.http_api_deployments.values() {
-            for agent_type in &deployment.agent_types {
-                let registered_agent_type = ok_or_continue!(
-                    registered_agent_types.get(agent_type).ok_or(
-                        DeployValidationError::HttpApiDeploymentMissingAgentType {
-                            http_api_deployment_domain: deployment.domain.clone(),
-                            missing_agent_type: agent_type.clone(),
-                        }
-                    ),
-                    errors
-                );
-
-                if let Some(http_mount) = &registered_agent_type.agent_type.http_mount {
-                    let mut compiled_agent_routes = ok_or_continue!(
-                        self.compile_agent_methods_http_routes(
-                            &mut current_route_id,
-                            deployment,
-                            &registered_agent_type.agent_type,
-                            &registered_agent_type.implemented_by,
-                            http_mount,
-                            &registered_agent_type.agent_type.methods
-                        ),
-                        errors
-                    );
-                    compiled_routes.append(&mut compiled_agent_routes);
-                };
-            }
-        }
-
-        // Fixme: code-first routes
-        // * SwaggerUi and WebHook routes
-        // * Validation of final router
-
-        if !errors.is_empty() {
-            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
-        };
-
-        Ok(compiled_routes)
-    }
-
-    fn compile_agent_methods_http_routes(
-        &self,
-        current_route_id: &mut i32,
-        deployment: &HttpApiDeployment,
-        agent: &AgentType,
-        implementer: &RegisteredAgentTypeImplementer,
-        http_mount: &HttpMountDetails,
-        methods: &[AgentMethod],
-    ) -> Result<Vec<UnboundCompiledRoute>, DeployValidationError> {
-        let mut result = Vec::new();
-
-        for method in methods {
-            for http_endpoint in &method.http_endpoint {
-                let cors = if !http_endpoint.cors_options.allowed_patterns.is_empty() {
-                    http_endpoint.cors_options.clone()
-                } else {
-                    http_mount.cors_options.clone()
-                };
-
-                let route_id = *current_route_id;
-                *current_route_id += 1;
-
-                let compiled = UnboundCompiledRoute {
-                    route_id,
-                    domain: deployment.domain.clone(),
-                    method: http_endpoint.http_method.clone(),
-                    path: http_mount
-                        .path_prefix
-                        .iter()
-                        .cloned()
-                        .chain(http_endpoint.path_suffix.iter().cloned())
-                        .collect(),
-                    header_vars: http_endpoint.header_vars.clone(),
-                    query_vars: http_endpoint.query_vars.clone(),
-                    behaviour: RouteBehaviour::CallAgent {
-                        component_id: implementer.component_id,
-                        component_revision: implementer.component_revision,
-                        agent_type: agent.type_name.clone(),
-                        method_name: method.name.clone(),
-                        input_schema: method.input_schema.clone(),
-                        output_schema: method.output_schema.clone(),
-                    },
-                    // Fixme: code-first routes
-                    security_scheme: None,
-                    cors,
-                };
-
-                result.push(compiled);
-            }
-        }
-
-        Ok(result)
     }
 }

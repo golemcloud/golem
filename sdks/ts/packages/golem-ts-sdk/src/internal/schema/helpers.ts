@@ -14,7 +14,6 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import * as Option from '../../newTypes/option';
 import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common';
 import * as WitType from '../mapping/types/WitType';
 import { TypeInfoInternal } from '../typeInfoInternal';
@@ -23,7 +22,7 @@ import {
   convertVariantTypeNameToKebab,
 } from '../mapping/types/stringFormat';
 import { ParameterDetail } from '../mapping/values/dataValue';
-import { getTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
+import { tryTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
 
 const MULTIMODAL_TYPE_NAMES = [
   'Multimodal',
@@ -38,17 +37,13 @@ export function isMultimodalType(type: Type.Type): boolean {
   return false;
 }
 
-export function isPrincipal(type: Type.Type): boolean {
-  return type.name === 'Principal';
-}
-
 export function getMultimodalParamDetails(
   type: Type.Type,
 ): Either.Either<ParameterDetail[], string> {
   const multimodalTypes =
     type.kind === 'union'
-      ? getTaggedUnion(type.unionTypes)
-      : getTaggedUnion([type]);
+      ? tryTaggedUnion(type.unionTypes)
+      : tryTaggedUnion([type]);
 
   if (Either.isLeft(multimodalTypes)) {
     return Either.left(
@@ -56,21 +51,21 @@ export function getMultimodalParamDetails(
     );
   }
 
-  const taggedUnionOpt = multimodalTypes.val;
+  const taggedUnion = multimodalTypes.val;
 
-  if (Option.isNone(taggedUnionOpt)) {
+  if (!taggedUnion) {
     return Either.left(
       `multimodal type is not a tagged union: ${multimodalTypes.val}. Expected an object with a literal 'tag' and 'val' property`,
     );
   }
 
-  const taggedTypes = TaggedUnion.getTaggedTypes(taggedUnionOpt.val);
+  const taggedTypes = TaggedUnion.getTaggedTypes(taggedUnion);
 
   return Either.all(
     taggedTypes.map((taggedTypeMetadata) => {
       const paramTypeOpt = taggedTypeMetadata.valueType;
 
-      if (Option.isNone(paramTypeOpt)) {
+      if (!paramTypeOpt) {
         return Either.left(
           `Multimodal types should have a value associated with the tag ${taggedTypeMetadata.tagLiteralName}`,
         );
@@ -78,15 +73,13 @@ export function getMultimodalParamDetails(
 
       const tagName = taggedTypeMetadata.tagLiteralName;
 
-      const valName = paramTypeOpt.val[0];
+      const [valName, paramType] = paramTypeOpt;
 
       if (valName !== 'val') {
         return Either.left(
           `The value associated with the tag ${tagName} should be named 'val', found '${valName}' instead`,
         );
       }
-
-      const paramType = paramTypeOpt.val[1];
 
       const typeName = paramType.name;
 
@@ -132,7 +125,7 @@ export function getMultimodalParamDetails(
         });
       }
 
-      const witType = WitType.fromTsType(paramType, Option.none());
+      const witType = WitType.fromTsType(paramType, undefined);
 
       return Either.map(witType, (typeInfo) => {
         const witType = typeInfo[0];

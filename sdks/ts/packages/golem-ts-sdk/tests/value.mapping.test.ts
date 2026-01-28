@@ -20,7 +20,6 @@ import {
   getTestListOfObjectType,
   getTupleComplexType,
   getTupleType,
-  getUnionType,
   getUnionComplexType,
   getPromiseType,
   getUnionWithOnlyLiterals,
@@ -47,7 +46,7 @@ import * as fc from 'fast-check';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as EffectEither from '../src/newTypes/either';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
-import { AnalysedType } from '../src/internal/mapping/types/AnalysedType';
+import { AnalysedType } from '../src/internal/mapping/types/analysedType';
 
 describe('typescript value to wit value round-trip conversions', () => {
   it('should correctly perform round-trip conversion for arbitrary values of interface type', () => {

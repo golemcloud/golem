@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import {NamedWitTypeNode, NodeIndex, ResourceMode, WitTypeNode} from "golem:rpc/types@0.2.2";
-import {AnalysedType, getNameFromAnalysedType, getOwnerFromAnalysedType, NameOptionTypePair, NameTypePair} from "./AnalysedType";
+import {AnalysedType, getNameFromAnalysedType, getOwnerFromAnalysedType, NameOptionTypePair, NameTypePair} from "./analysedType";
 import {WitType} from "golem:agent/common";
 
 export class WitTypeBuilder {

@@ -12,64 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RouteBehaviour;
 use super::SecuritySchemeDetails;
 use super::{CompiledRoute, CompiledRoutes};
+use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
+use crate::custom_api::{ConstructorParameter, MethodParameter, QueryOrHeaderType};
+use golem_api_grpc::proto;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_wasm::analysis::TypeEnum;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
 use std::ops::Deref;
 
-impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails>
-    for SecuritySchemeDetails
-{
+impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeDetails {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails,
+        value: proto::golem::customapi::SecuritySchemeDetails,
     ) -> Result<Self, Self::Error> {
-        let id = value
-            .id
-            .ok_or_else(|| "id field missing".to_string())?
-            .try_into()?;
+        let id = value.id.ok_or("id field missing")?.try_into()?;
 
         let provider_type = value
             .provider()
             .try_into()
-            .map_err(|e| format!("invalid provider: {}", e))?;
-
-        let name = SecuritySchemeName(value.name);
-
-        let client_id = ClientId::new(value.client_id);
-
-        let client_secret = ClientSecret::new(value.client_secret);
-
-        let redirect_url = RedirectUrl::new(value.redirect_url)
-            .map_err(|e| format!("Failed parsing redirect url: {e}"))?;
-
-        let scopes = value.scopes.into_iter().map(Scope::new).collect::<Vec<_>>();
+            .map_err(|e| format!("invalid provider: {e}"))?;
 
         Ok(Self {
             id,
-            name,
+            name: SecuritySchemeName(value.name),
             provider_type,
-            client_id,
-            client_secret,
-            redirect_url,
-            scopes,
+            client_id: ClientId::new(value.client_id),
+            client_secret: ClientSecret::new(value.client_secret),
+            redirect_url: RedirectUrl::new(value.redirect_url)
+                .map_err(|e| format!("Failed parsing redirect url: {e}"))?,
+            scopes: value.scopes.into_iter().map(Scope::new).collect(),
         })
     }
 }
 
 impl From<SecuritySchemeDetails>
-    for golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails
+    for golem_api_grpc::proto::golem::customapi::SecuritySchemeDetails
 {
     fn from(value: SecuritySchemeDetails) -> Self {
         Self {
             id: Some(value.id.into()),
             name: value.name.0,
-            provider: golem_api_grpc::proto::golem::apidefinition::Provider::from(
+            provider: golem_api_grpc::proto::golem::registry::SecuritySchemeProvider::from(
                 value.provider_type,
             )
             .into(),
@@ -81,19 +69,14 @@ impl From<SecuritySchemeDetails>
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for CompiledRoutes {
+impl TryFrom<proto::golem::customapi::CompiledRoutes> for CompiledRoutes {
     type Error = String;
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::apidefinition::CompiledRoutes,
-    ) -> Result<Self, Self::Error> {
-        let account_id = value
-            .account_id
-            .ok_or("Missing field: account_id")?
-            .try_into()?;
+    fn try_from(value: proto::golem::customapi::CompiledRoutes) -> Result<Self, Self::Error> {
+        let account_id = value.account_id.ok_or("Missing account_id")?.try_into()?;
         let environment_id = value
             .environment_id
-            .ok_or("Missing field: environment_id")?
+            .ok_or("Missing environment_id")?
             .try_into()?;
 
         let mut security_schemes = HashMap::new();
@@ -102,10 +85,11 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for Co
             security_schemes.insert(scheme.id, scheme);
         }
 
-        let mut routes = Vec::new();
-        for route in value.compiled_routes {
-            routes.push(route.try_into()?);
-        }
+        let routes = value
+            .routes
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             account_id,
@@ -117,7 +101,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for Co
     }
 }
 
-impl From<CompiledRoutes> for golem_api_grpc::proto::golem::apidefinition::CompiledRoutes {
+impl From<CompiledRoutes> for proto::golem::customapi::CompiledRoutes {
     fn from(value: CompiledRoutes) -> Self {
         Self {
             account_id: Some(value.account_id.into()),
@@ -126,133 +110,471 @@ impl From<CompiledRoutes> for golem_api_grpc::proto::golem::apidefinition::Compi
             security_schemes: value
                 .security_schemes
                 .into_values()
-                .map(|v| v.into())
+                .map(Into::into)
                 .collect(),
-            compiled_routes: value.routes.into_iter().map(Into::into).collect(),
+            routes: value.routes.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoute> for CompiledRoute {
+impl TryFrom<proto::golem::customapi::CompiledRoute> for CompiledRoute {
     type Error = String;
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::apidefinition::CompiledRoute,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(value: proto::golem::customapi::CompiledRoute) -> Result<Self, Self::Error> {
         Ok(Self {
-            method: value.method.ok_or("Missing field: method")?.try_into()?,
+            route_id: value.route_id,
+            method: value.method.ok_or("Missing method")?.try_into()?,
             path: value
                 .path
                 .into_iter()
-                .map(|p| p.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-            header_vars: value
-                .header_vars
-                .into_iter()
-                .map(|p| p.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-            query_vars: value
-                .query_vars
-                .into_iter()
-                .map(|p| p.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-            behavior: value
-                .behaviour
-                .ok_or("Missing field: behaviour")?
-                .try_into()?,
-            security_scheme: value.security_scheme_id.map(|v| v.try_into()).transpose()?,
-            cors: value
-                .cors_options
-                .ok_or("Missing field: cors_options")?
-                .try_into()?,
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            body: value.body.ok_or("Missing body")?.try_into()?,
+            behavior: value.behavior.ok_or("Missing behavior")?.try_into()?,
+            security_scheme: value.security_scheme.map(TryInto::try_into).transpose()?,
+            cors: value.cors.ok_or("Missing cors")?.try_into()?,
         })
     }
 }
 
-impl From<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::CompiledRoute {
+impl From<CompiledRoute> for proto::golem::customapi::CompiledRoute {
     fn from(value: CompiledRoute) -> Self {
         Self {
+            route_id: value.route_id,
             method: Some(value.method.into()),
-            path: value.path.into_iter().map(|v| v.into()).collect(),
-            header_vars: value.header_vars.into_iter().map(|v| v.into()).collect(),
-            query_vars: value.query_vars.into_iter().map(|v| v.into()).collect(),
-            behaviour: value.behavior.into(),
-            security_scheme_id: value.security_scheme.map(Into::into),
-            cors_options: Some(value.cors.into()),
+            path: value.path.into_iter().map(Into::into).collect(),
+            body: Some(value.body.into()),
+            behavior: Some(value.behavior.into()),
+            security_scheme: value.security_scheme.map(Into::into),
+            cors: Some(value.cors.into()),
         }
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::apidefinition::RouteBehaviour> for RouteBehaviour {
+impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
     type Error = String;
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::apidefinition::RouteBehaviour,
-    ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::apidefinition::route_behaviour::Behavior;
+    fn try_from(value: proto::golem::customapi::RouteBehaviour) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_behaviour::Kind;
 
-        match value.behavior.ok_or("RouteBehaviour.behavior missing")? {
-            Behavior::CallAgent(agent) => Ok(RouteBehaviour::CallAgent {
+        match value.kind.ok_or("RouteBehaviour.kind missing")? {
+            Kind::CallAgent(agent) => Ok(RouteBehaviour::CallAgent {
                 component_id: agent
                     .component_id
-                    .ok_or("Missing field: component_id")?
+                    .ok_or("Missing component_id")?
                     .try_into()?,
                 component_revision: agent.component_revision.try_into()?,
                 agent_type: AgentTypeName(agent.agent_type),
+                constructor_parameters: agent
+                    .constructor_parameters
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                phantom: agent.phantom,
                 method_name: agent.method_name,
-                input_schema: agent
-                    .input_schema
-                    .ok_or("Missing field: input_schema")?
-                    .try_into()?,
-                output_schema: agent
-                    .output_schema
-                    .ok_or("Missing field: output_schema")?
+                method_parameters: agent
+                    .method_parameters
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                expected_agent_response: agent
+                    .expected_agent_response
+                    .ok_or("Missing expected_agent_response")?
                     .try_into()?,
             }),
-            Behavior::ServeSwaggerUi(_) => Ok(RouteBehaviour::ServeSwaggerUi),
-            Behavior::HandleWebhookCallback(_) => Ok(RouteBehaviour::HandleWebhookCallback),
         }
     }
 }
 
-impl From<RouteBehaviour> for Option<golem_api_grpc::proto::golem::apidefinition::RouteBehaviour> {
+impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
     fn from(value: RouteBehaviour) -> Self {
-        use golem_api_grpc::proto::golem::apidefinition::route_behaviour::Behavior;
+        use proto::golem::customapi::route_behaviour::Kind;
 
-        Some(match value {
+        match value {
             RouteBehaviour::CallAgent {
                 component_id,
                 component_revision,
                 agent_type,
+                constructor_parameters,
+                phantom,
                 method_name,
-                input_schema,
-                output_schema,
-            } => golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
-                behavior: Some(Behavior::CallAgent(
-                    golem_api_grpc::proto::golem::apidefinition::CallAgent {
+                method_parameters,
+                expected_agent_response,
+            } => Self {
+                kind: Some(Kind::CallAgent(
+                    proto::golem::customapi::route_behaviour::CallAgent {
                         component_id: Some(component_id.into()),
-                        component_revision: component_revision.get(),
+                        component_revision: component_revision.into(),
                         agent_type: agent_type.0,
+                        constructor_parameters: constructor_parameters
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                        phantom,
                         method_name,
-                        input_schema: Some(input_schema.into()),
-                        output_schema: Some(output_schema.into()),
+                        method_parameters: method_parameters.into_iter().map(Into::into).collect(),
+                        expected_agent_response: Some(expected_agent_response.into()),
                     },
                 )),
             },
-            RouteBehaviour::ServeSwaggerUi => {
-                golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
-                    behavior: Some(Behavior::ServeSwaggerUi(
-                        golem_api_grpc::proto::golem::common::Empty {},
-                    )),
-                }
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::ConstructorParameter> for ConstructorParameter {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::ConstructorParameter) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::constructor_parameter::Kind;
+
+        match value.kind.ok_or("ConstructorParameter.kind missing")? {
+            Kind::Path(path) => Ok(ConstructorParameter::Path {
+                path_segment_index: path.path_segment_index.into(),
+                parameter_type: path
+                    .parameter_type
+                    .ok_or("Missing parameter_type")?
+                    .try_into()?,
+            }),
+        }
+    }
+}
+
+impl From<ConstructorParameter> for proto::golem::customapi::ConstructorParameter {
+    fn from(value: ConstructorParameter) -> Self {
+        use proto::golem::customapi::constructor_parameter::Kind;
+
+        match value {
+            ConstructorParameter::Path {
+                path_segment_index,
+                parameter_type,
+            } => Self {
+                kind: Some(Kind::Path(
+                    proto::golem::customapi::constructor_parameter::Path {
+                        path_segment_index: path_segment_index.into(),
+                        parameter_type: Some(parameter_type.into()),
+                    },
+                )),
+            },
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::MethodParameter> for MethodParameter {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::MethodParameter) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::method_parameter::Kind;
+
+        match value.kind.ok_or("MethodParameter.kind missing")? {
+            Kind::Path(path) => Ok(MethodParameter::Path {
+                path_segment_index: path.path_segment_index.into(),
+                parameter_type: path
+                    .parameter_type
+                    .ok_or("Missing parameter_type")?
+                    .try_into()?,
+            }),
+
+            Kind::Query(query) => Ok(MethodParameter::Query {
+                query_parameter_name: query.query_parameter_name,
+                parameter_type: query
+                    .parameter_type
+                    .ok_or("Missing parameter_type")?
+                    .try_into()?,
+            }),
+
+            Kind::Header(header) => Ok(MethodParameter::Header {
+                header_name: header.header_name,
+                parameter_type: header
+                    .parameter_type
+                    .ok_or("Missing parameter_type")?
+                    .try_into()?,
+            }),
+
+            Kind::JsonObjectBodyField(field) => Ok(MethodParameter::JsonObjectBodyField {
+                field_index: field.field_index.into(),
+            }),
+
+            Kind::UnstructuredBinaryBody(_) => Ok(MethodParameter::UnstructuredBinaryBody),
+        }
+    }
+}
+
+impl From<MethodParameter> for proto::golem::customapi::MethodParameter {
+    fn from(value: MethodParameter) -> Self {
+        use proto::golem::customapi::method_parameter::Kind;
+
+        match value {
+            MethodParameter::Path {
+                path_segment_index,
+                parameter_type,
+            } => Self {
+                kind: Some(Kind::Path(
+                    proto::golem::customapi::method_parameter::Path {
+                        path_segment_index: path_segment_index.into(),
+                        parameter_type: Some(parameter_type.into()),
+                    },
+                )),
+            },
+
+            MethodParameter::Query {
+                query_parameter_name,
+                parameter_type,
+            } => Self {
+                kind: Some(Kind::Query(
+                    proto::golem::customapi::method_parameter::Query {
+                        query_parameter_name,
+                        parameter_type: Some(parameter_type.into()),
+                    },
+                )),
+            },
+
+            MethodParameter::Header {
+                header_name,
+                parameter_type,
+            } => Self {
+                kind: Some(Kind::Header(
+                    proto::golem::customapi::method_parameter::Header {
+                        header_name,
+                        parameter_type: Some(parameter_type.into()),
+                    },
+                )),
+            },
+
+            MethodParameter::JsonObjectBodyField { field_index } => Self {
+                kind: Some(Kind::JsonObjectBodyField(
+                    proto::golem::customapi::method_parameter::JsonObjectBodyField {
+                        field_index: field_index.into(),
+                    },
+                )),
+            },
+
+            MethodParameter::UnstructuredBinaryBody => Self {
+                kind: Some(Kind::UnstructuredBinaryBody(
+                    proto::golem::customapi::method_parameter::UnstructuredBinaryBody {},
+                )),
+            },
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::RequestBodySchema> for RequestBodySchema {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::RequestBodySchema) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::request_body_schema::Kind;
+
+        match value.kind.ok_or("RequestBodySchema.kind missing")? {
+            Kind::Unused(_) => Ok(RequestBodySchema::Unused),
+
+            Kind::JsonBody(body) => Ok(RequestBodySchema::JsonBody {
+                expected_type: (&body.expected_type.ok_or("JsonBody.expected_type missing")?)
+                    .try_into()?,
+            }),
+
+            Kind::UnrestrictedBinary(_) => Ok(RequestBodySchema::UnrestrictedBinary),
+
+            Kind::RestrictedBinary(body) => Ok(RequestBodySchema::RestrictedBinary {
+                allowed_mime_types: body.allowed_mime_types,
+            }),
+        }
+    }
+}
+
+impl From<RequestBodySchema> for proto::golem::customapi::RequestBodySchema {
+    fn from(value: RequestBodySchema) -> Self {
+        use proto::golem::customapi::request_body_schema::Kind;
+
+        match value {
+            RequestBodySchema::Unused => Self {
+                kind: Some(Kind::Unused(
+                    proto::golem::customapi::request_body_schema::Unused {},
+                )),
+            },
+
+            RequestBodySchema::JsonBody { expected_type } => Self {
+                kind: Some(Kind::JsonBody(
+                    proto::golem::customapi::request_body_schema::JsonBody {
+                        expected_type: Some((&expected_type).into()),
+                    },
+                )),
+            },
+
+            RequestBodySchema::UnrestrictedBinary => Self {
+                kind: Some(Kind::UnrestrictedBinary(
+                    proto::golem::customapi::request_body_schema::UnrestrictedBinary {},
+                )),
+            },
+
+            RequestBodySchema::RestrictedBinary { allowed_mime_types } => Self {
+                kind: Some(Kind::RestrictedBinary(
+                    proto::golem::customapi::request_body_schema::RestrictedBinary {
+                        allowed_mime_types,
+                    },
+                )),
+            },
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::PathSegmentType> for PathSegmentType {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::PathSegmentType) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::path_segment_type::{Kind, Primitive};
+
+        match value.kind.ok_or("PathSegmentType.kind missing")? {
+            Kind::Primitive(p) => match Primitive::try_from(p).unwrap_or_default() {
+                Primitive::Str => Ok(PathSegmentType::Str),
+                Primitive::Chr => Ok(PathSegmentType::Chr),
+                Primitive::F64 => Ok(PathSegmentType::F64),
+                Primitive::F32 => Ok(PathSegmentType::F32),
+                Primitive::U64 => Ok(PathSegmentType::U64),
+                Primitive::S64 => Ok(PathSegmentType::S64),
+                Primitive::U32 => Ok(PathSegmentType::U32),
+                Primitive::S32 => Ok(PathSegmentType::S32),
+                Primitive::U16 => Ok(PathSegmentType::U16),
+                Primitive::S16 => Ok(PathSegmentType::S16),
+                Primitive::U8 => Ok(PathSegmentType::U8),
+                Primitive::S8 => Ok(PathSegmentType::S8),
+                Primitive::Bool => Ok(PathSegmentType::Bool),
+                Primitive::Unspecified => Err("Invalid PathSegmentType::Primitive".to_string()),
+            },
+
+            Kind::EnumType(e) => {
+                let inner = e.inner.ok_or("PathSegmentType::Enum.inner missing")?;
+
+                Ok(PathSegmentType::Enum(TypeEnum {
+                    owner: inner.owner,
+                    name: inner.name,
+                    cases: inner.names,
+                }))
             }
-            RouteBehaviour::HandleWebhookCallback => {
-                golem_api_grpc::proto::golem::apidefinition::RouteBehaviour {
-                    behavior: Some(Behavior::HandleWebhookCallback(
-                        golem_api_grpc::proto::golem::common::Empty {},
-                    )),
-                }
+        }
+    }
+}
+
+impl From<PathSegmentType> for proto::golem::customapi::PathSegmentType {
+    fn from(value: PathSegmentType) -> Self {
+        use proto::golem::customapi::path_segment_type::{Kind, Primitive};
+
+        let kind = match value {
+            PathSegmentType::Str => Kind::Primitive(Primitive::Str.into()),
+            PathSegmentType::Chr => Kind::Primitive(Primitive::Chr.into()),
+            PathSegmentType::F64 => Kind::Primitive(Primitive::F64.into()),
+            PathSegmentType::F32 => Kind::Primitive(Primitive::F32.into()),
+            PathSegmentType::U64 => Kind::Primitive(Primitive::U64.into()),
+            PathSegmentType::S64 => Kind::Primitive(Primitive::S64.into()),
+            PathSegmentType::U32 => Kind::Primitive(Primitive::U32.into()),
+            PathSegmentType::S32 => Kind::Primitive(Primitive::S32.into()),
+            PathSegmentType::U16 => Kind::Primitive(Primitive::U16.into()),
+            PathSegmentType::S16 => Kind::Primitive(Primitive::S16.into()),
+            PathSegmentType::U8 => Kind::Primitive(Primitive::U8.into()),
+            PathSegmentType::S8 => Kind::Primitive(Primitive::S8.into()),
+            PathSegmentType::Bool => Kind::Primitive(Primitive::Bool.into()),
+
+            PathSegmentType::Enum(inner) => {
+                Kind::EnumType(proto::golem::customapi::path_segment_type::Enum {
+                    inner: Some(golem_wasm::protobuf::TypeEnum {
+                        owner: inner.owner,
+                        name: inner.name,
+                        names: inner.cases,
+                    }),
+                })
             }
-        })
+        };
+
+        Self { kind: Some(kind) }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::PathSegment> for PathSegment {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::PathSegment) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::path_segment::Kind;
+
+        match value.kind.ok_or("PathSegment.kind missing")? {
+            Kind::Literal(lit) => Ok(PathSegment::Literal { value: lit.value }),
+
+            Kind::Variable(_) => Ok(PathSegment::Variable),
+
+            Kind::CatchAll(_) => Ok(PathSegment::CatchAll),
+        }
+    }
+}
+
+impl From<PathSegment> for proto::golem::customapi::PathSegment {
+    fn from(value: PathSegment) -> Self {
+        use proto::golem::customapi::path_segment::Kind;
+
+        let kind = match value {
+            PathSegment::Literal { value } => {
+                Kind::Literal(proto::golem::customapi::path_segment::Literal { value })
+            }
+
+            PathSegment::Variable => Kind::Variable(golem_api_grpc::proto::golem::common::Empty {}),
+
+            PathSegment::CatchAll => Kind::CatchAll(golem_api_grpc::proto::golem::common::Empty {}),
+        };
+
+        Self { kind: Some(kind) }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::QueryOrHeaderType> for QueryOrHeaderType {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::QueryOrHeaderType) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::query_or_header_type::Kind;
+
+        match value.kind.ok_or("QueryOrHeaderType.kind missing")? {
+            Kind::Primitive(p) => Ok(QueryOrHeaderType::Primitive(
+                p.inner.ok_or("Primitive.inner missing")?.try_into()?,
+            )),
+
+            Kind::Option(opt) => Ok(QueryOrHeaderType::Option {
+                name: opt.name,
+                owner: opt.owner,
+                inner: Box::new(opt.inner.ok_or("Option.inner missing")?.try_into()?),
+            }),
+
+            Kind::List(list) => Ok(QueryOrHeaderType::List {
+                name: list.name,
+                owner: list.owner,
+                inner: Box::new(list.inner.ok_or("List.inner missing")?.try_into()?),
+            }),
+        }
+    }
+}
+
+impl From<QueryOrHeaderType> for proto::golem::customapi::QueryOrHeaderType {
+    fn from(value: QueryOrHeaderType) -> Self {
+        use proto::golem::customapi::query_or_header_type::Kind;
+
+        let kind = match value {
+            QueryOrHeaderType::Primitive(inner) => {
+                Kind::Primitive(proto::golem::customapi::query_or_header_type::Primitive {
+                    inner: Some(inner.into()),
+                })
+            }
+
+            QueryOrHeaderType::Option { name, owner, inner } => {
+                Kind::Option(proto::golem::customapi::query_or_header_type::Option {
+                    name,
+                    owner,
+                    inner: Some((*inner).into()),
+                })
+            }
+
+            QueryOrHeaderType::List { name, owner, inner } => {
+                Kind::List(proto::golem::customapi::query_or_header_type::List {
+                    name,
+                    owner,
+                    inner: Some((*inner).into()),
+                })
+            }
+        };
+
+        Self { kind: Some(kind) }
     }
 }

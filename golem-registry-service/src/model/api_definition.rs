@@ -14,33 +14,30 @@
 
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    CorsOptions, HeaderVariable, HttpMethod, PathSegment, QueryVariable,
-};
+use golem_common::model::agent::{CorsOptions, HttpMethod};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
-use golem_service_base::custom_api::RouteBehaviour;
-use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::custom_api::{
+    PathSegment, RequestBodySchema, RouteBehaviour, RouteId, SecuritySchemeDetails,
+};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[derive(BinaryCodec)]
 #[desert(evolution())]
 // Flattened version of golem_service_base::custom_api::CompiledRoute with late-bound references still unresolved
 pub struct UnboundCompiledRoute {
     pub domain: Domain,
-    pub route_id: i32,
+    pub route_id: RouteId,
     pub method: HttpMethod,
     pub path: Vec<PathSegment>,
-    pub header_vars: Vec<HeaderVariable>,
-    pub query_vars: Vec<QueryVariable>,
+    pub body: RequestBodySchema,
     pub behaviour: RouteBehaviour,
     pub security_scheme: Option<SecuritySchemeName>,
     pub cors: CorsOptions,
 }
 
-#[derive(Debug, Clone)]
 pub struct BoundCompiledRoute {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
@@ -50,18 +47,15 @@ pub struct BoundCompiledRoute {
     pub route: UnboundCompiledRoute,
 }
 
-#[derive(Debug, Clone)]
 pub struct CompiledRoutesForDomain {
     pub security_schemes: HashMap<SecuritySchemeId, SecuritySchemeDetails>,
     pub routes: Vec<MaybeDisabledCompiledRoute>,
 }
 
-#[derive(Debug, Clone)]
 pub struct MaybeDisabledCompiledRoute {
     pub method: HttpMethod,
     pub path: Vec<PathSegment>,
-    pub header_vars: Vec<HeaderVariable>,
-    pub query_vars: Vec<QueryVariable>,
+    pub body: RequestBodySchema,
     pub behavior: RouteBehaviour,
     pub security_scheme_missing: bool,
     pub security_scheme: Option<SecuritySchemeId>,

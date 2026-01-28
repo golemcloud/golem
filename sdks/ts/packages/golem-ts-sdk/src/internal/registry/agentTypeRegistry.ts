@@ -14,7 +14,6 @@
 
 import { AgentType } from 'golem:agent/common';
 import { AgentClassName } from '../../agentClassName';
-import * as Option from '../../newTypes/option';
 
 /**
  * Singleton registry for agent types.
@@ -43,8 +42,8 @@ class AgentTypeRegistryImpl {
     return this.cachedAgents;
   }
 
-  get(agentClassName: AgentClassName): Option.Option<AgentType> {
-    return Option.fromNullable(this.registry.get(agentClassName.value));
+  get(agentClassName: AgentClassName): AgentType | undefined {
+    return this.registry.get(agentClassName.value);
   }
 
   exists(agentClassName: AgentClassName): boolean {

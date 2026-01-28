@@ -767,6 +767,29 @@ pub enum HttpMethod {
     Custom(CustomHttpMethod),
 }
 
+#[cfg(feature = "full")]
+impl TryFrom<HttpMethod> for http::Method {
+    type Error = anyhow::Error;
+
+    fn try_from(value: HttpMethod) -> Result<Self, Self::Error> {
+        match value {
+            HttpMethod::Get(_) => Ok(http::Method::GET),
+            HttpMethod::Head(_) => Ok(http::Method::HEAD),
+            HttpMethod::Post(_) => Ok(http::Method::POST),
+            HttpMethod::Put(_) => Ok(http::Method::PUT),
+            HttpMethod::Delete(_) => Ok(http::Method::DELETE),
+            HttpMethod::Connect(_) => Ok(http::Method::CONNECT),
+            HttpMethod::Options(_) => Ok(http::Method::OPTIONS),
+            HttpMethod::Trace(_) => Ok(http::Method::TRACE),
+            HttpMethod::Patch(_) => Ok(http::Method::PATCH),
+            HttpMethod::Custom(custom) => {
+                let converted = http::Method::from_bytes(custom.value.as_bytes())?;
+                Ok(converted)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",

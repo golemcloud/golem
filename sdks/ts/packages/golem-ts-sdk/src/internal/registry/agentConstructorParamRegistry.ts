@@ -47,6 +47,20 @@ class AgentConstructorParamRegistryImpl {
     return this.registry.get(agentClassName);
   }
 
+  getParametersForPrincipal(agentClassName: string): Set<string> {
+    const classMeta = this.registry.get(agentClassName);
+
+    const principalParams: Set<string> = new Set();
+
+    classMeta?.forEach((param, paramName) => {
+      if (param.typeInfo?.tag === 'principal') {
+        principalParams.add(paramName);
+      }
+    });
+
+    return principalParams;
+  }
+
   getParamType(
     agentClassName: string,
     paramName: string,

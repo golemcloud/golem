@@ -22,7 +22,7 @@ use std::str::FromStr;
 
 newtype_uuid!(
     SecuritySchemeId,
-    golem_api_grpc::proto::golem::apidefinition::SecuritySchemeId
+    golem_api_grpc::proto::golem::registry::SecuritySchemeId
 );
 
 declare_revision!(SecuritySchemeRevision);

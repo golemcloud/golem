@@ -15,25 +15,38 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInputExecutor;
-use futures::FutureExt;
-use poem::{Endpoint, Request, Response};
+use crate::api::common::ApiEndpointError;
+use crate::gateway_execution::request_handler::RequestHandler;
+use futures::{FutureExt, TryFutureExt};
+use golem_common::recorded_http_api_request;
+use poem::{Endpoint, IntoResponse, Request, Response};
+use tracing::Instrument;
 
 pub struct CustomHttpRequestApi {
-    pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
+    pub request_handler: Arc<RequestHandler>,
 }
 
 impl CustomHttpRequestApi {
-    pub fn new(gateway_http_input_executor: Arc<GatewayHttpInputExecutor>) -> Self {
-        Self {
-            gateway_http_input_executor,
-        }
+    pub fn new(request_handler: Arc<RequestHandler>) -> Self {
+        Self { request_handler }
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        self.gateway_http_input_executor
-            .execute_http_request(request)
-            .await
+        let record = recorded_http_api_request!("execute",
+            method = %request.method(),
+            uri = %request.uri()
+        );
+
+        let response = self
+            .request_handler
+            .handle_request(request)
+            .instrument(record.span.clone())
+            .map_err(ApiEndpointError::from)
+            .await;
+
+        record
+            .result(response)
+            .unwrap_or_else(IntoResponse::into_response)
     }
 }
 

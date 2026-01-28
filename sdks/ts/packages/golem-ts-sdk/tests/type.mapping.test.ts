@@ -25,9 +25,13 @@ import {
   getUnionWithLiterals,
 } from './testUtils';
 
-import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
-
-import { NameTypePair } from '../src/internal/mapping/types/AnalysedType';
+import {
+  AnalysedType,
+  bool,
+  f64,
+  NameTypePair,
+  str,
+} from '../src/internal/mapping/types/analysedType';
 
 // Interface type indirectly tests primitive types, union, list etc
 describe('TypeScript Interface to AnalysedType', () => {
@@ -81,17 +85,17 @@ describe('TypeScript Interface to AnalysedType', () => {
 describe('TypeScript primitives to AnalysedType', () => {
   it('Boolean type is converted to AnalysedType.Bool', () => {
     const [booleanType] = getBooleanType();
-    expect(booleanType).toEqual(AnalysedType.bool());
+    expect(booleanType).toEqual(bool());
   });
 
   it('String type is converted to AnalysedType.String', () => {
     const [analysedType] = getStringType();
-    expect(analysedType).toEqual(AnalysedType.str());
+    expect(analysedType).toEqual(str());
   });
 
   it('Number type is converted to AnalysedType.F64', () => {
     const [analysedType] = getNumberType();
-    expect(analysedType).toEqual(AnalysedType.f64());
+    expect(analysedType).toEqual(f64());
   });
 });
 
@@ -100,7 +104,7 @@ describe('TypeScript primitives to AnalysedType', () => {
 describe('TypeScript Promise type to AnalysedType', () => {
   it('Promise type is converted to AnalysedType', () => {
     const [promiseType] = getPromiseType();
-    expect(promiseType).toEqual(AnalysedType.str());
+    expect(promiseType).toEqual(str());
   });
 });
 
@@ -141,7 +145,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
   it('Union is converted to Variant with the name of the type as case name', () => {
     const [enumType] = getUnionType();
 
-    const expected: AnalysedType.AnalysedType = {
+    const expected: AnalysedType = {
       kind: 'variant',
       taggedTypes: [],
       value: {
@@ -206,7 +210,6 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
 
 test('Union with literals to AnalysedType', () => {
   const [unionWithLiterals] = getUnionWithLiterals();
-
   const expectedAnalysedType = {
     kind: 'variant',
     taggedTypes: [],
@@ -891,7 +894,7 @@ function checkTupleFields(fields: any[]) {
   tupleFields.forEach((field) => {
     expect(field.typ.kind).toBe('tuple');
     if (field.typ.kind == 'tuple') {
-      const expected: AnalysedType.AnalysedType[] = [
+      const expected: AnalysedType[] = [
         {
           kind: 'string',
         },
@@ -912,7 +915,7 @@ function checkTupleWithObjectFields(fields: any[]) {
   tupleObjectFields.forEach((field) => {
     expect(field.typ.kind).toBe('tuple');
     if (field.typ.kind == 'tuple') {
-      const expected: AnalysedType.AnalysedType[] = [
+      const expected: AnalysedType[] = [
         {
           kind: 'string',
         },

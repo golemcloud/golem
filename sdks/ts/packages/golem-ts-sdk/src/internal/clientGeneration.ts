@@ -15,7 +15,6 @@
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as wasmRpc from 'golem:rpc/types@0.2.2';
 import * as WitValue from './mapping/values/WitValue';
-import * as Option from '../newTypes/option';
 import * as Either from '../newTypes/either';
 import {
   getAgentType,
@@ -61,14 +60,13 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentType: AgentType,
   ctor: T,
 ) {
-  const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
+  const metadata = TypeMetadata.get(ctor.name);
 
-  if (Option.isNone(metadataOpt)) {
+  if (!metadata) {
     throw new Error(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const metadata = metadataOpt.val;
   const shared = new WasmRpxProxyHandlerShared(
     metadata,
     agentClassName,
@@ -87,13 +85,14 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 export function getPhantomRemoteClient<
   T extends new (phantomId: Uuid, ...args: any[]) => any,
 >(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
-  const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
-  if (Option.isNone(metadataOpt)) {
+  const metadata = TypeMetadata.get(ctor.name);
+
+  if (!metadata) {
     throw new Error(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const metadata = metadataOpt.val;
+
   const shared = new WasmRpxProxyHandlerShared(
     metadata,
     agentClassName,
@@ -112,13 +111,13 @@ export function getPhantomRemoteClient<
 export function getNewPhantomRemoteClient<
   T extends new (...args: any[]) => any,
 >(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
-  const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
-  if (Option.isNone(metadataOpt)) {
+  const metadata = TypeMetadata.get(ctor.name);
+
+  if (!metadata) {
     throw new Error(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const metadata = metadataOpt.val;
   const shared = new WasmRpxProxyHandlerShared(
     metadata,
     agentClassName,

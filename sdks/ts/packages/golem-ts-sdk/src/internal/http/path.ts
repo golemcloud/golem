@@ -22,10 +22,12 @@ export function parsePath(path: string): PathSegment[] {
 
   const segments = path.split('/').slice(1);
 
-  return segments.map(parseSegment);
+  return segments.map((segment, index) =>
+    parseSegment(segment, index === segments.length - 1),
+  );
 }
 
-function parseSegment(segment: string): PathSegment {
+function parseSegment(segment: string, isLast: boolean): PathSegment {
   if (!segment) {
     throw new Error(`Empty path segment ("//") is not allowed`);
   }
@@ -39,6 +41,22 @@ function parseSegment(segment: string): PathSegment {
 
     if (!name) {
       throw new Error(`Empty path variable "{}" is not allowed`);
+    }
+
+    if (name.startsWith('*')) {
+      if (!isLast) {
+        throw new Error(
+          `Remaining path variable "{${name}}" is only allowed as the last path segment`,
+        );
+      }
+
+      const variableName = name.slice(1);
+      rejectEmptyString(variableName, 'remaining path variable');
+
+      return {
+        tag: 'remaining-path-variable',
+        val: { variableName },
+      };
     }
 
     if (name === 'agent-type' || name === 'agent-version') {

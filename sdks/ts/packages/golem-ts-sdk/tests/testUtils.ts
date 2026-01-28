@@ -16,7 +16,7 @@ import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
   AnalysedType,
   NameTypePair,
-} from '../src/internal/mapping/types/AnalysedType';
+} from '../src/internal/mapping/types/analysedType';
 import { AgentClassName } from '../src';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
@@ -29,73 +29,89 @@ export const EphemeralAgentClassName = new AgentClassName('EphemeralAgent');
 export const SimpleHttpAgentClassName = new AgentClassName('SimpleHttpAgent');
 export const ComplexHttpAgentClassName = new AgentClassName('ComplexHttpAgent');
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTestInterfaceType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('TestInterfaceType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTestMapType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('MapType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTestObjectType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('ObjectType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTestListOfObjectType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('ListComplexType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getUnionType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('UnionType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getResultTypeExact(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('ResultTypeExactBoth');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getUnionComplexType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('UnionComplexType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTupleType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('TupleType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTupleComplexType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('TupleComplexType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getBooleanType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('boolean');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getStringType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('string');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getNumberType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('number');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getPromiseType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('PromiseType');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getUnionWithLiterals(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('UnionWithLiterals');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getUnionWithOnlyLiterals(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('UnionWithOnlyLiterals');
 }
 
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getRecordFieldsFromAnalysedType(
   analysedType: AnalysedType,
 ): NameTypePair[] | undefined {
   return analysedType.kind === 'record' ? analysedType.value.fields : undefined;
 }
 
-function fetchTypeFromBarAgent(
+export function fetchTypeFromBarAgent(
   typeNameInTestData: string,
 ): [AnalysedType, Type.Type] {
   const complexAgentMetadata = TypeMetadata.get(BarAgentClassName.value);

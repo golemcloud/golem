@@ -19,7 +19,6 @@ import { Result } from 'golem:rpc/types@0.2.2';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { AgentInitiator } from '../src/internal/agentInitiator';
-import * as Option from '../src/newTypes/option';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
@@ -45,7 +44,7 @@ describe('AgentType look up', () => {
 
     const lookupResult = AgentInitiatorRegistry.lookup(agentClassName.value);
 
-    expect(lookupResult).toEqual(Option.some(FailingAgentInitiator));
+    expect(lookupResult).toEqual(FailingAgentInitiator);
   });
 
   it('AgentTypeRegistry should return the agent-type when looking up by string representation of agentClassName', () => {
@@ -73,7 +72,7 @@ describe('AgentType look up', () => {
       new AgentClassName('AssistantAgent'),
     );
 
-    expect(agentType).toEqual(Option.some(AgentTypeSample));
+    expect(agentType).toEqual(AgentTypeSample);
   });
 
   it('AgentMethodMetadataRegistry should return method details when looking up by string representation of agentClassName', () => {
@@ -99,19 +98,16 @@ describe('AgentType look up', () => {
 
     const agentType = AgentTypeRegistry.get(agentClassName);
 
-    expect(Option.isSome(agentType)).toBe(true);
-    if (Option.isSome(agentType)) {
-      expect(agentType.val.mode).toEqual('ephemeral');
-    }
+    expect(agentType).toBeDefined;
+    expect(agentType!.mode).toEqual('ephemeral');
   });
 
   it('AgentType should have durable durability mode by default', () => {
     const agentClassName = new AgentClassName('FooAgent');
     const agentType = AgentTypeRegistry.get(agentClassName);
 
-    expect(Option.isSome(agentType)).toBe(true);
-    if (Option.isSome(agentType)) {
-      expect(agentType.val.mode).toEqual('durable');
-    }
+    expect(agentType).toBeDefined;
+
+    expect(agentType!.mode).toEqual('durable');
   });
 });

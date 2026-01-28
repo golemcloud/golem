@@ -14,11 +14,6 @@
 
 import { WitNode, WitValue } from 'golem:rpc/types@0.2.2';
 
-import * as Either from '../../../newTypes/either';
-import { AnalysedType } from '../types/AnalysedType';
-import { serializeDefaultTsValue } from './serializer';
-import { deserialize } from './deserializer';
-
 export type Value =
   | {
       kind: 'bool';

@@ -14,7 +14,6 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
-import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect } from 'vitest';
 import {
@@ -82,9 +81,7 @@ import {
   deserializeDataValue,
   serializeToDataValue,
 } from '../src/internal/mapping/values/dataValue';
-import { TextOrImage } from './sampleAgents';
-import { RegisteredAgentType } from 'golem:agent/host';
-import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
+import { TextOrImage } from './validAgents';
 
 test('BarAgent can be successfully initiated', () => {
   fc.assert(
@@ -215,10 +212,13 @@ test('BarAgent can be successfully initiated', () => {
           ],
         };
 
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
-          () => new Error('BarAgent not found in AgentInitiatorRegistry'),
+        const agentInitiator = AgentInitiatorRegistry.lookup(
+          BarAgentCustomClassName.value,
         );
+
+        if (!agentInitiator) {
+          throw new Error('BarAgent not found in AgentInitiatorRegistry');
+        }
 
         const result = agentInitiator.initiate(dataValue, { tag: 'anonymous' });
 
@@ -951,10 +951,11 @@ function initiateFooAgent(
     (error) => new Error(error),
   );
 
-  const agentInitiator = Option.getOrThrowWith(
-    AgentInitiatorRegistry.lookup(FooAgentClassName.value),
-    () => new Error('FooAgent not found in AgentInitiatorRegistry'),
-  );
+  const agentInitiator = AgentInitiatorRegistry.lookup(FooAgentClassName.value);
+
+  if (!agentInitiator) {
+    throw new Error('FooAgent not found in AgentInitiatorRegistry');
+  }
 
   const result = agentInitiator.initiate(constructorParams, {
     tag: 'anonymous',

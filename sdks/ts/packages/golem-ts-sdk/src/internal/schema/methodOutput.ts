@@ -14,7 +14,6 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import * as Option from '../../newTypes/option';
 import { DataSchema } from 'golem:agent/common';
 import * as WitType from '../mapping/types/WitType';
 import {
@@ -22,7 +21,7 @@ import {
   EmptyType,
   result,
   tuple,
-} from '../mapping/types/AnalysedType';
+} from '../mapping/types/analysedType';
 import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
@@ -34,6 +33,7 @@ import {
   TypeInfoInternal,
 } from '../typeInfoInternal';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
+import { Try } from '../try';
 
 export function resolveMethodReturnDataSchema(
   agentClassName: string,
@@ -66,8 +66,8 @@ export function resolveMethodReturnTypeInfo(
 
   if (Either.isLeft(voidOrResult)) return voidOrResult;
 
-  if (Option.isSome(voidOrResult.val)) {
-    return getTypeDetailsFromVoidLike(voidOrResult.val.val, returnType);
+  if (voidOrResult.val) {
+    return getTypeDetailsFromVoidLike(voidOrResult.val, returnType);
   }
 
   const unstructured = tryUnstructured(returnType);
@@ -103,16 +103,12 @@ type VoidLike =
   | { kind: 'void'; schema: DataSchema }
   | { kind: 'result-with-void'; analysed: AnalysedType };
 
-function tryVoidLike(
-  type: Type.Type,
-): Either.Either<Option.Option<VoidLike>, string> {
+function tryVoidLike(type: Type.Type): Try<VoidLike> {
   switch (type.kind) {
     case 'void':
     case 'undefined':
     case 'null':
-      return Either.right(
-        Option.some({ kind: 'void', schema: { tag: 'tuple', val: [] } }),
-      );
+      return Either.right({ kind: 'void', schema: { tag: 'tuple', val: [] } });
 
     case 'promise':
       return tryVoidLike(type.element);
@@ -121,7 +117,7 @@ function tryVoidLike(
       return tryResultWithVoid(type, type.originalTypeName, type.typeParams);
 
     default:
-      return Either.right(Option.none());
+      return Either.right(undefined);
   }
 }
 
@@ -129,28 +125,26 @@ function tryResultWithVoid(
   type: Type.Type,
   originalTypename: string | undefined,
   resultTypeParams: Type.Type[],
-): Either.Either<Option.Option<VoidLike>, string> {
+): Try<VoidLike> {
   const isResultType = type.name === 'Result' || originalTypename === 'Result';
-  if (!isResultType || !resultTypeParams) return Either.right(Option.none());
+  if (!isResultType || !resultTypeParams) return Either.right(undefined);
 
   const [okType, errType] = resultTypeParams;
   const okEmpty = tryEmptyType(okType);
   const errEmpty = tryEmptyType(errType);
 
-  if (!okEmpty && !errEmpty) return Either.right(Option.none());
+  if (!okEmpty && !errEmpty) return Either.right(undefined);
 
   const analysedOkEither = okEmpty
     ? Either.right<AnalysedType | undefined, string>(undefined)
-    : Either.flatMap(
-        WitType.fromTsType(okType, Option.none()),
-        ([, analysedOk]) =>
-          Either.right<AnalysedType | undefined, string>(analysedOk),
+    : Either.flatMap(WitType.fromTsType(okType, undefined), ([, analysedOk]) =>
+        Either.right<AnalysedType | undefined, string>(analysedOk),
       );
 
   const analysedErrEither = errEmpty
     ? Either.right<AnalysedType | undefined, string>(undefined)
     : Either.flatMap(
-        WitType.fromTsType(errType, Option.none()),
+        WitType.fromTsType(errType, undefined),
         ([_, analysedErr]) =>
           Either.right<AnalysedType | undefined, string>(analysedErr),
       );
@@ -164,12 +158,10 @@ function tryResultWithVoid(
         analysedErr ?? undefined,
       );
 
-      return Either.right(
-        Option.some({
-          kind: 'result-with-void',
-          analysed: analysedResult,
-        }),
-      );
+      return Either.right({
+        kind: 'result-with-void',
+        analysed: analysedResult,
+      });
     }),
   );
 }
@@ -243,7 +235,7 @@ function mapStandardTsType(
   type: Type.Type,
 ): Either.Either<TypeInfoInternal, string> {
   return Either.map(
-    WitType.fromTsType(type, Option.none()),
+    WitType.fromTsType(type, undefined),
     ([witType, analysed]) => ({
       tag: 'analysed',
       val: analysed,

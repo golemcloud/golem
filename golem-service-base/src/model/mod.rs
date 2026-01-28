@@ -15,6 +15,8 @@
 pub mod auth;
 pub mod plugin_registration;
 
+use derive_more::Display;
+use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePermissions, ComponentRevision, PluginInstallationAction,
@@ -343,5 +345,64 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
             }),
             None => Err(anyhow::anyhow!("Missing value")),
         }
+    }
+}
+
+/// Index type that can be safely converted to usize and conveniently sent over the wire due to fixed size.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display, BinaryCodec)]
+#[desert(transparent)]
+pub struct SafeIndex(u32);
+
+const _: () = {
+    assert!(
+        usize::BITS >= u32::BITS,
+        "SafeIndex is backed to a u32 but needs to be able to be converted to a usize losslessly"
+    );
+};
+
+impl SafeIndex {
+    pub fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for SafeIndex {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<SafeIndex> for u32 {
+    fn from(value: SafeIndex) -> Self {
+        value.0
+    }
+}
+
+impl From<SafeIndex> for usize {
+    fn from(value: SafeIndex) -> Self {
+        // Safe due to assertion above
+        value.get() as usize
+    }
+}
+
+impl TryFrom<usize> for SafeIndex {
+    type Error = String;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        Ok(SafeIndex::new(value.try_into().map_err(|_| {
+            format!("PathSegmentIndex overflow: {value}")
+        })?))
+    }
+}
+
+impl<T> std::ops::Index<SafeIndex> for [T] {
+    type Output = T;
+
+    fn index(&self, index: SafeIndex) -> &Self::Output {
+        &self[usize::from(index)]
     }
 }

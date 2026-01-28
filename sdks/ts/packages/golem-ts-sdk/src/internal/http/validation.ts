@@ -19,6 +19,60 @@ import {
   HttpEndpointDetails,
   HttpMountDetails,
 } from 'golem:agent/common';
+import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
+import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
+import { TypeInfoInternal } from '../typeInfoInternal';
+
+export function validateHttpMount(
+  agentClassName: string,
+  agentMount: HttpMountDetails,
+  agentConstructor: AgentConstructor,
+) {
+  const parametersForPrincipal =
+    AgentConstructorParamRegistry.getParametersForPrincipal(agentClassName);
+
+  const constructorInputParams =
+    collectConstructorInputParameterNames(agentConstructor);
+
+  validateNoCatchAllInHttpMount(agentClassName, agentMount);
+  validateConstructorParamsAreHttpSafe(agentClassName, agentConstructor);
+  validateMountVariablesAreNotPrincipal(agentMount, parametersForPrincipal);
+  validateMountVariablesExistInConstructor(agentMount, constructorInputParams);
+  validateConstructorVarsAreSatisfied(agentMount, constructorInputParams);
+}
+
+export function validateHttpEndpoint(
+  agentClassName: string,
+  agentMethod: AgentMethod,
+  httpMountDetails: HttpMountDetails | undefined,
+) {
+  if (agentMethod.httpEndpoint.length === 0) {
+    return;
+  }
+
+  validateMountIsDefinedForHttpEndpoint(
+    agentClassName,
+    agentMethod,
+    httpMountDetails,
+  );
+
+  const parameterTypes = AgentMethodParamRegistry.getParametersAndType(
+    agentClassName,
+    agentMethod.name,
+  );
+
+  const methodVarsWithoutAutoInjectedVariables = collectMethodInputVars(
+    agentMethod.inputSchema,
+  );
+
+  for (const endpoint of agentMethod.httpEndpoint) {
+    validateEndpointVariables(
+      endpoint,
+      methodVarsWithoutAutoInjectedVariables,
+      parameterTypes,
+    );
+  }
+}
 
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
@@ -32,124 +86,161 @@ export function rejectQueryParamsInPath(path: string, entityName: string) {
   }
 }
 
-// Ensures that all method input parameters are provided
-// by the HTTP endpoint, and that no foreign variables are used.
-export function validateHttpEndpoint(
+function collectMethodInputVars(schema: DataSchema): Set<string> {
+  return new Set(schema.val.map(([name]) => name));
+}
+
+function validateMountIsDefinedForHttpEndpoint(
   agentClassName: string,
   agentMethod: AgentMethod,
   httpMountDetails: HttpMountDetails | undefined,
 ) {
-  const methodVars = collectMethodInputVars(agentMethod.inputSchema);
-
   if (!httpMountDetails && agentMethod.httpEndpoint.length > 0) {
     throw new Error(
       `Agent method '${agentMethod.name}' of '${agentClassName}' defines HTTP endpoints ` +
         `but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.`,
     );
   }
+}
 
-  for (const endpoint of agentMethod.httpEndpoint) {
-    validateNoForeignEndpointVariables(endpoint, methodVars);
-    validateAllMethodParamsProvided(
-      endpoint,
-      methodVars,
-      agentClassName,
-      agentMethod.name,
+function validateNoCatchAllInHttpMount(
+  agentClassName: string,
+  agentMount: HttpMountDetails,
+) {
+  const catchAllSegment = agentMount.pathPrefix.find(
+    (segment) => segment.tag === 'remaining-path-variable',
+  );
+
+  if (catchAllSegment) {
+    throw new Error(
+      `HTTP mount for agent '${agentClassName}' cannot contain catch-all path variable '${catchAllSegment.val.variableName}'`,
     );
   }
 }
 
-// Ensures that all agent constructor variables are provided
-// by the HTTP mount, either via path variables or header variables.
-export function validateHttpMountWithConstructor(
-  agentMount: HttpMountDetails,
+function validateEndpointVariables(
+  endpoint: HttpEndpointDetails,
+  methodVars: Set<string>,
+  parameterTypes: Map<string, TypeInfoInternal>,
+) {
+  const principalParams = getPrincipalParams(parameterTypes);
+  const unstructuredBinaryParams = getUnstructuredBinaryParams(parameterTypes);
+
+  function validateVariable(
+    variableName: string,
+    location: 'header' | 'query' | 'path',
+    binaryError: string,
+  ) {
+    if (principalParams.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint ${location} variable '${variableName}' cannot be used for parameters of type 'Principal'`,
+      );
+    }
+
+    if (unstructuredBinaryParams.has(variableName)) {
+      throw new Error(binaryError);
+    }
+
+    if (!methodVars.has(variableName)) {
+      throw new Error(
+        `HTTP endpoint ${location} variable '${variableName}' is not defined in method input parameters.`,
+      );
+    }
+  }
+
+  for (const { variableName } of endpoint.headerVars) {
+    validateVariable(
+      variableName,
+      'header',
+      `HTTP endpoint header variable '${variableName}' cannot be used for method parameters of type 'UnstructuredBinary'`,
+    );
+  }
+
+  for (const { variableName } of endpoint.queryVars) {
+    validateVariable(
+      variableName,
+      'query',
+      `HTTP endpoint query variable '${variableName}' cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
+    );
+  }
+
+  for (const segment of endpoint.pathSuffix) {
+    if (
+      segment.tag === 'remaining-path-variable' ||
+      segment.tag === 'path-variable'
+    ) {
+      const name = segment.val.variableName;
+
+      validateVariable(
+        name,
+        'path',
+        `HTTP endpoint path variable "${name}" cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
+      );
+    }
+  }
+}
+
+function getPrincipalParams(
+  parameterTypes: Map<string, TypeInfoInternal>,
+): Set<string> {
+  const methodVarsOfPrincipal = new Set<string>();
+
+  for (const [varName, typeInfo] of parameterTypes.entries()) {
+    if (typeInfo.tag === 'principal') {
+      methodVarsOfPrincipal.add(varName);
+    }
+  }
+
+  return methodVarsOfPrincipal;
+}
+
+function getUnstructuredBinaryParams(
+  parameterTypes: Map<string, TypeInfoInternal>,
+): Set<string> {
+  const methodVarsOfPrincipal = new Set<string>();
+
+  for (const [varName, typeInfo] of parameterTypes.entries()) {
+    if (typeInfo.tag === 'unstructured-binary') {
+      methodVarsOfPrincipal.add(varName);
+    }
+  }
+
+  return methodVarsOfPrincipal;
+}
+
+function collectConstructorInputParameterNames(
+  agentConstructor: AgentConstructor,
+): Set<string> {
+  return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
+}
+
+function validateConstructorParamsAreHttpSafe(
+  agentClassName: string,
   agentConstructor: AgentConstructor,
 ) {
-  const constructorVars = collectConstructorVars(agentConstructor);
-
-  validateMountVariablesExistInConstructor(agentMount, constructorVars);
-  validateConstructorVarsAreSatisfied(agentMount, constructorVars);
+  for (const [paramName, paramSchema] of agentConstructor.inputSchema.val) {
+    if (paramSchema.tag === 'unstructured-binary') {
+      throw new Error(
+        `HTTP mount path variable '${paramName}' cannot be used for constructor parameters of type 'UnstructuredBinary'`,
+      );
+    }
+  }
 }
 
-function collectMethodInputVars(schema: DataSchema): Set<string> {
-  return new Set(schema.val.map(([name]) => name));
-}
-
-function validateAllMethodParamsProvided(
-  endpoint: HttpEndpointDetails,
-  methodVars: Set<string>,
-  agentClassName: string,
-  agentMethodName: string,
+function validateMountVariablesAreNotPrincipal(
+  agentMount: HttpMountDetails,
+  parametersForPrincipal: Set<string>,
 ) {
-  const providedVars = collectHttpEndpointVariables(endpoint);
-
-  for (const methodVar of methodVars) {
-    if (!providedVars.has(methodVar)) {
-      throw new Error(
-        `Method parameter "${methodVar}" in method ${agentMethodName} of ${agentClassName} is not provided by HTTP endpoint (path, query, or headers).`,
-      );
-    }
-  }
-}
-
-function collectHttpEndpointVariables(
-  endpoint: HttpEndpointDetails,
-): Set<string> {
-  const vars = new Set<string>();
-
-  for (const { variableName } of endpoint.headerVars) {
-    vars.add(variableName);
-  }
-
-  for (const { variableName } of endpoint.queryVars) {
-    vars.add(variableName);
-  }
-
-  for (const segment of endpoint.pathSuffix) {
+  for (const segment of agentMount.pathPrefix) {
     if (segment.tag === 'path-variable') {
-      vars.add(segment.val.variableName);
-    }
-  }
-
-  return vars;
-}
-
-function validateNoForeignEndpointVariables(
-  endpoint: HttpEndpointDetails,
-  methodVars: Set<string>,
-) {
-  for (const { variableName } of endpoint.headerVars) {
-    if (!methodVars.has(variableName)) {
-      throw new Error(
-        `HTTP endpoint header variable "${variableName}" is not defined in method input parameters.`,
-      );
-    }
-  }
-
-  for (const { variableName } of endpoint.queryVars) {
-    if (!methodVars.has(variableName)) {
-      throw new Error(
-        `HTTP endpoint query variable "${variableName}" is not defined in method input parameters.`,
-      );
-    }
-  }
-
-  for (const segment of endpoint.pathSuffix) {
-    if (segment.tag === 'path-variable') {
-      const name = segment.val.variableName;
-      if (!methodVars.has(name)) {
+      const variableName = segment.val.variableName;
+      if (parametersForPrincipal.has(variableName)) {
         throw new Error(
-          `HTTP endpoint path variable "${name}" is not defined in method input parameters.`,
+          `HTTP mount path variable '${variableName}' cannot be used for constructor parameters of type 'Principal'`,
         );
       }
     }
   }
-}
-
-function collectConstructorVars(
-  agentConstructor: AgentConstructor,
-): Set<string> {
-  return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
 }
 
 function validateMountVariablesExistInConstructor(
@@ -162,7 +253,7 @@ function validateMountVariablesExistInConstructor(
 
       if (!constructorVars.has(variableName)) {
         throw new Error(
-          `HTTP mount path variable "${variableName}" ` +
+          `HTTP mount path variable '${variableName}' ` +
             `(in path segment ${segmentIndex}) ` +
             `is not defined in the agent constructor.`,
         );
@@ -180,7 +271,7 @@ function validateConstructorVarsAreSatisfied(
   for (const constructorVar of constructorVars) {
     if (!providedVars.has(constructorVar)) {
       throw new Error(
-        `Agent constructor variable "${constructorVar}" ` +
+        `Agent constructor variable '${constructorVar}' ` +
           `is not provided by the HTTP mount path.`,
       );
     }

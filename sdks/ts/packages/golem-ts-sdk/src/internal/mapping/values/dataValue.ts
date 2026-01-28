@@ -35,7 +35,6 @@ import {
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
-import * as Option from '../../../newTypes/option';
 
 import * as Value from '../values/Value';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
@@ -396,7 +395,8 @@ function serializeMultimodalToDataValue(
       const type = param.type;
 
       const valOpt = getValFieldFromTaggedObject(elem, name);
-      if (Option.isNone(valOpt)) {
+
+      if (valOpt.tag === 'not-found') {
         continue;
       }
 
@@ -493,12 +493,12 @@ export function createSingleElementTupleDataValue(
 function getValFieldFromTaggedObject(
   value: any,
   tagValue: string,
-): Option.Option<any> {
+): { tag: 'found'; val: any } | { tag: 'not-found' } {
   if (typeof value === 'object' && value !== null) {
     if ('tag' in value && 'val' in value && value['tag'] === tagValue) {
-      return Option.some(value['val']);
+      return { tag: 'found', val: value['val'] };
     }
   }
 
-  return Option.none();
+  return { tag: 'not-found' };
 }
