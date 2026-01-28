@@ -29,7 +29,7 @@ let GlobalVariantTermIdx = 0;
 // If the union has a name (Ex: type MyUnion = string | number), then we simply suffix the actual name of the union
 // with the actual index (termIdx argument below) of the variant
 // That is, `MyUnion` is converted to `variant { my-union-0(string), my-union-1(number)`
-export function generateVariantCaseName(originalUnionName: string | undefined, termIdx: number): string {
+export function generateVariantTermName(originalUnionName: string | undefined, termIdx: number): string {
 
   // if the union by itself does not have a name, generate a generic one using `case` prefix
   if (!originalUnionName) {

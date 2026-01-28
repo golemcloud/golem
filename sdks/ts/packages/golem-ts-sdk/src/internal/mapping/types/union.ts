@@ -15,7 +15,7 @@
 import { buildJSONFromType, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import { TypeMappingScope } from './scope';
-import { generateVariantCaseName } from './name';
+import { generateVariantTermName } from './name';
 import { isKebabCase, isNumberString, trimQuotes } from './stringFormat';
 import {
   tryTaggedUnion,
@@ -235,7 +235,7 @@ export function handleUnion(ctx : UnionCtx, mapper: TypeMapper): Either.Either<A
     possibleTypes.push({
       // Note that for untagged-unions, all elements are anonymus
       // and we generate the name using the original union type name and field index
-      name: generateVariantCaseName(type.name, fieldIdx++),
+      name: generateVariantTermName(type.name, fieldIdx++),
       typ: result.val,
     });
   }
