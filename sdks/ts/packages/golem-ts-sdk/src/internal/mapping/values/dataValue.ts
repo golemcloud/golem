@@ -394,8 +394,9 @@ function serializeMultimodalToDataValue(
       const name = param.name;
       const type = param.type;
 
-      const valOpt: any | undefined = getValFieldFromTaggedObject(elem, name);
-      if (!valOpt) {
+      const valOpt = getValFieldFromTaggedObject(elem, name);
+
+      if (valOpt.tag === 'not-found') {
         continue;
       }
 
@@ -492,12 +493,12 @@ export function createSingleElementTupleDataValue(
 function getValFieldFromTaggedObject(
   value: any,
   tagValue: string,
-): any | undefined {
+): { tag: 'found'; val: any } | { tag: 'not-found' } {
   if (typeof value === 'object' && value !== null) {
     if ('tag' in value && 'val' in value && value['tag'] === tagValue) {
-      return value['val'];
+      return { tag: 'found', val: value['val'] };
     }
   }
 
-  return null;
+  return { tag: 'not-found' };
 }
