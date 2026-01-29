@@ -12,7 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export type TypeMappingScope = {
+
+// Represents the scope of the type that's being mapped.
+// Example:
+// For the following code:
+//
+// ```ts
+// interface MyInterface { a?: MyData }
+// ```
+//
+// During type mapping of `MyInterface`, the mapping of `MyData` will come into picture,
+// and at this point, the scope of mapping is as follows:
+//
+// ```ts
+//   { scope: 'interface', name: 'MyData', parameterName: 'a', hasQuestionMark: true  }
+// ```
+export type TypeScope = {
   scope: 'interface' | 'object' | 'method' | 'constructor';
   name: string;
   parameterName: string
@@ -23,14 +38,14 @@ export type TypeMappingScope = {
   name: string;
 };
 
-export const TypeMappingScope = {
-  isOptional(scope: TypeMappingScope) {
+export const TypeScope = {
+  isQuestionMarkOptional(scope: TypeScope) {
     return (scope.scope === 'interface' ||
       scope.scope === 'object' ||
       scope.scope === 'method' || scope.scope === 'constructor') && scope.hasQuestionMark;
   },
 
-  paramName(scope: TypeMappingScope): string | undefined {
+  paramName(scope: TypeScope): string | undefined {
     if (scope.scope === 'interface' ||
       scope.scope === 'object' ||
       scope.scope === 'method' || scope.scope === 'constructor') {
@@ -41,7 +56,7 @@ export const TypeMappingScope = {
 
   },
 
-  interface(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
+  interface(name: string, parameterName: string, hasQuestionMark: boolean): TypeScope {
     return {
       scope: 'interface',
       name,
@@ -50,7 +65,7 @@ export const TypeMappingScope = {
     };
   },
 
-  object(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
+  object(name: string, parameterName: string, hasQuestionMark: boolean): TypeScope {
     return {
       scope: 'object',
       name,
@@ -59,7 +74,7 @@ export const TypeMappingScope = {
     };
   },
 
-  method(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
+  method(name: string, parameterName: string, hasQuestionMark: boolean): TypeScope {
     return {
       scope: 'method',
       name,
@@ -68,7 +83,7 @@ export const TypeMappingScope = {
     };
   },
 
-  constructor(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
+  constructor(name: string, parameterName: string, hasQuestionMark: boolean): TypeScope {
     return {
       scope: 'constructor',
       name: name,
@@ -78,7 +93,7 @@ export const TypeMappingScope = {
 
   },
 
-  others(name: string): TypeMappingScope {
+  others(name: string): TypeScope {
     return {
       scope: 'others',
       name,

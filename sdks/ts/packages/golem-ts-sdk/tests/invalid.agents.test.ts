@@ -17,7 +17,7 @@
 import { describe, expect } from 'vitest';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as AnalysedType from '../src/internal/mapping/types/analysedType';
-import { TypeMappingScope } from '../src/internal/mapping/types/scope';
+import { TypeScope } from '../src/internal/mapping/types/scope';
 import * as Either from '../src/newTypes/either';
 import { agent, AgentId, BaseAgent } from '../src';
 import { typeMapper } from '../src/internal/mapping/types/typeMapperImpl';
@@ -336,7 +336,7 @@ function getAnalysedTypeInFun1(
   const type = fun1Params?.get(parameterName)!;
   return typeMapper(
     type,
-    TypeMappingScope.method('fun1', parameterName, type.optional),
+    TypeScope.method('fun1', parameterName, type.optional),
   );
 }
 

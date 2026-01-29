@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// This is more or less inspired from `effect` library
+// The following usage pattern is also inspired from `effect` library
+// ```ts
+// import * as Either from ../newTypes/either.ts
+// Either.right("foo")
+// ```
 export type Either<T, E> = { tag: 'right'; val: T } | { tag: 'left'; val: E };
 
 export function right<T, E = never>(val: T): Either<T, E> {
@@ -27,10 +33,6 @@ export function left<T = never, E = unknown>(val: E): Either<T, E> {
 
 export function map<T, E, U>(r: Either<T, E>, f: (t: T) => U): Either<U, E> {
   return r.tag === 'right' ? right(f(r.val)) : r;
-}
-
-export function getRight<T, E>(r: Either<T, E>): T | null {
-  return r.tag === 'right' ? r.val : null;
 }
 
 export function flatMap<T, E, U>(

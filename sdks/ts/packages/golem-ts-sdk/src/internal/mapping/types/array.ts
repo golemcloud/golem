@@ -21,29 +21,32 @@ import { TypeMapper } from './typeMapper';
 type TsType = CoreType.Type;
 type ArrayCtx = Ctx & { type: Extract<TsType, { kind: "array" }> };
 
+const TYPED_ARRAYS: Record<string, () => AnalysedType> = {
+  Float64Array: () => list(undefined, 'f64', undefined, f64()),
+  Float32Array: () => list(undefined, 'f32', undefined, f32()),
+  Int8Array:    () => list(undefined, 'i8',  undefined, s8()),
+  Uint8Array:   () => list(undefined, 'u8',  undefined, u8()),
+  Int16Array:   () => list(undefined, 'i16', undefined, s16()),
+  Uint16Array:  () => list(undefined, 'u16', undefined, u16()),
+  Int32Array:   () => list(undefined, 'i32', undefined, s32()),
+  Uint32Array:  () => list(undefined, 'u32', undefined, u32()),
+  BigInt64Array:  () => list(undefined, 'big-i64', undefined, s64(true)),
+  BigUint64Array: () => list(undefined, 'big-u64', undefined, u64(true)),
+};
+
 export function handleArray({ type }: ArrayCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const name = type.name;
 
-  switch (name) {
-    case "Float64Array": return Either.right(list(undefined, 'f64', undefined, f64()));
-    case "Float32Array": return Either.right(list(undefined, 'f32', undefined, f32()));
-    case "Int8Array":    return Either.right(list(undefined, 'i8', undefined, s8()));
-    case "Uint8Array":   return Either.right(list(undefined,  'u8', undefined, u8()));
-    case "Int16Array":   return Either.right(list(undefined,  'i16', undefined, s16()));
-    case "Uint16Array":  return Either.right(list(undefined,  'u16',  undefined, u16()));
-    case "Int32Array":   return Either.right(list(undefined, 'i32', undefined, s32()));
-    case "Uint32Array":  return Either.right(list(undefined, 'u32',  undefined, u32()));
-    case "BigInt64Array":  return Either.right(list(undefined, 'big-i64', undefined, s64(true)));
-    case "BigUint64Array": return Either.right(list(undefined,'big-u64', undefined, u64(true,)));
+  if (name) {
+    const typed = TYPED_ARRAYS[name];
+    if (typed) {
+      return Either.right(typed());
+    }
   }
 
-  const arrayElementType =
-    (type.kind === "array") ? type.element : undefined;
+  const arrayElementType = type.element;
 
-  if (!arrayElementType) {
-    return Either.left("Unable to determine the array element type");
-  }
-
+  // For an array type, we don't care about the scope of this element type, hence undefined
   const elemType = mapper(arrayElementType, undefined);
 
   return Either.map(elemType, (inner) => list(type.name, undefined, undefined, inner));
