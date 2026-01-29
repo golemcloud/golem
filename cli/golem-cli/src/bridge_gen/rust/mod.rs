@@ -15,14 +15,14 @@
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
-use crate::bridge_gen::BridgeGenerator;
+use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
     AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
 use golem_wasm::analysis::AnalysedType;
-use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use std::collections::{BTreeMap, HashMap};
@@ -1988,10 +1988,10 @@ impl RustBridgeGenerator {
     }
 
     fn package_name(&self) -> String {
-        format!("{}_client", self.agent_type.type_name.0.to_snake_case())
+        self.package_crate_name().to_snake_case()
     }
 
     fn package_crate_name(&self) -> String {
-        self.package_name().to_kebab_case()
+        bridge_client_directory_name(&self.agent_type.type_name)
     }
 }

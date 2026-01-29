@@ -362,31 +362,33 @@ pub mod api {
 
         fn handle_failure<E: ApiErrorDetails + Debug>(mut self, error: &mut E) {
             if let Some(start) = self.start_time.take() {
-                let elapsed = start.elapsed();
+                self.span.in_scope(|| {
+                    let elapsed = start.elapsed();
 
-                if error.is_expected() {
-                    // expected error, no need to display cause.
-                    // TODO: make this nicer
-                    error.take_cause();
-                    info!(
-                        elapsed_ms = elapsed.as_millis(),
-                        error = format!("{:?}", error),
-                        "API request failed",
-                    );
-                } else {
-                    error!(
-                        elapsed_ms = elapsed.as_millis(),
-                        error = format!("{:?}", error),
-                        "API request failed",
-                    );
-                }
+                    if error.is_expected() {
+                        // expected error, no need to display cause.
+                        // TODO: make this nicer
+                        error.take_cause();
+                        info!(
+                            elapsed_ms = elapsed.as_millis(),
+                            error = format!("{:?}", error),
+                            "API request failed",
+                        );
+                    } else {
+                        error!(
+                            elapsed_ms = elapsed.as_millis(),
+                            error = format!("{:?}", error),
+                            "API request failed",
+                        );
+                    }
 
-                record_api_failure(
-                    self.api_name,
-                    self.api_type,
-                    error.trace_error_kind(),
-                    elapsed,
-                );
+                    record_api_failure(
+                        self.api_name,
+                        self.api_type,
+                        error.trace_error_kind(),
+                        elapsed,
+                    );
+                })
             }
         }
     }

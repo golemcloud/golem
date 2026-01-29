@@ -31,6 +31,7 @@ use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
+use crate::model::repl::ReplLanguage;
 use crate::model::worker::{AgentUpdateMode, WorkerName};
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -626,6 +627,9 @@ pub enum GolemCliSubcommand {
     },
     /// Start Rib REPL for a selected component
     Repl {
+        /// Select the language for the REPL, defaults to the component's language
+        #[arg(long)]
+        language: Option<ReplLanguage>,
         #[command(flatten)]
         component_name: OptionalComponentName,
         /// Optional component revision to use, defaults to latest deployed component revision
