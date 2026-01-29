@@ -51,10 +51,7 @@ pub struct BuildContext<'a> {
 }
 
 impl<'a> BuildContext<'a> {
-    pub fn new(
-        application_context: &'a mut ApplicationContext,
-        build_config: &'a BuildConfig,
-    ) -> Self {
+    pub fn new(application_context: &'a ApplicationContext, build_config: &'a BuildConfig) -> Self {
         Self {
             application_context,
             build_config,
@@ -234,7 +231,7 @@ impl ApplicationContext {
         self.wit.read().await
     }
 
-    pub fn new_repl_bridge_sdk_target(&mut self, language: GuestLanguage) -> CustomBridgeSdkTarget {
+    pub fn new_repl_bridge_sdk_target(&self, language: GuestLanguage) -> CustomBridgeSdkTarget {
         let repl_root_bridge_sdk_dir = self.application.repl_root_bridge_sdk_dir(language);
         CustomBridgeSdkTarget {
             agent_type_names: Default::default(),
@@ -512,19 +509,19 @@ impl ApplicationContext {
             .collect()
     }
 
-    pub async fn build(&mut self, build_config: &BuildConfig) -> anyhow::Result<()> {
+    pub async fn build(&self, build_config: &BuildConfig) -> anyhow::Result<()> {
         build_app(&BuildContext::new(self, build_config)).await
     }
 
     pub async fn custom_command(
-        &mut self,
+        &self,
         build_config: &BuildConfig,
         command_name: &str,
     ) -> Result<(), CustomCommandError> {
         execute_custom_command(&BuildContext::new(self, build_config), command_name).await
     }
 
-    pub fn clean(&mut self, build_config: &BuildConfig, mode: CleanMode) -> anyhow::Result<()> {
+    pub fn clean(&self, build_config: &BuildConfig, mode: CleanMode) -> anyhow::Result<()> {
         clean_app(&BuildContext::new(self, build_config), mode)
     }
 

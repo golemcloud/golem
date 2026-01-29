@@ -270,8 +270,8 @@ impl AppCommandHandler {
                 .with_skip_up_to_date_checks(build_args.force_build.force_build);
 
             if let Some(repl_bridge_sdk_target) = build_args.repl_bridge_sdk_target {
-                let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-                let app_ctx = app_ctx.some_or_err_mut()?;
+                let app_ctx = self.ctx.app_context_lock().await;
+                let app_ctx = app_ctx.some_or_err()?;
                 build_config = build_config.with_custom_bridge_sdk_target(
                     app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
                 );
@@ -334,8 +334,8 @@ impl AppCommandHandler {
 
         let command = command[0].strip_prefix(":").unwrap_or(&command[0]);
 
-        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        let app_ctx = app_ctx.some_or_err_mut()?;
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
         if let Err(error) = app_ctx.custom_command(&BuildConfig::new(), command).await {
             match error {
                 CustomCommandError::CommandNotFound => {
@@ -581,8 +581,8 @@ impl AppCommandHandler {
             );
 
             if let Some(repl_bridge_sdk_target) = config.repl_bridge_sdk_target {
-                let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-                let app_ctx = app_ctx.some_or_err_mut()?;
+                let app_ctx = self.ctx.app_context_lock().await;
+                let app_ctx = app_ctx.some_or_err()?;
                 build_config = build_config.with_custom_bridge_sdk_target(
                     app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
                 );
@@ -1652,8 +1652,9 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        app_ctx.some_or_err_mut()?.build(build_config).await
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        app_ctx.build(build_config).await
     }
 
     pub async fn clean(
@@ -1666,8 +1667,8 @@ impl AppCommandHandler {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
 
-        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        let app_ctx = app_ctx.some_or_err_mut()?;
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
 
         let all_selected =
             app_ctx.selected_component_names().len() == app_ctx.application().component_count();

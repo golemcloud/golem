@@ -131,8 +131,8 @@ impl ReplHandler {
             .await?;
 
         let (repl_root_dir, repl_root_bridge_sdk_dir, repl_bridge_sdk_target) = {
-            let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-            let app_ctx = app_ctx.some_or_err_mut()?;
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
 
             let repl_root_dir = app_ctx.application().repl_root_dir(language);
             fs::create_dir_all(&repl_root_dir)?;
