@@ -55,6 +55,7 @@ use golem_common::model::deployment::{
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
@@ -286,6 +287,7 @@ impl AppCommandHandler {
         revision: Option<DeploymentRevision>,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
+        repl_bridge_sdk_target: Option<GuestLanguage>,
     ) -> anyhow::Result<()> {
         if let Some(version) = version {
             self.deploy_by_version(version, plan, deploy_args).await
@@ -298,6 +300,7 @@ impl AppCommandHandler {
                 approve_staging_steps,
                 force_build: Some(force_build),
                 deploy_args,
+                repl_bridge_sdk_target,
             })
             .await
         }
@@ -500,6 +503,17 @@ impl AppCommandHandler {
                 log_skipping_up_to_date("planning, no changes detected");
             } else {
                 log_skipping_up_to_date("deployment, no changes detected");
+
+                if let Some(current_deployment) =
+                    environment.server_environment.current_deployment.as_ref()
+                {
+                    self.apply_deploy_args(
+                        &environment.environment_id,
+                        current_deployment.deployment_revision,
+                        &deploy_args,
+                    )
+                    .await?;
+                }
             }
 
             return Ok(());
@@ -528,13 +542,23 @@ impl AppCommandHandler {
 
         let current_deployment = self.rollback_environment(&rollback_diff).await?;
 
-        self.apply_deploy_args(&deploy_args, &current_deployment)
-            .await?;
+        self.apply_deploy_args(
+            &current_deployment.environment_id,
+            current_deployment.revision,
+            &deploy_args,
+        )
+        .await?;
 
         Ok(())
     }
 
     pub async fn deploy(&self, config: DeployConfig) -> anyhow::Result<()> {
+        if let Some(repl_bridge_sdk_target) = config.repl_bridge_sdk_target {
+            let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+            let app_ctx = app_ctx.some_or_err_mut()?;
+            app_ctx.set_repl_bridge_sdk_target(repl_bridge_sdk_target);
+        }
+
         let environment = self
             .ctx
             .environment_handler()
@@ -543,10 +567,12 @@ impl AppCommandHandler {
 
         self.build(
             vec![],
-            config.force_build.as_ref().map(|force_build| BuildArgs {
-                step: vec![],
-                force_build: force_build.clone(),
-            }),
+            // TODO:
+            //config.force_build.as_ref().map(|force_build| BuildArgs {
+            //    step: vec![],
+            //    force_build: force_build.clone(),
+            //}),
+            None,
             &ApplicationComponentSelectMode::All,
         )
         .await?;
@@ -556,6 +582,17 @@ impl AppCommandHandler {
                 log_skipping_up_to_date("planning, no changes detected");
             } else {
                 log_skipping_up_to_date("deployment, no changes detected");
+
+                if let Some(current_deployment) =
+                    environment.server_environment.current_deployment.as_ref()
+                {
+                    self.apply_deploy_args(
+                        &environment.environment_id,
+                        current_deployment.deployment_revision,
+                        &config.deploy_args,
+                    )
+                    .await?;
+                }
             }
 
             return Ok(());
@@ -592,8 +629,12 @@ impl AppCommandHandler {
             .apply_staged_changes_to_environment(&deploy_diff)
             .await?;
 
-        self.apply_deploy_args(&config.deploy_args, &current_deployment)
-            .await?;
+        self.apply_deploy_args(
+            &current_deployment.environment_id,
+            current_deployment.revision,
+            &config.deploy_args,
+        )
+        .await?;
 
         Ok(())
     }
@@ -1469,8 +1510,9 @@ impl AppCommandHandler {
 
     async fn apply_deploy_args(
         &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
         deploy_args: &DeployArgs,
-        current_deployment: &CurrentDeployment,
     ) -> anyhow::Result<()> {
         if !deploy_args.is_any_set(self.ctx.deploy_args()) {
             return Ok(());
@@ -1483,10 +1525,7 @@ impl AppCommandHandler {
             .golem_clients()
             .await?
             .environment
-            .get_deployment_components(
-                &current_deployment.environment_id.0,
-                current_deployment.revision.into(),
-            )
+            .get_deployment_components(&environment_id.0, deployment_revision.into())
             .await?
             .values;
 

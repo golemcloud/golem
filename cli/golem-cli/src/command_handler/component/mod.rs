@@ -738,6 +738,7 @@ impl ComponentCommandHandler {
                     approve_staging_steps: false,
                     force_build: None,
                     deploy_args: deploy_args.cloned().unwrap_or_else(DeployArgs::none),
+                    repl_bridge_sdk_target: None,
                 })
                 .await?;
         }
@@ -791,6 +792,7 @@ impl ComponentCommandHandler {
                             approve_staging_steps: false,
                             force_build: None,
                             deploy_args: DeployArgs::none(),
+                            repl_bridge_sdk_target: None,
                         })
                         .await?;
 

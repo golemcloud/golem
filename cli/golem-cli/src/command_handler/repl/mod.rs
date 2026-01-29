@@ -12,34 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bridge_gen::bridge_client_directory_name;
 use crate::command::shared_args::DeployArgs;
 use crate::command_handler::repl::rib::CliRibRepl;
+use crate::command_handler::repl::rust::RustRepl;
+use crate::command_handler::repl::typescript::TypeScriptRepl;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
 use crate::model::app::{ApplicationComponentSelectMode, CustomBridgeSdkTarget};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
-use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::repl::ReplLanguage;
-use crate::process::{CommandExt, ExitStatusExt};
+use crate::model::environment::EnvironmentResolveMode;
+use crate::model::repl::{BridgeReplArgs, ReplLanguage};
 use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
 use anyhow::{anyhow, bail};
-use camino::Utf8PathBuf;
-use golem_common::base_model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::GuestLanguage;
-use indoc::{formatdoc, indoc};
-use itertools::Itertools;
-use serde_json::json;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::process::Command;
 
 mod rib;
+mod rust;
+mod typescript;
 
 #[derive(Clone)]
 pub struct ReplHandler {
@@ -137,13 +133,15 @@ impl ReplHandler {
         let (repl_root_dir, repl_root_bridge_sdk_dir) = {
             let mut app_ctx = self.ctx.app_context_lock_mut().await?;
             let app_ctx = app_ctx.some_or_err_mut()?;
+
             let repl_root_dir = app_ctx.application.repl_root_dir(language);
-            let repl_root_bridge_sdk_dir = app_ctx.application.repl_root_bridge_sdk_dir(language);
-            app_ctx.custom_repl_bridge_sdk_target = Some(CustomBridgeSdkTarget {
-                agent_type_names: Default::default(),
-                target_language: Some(language),
-                output_dir: Some(repl_root_bridge_sdk_dir.clone()),
-            });
+            fs::create_dir_all(&repl_root_dir)?;
+            let repl_root_dir = repl_root_dir.canonicalize()?;
+
+            let repl_root_bridge_sdk_dir = app_ctx.set_repl_bridge_sdk_target(language);
+            fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
+            let repl_root_bridge_sdk_dir = repl_root_bridge_sdk_dir.canonicalize()?;
+
             (repl_root_dir, repl_root_bridge_sdk_dir)
         };
 
@@ -158,217 +156,19 @@ impl ReplHandler {
             app_ctx.wit.get_all_extracted_agent_type_names().await
         };
 
-        match language {
-            GuestLanguage::Rust => {
-                self.rust_repl(
-                    environment,
-                    script,
-                    stream_logs,
-                    repl_root_dir,
-                    repl_root_bridge_sdk_dir,
-                    agent_type_names,
-                )
-                .await?
-            }
-            GuestLanguage::TypeScript => {
-                self.ts_repl(
-                    environment,
-                    script,
-                    stream_logs,
-                    repl_root_dir,
-                    repl_root_bridge_sdk_dir,
-                    agent_type_names,
-                )
-                .await?
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn ts_repl(
-        &self,
-        environment: ResolvedEnvironmentIdentity,
-        script: Option<String>,
-        stream_logs: bool,
-        repl_root_dir: PathBuf,
-        repl_root_bridge_sdk_dir: PathBuf,
-        agent_type_names: Vec<AgentTypeName>,
-    ) -> anyhow::Result<()> {
-        let repl_root_dir = repl_root_dir.canonicalize()?;
-        let repl_root_bridge_sdk_dir = repl_root_bridge_sdk_dir.canonicalize()?;
-        let relative_bridge_sdk_unix_path = repl_root_bridge_sdk_dir
-            .strip_prefix(&repl_root_dir)?
-            .display()
-            .to_string()
-            .replace("\\", "/");
-
-        let workspaces = agent_type_names
-            .iter()
-            .map(|agent_type_name| {
-                format!(
-                    "{}/{}",
-                    relative_bridge_sdk_unix_path,
-                    bridge_client_directory_name(agent_type_name)
-                )
-            })
-            .collect::<Vec<_>>();
-
-        let dependencies = agent_type_names
-            .iter()
-            .map(|agent_type_name| (bridge_client_directory_name(agent_type_name), "*"))
-            .collect::<BTreeMap<_, _>>();
-
-        let package_json = json!({
-          "name": "repl",
-          "type": "module",
-          "private": true,
-          "workspaces": workspaces,
-          "dependencies": dependencies,
-          "devDependencies": {
-            "@golem/golem-ts-repl": self.ctx.template_sdk_overrides().ts_package_version_or_path("golem-ts-repl"),
-            "tsx": "^4.7",
-            "typescript": "^5.9"
-          }
-        });
-
-        fs::write_str(
-            repl_root_dir.join("package.json"),
-            serde_json::to_string_pretty(&package_json)?,
-        )?;
-
-        let tsconfig_json = json!({
-          "compilerOptions": {
-            "composite": true,
-            "declaration": true,
-            "esModuleInterop": true,
-            "forceConsistentCasingInFileNames": true,
-            "module": "ES2022",
-            "moduleResolution": "nodenext",
-            "skipLibCheck": true,
-            "sourceMap": true,
-            "strict": true,
-            "target": "ES2022"
-          },
-          "include": [
-            format!("{}/ts/**/*.ts", repl_root_bridge_sdk_dir.display())
-          ]
-        });
-
-        fs::write_str(
-            repl_root_dir.join("tsconfig.json"),
-            serde_json::to_string_pretty(&tsconfig_json)?,
-        )?;
-
-        let agents_config = agent_type_names
-            .iter()
-            .map(|agent_type_name| {
-                formatdoc! {"
-                    '{agent_type_name}': {{
-                      typeName: '{agent_type_name}',
-                      clientPackageName: '{client_package_name}',
-                      package: await import('{client_package_name}'),
-                    }}",
-                    client_package_name = bridge_client_directory_name(agent_type_name)
-                }
-                .lines()
-                .enumerate()
-                .map(|(idx, l)| {
-                    if idx == 0 {
-                        l.to_string()
-                    } else {
-                        format!("    {l}")
-                    }
-                })
-                .join("\n")
-            })
-            .collect::<Vec<_>>()
-            .join(",\n");
-
-        fs::write_str(
-            repl_root_dir.join("repl.ts"),
-            formatdoc! {"
-                    import 'tsx/patch-repl';
-                    const {{ Repl }} = await import('@golem/golem-ts-repl');
-
-                    const repl = new Repl({{
-                      agents: {{
-                        {agents_config}
-                      }}
-                    }});
-
-                    await repl.run();
-                ",
-            },
-        )?;
-
-        Command::new("npm")
-            .arg("install")
-            .current_dir(&repl_root_dir)
-            .stream_and_wait_for_status("TS REPL - npm install")
-            .await?
-            .check_exit_status()?;
-
-        let repl_env_vars = {
-            let mut env = HashMap::new();
-            env.insert(
-                "GOLEM_REPL_APPLICATION",
-                environment.application_name.0.clone(),
-            );
-            env.insert(
-                "GOLEM_REPL_ENVIRONMENT",
-                environment.environment_name.0.clone(),
-            );
-            match self
-                .ctx
-                .manifest_environment()
-                .and_then(|e| e.environment.server.as_ref())
-            {
-                Some(Server::Builtin(BuiltinServer::Local)) | None => {
-                    env.insert("GOLEM_REPL_SERVER_KIND", "local".to_string());
-                }
-                Some(Server::Builtin(BuiltinServer::Cloud)) => {
-                    env.insert("GOLEM_REPL_SERVER_KIND", "cloud".to_string());
-                    env.insert(
-                        "GOLEM_REPL_SERVER_TOKEN",
-                        self.ctx.auth_token().await?.into_secret(),
-                    );
-                }
-                Some(Server::Custom(custom)) => {
-                    env.insert("GOLEM_REPL_SERVER_KIND", "custom".to_string());
-                    env.insert("GOLEM_REPL_SERVER_CUSTOM_URL", custom.url.to_string());
-                    env.insert(
-                        "GOLEM_REPL_SERVER_TOKEN",
-                        self.ctx.auth_token().await?.into_secret(),
-                    );
-                }
-            }
-            env
+        let args = BridgeReplArgs {
+            environment,
+            script,
+            stream_logs,
+            repl_root_dir,
+            repl_root_bridge_sdk_dir,
+            agent_type_names,
         };
 
-        Command::new("npx")
-            .args(&["tsx", "repl.ts"])
-            .current_dir(&repl_root_dir)
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .stdin(std::process::Stdio::inherit())
-            .envs(repl_env_vars)
-            .spawn()?
-            .wait()
-            .await?
-            .check_exit_status()
-    }
-
-    async fn rust_repl(
-        &self,
-        environment: ResolvedEnvironmentIdentity,
-        script: Option<String>,
-        stream_logs: bool,
-        repl_root_dir: PathBuf,
-        repl_root_bridge_sdk_dir: PathBuf,
-        agent_type_names: Vec<AgentTypeName>,
-    ) -> anyhow::Result<()> {
-        todo!("Rust REPL is not implemented yet")
+        match language {
+            GuestLanguage::Rust => RustRepl::new(self.ctx.clone()).run(args).await,
+            GuestLanguage::TypeScript => TypeScriptRepl::new(self.ctx.clone()).run(args).await,
+        }
     }
 
     async fn rib_repl(
@@ -462,5 +262,48 @@ impl ReplHandler {
         )
         .run(script)
         .await
+    }
+
+    async fn repl_server_env_vars(&self) -> anyhow::Result<HashMap<String, String>> {
+        let Some(environment) = self.ctx.manifest_environment() else {
+            bail!("REPL requires a manifest environment to be used.");
+        };
+
+        let mut env_vars = HashMap::new();
+
+        env_vars.insert(
+            "GOLEM_REPL_APPLICATION".to_string(),
+            environment.application_name.0.clone(),
+        );
+        env_vars.insert(
+            "GOLEM_REPL_ENVIRONMENT".to_string(),
+            environment.environment_name.0.clone(),
+        );
+
+        match environment.environment.server.as_ref() {
+            Some(Server::Builtin(BuiltinServer::Local)) | None => {
+                env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "local".to_string());
+            }
+            Some(Server::Builtin(BuiltinServer::Cloud)) => {
+                env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "cloud".to_string());
+                env_vars.insert(
+                    "GOLEM_REPL_SERVER_TOKEN".to_string(),
+                    self.ctx.auth_token().await?.into_secret(),
+                );
+            }
+            Some(Server::Custom(custom)) => {
+                env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "custom".to_string());
+                env_vars.insert(
+                    "GOLEM_REPL_SERVER_CUSTOM_URL".to_string(),
+                    custom.url.to_string(),
+                );
+                env_vars.insert(
+                    "GOLEM_REPL_SERVER_TOKEN".to_string(),
+                    self.ctx.auth_token().await?.into_secret(),
+                );
+            }
+        }
+
+        Ok(env_vars)
     }
 }

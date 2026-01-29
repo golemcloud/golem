@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::environment::ResolvedEnvironmentIdentity;
+use golem_common::base_model::agent::AgentTypeName;
 use golem_templates::model::GuestLanguage;
 use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -70,4 +73,14 @@ impl FromStr for ReplLanguage {
             format!("Unknown guest language: {s}. Expected one of {all}")
         })
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct BridgeReplArgs {
+    pub environment: ResolvedEnvironmentIdentity,
+    pub script: Option<String>,
+    pub stream_logs: bool,
+    pub repl_root_dir: PathBuf,
+    pub repl_root_bridge_sdk_dir: PathBuf,
+    pub agent_type_names: Vec<AgentTypeName>,
 }

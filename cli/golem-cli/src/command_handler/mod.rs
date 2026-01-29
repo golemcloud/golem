@@ -319,6 +319,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 revision,
                 force_build,
                 deploy_args,
+                repl_bridge_sdk_target,
             } => {
                 self.ctx
                     .app_handler()
@@ -330,6 +331,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         revision,
                         force_build,
                         deploy_args,
+                        repl_bridge_sdk_target
                     )
                     .await
             }

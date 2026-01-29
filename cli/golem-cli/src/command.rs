@@ -667,6 +667,9 @@ pub enum GolemCliSubcommand {
         force_build: ForceBuildArg,
         #[command(flatten)]
         deploy_args: DeployArgs,
+        // Internal flag for REPL reload
+        #[arg(long, hide = true)]
+        repl_bridge_sdk_target: Option<GuestLanguage>,
     },
     /// Clean all components in the application or by selection
     Clean {

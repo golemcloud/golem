@@ -228,6 +228,7 @@ pub enum AppBuildStep {
     Link,
     AddMetadata,
     GenBridge,
+    GenBridgeRepl,
 }
 
 #[derive(Debug, Clone)]

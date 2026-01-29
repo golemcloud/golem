@@ -18,6 +18,9 @@ import {
   ConfigureClient,
 } from './config';
 import * as repl from 'node:repl';
+import * as process from 'node:process';
+import * as shellQuote from 'shell-quote';
+import * as childProcess from 'node:child_process';
 
 export class Repl {
   private readonly config: Config;
@@ -32,6 +35,33 @@ export class Repl {
     const r = repl.start({
       useColors: true,
       useGlobal: true,
+      preview: false,
+    });
+
+    r.defineCommand('deploy', {
+      help: 'Deploy the current Golem Application',
+      async action(raw_args: string) {
+        this.pause();
+
+        const parsed_args = shellQuote.parse((raw_args ?? '').trim());
+
+        let args = parsed_args.filter(
+          (t): t is string => typeof t === 'string' && t.length > 0,
+        );
+        args = [
+          'deploy',
+          '--environment',
+          client_config.environment,
+          '--repl-bridge-sdk-target',
+          'ts',
+          ...args,
+        ];
+
+        const child = childProcess.spawn('golem', args, { stdio: 'inherit' });
+        await new Promise((resolve) => child.once('exit', resolve));
+
+        process.exit(75);
+      },
     });
 
     for (let agentTypeName in this.config.agents) {

@@ -23,7 +23,7 @@ pub async fn gen_bridge(ctx: &ApplicationContext) -> anyhow::Result<()> {
             None => collect_manifest_targets(ctx).await?,
         };
 
-        if let Some(target) = ctx.custom_repl_bridge_sdk_target.as_ref() {
+        if let Some(target) = ctx.repl_bridge_sdk_target.as_ref() {
             targets.extend(collect_custom_targets(ctx, target).await?);
         }
 

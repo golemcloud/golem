@@ -42,7 +42,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct CliRibRepl {
-    cli_ctx: Arc<Context>,
+    ctx: Arc<Context>,
     stream_logs: Arc<AtomicBool>,
     dependencies: ReplComponentDependencies,
     component: ComponentDto,
@@ -56,7 +56,7 @@ impl CliRibRepl {
         component: ComponentDto,
     ) -> Arc<Self> {
         Arc::new(Self {
-            cli_ctx,
+            ctx: cli_ctx,
             stream_logs: Arc::new(AtomicBool::new(stream_logs)),
             dependencies,
             component,
@@ -70,7 +70,7 @@ impl CliRibRepl {
         command_registry.register(commands::Logs::new(self.stream_logs.clone()));
 
         let mut repl = RibRepl::bootstrap(RibReplConfig {
-            history_file: Some(self.cli_ctx.rib_repl_history_file().await?),
+            history_file: Some(self.ctx.rib_repl_history_file().await?),
             dependency_manager: self.clone(),
             worker_function_invoke: self.clone(),
             printer: None,
@@ -82,12 +82,9 @@ impl CliRibRepl {
 
         if script_input.is_none() {
             logln("");
-            self.cli_ctx
-                .log_handler()
-                .log_view(&ComponentReplStartedView(ComponentView::new_rib_style(
-                    self.cli_ctx.show_sensitive(),
-                    self.component.clone(),
-                )));
+            self.ctx.log_handler().log_view(&ComponentReplStartedView(
+                ComponentView::new_rib_style(self.ctx.show_sensitive(), self.component.clone()),
+            ));
             logln("");
         }
 
@@ -95,10 +92,10 @@ impl CliRibRepl {
             Some(script) => {
                 let result = repl.execute(&script).await;
                 match &result {
-                    Ok(rib_result) => match self.cli_ctx.format() {
+                    Ok(rib_result) => match self.ctx.format() {
                         Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
                             let result = rib_result.as_ref().and_then(|r| r.get_val());
-                            self.cli_ctx.log_handler().log_serializable(&result);
+                            self.ctx.log_handler().log_serializable(&result);
                         }
                         Format::Text => {
                             repl.print_execute_result(&result);
@@ -170,13 +167,13 @@ impl WorkerFunctionInvoke for CliRibRepl {
         let component_name = ComponentName(component_name.to_string());
 
         let environment = self
-            .cli_ctx
+            .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
         let component = self
-            .cli_ctx
+            .ctx
             .component_handler()
             .resolve_component(
                 &environment,
@@ -206,7 +203,7 @@ impl WorkerFunctionInvoke for CliRibRepl {
         };
 
         let result = self
-            .cli_ctx
+            .ctx
             .worker_handler()
             .invoke_worker(
                 &component,

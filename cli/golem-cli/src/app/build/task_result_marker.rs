@@ -387,6 +387,24 @@ impl TaskResultMarkerHashSource for ExtractAgentTypeMarkerHash<'_> {
     }
 }
 
+pub struct GenerateBridgeReplMarkerHash {
+    pub language: GuestLanguage,
+}
+
+impl TaskResultMarkerHashSource for GenerateBridgeReplMarkerHash {
+    fn kind() -> &'static str {
+        "GenerateBridgeReplMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(self.language.to_string()))
+    }
+}
+
 pub struct TaskResultMarker {
     kind: &'static str,
     id: String,

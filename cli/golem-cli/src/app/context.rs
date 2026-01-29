@@ -17,6 +17,8 @@ use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::remote_components::RemoteComponents;
+use crate::command::shared_args::LanguageArg;
+use crate::fs;
 use crate::fs::{compile_and_collect_globs, PathExtra};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
@@ -37,6 +39,7 @@ use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentName;
+use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -55,7 +58,7 @@ pub struct ApplicationContext {
     selected_component_names: BTreeSet<ComponentName>,
     remote_components: RemoteComponents,
     pub tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
-    pub custom_repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
+    pub repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
 }
 
 pub struct ToolsWithEnsuredCommonDeps {
@@ -163,6 +166,16 @@ impl ApplicationContext {
         Ok(Some(ctx))
     }
 
+    pub fn set_repl_bridge_sdk_target(&mut self, language: GuestLanguage) -> PathBuf {
+        let repl_root_bridge_sdk_dir = self.application.repl_root_bridge_sdk_dir(language);
+        self.repl_bridge_sdk_target = Some(CustomBridgeSdkTarget {
+            agent_type_names: Default::default(),
+            target_language: Some(language),
+            output_dir: Some(repl_root_bridge_sdk_dir.clone()),
+        });
+        repl_root_bridge_sdk_dir
+    }
+
     async fn create_context(
         app_and_calling_working_dir: ValidatedResult<(Application, PathBuf)>,
         config: ApplicationConfig,
@@ -202,7 +215,7 @@ impl ApplicationContext {
                         offline,
                     ),
                     tools_with_ensured_common_deps,
-                    custom_repl_bridge_sdk_target: None,
+                    repl_bridge_sdk_target: None,
                 };
                 ValidatedResult::Ok(ctx)
             } else {

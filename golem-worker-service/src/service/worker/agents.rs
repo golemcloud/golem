@@ -19,7 +19,7 @@ use golem_common::model::agent::{AgentError, AgentId, DataValue, UntypedDataValu
 use golem_common::model::WorkerId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value};
+use golem_wasm::{FromValue, IntoValueAndType, Value};
 use std::sync::Arc;
 
 pub struct AgentsService {
