@@ -42,12 +42,7 @@ export class AgentWithPrincipalAutoInjection2 extends BaseAgent {
     super();
   }
 
-  foo(
-    name: string,
-    num: number,
-    principal: Principal,
-    text: string,
-  ): Promise<string> {
+  foo(name: string, num: number, principal: Principal, text: string): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -81,12 +76,7 @@ export class AgentWithPrincipalAutoInjection4 extends BaseAgent {
     super();
   }
 
-  foo(
-    name: string,
-    num: number,
-    principal: Principal,
-    text: string | null,
-  ): Promise<string> {
+  foo(name: string, num: number, principal: Principal, text: string | null): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -118,36 +108,19 @@ export class AgentWithPrincipalAutoInjection5 extends BaseAgent {
     return Promise.resolve(name);
   }
 
-  fooWithoutPrincipal2(
-    name: string,
-    num: number,
-    text: string,
-  ): Promise<string> {
+  fooWithoutPrincipal2(name: string, num: number, text: string): Promise<string> {
     return Promise.resolve(name);
   }
 
-  fooWithoutPrincipal3(
-    name: string,
-    num: number,
-    text?: string,
-  ): Promise<string> {
+  fooWithoutPrincipal3(name: string, num: number, text?: string): Promise<string> {
     return Promise.resolve(name);
   }
 
-  fooWithoutPrincipal4(
-    name: string,
-    num: number,
-    text1?: string,
-    text2?: string,
-  ): Promise<string> {
+  fooWithoutPrincipal4(name: string, num: number, text1?: string, text2?: string): Promise<string> {
     return Promise.resolve(name);
   }
 
-  fooWithoutPrincipal5(
-    name: string,
-    num: number,
-    text: string | undefined,
-  ): Promise<string> {
+  fooWithoutPrincipal5(name: string, num: number, text: string | undefined): Promise<string> {
     return Promise.resolve(name);
   }
 }
@@ -166,85 +139,64 @@ export class RemoteAgentWithPrincipal extends BaseAgent {
     await AgentWithPrincipalAutoInjection1.get(name).foo(name);
 
     // Handles constructor and method with `Principal` in between other parameters
-    await AgentWithPrincipalAutoInjection2.get(name, 1, 'required').foo(
-      name,
-      1,
-      'required',
-    );
+    await AgentWithPrincipalAutoInjection2.get(name, 1, 'required').foo(name, 1, 'required');
 
     // Handles constructor and method with `Principal` in between other parameters that are optional with `?`
-    await AgentWithPrincipalAutoInjection3.get(name, 1, 'optional').foo(
-      name,
-      1,
-      'optional',
-    );
+    await AgentWithPrincipalAutoInjection3.get(name, 1, 'optional').foo(name, 1, 'optional');
     await AgentWithPrincipalAutoInjection3.get(name, 1).foo(name, 1);
 
     // Handles constructor and method with `Principal` in between other parameters that can be null
-    await AgentWithPrincipalAutoInjection4.get(name, 1, null).foo(
-      name,
-      1,
-      null,
-    );
-    await AgentWithPrincipalAutoInjection4.get(name, 1, 'not-null').foo(
-      name,
-      1,
-      'no-null',
-    );
+    await AgentWithPrincipalAutoInjection4.get(name, 1, null).foo(name, 1, null);
+    await AgentWithPrincipalAutoInjection4.get(name, 1, 'not-null').foo(name, 1, 'no-null');
 
     // Handles constructor and method with `Principal` in between other parameters that can be undefined
-    await AgentWithPrincipalAutoInjection5.get(name, 1, undefined).foo(
-      name,
-      1,
-      undefined,
-    );
+    await AgentWithPrincipalAutoInjection5.get(name, 1, undefined).foo(name, 1, undefined);
     await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').foo(
       name,
       1,
       'not-undefined',
     );
 
-    await AgentWithPrincipalAutoInjection5.get(
-      name,
+    await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').fooWithoutPrincipal1(
+      'name',
       1,
-      'not-undefined',
-    ).fooWithoutPrincipal1('name', 1);
+    );
 
-    await AgentWithPrincipalAutoInjection5.get(
-      name,
+    await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').fooWithoutPrincipal2(
+      'foo',
       1,
-      'not-undefined',
-    ).fooWithoutPrincipal2('foo', 1, 'bar');
+      'bar',
+    );
 
-    await AgentWithPrincipalAutoInjection5.get(
-      name,
+    await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').fooWithoutPrincipal3(
+      'foo',
       1,
-      'not-undefined',
-    ).fooWithoutPrincipal3('foo', 1);
+    );
 
-    await AgentWithPrincipalAutoInjection5.get(
-      name,
+    await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').fooWithoutPrincipal3(
+      'foo',
       1,
-      'not-undefined',
-    ).fooWithoutPrincipal3('foo', 1, 'bar');
+      'bar',
+    );
 
-    await AgentWithPrincipalAutoInjection5.get(
-      name,
+    await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').fooWithoutPrincipal4(
+      'foo',
       1,
-      'not-undefined',
-    ).fooWithoutPrincipal4('foo', 1, undefined);
+      undefined,
+    );
 
-    await AgentWithPrincipalAutoInjection5.get(
-      name,
+    await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').fooWithoutPrincipal4(
+      'foo',
       1,
-      'not-undefined',
-    ).fooWithoutPrincipal4('foo', 1, 'bar', 'baz');
+      'bar',
+      'baz',
+    );
 
-    await AgentWithPrincipalAutoInjection5.get(
-      name,
+    await AgentWithPrincipalAutoInjection5.get(name, 1, 'not-undefined').fooWithoutPrincipal5(
+      'foo',
       1,
-      'not-undefined',
-    ).fooWithoutPrincipal5('foo', 1, 'bar');
+      'bar',
+    );
 
     return 'finished';
   }

@@ -29,10 +29,7 @@ class AgentInitiatorRegistryImpl {
     this.registry = new Map();
   }
 
-  register(
-    agentTypeName: AgentClassName,
-    agentInitiator: AgentInitiator,
-  ): void {
+  register(agentTypeName: AgentClassName, agentInitiator: AgentInitiator): void {
     this.registry.set(agentTypeName.value, agentInitiator);
   }
 
@@ -53,5 +50,4 @@ class AgentInitiatorRegistryImpl {
   }
 }
 
-export const AgentInitiatorRegistry: AgentInitiatorRegistryImpl =
-  new AgentInitiatorRegistryImpl();
+export const AgentInitiatorRegistry: AgentInitiatorRegistryImpl = new AgentInitiatorRegistryImpl();

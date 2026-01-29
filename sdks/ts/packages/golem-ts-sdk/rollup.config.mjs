@@ -57,14 +57,10 @@ export default defineConfig([
         writeBundle() {
           const typesDir = path.resolve('types');
 
-          const files = fs
-            .readdirSync(typesDir)
-            .filter((f) => f.endsWith('.d.ts'));
+          const files = fs.readdirSync(typesDir).filter((f) => f.endsWith('.d.ts'));
 
           const refLines =
-            files
-              .map((f) => `/// <reference path="../types/${f}" />`)
-              .join('\n') + '\n';
+            files.map((f) => `/// <reference path="../types/${f}" />`).join('\n') + '\n';
 
           const mainDtsPath = path.resolve('dist/index.d.mts');
           const mainContent = fs.readFileSync(mainDtsPath, 'utf-8');

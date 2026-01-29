@@ -22,10 +22,7 @@ interface AgentConstructorParamMetadata {
  * Singleton registry for agent constructor parameter metadata.
  */
 class AgentConstructorParamRegistryImpl {
-  private readonly registry: Map<
-    string,
-    Map<string, AgentConstructorParamMetadata>
-  >;
+  private readonly registry: Map<string, Map<string, AgentConstructorParamMetadata>>;
 
   constructor() {
     this.registry = new Map();
@@ -41,9 +38,7 @@ class AgentConstructorParamRegistryImpl {
     }
   }
 
-  get(
-    agentClassName: string,
-  ): Map<string, AgentConstructorParamMetadata> | undefined {
+  get(agentClassName: string): Map<string, AgentConstructorParamMetadata> | undefined {
     return this.registry.get(agentClassName);
   }
 
@@ -61,19 +56,12 @@ class AgentConstructorParamRegistryImpl {
     return principalParams;
   }
 
-  getParamType(
-    agentClassName: string,
-    paramName: string,
-  ): TypeInfoInternal | undefined {
+  getParamType(agentClassName: string, paramName: string): TypeInfoInternal | undefined {
     const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(paramName)?.typeInfo;
   }
 
-  setType(
-    agentClassName: string,
-    paramName: string,
-    typeInfo: TypeInfoInternal,
-  ): void {
+  setType(agentClassName: string, paramName: string, typeInfo: TypeInfoInternal): void {
     this.ensureMeta(agentClassName, paramName);
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(paramName)!.typeInfo = typeInfo;

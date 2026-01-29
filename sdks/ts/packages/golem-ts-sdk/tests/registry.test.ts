@@ -27,9 +27,7 @@ describe('AgentType look up', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
 
     const FailingAgentInitiator: AgentInitiator = {
-      initiate: (
-        _constructorParams: DataValue,
-      ): Result<ResolvedAgent, AgentError> => {
+      initiate: (_constructorParams: DataValue): Result<ResolvedAgent, AgentError> => {
         return {
           tag: 'err',
           val: {
@@ -68,9 +66,7 @@ describe('AgentType look up', () => {
 
     AgentTypeRegistry.register(agentClassName, AgentTypeSample);
 
-    const agentType = AgentTypeRegistry.get(
-      new AgentClassName('AssistantAgent'),
-    );
+    const agentType = AgentTypeRegistry.get(new AgentClassName('AssistantAgent'));
 
     expect(agentType).toEqual(AgentTypeSample);
   });

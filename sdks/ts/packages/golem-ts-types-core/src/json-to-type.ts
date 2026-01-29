@@ -180,9 +180,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       const typeArgs = (json.typeArgs ?? []).map(buildTypeFromJSON);
 
       if (typeArgs.length !== 2) {
-        throw new Error(
-          `Map type must have exactly 2 type arguments, got ${typeArgs.length}`,
-        );
+        throw new Error(`Map type must have exactly 2 type arguments, got ${typeArgs.length}`);
       }
 
       return {

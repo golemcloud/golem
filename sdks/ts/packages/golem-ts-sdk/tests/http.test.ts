@@ -16,15 +16,8 @@ import { describe, it } from 'vitest';
 import { getHttpMountDetails } from '../src/internal/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/internal/http/query';
-import {
-  AgentMethod,
-  HttpEndpointDetails,
-  HttpMountDetails,
-} from 'golem:agent/common';
-import {
-  validateHttpEndpoint,
-  validateHttpMount,
-} from '../src/internal/http/validation';
+import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
+import { validateHttpEndpoint, validateHttpMount } from '../src/internal/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
   it('returns undefined when mount is not provided', () => {
@@ -88,9 +81,7 @@ describe('getHttpMountDetails – auth and cors', () => {
     const result = getHttpMountDetails(opts)!;
 
     expect(result.authDetails).toEqual({ required: true });
-    expect(result.corsOptions.allowedPatterns).toEqual([
-      'https://app.acme.com',
-    ]);
+    expect(result.corsOptions.allowedPatterns).toEqual(['https://app.acme.com']);
   });
 });
 
@@ -130,15 +121,11 @@ describe('getHttpMountDetails – validation errors', () => {
   });
 
   it('rejects mount without leading slash', () => {
-    expect(() => getHttpMountDetails({ mount: 'chats' })).toThrow(
-      'HTTP mount must start with "/"',
-    );
+    expect(() => getHttpMountDetails({ mount: 'chats' })).toThrow('HTTP mount must start with "/"');
   });
 
   it('rejects empty path segments', () => {
-    expect(() => getHttpMountDetails({ mount: '/chats//foo' })).toThrow(
-      'Empty path segment',
-    );
+    expect(() => getHttpMountDetails({ mount: '/chats//foo' })).toThrow('Empty path segment');
   });
 
   it('rejects unclosed path variable', () => {
@@ -185,18 +172,14 @@ describe('validateHttpMountWithConstructor', () => {
     const agentMount = mount(['chatId', 'userId']);
     const agentConstructor = constructorVars('chatId', 'userId');
 
-    expect(() =>
-      validateHttpMount('Foo', agentMount, agentConstructor),
-    ).not.toThrow();
+    expect(() => validateHttpMount('Foo', agentMount, agentConstructor)).not.toThrow();
   });
 
   it('fails when a constructor variable is not provided by the mount', () => {
     const agentMount = mount(['chatId']);
     const agentConstructor = constructorVars('chatId', 'tenant');
 
-    expect(() =>
-      validateHttpMount('Foo', agentMount, agentConstructor),
-    ).toThrow(
+    expect(() => validateHttpMount('Foo', agentMount, agentConstructor)).toThrow(
       "Agent constructor variable 'tenant' is not provided by the HTTP mount path.",
     );
   });
@@ -205,9 +188,7 @@ describe('validateHttpMountWithConstructor', () => {
     const agentMount = mount(['chatId']);
     const agentConstructor = constructorVars();
 
-    expect(() =>
-      validateHttpMount('Foo', agentMount, agentConstructor),
-    ).toThrow(
+    expect(() => validateHttpMount('Foo', agentMount, agentConstructor)).toThrow(
       "HTTP mount path variable 'chatId' (in path segment 0) is not defined in the agent constructor.",
     );
   });
@@ -235,20 +216,14 @@ describe('validateHttpEndpoint', () => {
     } as any;
   }
 
-  function method(
-    vars: string[],
-    endpoints: HttpEndpointDetails[],
-  ): AgentMethod {
+  function method(vars: string[], endpoints: HttpEndpointDetails[]): AgentMethod {
     return {
       name: 'doThing',
       description: '',
       promptHint: '',
       inputSchema: {
         tag: 'tuple',
-        val: vars.map((v) => [
-          v,
-          { tag: 'component-model', val: { nodes: [] } },
-        ]),
+        val: vars.map((v) => [v, { tag: 'component-model', val: { nodes: [] } }]),
       },
       outputSchema: { tag: 'tuple', val: [] },
       httpEndpoint: endpoints,
@@ -268,9 +243,7 @@ describe('validateHttpEndpoint', () => {
   it('passes when all method parameters are provided via path', () => {
     const agentMethod = method(['id', 'event'], [endpoint(['id', 'event'])]);
 
-    expect(() =>
-      validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
-    ).not.toThrow();
+    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).not.toThrow();
   });
 
   it('passes when method parameters are split across path, query, and headers', () => {
@@ -279,17 +252,13 @@ describe('validateHttpEndpoint', () => {
       [endpoint(['id'], ['limit'], ['tenant'])],
     );
 
-    expect(() =>
-      validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
-    ).not.toThrow();
+    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).not.toThrow();
   });
 
   it('fails when endpoint path variable is not part of method input', () => {
     const agentMethod = method([], [endpoint(['id'])]);
 
-    expect(() =>
-      validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
-    ).toThrow(
+    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
       "HTTP endpoint path variable 'id' is not defined in method input parameters.",
     );
   });
@@ -297,9 +266,7 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint query variable is not part of method input', () => {
     const agentMethod = method([], [endpoint([], ['limit'])]);
 
-    expect(() =>
-      validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
-    ).toThrow(
+    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
       "HTTP endpoint query variable 'limit' is not defined in method input parameters.",
     );
   });
@@ -307,9 +274,7 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint header variable is not part of method input', () => {
     const agentMethod = method([], [endpoint([], [], ['tenant'])]);
 
-    expect(() =>
-      validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
-    ).toThrow(
+    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
       "HTTP endpoint header variable 'tenant' is not defined in method input parameters.",
     );
   });
@@ -323,9 +288,7 @@ describe('validateHttpEndpoint', () => {
       ],
     );
 
-    expect(() =>
-      validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
-    ).toThrow(
+    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
       "HTTP endpoint path variable 'foo' is not defined in method input parameters.",
     );
   });
@@ -333,9 +296,7 @@ describe('validateHttpEndpoint', () => {
   it('endpoints with no mount details', () => {
     const agentMethod = method(['id'], [endpoint(['id'])]);
 
-    expect(() =>
-      validateHttpEndpoint(agentName, agentMethod, undefined),
-    ).toThrow(
+    expect(() => validateHttpEndpoint(agentName, agentMethod, undefined)).toThrow(
       "Agent method 'doThing' of 'TestAgent' defines HTTP endpoints but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.",
     );
   });
