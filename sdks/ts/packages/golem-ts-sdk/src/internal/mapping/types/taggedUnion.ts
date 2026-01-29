@@ -20,209 +20,141 @@ import { Try } from '../../try';
 
 export type TsType = Type.Type;
 
-//  { tag: 'a', val: string }
-//  is { tagLiteralName: 'a', valueType: ['val', string] }
 export type TaggedTypeMetadata = {
-  tagLiteralName: string
-  valueType: [string, Type.Type] | undefined,
-}
+  tagLiteralName: string;
+  valueType: [string, Type.Type] | undefined;
+};
 
-export type UserDefinedResultType = {okType?: [string, TsType], errType?: [string, TsType]};
+export type UserDefinedResultType = {
+  okType?: [string, TsType];
+  errType?: [string, TsType];
+};
 
-export type TaggedUnion = {tag: 'custom', val: TaggedTypeMetadata[] } | {tag: 'result', val: UserDefinedResultType }
+export type TaggedUnion =
+  | { tag: 'custom'; val: TaggedTypeMetadata[] }
+  | { tag: 'result'; val: UserDefinedResultType };
 
 export const TaggedUnion = {
   getTagNames(tu: TaggedUnion): string[] {
-    if (tu.tag === 'custom') {
-      return tu.val.map(t => t.tagLiteralName);
-    } else {
-      return ['ok', 'err'];
-    }
+    return tu.tag === 'custom'
+      ? tu.val.map(t => t.tagLiteralName)
+      : ['ok', 'err'];
   },
 
   getTaggedTypes(tu: TaggedUnion): TaggedTypeMetadata[] {
-    if (tu.tag === 'custom') {
-      return tu.val;
-    } else {
-      const taggedTypes: TaggedTypeMetadata[] = [];
-      if (tu.val.okType) {
-        taggedTypes.push({
-          tagLiteralName: 'ok',
-          valueType: tu.val.okType ? tu.val.okType : undefined
-        });
-      } else {
-        taggedTypes.push({
-          tagLiteralName: 'ok',
-          valueType: undefined
-        });
-      }
-      if (tu.val.errType) {
-        taggedTypes.push({
-          tagLiteralName: 'err',
-          valueType: tu.val.errType ? tu.val.errType : undefined
-        });
-      } else {
-        taggedTypes.push({
-          tagLiteralName: 'err',
-          valueType: undefined
-        });
-      }
-      return taggedTypes;
-    }
+    if (tu.tag === 'custom') return tu.val;
+
+    return [
+      { tagLiteralName: 'ok', valueType: tu.val.okType ?? undefined },
+      { tagLiteralName: 'err', valueType: tu.val.errType ?? undefined },
+    ];
   },
 
-  isResult(tu: TaggedUnion): tu is {tag: 'result', val: UserDefinedResultType} {
+  isResult(tu: TaggedUnion): tu is { tag: 'result'; val: UserDefinedResultType } {
     return tu.tag === 'result';
-  }
-}
+  },
+};
 
-
-export function tryTaggedUnion(
-  unionTypes: TsType[]
-): Try<TaggedUnion> {
-
+export function tryTaggedUnion(unionTypes: TsType[]): Try<TaggedUnion> {
   const taggedTypeMetadata: TaggedTypeMetadata[] = [];
 
   for (const ut of unionTypes) {
-    if (ut.kind === "object") {
+    if (ut.kind !== "object" || ut.properties.length > 2) {
+      return Either.right(undefined);
+    }
 
-      if (ut.properties.length > 2) {
-        return Either.right(undefined);
-      }
+    const tag = ut.properties.find(p => p.getName() === "tag");
+    if (!tag) return Either.right(undefined);
 
-      const tag =
-        ut.properties.find((type) => type.getName() === "tag");
+    const tagType = tag.getTypeAtLocation(tag.getValueDeclarationOrThrow());
+    if (tagType.kind !== "literal" || !tagType.literalValue) {
+      return Either.right(undefined);
+    }
 
-      if (!tag) {
-        return Either.right(undefined);
-      }
+    const tagValueTrimmed = trimQuotes(tagType.literalValue);
 
-      const tagType =
-        tag.getTypeAtLocation(tag.getValueDeclarationOrThrow());
-
-      if (tagType.kind !== "literal" || !tagType.literalValue) {
-        return Either.right(undefined);
-      }
-
-      const tagValue = tagType.literalValue;
-
-      const tagValueTrimmed = trimQuotes(tagValue);
-
-      const nextSymbol =
-        ut.properties.find((type) => type.getName() !== "tag");
-
-      if (!nextSymbol){
-        taggedTypeMetadata.push({
-          tagLiteralName: tagValueTrimmed,
-          valueType: undefined
-        });
-      } else {
-        const nodes = nextSymbol.getDeclarations();
-        const node = nodes[0];
-
-        const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
-
-        propType.optional = node.hasQuestionToken();
-
-        taggedTypeMetadata.push({
-          tagLiteralName: tagValueTrimmed,
-          valueType: [nextSymbol.getName(), propType]
-        });
-      }
+    const nextSymbol = ut.properties.find(p => p.getName() !== "tag");
+    if (!nextSymbol) {
+      taggedTypeMetadata.push({ tagLiteralName: tagValueTrimmed, valueType: undefined });
     } else {
-      return Either.right(undefined)
+      const node = nextSymbol.getDeclarations()[0];
+      const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
+      propType.optional = node.hasQuestionToken();
+
+      taggedTypeMetadata.push({
+        tagLiteralName: tagValueTrimmed,
+        valueType: [nextSymbol.getName(), propType],
+      });
     }
   }
 
-  const eitherType = tryResultType(taggedTypeMetadata);
+  const eitherResultType = tryResultType(taggedTypeMetadata);
+  if (Either.isLeft(eitherResultType)) return eitherResultType;
+  if (eitherResultType.val) return Either.right({ tag: 'result', val: eitherResultType.val });
 
-  if (Either.isLeft(eitherType)) {
-    return eitherType;
-  }
+  const reservedKeys = taggedTypeMetadata
+    .map(t => t.tagLiteralName)
+    .filter(t => TagKeyWords.includes(t));
 
-  if (eitherType.val) {
-    return Either.right({tag: 'result', val: eitherType.val});
-  }
-
-  const keys = taggedTypeMetadata
-    .map((t) => t.tagLiteralName)
-    .filter((t) => TagKeyWords.includes(t));
-
-  if (keys.length > 0) {
+  if (reservedKeys.length > 0) {
     return Either.left(
-      `Invalid tag value(s): \`${keys.join(", ")}\`. ` +
+      `Invalid tag value(s): \`${reservedKeys.join(", ")}\`. ` +
       `These are reserved keywords and cannot be used. ` +
       `Reserved keywords: ${TagKeyWords.join(", ")}.`
     );
   }
 
-  return Either.right({tag: 'custom', val: taggedTypeMetadata});
+  return Either.right({ tag: 'custom', val: taggedTypeMetadata });
 }
 
 function tryResultType(taggedTypes: TaggedTypeMetadata[]): Try<UserDefinedResultType> {
-  if (taggedTypes.length !== 2) {
-    return Either.right(undefined);
-  }
+  if (taggedTypes.length !== 2) return Either.right(undefined);
 
   const okTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'ok');
   const errTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'err');
-
-  if (!okTypeMetadata || !errTypeMetadata) {
-    return Either.right(undefined);
-  }
+  if (!okTypeMetadata || !errTypeMetadata) return Either.right(undefined);
 
   const okType = okTypeMetadata.valueType;
   const errType = errTypeMetadata.valueType;
-
-
-  if (!okType || !errType) {
-    return Either.right(undefined);
-  }
-
+  if (!okType || !errType) return Either.right(undefined);
 
   if (okType[1].optional) {
-    return Either.left("The value corresponding to the tag 'ok'  cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional");
+    return Either.left(
+      "The value corresponding to the tag 'ok' cannot be optional. " +
+      "Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional"
+    );
   }
 
-  if(errType[1].optional) {
-    return Either.left("The value corresponding to the tag 'err' cannot be optional. Avoid using the tag names `ok , `err`. Alternatively,  make the value type non optional");
+  if (errType[1].optional) {
+    return Either.left(
+      "The value corresponding to the tag 'err' cannot be optional. " +
+      "Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional"
+    );
   }
 
   return Either.right({ okType, errType });
 }
 
+export type UnionOfLiteral = { literals: string[] };
 
-export type UnionOfLiteral = {
-  literals: string[]
-}
-
-export function tryUnionOfOnlyLiteral(
-  unionTypes: TsType[]
-): Try<UnionOfLiteral> {
-
+export function tryUnionOfOnlyLiteral(unionTypes: TsType[]): Try<UnionOfLiteral> {
   const literals: string[] = [];
 
   for (const ut of unionTypes) {
-    if (ut.kind === "literal" && ut.literalValue) {
-      const literalValue = ut.literalValue;
-      if (isNumberString(literalValue)) {
-        return Either.right(undefined);
-      }
+    if (ut.kind !== "literal" || !ut.literalValue) return Either.right(undefined);
 
-      if (literalValue === 'true' || literalValue === 'false') {
-        return Either.right(undefined);
-      }
-
-      const literalValueTrimmed = trimQuotes(literalValue);
-
-      if (TagKeyWords.includes(literalValueTrimmed)) {
-        return Either.left(`\`${literalValueTrimmed}\` is a reserved keyword. The following keywords cannot be used as literals: ` + TagKeyWords.join(', '));
-      }
-
-      literals.push(literalValueTrimmed);
-    } else {
+    const valueTrimmed = trimQuotes(ut.literalValue);
+    if (isNumberString(valueTrimmed) || valueTrimmed === 'true' || valueTrimmed === 'false') {
       return Either.right(undefined);
     }
+
+    if (TagKeyWords.includes(valueTrimmed)) {
+      return Either.left(
+        `\`${valueTrimmed}\` is a reserved keyword. The following keywords cannot be used as literals: ${TagKeyWords.join(', ')}`
+      );
+    }
+
+    literals.push(valueTrimmed);
   }
 
   return Either.right({ literals });

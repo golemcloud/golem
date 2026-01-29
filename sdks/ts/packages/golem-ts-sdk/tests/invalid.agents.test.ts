@@ -17,7 +17,7 @@
 import { describe, expect } from 'vitest';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as AnalysedType from '../src/internal/mapping/types/analysedType';
-import { TypeMappingScope } from '../src/internal/mapping/types/scope';
+import { TypeScope } from '../src/internal/mapping/types/scope';
 import * as Either from '../src/newTypes/either';
 import { agent, AgentId, BaseAgent } from '../src';
 import { typeMapper } from '../src/internal/mapping/types/typeMapperImpl';
@@ -132,15 +132,15 @@ describe('Invalid types in agents', () => {
     );
 
     expect(resultTypeInvalid1.val).toBe(
-      "The value corresponding to the tag 'ok'  cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
+      "The value corresponding to the tag 'ok' cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
     );
 
     expect(resultTypeInvalid2.val).toBe(
-      "The value corresponding to the tag 'err' cannot be optional. Avoid using the tag names `ok , `err`. Alternatively,  make the value type non optional",
+      "The value corresponding to the tag 'err' cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
     );
 
     expect(resultTypeInvalid3.val).toBe(
-      "The value corresponding to the tag 'ok'  cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
+      "The value corresponding to the tag 'ok' cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
     );
   });
 
@@ -221,7 +221,7 @@ describe('Invalid types in agents', () => {
     expect(fun13Type.val).toBe('Unsupported type `Object`');
 
     expect(fun14Type.val).toBe(
-      '`RecursiveType` is recursive.\nRecursive types are not supported yet. \nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.',
+      '`RecursiveType` is recursive.\nRecursive types are not supported yet.\nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.',
     );
   });
 });
@@ -336,7 +336,7 @@ function getAnalysedTypeInFun1(
   const type = fun1Params?.get(parameterName)!;
   return typeMapper(
     type,
-    TypeMappingScope.method('fun1', parameterName, type.optional),
+    TypeScope.method('fun1', parameterName, type.optional),
   );
 }
 

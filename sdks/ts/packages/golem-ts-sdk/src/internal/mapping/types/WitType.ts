@@ -16,7 +16,7 @@ import {Type} from "@golemcloud/golem-ts-types-core";
 import {WitTypeBuilder} from "./witTypeBuilder";
 import * as Either from "../../../newTypes/either";
 import {WitType} from "golem:agent/common";
-import { TypeMappingScope } from './scope';
+import { TypeScope } from './scope';
 import { AnalysedType } from './analysedType';
 import { typeMapper } from './typeMapperImpl';
 
@@ -32,7 +32,7 @@ export { WitType } from "golem:rpc/types@0.2.2";
  *   WitType.fromTsType(type, scope)
  * ```
  */
-export const fromTsType = (type: Type.Type, scope: TypeMappingScope | undefined): Either.Either<[WitType, AnalysedType], string> => {
+export const fromTsType = (type: Type.Type, scope: TypeScope | undefined): Either.Either<[WitType, AnalysedType], string> => {
     const analysedTypeEither = typeMapper(type, scope);
     return Either.flatMap(analysedTypeEither, (analysedType) => {
       const witType = fromAnalysedType(analysedType);

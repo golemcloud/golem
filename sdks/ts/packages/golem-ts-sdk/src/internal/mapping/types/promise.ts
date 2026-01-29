@@ -22,7 +22,9 @@ type TsType = CoreType.Type;
 
 type PromiseCtx = Ctx & { type: Extract<TsType, { kind: "promise" }> };
 
-export function handlePromise({ type }: PromiseCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
+export function handlePromise({ type, scope }: PromiseCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
   const inner = type.element;
-  return mapper(inner, undefined);
+
+  // We reuse the same scope when it comes to promises
+  return mapper(inner, scope);
 }
