@@ -132,15 +132,15 @@ describe('Invalid types in agents', () => {
     );
 
     expect(resultTypeInvalid1.val).toBe(
-      "The value corresponding to the tag 'ok'  cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
+      "The value corresponding to the tag 'ok' cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
     );
 
     expect(resultTypeInvalid2.val).toBe(
-      "The value corresponding to the tag 'err' cannot be optional. Avoid using the tag names `ok , `err`. Alternatively,  make the value type non optional",
+      "The value corresponding to the tag 'err' cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
     );
 
     expect(resultTypeInvalid3.val).toBe(
-      "The value corresponding to the tag 'ok'  cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
+      "The value corresponding to the tag 'ok' cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional",
     );
   });
 
