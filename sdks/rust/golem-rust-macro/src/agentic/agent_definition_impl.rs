@@ -23,6 +23,54 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::ItemTrait;
 
+fn handle_assign(assign: syn::ExprAssign, options: &mut AgentDefinitionOptions) {
+    let key = match &*assign.left {
+        syn::Expr::Path(p) if p.path.is_ident("mode") => "mode",
+        syn::Expr::Path(p) if p.path.is_ident("mount") => "mount",
+        _ => panic!("Unknown agent definition attribute"),
+    };
+
+    match key {
+        "mode" => {
+            options.mode = parse_mode(&assign.right);
+        }
+        "mount" => {
+            options.http_mount_path_prefix = parse_mount_prefix(&assign.right);
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn parse_mount_prefix(expr: &syn::Expr) -> Vec<String> {
+    match expr {
+        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => {
+            vec![s.value()]
+        }
+        syn::Expr::Array(arr) => arr.elems.iter().map(|e| {
+            match e {
+                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => s.value(),
+                _ => panic!("mount must be string literals"),
+            }
+        }).collect(),
+        _ => panic!("Invalid mount syntax"),
+    }
+}
+
+
+fn parse_mode(expr: &syn::Expr) -> AgentMode {
+    match expr {
+        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => match s.value().as_str() {
+            "ephemeral" => AgentMode::Ephemeral,
+            "durable" => AgentMode::Durable,
+            _ => panic!("Invalid agent mode"),
+        },
+        syn::Expr::Path(p) if p.path.is_ident("ephemeral") => AgentMode::Ephemeral,
+        syn::Expr::Path(p) if p.path.is_ident("durable") => AgentMode::Durable,
+        _ => panic!("Invalid agent mode"),
+    }
+}
+
+
 fn parse_definition_attributes(attrs: TokenStream) -> proc_macro2::TokenStream {
     if attrs.is_empty() {
         return quote! {
