@@ -755,7 +755,7 @@ pub enum GolemCliSubcommand {
 }
 
 pub mod shared_args {
-    use crate::model::app::{AppBuildStep, BuildConfig};
+    use crate::model::app::AppBuildStep;
     use crate::model::worker::{AgentUpdateMode, WorkerName};
     use clap::Args;
     use golem_common::model::account::AccountId;

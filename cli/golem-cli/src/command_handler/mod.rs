@@ -331,7 +331,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         revision,
                         force_build,
                         deploy_args,
-                        repl_bridge_sdk_target
+                        repl_bridge_sdk_target,
                     )
                     .await
             }

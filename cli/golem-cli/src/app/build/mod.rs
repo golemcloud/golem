@@ -17,9 +17,7 @@ use crate::app::build::componentize::componentize;
 use crate::app::build::gen_bridge::gen_bridge;
 use crate::app::build::link::link;
 use crate::app::context::BuildContext;
-use crate::log::LogColorize;
 use crate::model::app::AppBuildStep;
-use anyhow::Context;
 pub mod add_metadata;
 pub mod clean;
 pub mod command;
@@ -52,14 +50,4 @@ pub async fn build_app(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-fn env_var_flag(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .map(|flag| {
-            let flag = flag.to_lowercase();
-            flag.starts_with("t") || flag == "1"
-        })
-        .unwrap_or_default()
 }

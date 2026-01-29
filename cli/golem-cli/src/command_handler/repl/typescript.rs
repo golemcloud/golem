@@ -19,7 +19,7 @@ use crate::bridge_gen::bridge_client_directory_name;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date, logln, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, LogIndent};
 use crate::model::app::BuildConfig;
 use crate::model::repl::BridgeReplArgs;
 use crate::process::{CommandExt, ExitStatusExt};
@@ -60,7 +60,7 @@ impl TypeScriptRepl {
 
         loop {
             let result = Command::new("npx")
-                .args(&["tsx", "repl.ts"])
+                .args(["tsx", "repl.ts"])
                 .current_dir(&args.repl_root_dir)
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())
@@ -106,9 +106,9 @@ impl TypeScriptRepl {
                     log_action("Generating", "TypeScript REPL package");
                     let _indent = LogIndent::new();
 
-                    self.generate_package_json(&args, &package_json_path)?;
-                    self.generate_tsconfig_json(&args, &tsconfig_json_path)?;
-                    self.generate_repl_ts(&args, &repl_ts_path)?;
+                    self.generate_package_json(args, &package_json_path)?;
+                    self.generate_tsconfig_json(args, &tsconfig_json_path)?;
+                    self.generate_repl_ts(args, &repl_ts_path)?;
 
                     Ok(())
                 },

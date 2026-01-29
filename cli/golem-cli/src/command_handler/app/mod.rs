@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;

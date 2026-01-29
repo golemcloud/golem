@@ -24,11 +24,10 @@ use crate::config::{
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
-use crate::model::app::{
-    AppBuildStep, ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName,
-    CustomBridgeSdkTarget, WithSource,
-};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
+use crate::model::app::{
+    ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
+};
 use crate::model::app_raw::{
     BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker, Server,
 };
@@ -53,7 +52,7 @@ use golem_common::model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeplo
 use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};

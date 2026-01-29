@@ -59,7 +59,7 @@ pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 pub const DEFAULT_TEMP_DIR: &str = "golem-temp";
 pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct BuildConfig {
     pub skip_up_to_date_checks: bool,
     pub steps_filter: HashSet<AppBuildStep>,
@@ -103,17 +103,6 @@ impl BuildConfig {
             true
         } else {
             self.steps_filter.contains(&step)
-        }
-    }
-}
-
-impl Default for BuildConfig {
-    fn default() -> Self {
-        Self {
-            skip_up_to_date_checks: false,
-            steps_filter: HashSet::new(),
-            custom_bridge_sdk_target: None,
-            repl_bridge_sdk_target: None,
         }
     }
 }
@@ -269,7 +258,7 @@ pub struct ComponentStubInterfaces {
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[clap(rename_all = "kebab_case")]
 pub enum AppBuildStep {
-    GenRpc,
+    GenRpc, // TODO: drop
     Componentize,
     Link,
     AddMetadata,
@@ -700,7 +689,7 @@ impl Application {
                 .temp_dir()
                 .join("bridge-sdk")
                 .join(language.id())
-                .join(bridge_client_directory_name(&agent_type_name)),
+                .join(bridge_client_directory_name(agent_type_name)),
         }
     }
 

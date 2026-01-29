@@ -1,6 +1,6 @@
-use crate::fs::delete_path_logged;
 use crate::app::context::BuildContext;
 use crate::fs::compile_and_collect_globs;
+use crate::fs::delete_path_logged;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::{CleanMode, DependencyType};
 use golem_common::model::component::ComponentName;
@@ -30,9 +30,12 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
 
             let component_names: Vec<ComponentName> = match mode {
                 CleanMode::All => ctx.application().component_names().cloned().collect(),
-                CleanMode::SelectedComponentsOnly => {
-                    ctx.application_context().selected_component_names().iter().cloned().collect()
-                }
+                CleanMode::SelectedComponentsOnly => ctx
+                    .application_context()
+                    .selected_component_names()
+                    .iter()
+                    .cloned()
+                    .collect(),
             };
 
             for component_name in &component_names {

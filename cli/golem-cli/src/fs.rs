@@ -557,6 +557,23 @@ fn normalize_pattern(pattern: &str) -> String {
     pattern.to_string()
 }
 
+pub fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        log_warn_action(
+            "Deleting",
+            format!("{} {}", context, path.log_color_highlight()),
+        );
+        remove(path).with_context(|| {
+            anyhow!(
+                "Failed to delete {}, path: {}",
+                context.log_color_highlight(),
+                path.log_color_highlight()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 fn normalize_pattern(pattern: &str) -> String {
     // Replacing \ with / to make it work as a glob pattern
@@ -588,21 +605,4 @@ mod test {
                 == (base_dir.join("../../../"), "target/a".to_string())
         );
     }
-}
-
-pub fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
-    if path.exists() {
-        log_warn_action(
-            "Deleting",
-            format!("{} {}", context, path.log_color_highlight()),
-        );
-        remove(path).with_context(|| {
-            anyhow!(
-                "Failed to delete {}, path: {}",
-                context.log_color_highlight(),
-                path.log_color_highlight()
-            )
-        })?;
-    }
-    Ok(())
 }

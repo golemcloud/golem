@@ -58,7 +58,12 @@ pub async fn componentize(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
 
 fn components_to_build(ctx: &BuildContext<'_>) -> BTreeSet<ComponentName> {
     let mut components_to_build = BTreeSet::new();
-    let mut remaining: Vec<_> = ctx.application_context().selected_component_names().iter().cloned().collect();
+    let mut remaining: Vec<_> = ctx
+        .application_context()
+        .selected_component_names()
+        .iter()
+        .cloned()
+        .collect();
 
     while let Some(component_name) = remaining.pop() {
         components_to_build.insert(component_name.clone());

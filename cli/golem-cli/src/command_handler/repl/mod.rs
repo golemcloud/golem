@@ -19,7 +19,7 @@ use crate::command_handler::repl::typescript::TypeScriptRepl;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
-use crate::model::app::{ApplicationComponentSelectMode, BuildConfig, CustomBridgeSdkTarget};
+use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
@@ -117,7 +117,7 @@ impl ReplHandler {
                     .collect::<HashSet<_>>();
 
                 if languages.len() == 1 {
-                    languages.iter().next().unwrap().clone()
+                    *languages.iter().next().unwrap()
                 } else {
                     todo!("interactive language selection for REPL is not implemented")
                 }

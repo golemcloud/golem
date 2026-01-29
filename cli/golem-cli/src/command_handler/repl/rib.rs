@@ -233,9 +233,7 @@ mod commands {
 
     impl Logs {
         pub fn new(stream_logs: Arc<AtomicBool>) -> Self {
-            Self {
-                stream_logs: stream_logs.into(),
-            }
+            Self { stream_logs }
         }
     }
 

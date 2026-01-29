@@ -33,9 +33,9 @@ pub mod fs;
 pub mod fuzzy;
 pub mod log;
 pub mod model;
+pub mod process;
 pub mod validation;
 pub mod wasm_rpc_stubgen;
-pub mod process;
 
 #[allow(unused)]
 mod wasm_metadata;

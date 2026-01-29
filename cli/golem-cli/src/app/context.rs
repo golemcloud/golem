@@ -17,8 +17,6 @@ use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::remote_components::RemoteComponents;
-use crate::command::shared_args::LanguageArg;
-use crate::fs;
 use crate::fs::{compile_and_collect_globs, PathExtra};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
