@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
@@ -31,7 +32,9 @@ use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent, LogOutput,
     Output,
 };
-use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
+use crate::model::app::{
+    ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+};
 use crate::model::deploy::DeployConfig;
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
@@ -262,9 +265,25 @@ impl AppCommandHandler {
         component_name: OptionalComponentNames,
         build_args: BuildArgs,
     ) -> anyhow::Result<()> {
+        let build_config = {
+            let mut build_config = BuildConfig::new()
+                .with_steps_filter(build_args.step.into_iter().collect())
+                .with_skip_up_to_date_checks(build_args.force_build.force_build);
+
+            if let Some(repl_bridge_sdk_target) = build_args.repl_bridge_sdk_target {
+                let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+                let app_ctx = app_ctx.some_or_err_mut()?;
+                build_config = build_config.with_custom_bridge_sdk_target(
+                    app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
+                );
+            }
+
+            build_config
+        };
+
         self.build(
+            &build_config,
             component_name.component_name,
-            Some(build_args),
             &ApplicationComponentSelectMode::CurrentDir,
         )
         .await
@@ -316,9 +335,9 @@ impl AppCommandHandler {
 
         let command = command[0].strip_prefix(":").unwrap_or(&command[0]);
 
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-        if let Err(error) = app_ctx.custom_command(command).await {
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
+        if let Err(error) = app_ctx.custom_command(&BuildConfig::new(), command).await {
             match error {
                 CustomCommandError::CommandNotFound => {
                     logln("");
@@ -553,11 +572,25 @@ impl AppCommandHandler {
     }
 
     pub async fn deploy(&self, config: DeployConfig) -> anyhow::Result<()> {
-        if let Some(repl_bridge_sdk_target) = config.repl_bridge_sdk_target {
-            let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-            let app_ctx = app_ctx.some_or_err_mut()?;
-            app_ctx.set_repl_bridge_sdk_target(repl_bridge_sdk_target);
-        }
+        let build_config = {
+            let mut build_config = BuildConfig::new().with_skip_up_to_date_checks(
+                config
+                    .force_build
+                    .as_ref()
+                    .map(|f| f.force_build)
+                    .unwrap_or(false),
+            );
+
+            if let Some(repl_bridge_sdk_target) = config.repl_bridge_sdk_target {
+                let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+                let app_ctx = app_ctx.some_or_err_mut()?;
+                build_config = build_config.with_custom_bridge_sdk_target(
+                    app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
+                );
+            }
+
+            build_config
+        };
 
         let environment = self
             .ctx
@@ -565,17 +598,8 @@ impl AppCommandHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        self.build(
-            vec![],
-            // TODO:
-            //config.force_build.as_ref().map(|force_build| BuildArgs {
-            //    step: vec![],
-            //    force_build: force_build.clone(),
-            //}),
-            None,
-            &ApplicationComponentSelectMode::All,
-        )
-        .await?;
+        self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
+            .await?;
 
         let Some(deploy_diff) = self.prepare_deployment(environment.clone()).await? else {
             if config.plan {
@@ -1623,22 +1647,14 @@ impl AppCommandHandler {
 
     pub async fn build(
         &self,
+        build_config: &BuildConfig,
         component_names: Vec<ComponentName>,
-        build: Option<BuildArgs>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
-        if let Some(build) = build {
-            self.ctx
-                .set_steps_filter(build.step.into_iter().collect())
-                .await;
-            self.ctx
-                .set_skip_up_to_date_checks(build.force_build.force_build)
-                .await;
-        }
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        app_ctx.some_or_err_mut()?.build().await
+        app_ctx.some_or_err_mut()?.build(build_config).await
     }
 
     pub async fn clean(
@@ -1651,11 +1667,11 @@ impl AppCommandHandler {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
 
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
 
         let all_selected =
-            app_ctx.selected_component_names().len() == app_ctx.application.component_count();
+            app_ctx.selected_component_names().len() == app_ctx.application().component_count();
 
         let clean_mode = {
             if all_selected {
@@ -1673,7 +1689,7 @@ impl AppCommandHandler {
             }
         };
 
-        app_ctx.clean(clean_mode)
+        app_ctx.clean(&BuildConfig::new(), clean_mode)
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
@@ -1770,8 +1786,12 @@ impl AppCommandHandler {
             let _log_output = silent_selection.then(|| LogOutput::new(Output::TracingDebug));
             app_ctx.select_components(default)?
         } else {
-            let fuzzy_search =
-                FuzzySearch::new(app_ctx.application.component_names().map(|cn| cn.as_str()));
+            let fuzzy_search = FuzzySearch::new(
+                app_ctx
+                    .application()
+                    .component_names()
+                    .map(|cn| cn.as_str()),
+            );
 
             let (found, not_found) =
                 fuzzy_search.find_many(component_names.iter().map(|cn| cn.0.as_str()));
@@ -1808,7 +1828,7 @@ impl AppCommandHandler {
                 ));
                 logln("");
                 log_text_view(&AvailableComponentNamesHelp(
-                    app_ctx.application.component_names().cloned().collect(),
+                    app_ctx.application().component_names().cloned().collect(),
                 ));
 
                 bail!(NonSuccessfulExit);
@@ -2010,7 +2030,10 @@ impl AppCommandHandler {
             );
             let _indent = self.ctx.log_handler().nested_text_view_indent();
 
-            diagnose(app_ctx.application.component(component_name).source(), None);
+            diagnose(
+                app_ctx.application().component(component_name).source(),
+                None,
+            );
         }
 
         Ok(())

@@ -1,5 +1,5 @@
-use crate::app::build::delete_path_logged;
-use crate::app::context::ApplicationContext;
+use crate::fs::delete_path_logged;
+use crate::app::context::BuildContext;
 use crate::fs::compile_and_collect_globs;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::{CleanMode, DependencyType};
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub fn clean_app(ctx: &ApplicationContext, mode: CleanMode) -> anyhow::Result<()> {
+pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> {
     {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
@@ -29,14 +29,14 @@ pub fn clean_app(ctx: &ApplicationContext, mode: CleanMode) -> anyhow::Result<()
             let mut paths = BTreeSet::<(&'static str, PathBuf)>::new();
 
             let component_names: Vec<ComponentName> = match mode {
-                CleanMode::All => ctx.application.component_names().cloned().collect(),
+                CleanMode::All => ctx.application().component_names().cloned().collect(),
                 CleanMode::SelectedComponentsOnly => {
-                    ctx.selected_component_names().iter().cloned().collect()
+                    ctx.application_context().selected_component_names().iter().cloned().collect()
                 }
             };
 
             for component_name in &component_names {
-                let component = ctx.application.component(component_name);
+                let component = ctx.application().component(component_name);
                 let component_source_dir = component.source_dir();
 
                 paths.insert(("generated wit", component.generated_wit()));
@@ -78,8 +78,8 @@ pub fn clean_app(ctx: &ApplicationContext, mode: CleanMode) -> anyhow::Result<()
                 log_action("Cleaning", "component clients");
                 let _indent = LogIndent::new();
 
-                for component_name in ctx.application.component_names() {
-                    for dep in ctx.application.component_dependencies(component_name) {
+                for component_name in ctx.application().component_names() {
+                    for dep in ctx.application().component_dependencies(component_name) {
                         if dep.dep_type.is_wasm_rpc() {
                             if let Some(dep) = dep.as_dependent_app_component() {
                                 log_action(
@@ -91,7 +91,7 @@ pub fn clean_app(ctx: &ApplicationContext, mode: CleanMode) -> anyhow::Result<()
                                 );
                                 let _indent = LogIndent::new();
 
-                                let dep_component = ctx.application.component(&dep.name);
+                                let dep_component = ctx.application().component(&dep.name);
                                 delete_path_logged("client wit", &dep_component.client_wit())?;
                                 if dep.dep_type == DependencyType::StaticWasmRpc {
                                     delete_path_logged(
@@ -108,14 +108,14 @@ pub fn clean_app(ctx: &ApplicationContext, mode: CleanMode) -> anyhow::Result<()
             log_action("Cleaning", "common clean targets");
             let _indent = LogIndent::new();
 
-            for clean in ctx.application.common_clean() {
+            for clean in ctx.application().common_clean() {
                 delete_path_logged("common clean target", &clean.source.join(&clean.value))?;
             }
 
             log_action("Cleaning", "application build dir");
             let _indent = LogIndent::new();
 
-            delete_path_logged("temp dir", ctx.application.temp_dir())?;
+            delete_path_logged("temp dir", ctx.application().temp_dir())?;
         }
         CleanMode::SelectedComponentsOnly => {
             // NOP

@@ -60,17 +60,44 @@ pub const DEFAULT_TEMP_DIR: &str = "golem-temp";
 pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug)]
-pub struct ApplicationConfig {
+pub struct BuildConfig {
     pub skip_up_to_date_checks: bool,
-    pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
-    pub golem_rust_override: RustDependencyOverride,
-    pub dev_mode: bool,
-    pub enable_wasmtime_fs_cache: bool,
+    pub repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
 }
 
-impl ApplicationConfig {
+impl BuildConfig {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn with_skip_up_to_date_checks(mut self, skip_up_to_date_checks: bool) -> Self {
+        self.skip_up_to_date_checks = skip_up_to_date_checks;
+        self
+    }
+
+    pub fn with_steps_filter(mut self, steps_filter: HashSet<AppBuildStep>) -> Self {
+        self.steps_filter = steps_filter;
+        self
+    }
+
+    pub fn with_custom_bridge_sdk_target(
+        mut self,
+        custom_bridge_sdk_target: CustomBridgeSdkTarget,
+    ) -> Self {
+        self.custom_bridge_sdk_target = Some(custom_bridge_sdk_target);
+        self
+    }
+
+    pub fn with_repl_bridge_sdk_target(
+        mut self,
+        repl_bridge_sdk_target: CustomBridgeSdkTarget,
+    ) -> Self {
+        self.repl_bridge_sdk_target = Some(repl_bridge_sdk_target);
+        self
+    }
+
     pub fn should_run_step(&self, step: AppBuildStep) -> bool {
         if self.steps_filter.is_empty() {
             true
@@ -78,6 +105,25 @@ impl ApplicationConfig {
             self.steps_filter.contains(&step)
         }
     }
+}
+
+impl Default for BuildConfig {
+    fn default() -> Self {
+        Self {
+            skip_up_to_date_checks: false,
+            steps_filter: HashSet::new(),
+            custom_bridge_sdk_target: None,
+            repl_bridge_sdk_target: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ApplicationConfig {
+    pub offline: bool,
+    pub golem_rust_override: RustDependencyOverride,
+    pub dev_mode: bool,
+    pub enable_wasmtime_fs_cache: bool,
 }
 
 #[derive(Debug, Clone)]

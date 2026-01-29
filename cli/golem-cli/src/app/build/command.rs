@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::delete_path_logged;
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::{
     AgentWrapperCommandMarkerHash, ComposeAgentWrapperCommandMarkerHash,
@@ -20,10 +19,11 @@ use crate::app::build::task_result_marker::{
     InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
-use crate::app::context::{ApplicationContext, ToolsWithEnsuredCommonDeps};
+use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
 use crate::error::NonSuccessfulExit;
 use crate::fs::compile_and_collect_globs;
+use crate::fs::delete_path_logged;
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
 };
@@ -44,12 +44,12 @@ use tokio::process::Command;
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     component_name: &ComponentName,
     command: &app_raw::BuildCommand,
 ) -> anyhow::Result<()> {
     let base_build_dir = ctx
-        .application
+        .application()
         .component(component_name)
         .source_dir()
         .to_path_buf();
@@ -76,7 +76,7 @@ pub async fn execute_build_command(
 }
 
 async fn execute_agent_wrapper(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     component_name: &ComponentName,
     base_build_dir: &Path,
     command: &GenerateAgentWrapper,
@@ -144,7 +144,7 @@ async fn execute_agent_wrapper(
 }
 
 async fn execute_compose_agent_wrapper(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     component_name: &ComponentName,
     base_build_dir: &Path,
     command: &ComposeAgentWrapper,
@@ -209,7 +209,7 @@ async fn execute_compose_agent_wrapper(
 }
 
 async fn execute_inject_to_prebuilt_quick_js(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     base_build_dir: &Path,
     command: &InjectToPrebuiltQuickJs,
 ) -> anyhow::Result<()> {
@@ -271,10 +271,10 @@ async fn execute_inject_to_prebuilt_quick_js(
 }
 
 pub async fn execute_custom_command(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     command_name: &str,
 ) -> Result<(), CustomCommandError> {
-    let all_custom_commands = ctx.application.all_custom_commands();
+    let all_custom_commands = ctx.application().all_custom_commands();
     if !all_custom_commands.contains(command_name) {
         return Err(CustomCommandError::CommandNotFound);
     }
@@ -285,7 +285,7 @@ pub async fn execute_custom_command(
     );
     let _indent = LogIndent::new();
 
-    let common_custom_commands = ctx.application.common_custom_commands();
+    let common_custom_commands = ctx.application().common_custom_commands();
     if let Some(command) = common_custom_commands.get(command_name) {
         log_action(
             "Executing",
@@ -303,8 +303,8 @@ pub async fn execute_custom_command(
         }
     }
 
-    for component_name in ctx.application.component_names() {
-        let component = &ctx.application.component(component_name);
+    for component_name in ctx.application().component_names() {
+        let component = &ctx.application().component(component_name);
         if let Some(custom_command) = component.custom_commands().get(command_name) {
             log_action(
                 "Executing",
@@ -330,7 +330,7 @@ pub async fn execute_custom_command(
 }
 
 fn execute_quickjs_create(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     base_build_dir: &Path,
     command: &GenerateQuickJSCrate,
 ) -> anyhow::Result<()> {
@@ -390,7 +390,7 @@ fn execute_quickjs_create(
 }
 
 fn execute_quickjs_d_ts(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     base_build_dir: &Path,
     command: &GenerateQuickJSDTS,
 ) -> anyhow::Result<()> {
@@ -429,7 +429,7 @@ fn execute_quickjs_d_ts(
 }
 
 pub async fn execute_external_command(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
 ) -> anyhow::Result<()> {
@@ -506,7 +506,7 @@ pub async fn execute_external_command(
                 }
 
                 ensure_common_deps_for_tool(
-                    &ctx.tools_with_ensured_common_deps,
+                    ctx.tools_with_ensured_common_deps(),
                     command_tokens[0].as_str(),
                 )
                 .await?;

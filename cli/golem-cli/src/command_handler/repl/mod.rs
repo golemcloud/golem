@@ -19,7 +19,7 @@ use crate::command_handler::repl::typescript::TypeScriptRepl;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
-use crate::model::app::{ApplicationComponentSelectMode, CustomBridgeSdkTarget};
+use crate::model::app::{ApplicationComponentSelectMode, BuildConfig, CustomBridgeSdkTarget};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
@@ -106,11 +106,11 @@ impl ReplHandler {
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.some_or_err()?;
                 let languages = app_ctx
-                    .application
+                    .application()
                     .component_names()
                     .filter_map(|component_name| {
                         app_ctx
-                            .application
+                            .application()
                             .component(component_name)
                             .guess_language()
                     })
@@ -130,30 +130,43 @@ impl ReplHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        let (repl_root_dir, repl_root_bridge_sdk_dir) = {
+        let (repl_root_dir, repl_root_bridge_sdk_dir, repl_bridge_sdk_target) = {
             let mut app_ctx = self.ctx.app_context_lock_mut().await?;
             let app_ctx = app_ctx.some_or_err_mut()?;
 
-            let repl_root_dir = app_ctx.application.repl_root_dir(language);
+            let repl_root_dir = app_ctx.application().repl_root_dir(language);
             fs::create_dir_all(&repl_root_dir)?;
             let repl_root_dir = repl_root_dir.canonicalize()?;
 
-            let repl_root_bridge_sdk_dir = app_ctx.set_repl_bridge_sdk_target(language);
+            let repl_bridge_sdk_target = app_ctx.new_repl_bridge_sdk_target(language);
+            let repl_root_bridge_sdk_dir = repl_bridge_sdk_target
+                .output_dir
+                .clone()
+                .expect("Missing target dir");
             fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
             let repl_root_bridge_sdk_dir = repl_root_bridge_sdk_dir.canonicalize()?;
 
-            (repl_root_dir, repl_root_bridge_sdk_dir)
+            (
+                repl_root_dir,
+                repl_root_bridge_sdk_dir,
+                repl_bridge_sdk_target,
+            )
         };
 
         self.ctx
             .app_handler()
-            .build(vec![], None, &ApplicationComponentSelectMode::All)
+            .build(
+                &BuildConfig::new().with_repl_bridge_sdk_target(repl_bridge_sdk_target),
+                vec![],
+                &ApplicationComponentSelectMode::All,
+            )
             .await?;
 
         let agent_type_names = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
-            app_ctx.wit.get_all_extracted_agent_type_names().await
+            let wit = app_ctx.wit().await;
+            wit.get_all_extracted_agent_type_names().await
         };
 
         let args = BridgeReplArgs {

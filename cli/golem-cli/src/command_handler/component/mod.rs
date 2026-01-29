@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{to_anyhow, ApplicationContext};
+use crate::app::context::{to_anyhow, ApplicationContext, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
@@ -24,8 +24,8 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
-use crate::model::app::DependencyType;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
+use crate::model::app::{BuildConfig, DependencyType};
 use crate::model::component::{
     ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
     SelectedComponents,
@@ -131,11 +131,11 @@ impl ComponentCommandHandler {
             let app_ctx = app_ctx.some_or_err()?;
             (
                 app_ctx
-                    .application
+                    .application()
                     .component_names()
                     .map(|name| name.to_string())
                     .collect::<HashSet<_>>(),
-                app_ctx.application.application_name().clone(),
+                app_ctx.application().application_name().clone(),
             )
         };
 
@@ -437,7 +437,7 @@ impl ComponentCommandHandler {
         let app_ctx = app_ctx.some_or_err()?;
 
         let component_names = app_ctx
-            .application
+            .application()
             .component_names()
             .cloned()
             .collect::<Vec<_>>();
@@ -452,7 +452,7 @@ impl ComponentCommandHandler {
             let _indent = self.ctx.log_handler().nested_text_view_indent();
             self.ctx.log_handler().log_serializable(
                 &app_ctx
-                    .application
+                    .application()
                     .component(&component_name)
                     .layer_properties()
                     .with_compacted_traces(),
@@ -883,15 +883,19 @@ impl ComponentCommandHandler {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
 
-        let component = app_ctx.application.component(component_name);
-        let linked_wasm_path = component.final_linked_wasm();
         let agent_types = {
-            if app_ctx.wit.is_agent(component_name) {
-                extract_and_store_agent_types(app_ctx, component_name).await?
+            if app_ctx.wit().await.is_agent(component_name) {
+                extract_and_store_agent_types(
+                    &BuildContext::new(app_ctx, &BuildConfig::new()),
+                    component_name,
+                )
+                .await?
             } else {
                 vec![]
             }
         };
+        let component = app_ctx.application().component(component_name);
+        let linked_wasm_path = component.final_linked_wasm();
 
         if !component.component_type().is_deployable() {
             bail!("Component {component_name} is not deployable");
@@ -1229,7 +1233,7 @@ fn app_component_dynamic_linking(
     let mut mapping = Vec::new();
 
     let wasm_rpc_deps = app_ctx
-        .application
+        .application()
         .component_dependencies(component_name)
         .iter()
         .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)

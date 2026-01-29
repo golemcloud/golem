@@ -1,7 +1,7 @@
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
-use crate::app::context::ApplicationContext;
+use crate::app::context::BuildContext;
 use crate::bridge_gen::rust::RustBridgeGenerator;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
@@ -16,14 +16,14 @@ use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
 
-pub async fn gen_bridge(ctx: &ApplicationContext) -> anyhow::Result<()> {
+pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
     let targets = {
-        let mut targets = match &ctx.config.custom_bridge_sdk_target {
+        let mut targets = match &ctx.custom_bridge_sdk_target() {
             Some(custom_target) => collect_custom_targets(ctx, custom_target).await?,
             None => collect_manifest_targets(ctx).await?,
         };
 
-        if let Some(target) = ctx.repl_bridge_sdk_target.as_ref() {
+        if let Some(target) = ctx.repl_bridge_sdk_target() {
             targets.extend(collect_custom_targets(ctx, target).await?);
         }
 
@@ -44,12 +44,11 @@ pub async fn gen_bridge(ctx: &ApplicationContext) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn collect_manifest_targets(
-    ctx: &ApplicationContext,
-) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+async fn collect_manifest_targets(ctx: &BuildContext<'_>) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
 
-    for (target_language, sdks_targets) in ctx.application.bridge_sdks().for_all_used_languages() {
+    for (target_language, sdks_targets) in ctx.application().bridge_sdks().for_all_used_languages()
+    {
         let mut matchers = sdks_targets.agents.clone().into_set();
 
         if matchers.is_empty() {
@@ -57,9 +56,10 @@ async fn collect_manifest_targets(
         }
 
         let is_matching_all = matchers.remove("*");
+        let wit = ctx.wit().await;
 
-        for component_name in ctx.selected_component_names() {
-            if !ctx.wit.is_agent(component_name) {
+        for component_name in ctx.application_context().selected_component_names() {
+            if !wit.is_agent(component_name) {
                 continue;
             }
 
@@ -75,7 +75,7 @@ async fn collect_manifest_targets(
                 matchers.remove(agent_type.type_name.as_str());
 
                 let output_dir = ctx
-                    .application
+                    .application()
                     .bridge_sdk_dir(&agent_type.type_name, target_language);
                 targets.push(BridgeSdkTarget {
                     component_name: component_name.clone(),
@@ -88,7 +88,7 @@ async fn collect_manifest_targets(
 
         if !matchers.is_empty() {
             // Remove "non-selected" components
-            for component_name in ctx.application.component_names() {
+            for component_name in ctx.application().component_names() {
                 matchers.remove(component_name.as_str());
             }
         }
@@ -111,19 +111,20 @@ async fn collect_manifest_targets(
 }
 
 async fn collect_custom_targets(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     custom_target: &CustomBridgeSdkTarget,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
 
     let should_filter_by_agent_type_name = !custom_target.agent_type_names.is_empty();
     let mut agent_type_names = custom_target.agent_type_names.clone();
-    for component_name in ctx.selected_component_names() {
-        if !ctx.wit.is_agent(component_name) {
+    let wit = ctx.wit().await;
+    for component_name in ctx.application_context().selected_component_names() {
+        if !wit.is_agent(component_name) {
             continue;
         }
 
-        let component = ctx.application.component(component_name);
+        let component = ctx.application().component(component_name);
         let target_language = custom_target
             .target_language
             .or_else(|| component.guess_language())
@@ -150,7 +151,7 @@ async fn collect_custom_targets(
                     output_dir.join(bridge_client_directory_name(&agent_type.type_name))
                 })
                 .unwrap_or_else(|| {
-                    ctx.application
+                    ctx.application()
                         .bridge_sdk_dir(&agent_type.type_name, target_language)
                 });
 
@@ -179,10 +180,10 @@ async fn collect_custom_targets(
 }
 
 async fn gen_bridge_sdk_target(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     target: BridgeSdkTarget,
 ) -> anyhow::Result<()> {
-    let component = ctx.application.component(&target.component_name);
+    let component = ctx.application().component(&target.component_name);
     let final_linked_wasm = component.final_linked_wasm();
     let agent_type_name = target.agent_type.type_name.clone();
     let output_dir = Utf8PathBuf::try_from(target.output_dir)?;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::LogColorize;
+use crate::log::{log_warn_action, LogColorize};
 use anyhow::{anyhow, bail, Context, Error};
 use std::cmp::PartialEq;
 use std::fs::{Metadata, OpenOptions};
@@ -588,4 +588,21 @@ mod test {
                 == (base_dir.join("../../../"), "target/a".to_string())
         );
     }
+}
+
+pub fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        log_warn_action(
+            "Deleting",
+            format!("{} {}", context, path.log_color_highlight()),
+        );
+        remove(path).with_context(|| {
+            anyhow!(
+                "Failed to delete {}, path: {}",
+                context.log_color_highlight(),
+                path.log_color_highlight()
+            )
+        })?;
+    }
+    Ok(())
 }

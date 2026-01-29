@@ -15,40 +15,39 @@
 use crate::app::build::add_metadata::add_metadata_to_selected_components;
 use crate::app::build::componentize::componentize;
 use crate::app::build::gen_bridge::gen_bridge;
-use crate::app::build::gen_rpc::gen_rpc;
 use crate::app::build::link::link;
-use crate::app::context::ApplicationContext;
-use crate::fs;
-use crate::log::{log_warn_action, LogColorize};
+use crate::app::context::BuildContext;
+use crate::log::LogColorize;
 use crate::model::app::AppBuildStep;
-use anyhow::{anyhow, Context};
-use std::path::Path;
-
+use anyhow::Context;
 pub mod add_metadata;
 pub mod clean;
 pub mod command;
 pub mod componentize;
 pub mod extract_agent_type;
 pub mod gen_bridge;
-pub mod gen_rpc;
 pub mod link;
 pub mod task_result_marker;
 pub mod up_to_date_check;
 
-pub async fn build_app(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
-    if ctx.config.should_run_step(AppBuildStep::GenRpc) {
-        gen_rpc(ctx).await?;
+// TODO: drop, or fix concurrent wit resolve
+// pub mod gen_rpc;
+
+pub async fn build_app(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    if ctx.should_run_step(AppBuildStep::GenRpc) {
+        // TODO: drop or fix, see above
+        // gen_rpc(ctx).await?;
     }
-    if ctx.config.should_run_step(AppBuildStep::Componentize) {
+    if ctx.should_run_step(AppBuildStep::Componentize) {
         componentize(ctx).await?;
     }
-    if ctx.config.should_run_step(AppBuildStep::Link) {
+    if ctx.should_run_step(AppBuildStep::Link) {
         link(ctx).await?;
     }
-    if ctx.config.should_run_step(AppBuildStep::AddMetadata) {
+    if ctx.should_run_step(AppBuildStep::AddMetadata) {
         add_metadata_to_selected_components(ctx).await?;
     }
-    if ctx.config.should_run_step(AppBuildStep::GenBridge) {
+    if ctx.should_run_step(AppBuildStep::GenBridge) {
         gen_bridge(ctx).await?;
     }
 
@@ -63,21 +62,4 @@ fn env_var_flag(name: &str) -> bool {
             flag.starts_with("t") || flag == "1"
         })
         .unwrap_or_default()
-}
-
-fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
-    if path.exists() {
-        log_warn_action(
-            "Deleting",
-            format!("{} {}", context, path.log_color_highlight()),
-        );
-        fs::remove(path).with_context(|| {
-            anyhow!(
-                "Failed to delete {}, path: {}",
-                context.log_color_highlight(),
-                path.log_color_highlight()
-            )
-        })?;
-    }
-    Ok(())
 }

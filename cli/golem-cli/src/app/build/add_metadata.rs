@@ -14,25 +14,24 @@
 
 use crate::app::build::task_result_marker::{AddMetadataMarkerHash, TaskResultMarker};
 use crate::app::build::up_to_date_check::is_up_to_date;
-use crate::app::context::ApplicationContext;
+use crate::app::context::BuildContext;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
 use crate::wasm_rpc_stubgen::commands::metadata::add_metadata;
 
-pub async fn add_metadata_to_selected_components(
-    ctx: &mut ApplicationContext,
-) -> anyhow::Result<()> {
+pub async fn add_metadata_to_selected_components(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
     log_action("Adding", "metadata to components");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.selected_component_names() {
-        let component = ctx.application.component(component_name);
+    let wit = ctx.wit().await;
+    for component_name in ctx.application_context().selected_component_names() {
+        let component = ctx.application().component(component_name);
         let temp_linked_wasm = component.temp_linked_wasm();
         let final_linked_wasm = component.final_linked_wasm();
 
-        let root_package_name = ctx.wit.root_package_name(component_name)?;
+        let root_package_name = wit.root_package_name(component_name)?;
 
         let task_result_marker = TaskResultMarker::new(
-            &ctx.application.task_result_marker_dir(),
+            &ctx.application().task_result_marker_dir(),
             AddMetadataMarkerHash {
                 component_name,
                 root_package_name: root_package_name.clone(),
@@ -40,7 +39,7 @@ pub async fn add_metadata_to_selected_components(
         )?;
 
         if is_up_to_date(
-            ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
+            ctx.skip_up_to_date_checks() || !task_result_marker.is_up_to_date(),
             || [&temp_linked_wasm],
             || [&final_linked_wasm],
         ) {

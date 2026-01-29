@@ -366,7 +366,7 @@ impl Context {
     pub async fn rib_repl_history_file(&self) -> anyhow::Result<PathBuf> {
         let app_ctx = self.app_context_lock().await;
         let history_file = match app_ctx.opt()? {
-            Some(app_ctx) => app_ctx.application.rib_repl_history_file().to_path_buf(),
+            Some(app_ctx) => app_ctx.application().rib_repl_history_file().to_path_buf(),
             None => self.config_dir.join(".rib_repl_history"),
         };
         debug!(
@@ -554,61 +554,10 @@ impl Context {
         Ok(state)
     }
 
-    async fn set_app_ctx_init_config<T>(
-        &self,
-        name: &str,
-        value_mut: fn(&mut ApplicationContextState) -> &mut T,
-        was_set_mut: fn(&mut ApplicationContextState) -> &mut bool,
-        value: T,
-    ) {
-        let mut state = self.app_context_state.write().await;
-        if *was_set_mut(&mut state) {
-            panic!("{name} can be set only once, was already set");
-        }
-        if state.app_context.is_some() {
-            panic!("cannot change {name} after application context init");
-        }
-        *value_mut(&mut state) = value;
-        *was_set_mut(&mut state) = true;
-    }
-
-    pub async fn set_skip_up_to_date_checks(&self, skip: bool) {
-        self.set_app_ctx_init_config(
-            "skip_up_to_date_checks",
-            |ctx| &mut ctx.skip_up_to_date_checks,
-            |ctx| &mut ctx.skip_up_to_date_checks_was_set,
-            skip,
-        )
-        .await
-    }
-
-    pub async fn set_steps_filter(&self, steps_filter: HashSet<AppBuildStep>) {
-        self.set_app_ctx_init_config(
-            "steps_filter",
-            |ctx| &mut ctx.build_steps_filter,
-            |ctx| &mut ctx.build_steps_filter_was_set,
-            steps_filter,
-        )
-        .await;
-    }
-
-    pub async fn set_custom_bridge_generator_target(
-        &self,
-        custom_bridge_sdk_target: CustomBridgeSdkTarget,
-    ) {
-        self.set_app_ctx_init_config(
-            "custom_bridge_generator_target",
-            |ctx| &mut ctx.custom_bridge_sdk_target,
-            |ctx| &mut ctx.custom_bridge_sdk_target_was_set,
-            Some(custom_bridge_sdk_target),
-        )
-        .await;
-    }
-
     pub async fn task_result_marker_dir(&self) -> anyhow::Result<PathBuf> {
         let app_ctx = self.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-        Ok(app_ctx.application.task_result_marker_dir())
+        Ok(app_ctx.application().task_result_marker_dir())
     }
 
     pub fn templates(
@@ -792,13 +741,6 @@ pub struct ApplicationContextState {
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
 
-    pub skip_up_to_date_checks: bool,
-    skip_up_to_date_checks_was_set: bool,
-    pub build_steps_filter: HashSet<AppBuildStep>,
-    build_steps_filter_was_set: bool,
-    pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
-    custom_bridge_sdk_target_was_set: bool,
-
     app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
 
@@ -808,12 +750,6 @@ impl ApplicationContextState {
             yes,
             app_source_mode: Some(source_mode),
             silent_init: false,
-            skip_up_to_date_checks: false,
-            skip_up_to_date_checks_was_set: false,
-            build_steps_filter: HashSet::new(),
-            build_steps_filter_was_set: false,
-            custom_bridge_sdk_target: None,
-            custom_bridge_sdk_target_was_set: false,
             app_context: None,
         }
     }
@@ -837,10 +773,7 @@ impl ApplicationContextState {
             .then(|| LogOutput::new(Output::TracingDebug));
 
         let app_config = ApplicationConfig {
-            skip_up_to_date_checks: self.skip_up_to_date_checks,
             offline: config.wasm_rpc_client_build_offline,
-            steps_filter: self.build_steps_filter.clone(),
-            custom_bridge_sdk_target: self.custom_bridge_sdk_target.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
             dev_mode: config.dev_mode,
             enable_wasmtime_fs_cache: config.enable_wasmtime_fs_cache,
@@ -865,7 +798,7 @@ impl ApplicationContextState {
 
         if !self.silent_init {
             if let Some(Ok(Some(app_ctx))) = &self.app_context {
-                if app_ctx.loaded_with_warnings
+                if app_ctx.loaded_with_warnings()
                     && !InteractiveHandler::confirm_manifest_app_warning(self.yes)?
                 {
                     bail!(NonSuccessfulExit)

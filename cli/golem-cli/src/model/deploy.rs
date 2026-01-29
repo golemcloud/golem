@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::command::shared_args::{DeployArgs, ForceBuildArg};
+use crate::model::app::BuildConfig;
 use crate::model::worker::WorkerName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_templates::model::GuestLanguage;

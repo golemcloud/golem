@@ -14,11 +14,13 @@
 
 use crate::app::build::task_result_marker::GenerateBridgeReplMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
+use crate::app::context::BuildContext;
 use crate::bridge_gen::bridge_client_directory_name;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogIndent};
+use crate::model::app::BuildConfig;
 use crate::model::repl::BridgeReplArgs;
 use crate::process::{CommandExt, ExitStatusExt};
 use golem_templates::model::GuestLanguage;
@@ -81,14 +83,14 @@ impl TypeScriptRepl {
     }
 
     async fn generate_repl_package(&self, args: &BridgeReplArgs) -> anyhow::Result<()> {
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
 
         let package_json_path = args.repl_root_dir.join("package.json");
         let tsconfig_json_path = args.repl_root_dir.join("tsconfig.json");
         let repl_ts_path = args.repl_root_dir.join("repl.ts");
 
-        new_task_up_to_date_check(app_ctx)
+        new_task_up_to_date_check(&BuildContext::new(app_ctx, &BuildConfig::new()))
             .with_task_result_marker(GenerateBridgeReplMarkerHash {
                 language: GuestLanguage::TypeScript,
             })?

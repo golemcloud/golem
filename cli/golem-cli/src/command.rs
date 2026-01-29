@@ -755,7 +755,7 @@ pub enum GolemCliSubcommand {
 }
 
 pub mod shared_args {
-    use crate::model::app::AppBuildStep;
+    use crate::model::app::{AppBuildStep, BuildConfig};
     use crate::model::worker::{AgentUpdateMode, WorkerName};
     use clap::Args;
     use golem_common::model::account::AccountId;
@@ -803,6 +803,9 @@ pub mod shared_args {
         pub step: Vec<AppBuildStep>,
         #[command(flatten)]
         pub force_build: ForceBuildArg,
+        // Internal flag for REPL reload
+        #[arg(long, hide = true)]
+        pub repl_bridge_sdk_target: Option<GuestLanguage>,
     }
 
     #[derive(Debug, Args)]

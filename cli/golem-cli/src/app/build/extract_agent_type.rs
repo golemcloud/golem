@@ -14,7 +14,7 @@
 
 use crate::app::build::task_result_marker::ExtractAgentTypeMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
-use crate::app::context::ApplicationContext;
+use crate::app::context::BuildContext;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize};
 use anyhow::Context;
@@ -22,10 +22,10 @@ use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
 
 pub async fn extract_and_store_agent_types(
-    ctx: &ApplicationContext,
+    ctx: &BuildContext<'_>,
     component_name: &ComponentName,
 ) -> anyhow::Result<Vec<AgentType>> {
-    let component = ctx.application.component(component_name);
+    let component = ctx.application().component(component_name);
     let wasm = component.agent_type_extraction_source_wasm();
     let extracted_agent_types = component.extracted_agent_types(&wasm);
 
@@ -45,7 +45,8 @@ pub async fn extract_and_store_agent_types(
                 );
 
                 let agent_types = ctx
-                    .wit
+                    .wit()
+                    .await
                     .get_or_extract_component_agent_types(component_name, &wasm)
                     .await?;
 
@@ -71,7 +72,8 @@ pub async fn extract_and_store_agent_types(
         None => {
             let agent_types = serde_json::from_str(&fs::read_to_string(&extracted_agent_types)?)
                 .context("Failed to deserialize agent types")?;
-            ctx.wit
+            ctx.wit()
+                .await
                 .add_cached_component_agent_types(component_name, agent_types)
                 .await
         }

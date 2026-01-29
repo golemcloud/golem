@@ -14,7 +14,7 @@
 
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::model::app::{ApplicationComponentSelectMode, CustomBridgeSdkTarget};
+use crate::model::app::{ApplicationComponentSelectMode, BuildConfig, CustomBridgeSdkTarget};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use golem_templates::model::GuestLanguage;
@@ -38,18 +38,14 @@ impl BridgeCommandHandler {
         output_dir: Option<PathBuf>,
     ) -> anyhow::Result<()> {
         self.ctx
-            .set_custom_bridge_generator_target(CustomBridgeSdkTarget {
-                agent_type_names: agent_type_names.into_iter().collect(),
-                target_language: language,
-                output_dir,
-            })
-            .await;
-
-        self.ctx
             .app_handler()
             .build(
+                &BuildConfig::new().with_custom_bridge_sdk_target(CustomBridgeSdkTarget {
+                    agent_type_names: agent_type_names.into_iter().collect(),
+                    target_language: language,
+                    output_dir,
+                }),
                 component_names,
-                None,
                 &ApplicationComponentSelectMode::CurrentDir,
             )
             .await
