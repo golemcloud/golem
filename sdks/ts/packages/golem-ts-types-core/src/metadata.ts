@@ -29,10 +29,7 @@ export type ConstructorArg = {
 
 export type ClassMetadata = {
   constructorArgs: ConstructorArg[];
-  methods: Map<
-    MethodNameString,
-    { methodParams: MethodParams; returnType: Type }
-  >;
+  methods: Map<MethodNameString, { methodParams: MethodParams; returnType: Type }>;
 };
 
 const Metadata = new Map<ClassNameString, ClassMetadata>();
@@ -41,10 +38,7 @@ export const TypeMetadata = {
   update(
     className: ClassNameString,
     constructorArgs: ConstructorArg[],
-    methods: Map<
-      MethodNameString,
-      { methodParams: MethodParams; returnType: Type }
-    >,
+    methods: Map<MethodNameString, { methodParams: MethodParams; returnType: Type }>,
   ) {
     Metadata.set(className, { constructorArgs, methods });
   },
@@ -80,29 +74,17 @@ export const TypeMetadata = {
         type: buildTypeFromJSON(arg.type),
       }));
 
-      const methodsMap = new Map<
-        string,
-        { methodParams: Map<string, Type>; returnType: Type }
-      >();
+      const methodsMap = new Map<string, { methodParams: Map<string, Type>; returnType: Type }>();
 
-      for (const [methodName, methodMeta] of Object.entries(
-        (meta as any).methods,
-      )) {
+      for (const [methodName, methodMeta] of Object.entries((meta as any).methods)) {
         const methodParamsMap = new Map<string, Type>();
-        for (const [paramName, paramJSON] of Object.entries(
-          (methodMeta as any).methodParams,
-        )) {
-          methodParamsMap.set(
-            paramName,
-            buildTypeFromJSON(paramJSON as LiteTypeJSON),
-          );
+        for (const [paramName, paramJSON] of Object.entries((methodMeta as any).methodParams)) {
+          methodParamsMap.set(paramName, buildTypeFromJSON(paramJSON as LiteTypeJSON));
         }
 
         methodsMap.set(methodName, {
           methodParams: methodParamsMap,
-          returnType: buildTypeFromJSON(
-            (methodMeta as any).returnType as LiteTypeJSON,
-          ),
+          returnType: buildTypeFromJSON((methodMeta as any).returnType as LiteTypeJSON),
         });
       }
 

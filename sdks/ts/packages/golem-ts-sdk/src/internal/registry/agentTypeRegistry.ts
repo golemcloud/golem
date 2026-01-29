@@ -51,5 +51,4 @@ class AgentTypeRegistryImpl {
   }
 }
 
-export const AgentTypeRegistry: AgentTypeRegistryImpl =
-  new AgentTypeRegistryImpl();
+export const AgentTypeRegistry: AgentTypeRegistryImpl = new AgentTypeRegistryImpl();

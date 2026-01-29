@@ -56,15 +56,11 @@ function validateAgentClassName(agentClassName: string): void {
   const parts = agentClassName.split(/[_-]/);
   for (const part of parts) {
     if (/^\d/.test(part)) {
-      throw new Error(
-        `Agent class name '${agentClassName}' segments cannot start with a number`,
-      );
+      throw new Error(`Agent class name '${agentClassName}' segments cannot start with a number`);
     }
   }
 
   if (!/^[a-zA-Z]/.test(agentClassName)) {
-    throw new Error(
-      `Agent class name '${agentClassName}' must start with a letter`,
-    );
+    throw new Error(`Agent class name '${agentClassName}' must start with a letter`);
   }
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from "../../../newTypes/either";
+import * as Either from '../../../newTypes/either';
 import { TypeScope } from './scope';
 import { callHandler } from './handlers';
 import { createCtx } from './ctx';
@@ -23,40 +23,47 @@ import { TypeMapper } from './typeMapper';
 type TsType = CoreType.Type;
 
 export const typeMapper: TypeMapper = (tsType: TsType, scope: TypeScope | undefined) => {
-  const result =
-    mapTypeInternal(tsType, scope);
+  const result = mapTypeInternal(tsType, scope);
 
   if (scope && TypeScope.isQuestionMarkOptional(scope)) {
     return Either.map(result, (analysedType) => {
-
       if (analysedType.kind === 'option' && analysedType.emptyType !== 'question-mark') {
         return analysedType;
       }
 
-      return option(undefined, "question-mark", analysedType)
-    })
+      return option(undefined, 'question-mark', analysedType);
+    });
   }
 
-  return result
-}
+  return result;
+};
 
-export function mapTypeInternal(type: TsType, scope: TypeScope | undefined): Either.Either<AnalysedType, string> {
+export function mapTypeInternal(
+  type: TsType,
+  scope: TypeScope | undefined,
+): Either.Either<AnalysedType, string> {
   const rejected = rejectBoxedTypes(type);
   if (Either.isLeft(rejected)) return rejected;
 
   return callHandler(type.kind, createCtx(type, scope), typeMapper);
 }
 
-
 function rejectBoxedTypes(type: TsType): Either.Either<never, string> {
   switch (type.name) {
-    case "String":  return Either.left("Unsupported type `String`, use `string` instead");
-    case "Boolean": return Either.left("Unsupported type `Boolean`, use `boolean` instead");
-    case "BigInt":  return Either.left("Unsupported type `BigInt`, use `bigint` instead");
-    case "Number":  return Either.left("Unsupported type `Number`, use `number` instead");
-    case "Symbol":  return Either.left("Unsupported type `Symbol`, use `string` if possible");
-    case "Date":    return Either.left("Unsupported type `Date`. Use a `string` if possible");
-    case "RegExp":  return Either.left("Unsupported type `RegExp`. Use a `string` if possible");
+    case 'String':
+      return Either.left('Unsupported type `String`, use `string` instead');
+    case 'Boolean':
+      return Either.left('Unsupported type `Boolean`, use `boolean` instead');
+    case 'BigInt':
+      return Either.left('Unsupported type `BigInt`, use `bigint` instead');
+    case 'Number':
+      return Either.left('Unsupported type `Number`, use `number` instead');
+    case 'Symbol':
+      return Either.left('Unsupported type `Symbol`, use `string` if possible');
+    case 'Date':
+      return Either.left('Unsupported type `Date`. Use a `string` if possible');
+    case 'RegExp':
+      return Either.left('Unsupported type `RegExp`. Use a `string` if possible');
   }
   return Either.right(undefined as never);
 }

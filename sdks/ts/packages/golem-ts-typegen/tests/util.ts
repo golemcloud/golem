@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Type, TypeMetadata } from "@golemcloud/golem-ts-types-core";
+import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 
-import "./setup";
-import { lazyLoadTypeMetadata } from "../src";
+import './setup';
+import { lazyLoadTypeMetadata } from '../src';
 
 /**
  * getAll functionality reads the type metadata from .metadata directory
@@ -30,94 +30,92 @@ export function getAll() {
 
 // Get an Interface Type from .metadata directory
 export function getInterfaceType(): Type.Type {
-  return fetchType("TestInterfaceType");
+  return fetchType('TestInterfaceType');
 }
 
 // Get a Map Type from .metadata directory
 // ts-morph discards type alias
 export function getTestMapType(): Type.Type {
-  return fetchType("MapType");
+  return fetchType('MapType');
 }
 
 // Get an Object Type from .metadata directory
 // Note that alias for object is kept intact.
 export function getObjectType(): Type.Type {
-  return fetchType("ObjectType");
+  return fetchType('ObjectType');
 }
 
 // Get a complex Object Type from .metadata directory
 export function getComplexObjectType(): Type.Type {
-  return fetchType("ObjectComplexType");
+  return fetchType('ObjectComplexType');
 }
 
 // Get a List Type from .metadata directory
 // ts-morph discards type alias
 export function getTestListOfObjectType(): Type.Type {
-  return fetchType("ListComplexType");
+  return fetchType('ListComplexType');
 }
 
 // Get a Union Type from .metadata directory
 // Here alias is kept intact by ts-morph
 export function getUnionType(): Type.Type {
-  return fetchType("UnionType");
+  return fetchType('UnionType');
 }
 
 // Get a Union Type from .metadata directory
 // Here alias is kept intact by ts-morph
 export function getUnionComplexType(): Type.Type {
-  return fetchType("UnionComplexType");
+  return fetchType('UnionComplexType');
 }
 
 // Get a Tuple Type from .metadata directory
 // Here alias is kept intact by ts-morph
 export function getTupleType(): Type.Type {
-  return fetchType("TupleType");
+  return fetchType('TupleType');
 }
 
 // Get a boolean Type from .metadata directory
 export function getBooleanType(): Type.Type {
-  return fetchType("boolean");
+  return fetchType('boolean');
 }
 
 // Get a string Type from .metadata directory
 export function getStringType(): Type.Type {
-  return fetchType("string");
+  return fetchType('string');
 }
 
 // Get a number Type from .metadata directory
 export function getNumberType(): Type.Type {
-  return fetchType("number");
+  return fetchType('number');
 }
 
 // Get a Promise Type from .metadata directory
 export function getPromiseType(): Type.Type {
-  return fetchType("PromiseType");
+  return fetchType('PromiseType');
 }
 
 export function getClassType(): Type.Type {
-  return fetchType("FooBar");
+  return fetchType('FooBar');
 }
 
 export function getLiterallyObjectType(): Type.Type {
-  return fetchType("Object");
+  return fetchType('Object');
 }
 
 export function getRecursiveType(): Type.Type {
-  return fetchType("RecursiveType");
+  return fetchType('RecursiveType');
 }
 
 export function getObjectWithTypeParameter(): Type.Type {
-  return fetchType("ObjectWithTypeParameter");
+  return fetchType('ObjectWithTypeParameter');
 }
 
 export function getUnionWithTypeParameter(): Type.Type {
-  return fetchType("UnionWithTypeParameter");
+  return fetchType('UnionWithTypeParameter');
 }
 
 // Fetch constructor parameters by class name
-export function getConstructorParams(
-  className: string,
-): Array<{ name: string; type: Type.Type }> {
+export function getConstructorParams(className: string): Array<{ name: string; type: Type.Type }> {
   const classMetadata = getAll().get(className);
   if (!classMetadata) {
     throw new Error(`Class ${className} not found in metadata`);
@@ -126,10 +124,7 @@ export function getConstructorParams(
 }
 
 // Fetch method parameters by class name and method name
-export function getMethodParams(
-  className: string,
-  methodName: string,
-): Map<string, Type.Type> {
+export function getMethodParams(className: string, methodName: string): Map<string, Type.Type> {
   const classMetadata = getAll().get(className);
   if (!classMetadata) {
     throw new Error(`Class ${className} not found in metadata`);
@@ -158,10 +153,7 @@ function fetchType(typeNameInTestData: string): Type.Type {
     const methods = Array.from(type.methods.values());
 
     for (const method of methods) {
-      if (
-        method.returnType &&
-        Type.getTypeName(method.returnType) === typeNameInTestData
-      ) {
+      if (method.returnType && Type.getTypeName(method.returnType) === typeNameInTestData) {
         return method.returnType;
       }
 

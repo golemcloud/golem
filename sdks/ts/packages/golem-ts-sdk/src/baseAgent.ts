@@ -75,9 +75,7 @@ export class BaseAgent {
    */
   getAgentType(): AgentType {
     if (!this.cachedAgentType) {
-      const agentType: AgentType | undefined = AgentTypeRegistry.get(
-        this.agentClassName,
-      );
+      const agentType: AgentType | undefined = AgentTypeRegistry.get(this.agentClassName);
 
       if (!agentType) {
         throw new Error(
@@ -98,18 +96,14 @@ export class BaseAgent {
    * @throws String Can throw a string describing the load error.
    */
   loadSnapshot(bytes: Uint8Array): Promise<void> {
-    throw new Error(
-      `\`loadSnapshot\` is not implemented for ${this.constructor.name}`,
-    );
+    throw new Error(`\`loadSnapshot\` is not implemented for ${this.constructor.name}`);
   }
 
   /**
    * Saves the agent's current state into a binary snapshot.
    */
   saveSnapshot(): Promise<Uint8Array> {
-    throw new Error(
-      `\`saveSnapshot\` is not implemented for ${this.constructor.name}`,
-    );
+    throw new Error(`\`saveSnapshot\` is not implemented for ${this.constructor.name}`);
   }
 
   /**
@@ -150,9 +144,10 @@ export class BaseAgent {
     );
   }
 
-  static getPhantom<
-    T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent,
-  >(this: T, ...args: ConstructorParameters<T>): Client<InstanceType<T>> {
+  static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
+    this: T,
+    ...args: ConstructorParameters<T>
+  ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
     );
@@ -195,9 +190,9 @@ export class BaseAgent {
  * ```
  */
 export type Client<T> = {
-  [K in keyof T as T[K] extends (...args: any[]) => any
-    ? K
-    : never]: T[K] extends (...args: infer A) => infer R
+  [K in keyof T as T[K] extends (...args: any[]) => any ? K : never]: T[K] extends (
+    ...args: infer A
+  ) => infer R
     ? RemoteMethod<GetArgs<A>, Awaited<R>>
     : never;
 };
@@ -228,10 +223,10 @@ type GetArgs<T extends readonly unknown[]> =
 type IsOptional<T extends readonly unknown[], K extends keyof T> =
   {} extends Pick<T, K> ? true : false;
 
-type AllOptional<
-  T extends readonly unknown[],
-  I extends any[] = [],
-> = T extends readonly [any, ...infer R]
+type AllOptional<T extends readonly unknown[], I extends any[] = []> = T extends readonly [
+  any,
+  ...infer R,
+]
   ? IsOptional<T, I['length']> extends true
     ? AllOptional<R, [...I, 0]>
     : false

@@ -3,8 +3,7 @@
   "type": "module",
   "version": "0.0.0",
   "publishConfig": {
-    "access": "public",
-    "tag": "test"
+    "access": "public"
   },
   "files": [
     "types",
@@ -34,8 +33,6 @@
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "format": "prettier --write \"src/**/*\" \"tests/**/*\"",
-    "format:check": "prettier --check \"src/**/*\" \"tests/**/*\"",
     "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types",
     "clean-test-data": "rm -rf .metadata",
     "generate-sample-agents-types": "node ../golem-ts-typegen/dist/bin/golem-typegen ./tsconfig.json --files tests/**/*.ts --include-class-decorators agent",

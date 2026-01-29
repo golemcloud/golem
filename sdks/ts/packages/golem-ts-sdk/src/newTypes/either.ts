@@ -35,17 +35,11 @@ export function map<T, E, U>(r: Either<T, E>, f: (t: T) => U): Either<U, E> {
   return r.tag === 'right' ? right(f(r.val)) : r;
 }
 
-export function flatMap<T, E, U>(
-  e: Either<T, E>,
-  f: (t: T) => Either<U, E>,
-): Either<U, E> {
+export function flatMap<T, E, U>(e: Either<T, E>, f: (t: T) => Either<U, E>): Either<U, E> {
   return e.tag === 'right' ? f(e.val) : e;
 }
 
-export function getOrElse<T, E, U>(
-  e: Either<T, E>,
-  onErr: (err: E) => U,
-): T | U {
+export function getOrElse<T, E, U>(e: Either<T, E>, onErr: (err: E) => U): T | U {
   return e.tag === 'right' ? e.val : onErr(e.val);
 }
 
@@ -54,10 +48,7 @@ export function getOrThrow<T, E>(e: Either<T, E>): T {
   throw new Error(`Called getOrThrow on an Err value: ${e.val}`);
 }
 
-export function getOrThrowWith<T, E>(
-  e: Either<T, E>,
-  onErr: (err: E) => Error,
-): T {
+export function getOrThrowWith<T, E>(e: Either<T, E>, onErr: (err: E) => Error): T {
   if (e.tag === 'right') return e.val;
   throw onErr(e.val);
 }
@@ -88,10 +79,7 @@ export function mapBoth<T, E, U, F>(
   return r.tag === 'right' ? right(onOk(r.val)) : left(onErr(r.val));
 }
 
-export function mapError<T, E, F>(
-  r: Either<T, E>,
-  f: (e: E) => F,
-): Either<T, F> {
+export function mapError<T, E, F>(r: Either<T, E>, f: (e: E) => F): Either<T, F> {
   return r.tag === 'right' ? r : left(f(r.val));
 }
 
@@ -105,10 +93,7 @@ export function zipWith<A, B, C, E>(
   return right(f(ra.val, rb.val));
 }
 
-export function zipBoth<A, B, E>(
-  ra: Either<A, E>,
-  rb: Either<B, E>,
-): Either<[A, B], E> {
+export function zipBoth<A, B, E>(ra: Either<A, E>, rb: Either<B, E>): Either<[A, B], E> {
   if (ra.tag === 'left') {
     return {
       tag: 'left',
@@ -133,8 +118,6 @@ export function all<T, E>(results: Either<T, E>[]): Either<T[], E> {
   return right(vals);
 }
 
-export function mapOrReturn<T>(
-  e: Either<T, string>,
-): T | Either<never, string> {
+export function mapOrReturn<T>(e: Either<T, string>): T | Either<never, string> {
   return isLeft(e) ? e : e.val;
 }

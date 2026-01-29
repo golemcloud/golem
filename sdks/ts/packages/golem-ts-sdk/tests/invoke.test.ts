@@ -16,11 +16,7 @@ import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect } from 'vitest';
-import {
-  BarAgentClassName,
-  BarAgentCustomClassName,
-  FooAgentClassName,
-} from './testUtils';
+import { BarAgentClassName, BarAgentCustomClassName, FooAgentClassName } from './testUtils';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
 import {
@@ -54,12 +50,7 @@ import {
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
-import {
-  BinaryReference,
-  DataValue,
-  ElementValue,
-  TextReference,
-} from 'golem:agent/common';
+import { BinaryReference, DataValue, ElementValue, TextReference } from 'golem:agent/common';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
@@ -148,9 +139,7 @@ test('BarAgent can be successfully initiated', () => {
           arg4.tag !== 'unstructured-text' ||
           arg5.tag !== 'unstructured-binary'
         ) {
-          throw new Error(
-            'Test failure: unresolved type in BarAgent constructor',
-          );
+          throw new Error('Test failure: unresolved type in BarAgent constructor');
         }
 
         const interfaceWit = Either.getOrThrowWith(
@@ -212,9 +201,7 @@ test('BarAgent can be successfully initiated', () => {
           ],
         };
 
-        const agentInitiator = AgentInitiatorRegistry.lookup(
-          BarAgentCustomClassName.value,
-        );
+        const agentInitiator = AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value);
 
         if (!agentInitiator) {
           throw new Error('BarAgent not found in AgentInitiatorRegistry');
@@ -349,13 +336,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
         );
 
         // Void return type
-        testInvoke(
-          'fun6',
-          [['param', arbString]],
-          resolvedAgent,
-          undefined,
-          false,
-        );
+        testInvoke('fun6', [['param', arbString]], resolvedAgent, undefined, false);
 
         // Invoking with various kind of optional types embedded in union type
         testInvoke(
@@ -383,22 +364,10 @@ test('An agent can be successfully initiated and all of its methods can be invok
         );
 
         // Invoking with union with literals
-        testInvoke(
-          'fun8',
-          [['a', unionWithLiterals]],
-          resolvedAgent,
-          unionWithLiterals,
-          false,
-        );
+        testInvoke('fun8', [['a', unionWithLiterals]], resolvedAgent, unionWithLiterals, false);
 
         // Invoking with tagged union
-        testInvoke(
-          'fun9',
-          [['param', taggedUnion]],
-          resolvedAgent,
-          taggedUnion,
-          false,
-        );
+        testInvoke('fun9', [['param', taggedUnion]], resolvedAgent, taggedUnion, false);
 
         // Invoking with union with only literals
         testInvoke(
@@ -437,13 +406,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
         );
 
         // Invoking with unstructured text
-        testInvoke(
-          'fun15',
-          [['param', unstructuredText]],
-          resolvedAgent,
-          unstructuredText,
-          false,
-        );
+        testInvoke('fun15', [['param', unstructuredText]], resolvedAgent, unstructuredText, false);
 
         // Invoking with unstructured text with language code
         testInvoke(
@@ -484,22 +447,10 @@ test('Invoke function that takes and returns inbuilt result type', () => {
     false,
   );
 
-  testInvoke(
-    'fun30',
-    [['param', Result.ok(true)]],
-    resolvedAgent,
-    Result.ok(true),
-    false,
-  );
+  testInvoke('fun30', [['param', Result.ok(true)]], resolvedAgent, Result.ok(true), false);
 
   // aliased result test
-  testInvoke(
-    'fun31',
-    [['param', Result.ok(true)]],
-    resolvedAgent,
-    Result.ok(true),
-    false,
-  );
+  testInvoke('fun31', [['param', Result.ok(true)]], resolvedAgent, Result.ok(true), false);
 });
 
 test('Invoke function that returns unit type', () => {
@@ -578,53 +529,17 @@ test('Invoke function that takes and returns inbuilt result type with undefined'
 
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-  testInvoke(
-    'fun32',
-    [['param', 'foo']],
-    resolvedAgent,
-    Result.ok(undefined),
-    false,
-  );
+  testInvoke('fun32', [['param', 'foo']], resolvedAgent, Result.ok(undefined), false);
 
-  testInvoke(
-    'fun33',
-    [['param', 'foo']],
-    resolvedAgent,
-    Result.err(undefined),
-    false,
-  );
+  testInvoke('fun33', [['param', 'foo']], resolvedAgent, Result.err(undefined), false);
 
-  testInvoke(
-    'fun34',
-    [['param', 'foo']],
-    resolvedAgent,
-    Result.ok(undefined),
-    false,
-  );
+  testInvoke('fun34', [['param', 'foo']], resolvedAgent, Result.ok(undefined), false);
 
-  testInvoke(
-    'fun35',
-    [['param', 'foo']],
-    resolvedAgent,
-    Result.ok(undefined),
-    false,
-  );
+  testInvoke('fun35', [['param', 'foo']], resolvedAgent, Result.ok(undefined), false);
 
-  testInvoke(
-    'fun36',
-    [['param', 'foo']],
-    resolvedAgent,
-    Result.err(undefined),
-    false,
-  );
+  testInvoke('fun36', [['param', 'foo']], resolvedAgent, Result.err(undefined), false);
 
-  testInvoke(
-    'fun37',
-    [['param', 'foo']],
-    resolvedAgent,
-    Result.ok(undefined),
-    false,
-  );
+  testInvoke('fun37', [['param', 'foo']], resolvedAgent, Result.ok(undefined), false);
 });
 
 test('Invoke function that takes and returns multimodal default', () => {
@@ -654,13 +569,7 @@ test('Invoke function that takes and returns multimodal default', () => {
     },
   ];
 
-  testInvoke(
-    'fun18',
-    [['param', multimodalInput]],
-    resolvedAgent,
-    multimodalInput,
-    true,
-  );
+  testInvoke('fun18', [['param', multimodalInput]], resolvedAgent, multimodalInput, true);
 });
 
 test('Invoke function that takes and returns multimodal basic', () => {
@@ -688,13 +597,7 @@ test('Invoke function that takes and returns multimodal basic', () => {
     { tag: 'text', val: { tag: 'url', val: 'https://foo.bar/some-text.txt' } },
   ];
 
-  testInvoke(
-    'fun38',
-    [['param', multimodalInput]],
-    resolvedAgent,
-    multimodalInput,
-    true,
-  );
+  testInvoke('fun38', [['param', multimodalInput]], resolvedAgent, multimodalInput, true);
 });
 
 test('Invoke function that takes and returns typed array', () => {
@@ -720,18 +623,7 @@ test('Invoke function that takes and returns typed array', () => {
       int64ArrayArb,
       float32ArrayArb,
       float64ArrayArb,
-      (
-        uint8,
-        uint16,
-        uint32,
-        uint64,
-        int8,
-        int16,
-        int32,
-        int64,
-        float32,
-        float64,
-      ) => {
+      (uint8, uint16, uint32, uint64, int8, int16, int32, int64, float32, float64) => {
         testInvoke('fun19', [['param', uint8]], resolvedAgent, uint8, false);
 
         testInvoke('fun20', [['param', uint16]], resolvedAgent, uint16, false);
@@ -748,21 +640,9 @@ test('Invoke function that takes and returns typed array', () => {
 
         testInvoke('fun29', [['param', int64]], resolvedAgent, int64, false);
 
-        testInvoke(
-          'fun21',
-          [['param', float32]],
-          resolvedAgent,
-          float32,
-          false,
-        );
+        testInvoke('fun21', [['param', float32]], resolvedAgent, float32, false);
 
-        testInvoke(
-          'fun28',
-          [['param', float64]],
-          resolvedAgent,
-          float64,
-          false,
-        );
+        testInvoke('fun28', [['param', float64]], resolvedAgent, float64, false);
       },
     ),
   );
@@ -909,36 +789,26 @@ test('Invoke function that takes unstructured-text and returns unstructured-text
     languageCode: 'pl',
   };
 
-  const dataValue = createInputDataValue(
-    [['param', invalidUnstructuredText]],
-    'fun16',
-    false,
-  );
+  const dataValue = createInputDataValue([['param', invalidUnstructuredText]], 'fun16', false);
 
-  resolvedAgent
-    .invoke('fun16', dataValue, { tag: 'anonymous' })
-    .then((invokeResult) => {
-      if (invokeResult.tag === 'ok') {
-        throw new Error('Test failure: invocation should have failed');
-      } else {
-        expect(invokeResult.val.val).toContain(
-          'Failed to deserialize arguments for method fun16 in agent FooAgent: Invalid value for parameter param. Language code `pl` is not allowed. Allowed codes: en, de',
-        );
-      }
-    });
+  resolvedAgent.invoke('fun16', dataValue, { tag: 'anonymous' }).then((invokeResult) => {
+    if (invokeResult.tag === 'ok') {
+      throw new Error('Test failure: invocation should have failed');
+    } else {
+      expect(invokeResult.val.val).toContain(
+        'Failed to deserialize arguments for method fun16 in agent FooAgent: Invalid value for parameter param. Language code `pl` is not allowed. Allowed codes: en, de',
+      );
+    }
+  });
 });
 
-function initiateFooAgent(
-  constructorParam: string,
-  simpleAgentClassMeta: ClassMetadata,
-) {
+function initiateFooAgent(constructorParam: string, simpleAgentClassMeta: ClassMetadata) {
   const constructorInfo = simpleAgentClassMeta.constructorArgs[0];
 
-  const constructorParamTypeInfoInternal =
-    AgentConstructorParamRegistry.getParamType(
-      'FooAgent',
-      constructorInfo.name,
-    );
+  const constructorParamTypeInfoInternal = AgentConstructorParamRegistry.getParamType(
+    'FooAgent',
+    constructorInfo.name,
+  );
 
   if (!constructorParamTypeInfoInternal) {
     throw new Error(
@@ -962,9 +832,7 @@ function initiateFooAgent(
   });
 
   if (result.tag !== 'ok') {
-    throw new Error(
-      util.format('Agent initiation failed: %s', JSON.stringify(result.val)),
-    );
+    throw new Error(util.format('Agent initiation failed: %s', JSON.stringify(result.val)));
   }
 
   return result.val;
@@ -981,35 +849,27 @@ function testInvoke(
   // We need to first manually form the data-value to test the dynamic invoke.
   // For this, we first convert the original ts-value to data value and do a round trip to ensure
   // data matches exact.
-  const dataValue = createInputDataValue(
-    parameterNameAndValues,
-    methodName,
-    multimodal,
-  );
+  const dataValue = createInputDataValue(parameterNameAndValues, methodName, multimodal);
 
-  resolvedAgent
-    .invoke(methodName, dataValue, { tag: 'anonymous' })
-    .then((invokeResult) => {
-      const resultDataValue =
-        invokeResult.tag === 'ok'
-          ? invokeResult.val
-          : (() => {
-              throw new Error(
-                'Test failure: ' + JSON.stringify(invokeResult.val),
-              );
-            })();
+  resolvedAgent.invoke(methodName, dataValue, { tag: 'anonymous' }).then((invokeResult) => {
+    const resultDataValue =
+      invokeResult.tag === 'ok'
+        ? invokeResult.val
+        : (() => {
+            throw new Error('Test failure: ' + JSON.stringify(invokeResult.val));
+          })();
 
-      if (expectedDataValueOutput !== undefined) {
-        expect(resultDataValue).toEqual(expectedDataValueOutput);
-      }
+    if (expectedDataValueOutput !== undefined) {
+      expect(resultDataValue).toEqual(expectedDataValueOutput);
+    }
 
-      // Unless it is an RPC call, we don't really need to deserialize the result
-      // But to ensure the data-value returned above corresponds to the original input
-      // we deserialize and assert if the input is same as output.
-      const result = deserializeReturnValue(methodName, resultDataValue);
+    // Unless it is an RPC call, we don't really need to deserialize the result
+    // But to ensure the data-value returned above corresponds to the original input
+    // we deserialize and assert if the input is same as output.
+    const result = deserializeReturnValue(methodName, resultDataValue);
 
-      expect(result).toEqual(Either.right(expectedOutput));
-    });
+    expect(result).toEqual(Either.right(expectedOutput));
+  });
 }
 
 function createInputDataValue(
@@ -1044,57 +904,49 @@ function createInputDataValue(
     return Either.getOrThrowWith(result, (error) => new Error(error));
   }
 
-  const elementValues: ElementValue[] = parameterNameAndValues.map(
-    ([paramName, value]) => {
-      const paramAnalysedType = AgentMethodParamRegistry.getParamType(
-        'FooAgent',
-        methodName,
-        paramName,
-      );
+  const elementValues: ElementValue[] = parameterNameAndValues.map(([paramName, value]) => {
+    const paramAnalysedType = AgentMethodParamRegistry.getParamType(
+      'FooAgent',
+      methodName,
+      paramName,
+    );
 
-      if (!paramAnalysedType) {
-        throw new Error(
-          `Unresolved type for \`${paramName}\` in method \`${methodName}\``,
+    if (!paramAnalysedType) {
+      throw new Error(`Unresolved type for \`${paramName}\` in method \`${methodName}\``);
+    }
+
+    switch (paramAnalysedType.tag) {
+      case 'analysed':
+        const witValue = Either.getOrThrowWith(
+          WitValue.fromTsValueDefault(value, paramAnalysedType.val),
+          (error) => new Error(error),
         );
-      }
+        return {
+          tag: 'component-model',
+          val: witValue,
+        };
 
-      switch (paramAnalysedType.tag) {
-        case 'analysed':
-          const witValue = Either.getOrThrowWith(
-            WitValue.fromTsValueDefault(value, paramAnalysedType.val),
-            (error) => new Error(error),
-          );
-          return {
-            tag: 'component-model',
-            val: witValue,
-          };
+      case 'unstructured-text':
+        const textReference = serializeTsValueToTextReference(value);
+        return {
+          tag: 'unstructured-text',
+          val: textReference,
+        };
 
-        case 'unstructured-text':
-          const textReference = serializeTsValueToTextReference(value);
-          return {
-            tag: 'unstructured-text',
-            val: textReference,
-          };
+      case 'unstructured-binary':
+        const binaryReference = serializeTsValueToBinaryReference(value);
+        return {
+          tag: 'unstructured-binary',
+          val: binaryReference,
+        };
 
-        case 'unstructured-binary':
-          const binaryReference = serializeTsValueToBinaryReference(value);
-          return {
-            tag: 'unstructured-binary',
-            val: binaryReference,
-          };
+      case 'principal':
+        throw new Error('Test failure: principal types should never be part of method parameters');
 
-        case 'principal':
-          throw new Error(
-            'Test failure: principal types should never be part of method parameters',
-          );
-
-        case 'multimodal':
-          throw new Error(
-            'Test failure: multimodal types should not be part of other parameters',
-          );
-      }
-    },
-  );
+      case 'multimodal':
+        throw new Error('Test failure: multimodal types should not be part of other parameters');
+    }
+  });
 
   return {
     tag: 'tuple',
@@ -1111,18 +963,13 @@ function deserializeReturnValue(
   methodName: string,
   returnValue: DataValue,
 ): Either.Either<any, string> {
-  const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(
-    methodName,
-  )?.returnType;
+  const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(methodName)?.returnType;
 
   if (!returnType) {
     throw new Error(`Method ${methodName} not found in metadata`);
   }
 
-  const returnTypeAnalysedType = AgentMethodRegistry.getReturnType(
-    'FooAgent',
-    methodName,
-  );
+  const returnTypeAnalysedType = AgentMethodRegistry.getReturnType('FooAgent', methodName);
 
   if (!returnTypeAnalysedType) {
     throw new Error(`Unsupported return type for method ${methodName}`);

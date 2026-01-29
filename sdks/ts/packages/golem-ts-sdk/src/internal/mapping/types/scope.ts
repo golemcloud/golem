@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 // Represents the scope of the type that's being mapped.
 // Example:
 // For the following code:
@@ -27,33 +26,40 @@
 // ```ts
 //   { scope: 'interface', name: 'MyData', parameterName: 'a', hasQuestionMark: true  }
 // ```
-export type TypeScope = {
-  scope: 'interface' | 'object' | 'method' | 'constructor';
-  name: string;
-  parameterName: string
-  hasQuestionMark: boolean
-}
+export type TypeScope =
   | {
-  scope: 'others';
-  name: string;
-};
+      scope: 'interface' | 'object' | 'method' | 'constructor';
+      name: string;
+      parameterName: string;
+      hasQuestionMark: boolean;
+    }
+  | {
+      scope: 'others';
+      name: string;
+    };
 
 export const TypeScope = {
   isQuestionMarkOptional(scope: TypeScope) {
-    return (scope.scope === 'interface' ||
-      scope.scope === 'object' ||
-      scope.scope === 'method' || scope.scope === 'constructor') && scope.hasQuestionMark;
+    return (
+      (scope.scope === 'interface' ||
+        scope.scope === 'object' ||
+        scope.scope === 'method' ||
+        scope.scope === 'constructor') &&
+      scope.hasQuestionMark
+    );
   },
 
   paramName(scope: TypeScope): string | undefined {
-    if (scope.scope === 'interface' ||
+    if (
+      scope.scope === 'interface' ||
       scope.scope === 'object' ||
-      scope.scope === 'method' || scope.scope === 'constructor') {
+      scope.scope === 'method' ||
+      scope.scope === 'constructor'
+    ) {
       return scope.parameterName;
     }
 
-    return undefined
-
+    return undefined;
   },
 
   interface(name: string, parameterName: string, hasQuestionMark: boolean): TypeScope {
@@ -89,8 +95,7 @@ export const TypeScope = {
       name: name,
       parameterName: parameterName,
       hasQuestionMark: hasQuestionMark,
-    }
-
+    };
   },
 
   others(name: string): TypeScope {
@@ -98,5 +103,5 @@ export const TypeScope = {
       scope: 'others',
       name,
     };
-  }
-}
+  },
+};

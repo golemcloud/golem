@@ -24,10 +24,7 @@ export interface AgentMethodParamMetadata {
  * Singleton registry for agent method parameter metadata.
  */
 class AgentMethodParamRegistryImpl {
-  private readonly registry: Map<
-    string,
-    Map<string, Map<string, AgentMethodParamMetadata>>
-  >;
+  private readonly registry: Map<string, Map<string, Map<string, AgentMethodParamMetadata>>>;
 
   constructor() {
     this.registry = new Map();
@@ -49,9 +46,7 @@ class AgentMethodParamRegistryImpl {
     }
   }
 
-  get(
-    agentClassName: string,
-  ): Map<string, Map<string, AgentMethodParamMetadata>> | undefined {
+  get(agentClassName: string): Map<string, Map<string, AgentMethodParamMetadata>> | undefined {
     if (!this.registry.has(agentClassName)) {
       this.registry.set(agentClassName, new Map());
     }

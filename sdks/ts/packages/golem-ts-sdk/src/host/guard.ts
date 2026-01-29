@@ -55,10 +55,7 @@ export function usePersistenceLevel(level: PersistenceLevel) {
  * @param f - The function to execute.
  * @returns The result of the executed function.
  */
-export function withPersistenceLevel<R>(
-  level: PersistenceLevel,
-  f: () => R,
-): R {
+export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R {
   const guard = usePersistenceLevel(level);
   return executeWithDrop([guard], f);
 }
