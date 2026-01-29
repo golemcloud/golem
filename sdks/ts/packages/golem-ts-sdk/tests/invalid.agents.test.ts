@@ -221,7 +221,7 @@ describe('Invalid types in agents', () => {
     expect(fun13Type.val).toBe('Unsupported type `Object`');
 
     expect(fun14Type.val).toBe(
-      '`RecursiveType` is recursive.\nRecursive types are not supported yet. \nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.',
+      '`RecursiveType` is recursive.\nRecursive types are not supported yet.\nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.',
     );
   });
 });
