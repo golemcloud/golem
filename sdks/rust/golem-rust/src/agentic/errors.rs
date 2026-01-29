@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::agent::common::ValueAndType;
+use crate::bindings::golem::agent::common::{HttpMountDetails, ValueAndType};
 use crate::golem_agentic::golem::agent::common::AgentError;
 use crate::value_and_type::IntoValue;
 

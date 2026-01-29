@@ -23,7 +23,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::ItemTrait;
 
-fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
+fn parse_definition_attributes(attrs: TokenStream) -> proc_macro2::TokenStream {
     if attrs.is_empty() {
         return quote! {
             golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
@@ -73,6 +73,9 @@ fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
                     _ => {}
                 }
             }
+            if left.path.is_ident("mount") {
+
+            }
         }
     }
 
@@ -81,7 +84,7 @@ fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
-    let agent_mode = parse_agent_mode(attrs);
+    let agent_mode = parse_definition_attributes(attrs);
 
     let type_parameters = agent_definition_trait
         .generics

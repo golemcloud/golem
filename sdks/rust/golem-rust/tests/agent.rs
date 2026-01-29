@@ -312,7 +312,7 @@ mod tests {
     }
 
     // Test: #[agent_definition(mode = "ephemeral")]
-    #[agent_definition(mode = "ephemeral")]
+    #[agent_definition(mode = "ephemeral", mount = "/mnt/data")]
     trait EchoEphemeralExplicit {
         fn new(init: UserId) -> Self;
         fn echo(&self, message: String) -> String;
