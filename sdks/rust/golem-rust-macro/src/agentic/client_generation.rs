@@ -260,50 +260,48 @@ fn get_remote_agent_methods_info(
                 syn::ReturnType::Default => quote! {},
             };
 
-                  Some(quote!{
-                        pub async fn #method_name(#(#inputs),*) -> #return_type {
-                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
-                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+            Some(quote!{
+              pub async fn #method_name(#(#inputs),*) -> #return_type {
+                let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
+                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
-                            #remote_method_name_token,
-                            &wit_values
-                          );
+                let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
+                  #remote_method_name_token,
+                  &wit_values
+                );
 
-                          let rpc_result: Result<golem_rust::golem_wasm::WitValue, golem_rust::golem_wasm::RpcError> = golem_rust::agentic::await_invoke_result(rpc_result_future).await;
+                let rpc_result: Result<golem_rust::golem_wasm::WitValue, golem_rust::golem_wasm::RpcError> = golem_rust::agentic::await_invoke_result(rpc_result_future).await;
 
-                          let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
+                let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
-                          let wit_value = golem_rust::agentic::unwrap_wit_tuple(rpc_result_ok);
+                let wit_value = golem_rust::agentic::unwrap_wit_tuple(rpc_result_ok);
 
-                          #process_invoke_result
-                        }
+                #process_invoke_result
+              }
 
-                        pub fn #trigger_method_name(#(#inputs),*) {
-                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
-                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+              pub fn #trigger_method_name(#(#inputs),*) {
+                let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
+                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let rpc_result: Result<(), golem_rust::golem_wasm::RpcError> = self.wasm_rpc.invoke(
-                            #remote_method_name_token,
-                            &wit_values
-                          );
+                let rpc_result: Result<(), golem_rust::golem_wasm::RpcError> = self.wasm_rpc.invoke(
+                  #remote_method_name_token,
+                  &wit_values
+                );
 
-                          rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
-                        }
+                rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
+              }
 
-                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime) {
-                          let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
-                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+              pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime) {
+                let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
+                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          self.wasm_rpc.schedule_invocation(
-                            scheduled_time,
-                            #remote_method_name_token,
-                            &wit_values
-                          );
-                        }
-                     })
-
-
+                self.wasm_rpc.schedule_invocation(
+                  scheduled_time,
+                  #remote_method_name_token,
+                  &wit_values
+                );
+              }
+           })
         } else {
             None
         }
