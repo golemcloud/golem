@@ -16,8 +16,8 @@ use super::WorkerStream;
 use crate::service::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::account::AccountId;
 use golem_common::model::WorkerId;
+use golem_common::model::account::AccountId;
 use std::sync::Arc;
 use tonic::Status;
 

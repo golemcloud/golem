@@ -823,11 +823,11 @@ impl AppCommandHandler {
 
         let diffable_local_http_api_deployments = {
             let mut diffable_local_http_api_deployments =
-                BTreeMap::<String, diff::HashOf<diff::HttpApiDeployment>>::new();
+                BTreeMap::<String, diff::HashOf<diff::HttpApiDeploymentLegacy>>::new();
             for (domain, http_api_deployment) in &deployable_manifest_http_api_deployments {
                 diffable_local_http_api_deployments.insert(
                     domain.0.clone(),
-                    diff::HttpApiDeployment {
+                    diff::HttpApiDeploymentLegacy {
                         agent_types: http_api_deployment
                             .iter()
                             .map(|def| def.0.clone())

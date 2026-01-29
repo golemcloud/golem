@@ -163,12 +163,13 @@ message CompiledRoute {
   RequestBodySchema body = 4;
   RouteBehaviour behavior = 5;
   optional golem.registry.SecuritySchemeId security_scheme = 6;
-  golem.component.CorsOptions cors = 7;
+  CorsOptions cors = 7;
 }
 
 message RouteBehaviour {
   oneof kind {
     CallAgent call_agent = 1;
+    CorsPreflight cors_preflight = 2;
   }
 
   message CallAgent {
@@ -181,6 +182,11 @@ message RouteBehaviour {
     repeated MethodParameter method_parameters = 7;
     golem.component.DataSchema expected_agent_response = 8;
   }
+
+  message CorsPreflight {
+    repeated string allowed_origins = 1;
+    repeated golem.component.HttpMethod allowed_methods = 2;
+  }
 }
 
 message SecuritySchemeDetails {
@@ -191,4 +197,8 @@ message SecuritySchemeDetails {
   string client_secret = 5;
   string redirect_url = 6;
   repeated string scopes = 7;
+}
+
+message CorsOptions {
+  repeated string allowed_patterns = 1;
 }

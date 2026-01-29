@@ -28,6 +28,7 @@ export function handleTuple({ type }: TupleCtx, mapper: TypeMapper): Either.Eith
   }
 
   return Either.map(
+    // note that the scope of each type in the map is undefined since we track the scope only if it's interface, object, constructor or method
     Either.all(type.elements.map(el => mapper(el, undefined))),
     items => tuple(type.name, undefined, items)
   );

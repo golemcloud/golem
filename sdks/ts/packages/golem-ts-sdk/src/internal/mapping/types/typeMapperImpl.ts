@@ -14,19 +14,19 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import { TypeMappingScope } from './scope';
+import { TypeScope } from './scope';
 import { callHandler } from './handlers';
-import { ctx } from './ctx';
+import { createCtx } from './ctx';
 import { AnalysedType, option } from './analysedType';
 import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-export const typeMapper: TypeMapper = (tsType: TsType, scope: TypeMappingScope | undefined) => {
+export const typeMapper: TypeMapper = (tsType: TsType, scope: TypeScope | undefined) => {
   const result =
     mapTypeInternal(tsType, scope);
 
-  if (scope && TypeMappingScope.isOptional(scope)) {
+  if (scope && TypeScope.isQuestionMarkOptional(scope)) {
     return Either.map(result, (analysedType) => {
 
       if (analysedType.kind === 'option' && analysedType.emptyType !== 'question-mark') {
@@ -40,11 +40,11 @@ export const typeMapper: TypeMapper = (tsType: TsType, scope: TypeMappingScope |
   return result
 }
 
-export function mapTypeInternal(type: TsType, scope: TypeMappingScope | undefined): Either.Either<AnalysedType, string> {
+export function mapTypeInternal(type: TsType, scope: TypeScope | undefined): Either.Either<AnalysedType, string> {
   const rejected = rejectBoxedTypes(type);
   if (Either.isLeft(rejected)) return rejected;
 
-  return callHandler(type.kind, ctx(type, scope), typeMapper);
+  return callHandler(type.kind, createCtx(type, scope), typeMapper);
 }
 
 

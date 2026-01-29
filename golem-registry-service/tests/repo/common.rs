@@ -19,6 +19,7 @@ use futures::future::join_all;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
@@ -37,7 +38,7 @@ use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
-    AgentTypeSet, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
+    HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
@@ -816,7 +817,12 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        agent_types: AgentTypeSet([AgentTypeName("test-agent".to_string())].into()),
+        data: Blob::new(HttpApiDeploymentData {
+            agents: BTreeMap::from_iter([(
+                AgentTypeName("test-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            )]),
+        }),
     }
     .with_updated_hash();
 

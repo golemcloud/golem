@@ -14,24 +14,26 @@
 
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import { TypeMappingScope } from './scope';
+import { TypeScope } from './scope';
 
 type TsType = CoreType.Type;
 
+// The `handler` deals with `Ctx` rather than `TypeMappingScope`.
+// A scope is a pre-calculated details along with the scope details
 export type Ctx = {
   type: TsType;
-  scope: TypeMappingScope | undefined;
+  scope: TypeScope | undefined;
   scopeName?: string;
   parameterInScope: string | undefined;
 };
 
-export function ctx(type: TsType, scope: TypeMappingScope | undefined): Ctx {
+export function createCtx(type: TsType, scope: TypeScope | undefined): Ctx {
   return {
     type,
     scope,
     scopeName: scope?.name,
     parameterInScope: scope
-      ? TypeMappingScope.paramName(scope)
+      ? TypeScope.paramName(scope)
       : undefined
   };
 }

@@ -15,27 +15,27 @@
 mod error;
 mod worker;
 
+use crate::bootstrap::Services;
 use crate::config::GrpcApiConfig;
 use crate::grpcapi::worker::WorkerGrpcApi;
-use crate::service::Services;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServiceServer;
 use golem_api_grpc::proto::golem::worker::v1::{
-    worker_error, worker_execution_error, WorkerError, WorkerExecutionError,
+    WorkerError, WorkerExecutionError, worker_error, worker_execution_error,
 };
-use golem_common::model::component::ComponentFilePath;
 use golem_common::model::WorkerId;
+use golem_common::model::component::ComponentFilePath;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
-use tonic::Status;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;

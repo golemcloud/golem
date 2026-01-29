@@ -15,8 +15,8 @@
 use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult};
 use crate::service::component::ComponentService;
 use crate::service::worker::{WorkerResult, WorkerService, WorkerServiceError};
-use golem_common::model::agent::{AgentError, AgentId, DataValue, UntypedDataValue};
 use golem_common::model::WorkerId;
+use golem_common::model::agent::{AgentError, AgentId, DataValue, UntypedDataValue};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::{FromValue, IntoValueAndType, Value};

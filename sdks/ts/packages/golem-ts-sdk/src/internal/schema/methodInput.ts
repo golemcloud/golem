@@ -17,7 +17,7 @@ import * as Either from '../../newTypes/either';
 import { DataSchema, ElementSchema } from 'golem:agent/common';
 import * as WitType from '../mapping/types/WitType';
 import { MethodParams } from '@golemcloud/golem-ts-types-core';
-import { TypeMappingScope } from '../mapping/types/scope';
+import { TypeScope } from '../mapping/types/scope';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import {
   getMultimodalDataSchemaFromTypeInternal,
@@ -212,11 +212,7 @@ function processMethodParameter(
     WitType.fromTsType(
       parameterType,
 
-      TypeMappingScope.method(
-        methodName,
-        parameterName,
-        parameterType.optional,
-      ),
+      TypeScope.method(methodName, parameterName, parameterType.optional),
     ),
     (typeInfo) => {
       const witType = typeInfo[0];

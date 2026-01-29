@@ -1,6 +1,6 @@
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
-import { TypeMappingScope } from './scope';
+import { TypeScope } from './scope';
 import { Ctx } from './ctx';
 import { AnalysedType, field, record } from './analysedType';
 import { TypeMapper } from './typeMapper';
@@ -19,7 +19,7 @@ export function handleObject({ type }: ObjectCtx, mapper: TypeMapper): Either.Ei
     const entityName = type.name ?? type.kind;
 
     if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-      const tsType =  mapper(internalType, TypeMappingScope.object(
+      const tsType =  mapper(internalType, TypeScope.object(
         entityName,
         prop.getName(),
         true
@@ -30,7 +30,7 @@ export function handleObject({ type }: ObjectCtx, mapper: TypeMapper): Either.Ei
       });
     }
 
-    const tsType = mapper(internalType, TypeMappingScope.object(
+    const tsType = mapper(internalType, TypeScope.object(
       entityName,
       prop.getName(),
       false

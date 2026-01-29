@@ -17,7 +17,7 @@ use crate::model;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::worker::ConnectWorkerStream;
-use crate::service::worker::{proxy_worker_connection, InvocationParameters, WorkerService};
+use crate::service::worker::{InvocationParameters, WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::model::auth::TokenSecret;
@@ -30,14 +30,14 @@ use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationRequest, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
-use golem_common::{recorded_http_api_request, SafeDisplay};
+use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{
     AuthCtx, EnvironmentAction, GolemSecurityScheme, WrappedGolemSecuritySchema,
 };
 use golem_service_base::model::*;
-use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::Body;
+use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::*;
@@ -810,7 +810,7 @@ impl WorkerApi {
         match (from, query) {
             (Some(_), Some(_)) => Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
                 errors: vec![
-                    "Cannot specify both the 'from' and the 'query' parameters".to_string()
+                    "Cannot specify both the 'from' and the 'query' parameters".to_string(),
                 ],
                 cause: None,
             }))),

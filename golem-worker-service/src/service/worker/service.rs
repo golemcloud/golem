@@ -32,9 +32,9 @@ use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_wasm::ValueAndType;
 use golem_wasm::protobuf::Val as ProtoVal;
 use golem_wasm::protobuf::Val;
-use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
@@ -267,13 +267,15 @@ impl WorkerService {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<ValueAndType>> {
         // sanity check for consistency of auth and owner information
-        assert!(auth_ctx
-            .authorize_environment_action(
-                account_id_owning_environment,
-                &BTreeSet::new(),
-                EnvironmentAction::UpdateWorker,
-            )
-            .is_ok());
+        assert!(
+            auth_ctx
+                .authorize_environment_action(
+                    account_id_owning_environment,
+                    &BTreeSet::new(),
+                    EnvironmentAction::UpdateWorker,
+                )
+                .is_ok()
+        );
 
         let result = self
             .worker_client

@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
+use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
-use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
-use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
@@ -33,13 +31,12 @@ use std::time::Duration;
 pub struct WorkerServiceConfig {
     pub environment: String,
     pub tracing: TracingConfig,
-    pub gateway_session_storage: GatewaySessionStorageConfig,
+    pub gateway_session_storage: SessionStoreConfig,
     pub port: u16,
     pub custom_request_port: u16,
     pub grpc: GrpcApiConfig,
     pub routing_table: RoutingTableConfig,
     pub worker_executor: WorkerExecutorClientConfig,
-    pub blob_storage: BlobStorageConfig,
     pub workspace: String,
     pub registry_service: GrpcRegistryServiceConfig,
     pub cors_origin_regex: String,
@@ -84,12 +81,7 @@ impl SafeDisplay for WorkerServiceConfig {
         );
         let _ = writeln!(&mut result, "worker executor:");
         let _ = writeln!(result, "{}", self.worker_executor.to_safe_string_indented());
-        let _ = writeln!(&mut result, "blob storage:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.blob_storage.to_safe_string_indented()
-        );
+
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
         let _ = writeln!(&mut result, "registry service:");
         let _ = writeln!(
@@ -129,14 +121,13 @@ impl Default for WorkerServiceConfig {
     fn default() -> Self {
         Self {
             environment: "local".to_string(),
-            gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
+            gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,
             grpc: GrpcApiConfig::default(),
             routing_table: RoutingTableConfig::default(),
             worker_executor: WorkerExecutorClientConfig::default(),
-            blob_storage: BlobStorageConfig::default(),
             workspace: "release".to_string(),
             registry_service: GrpcRegistryServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
@@ -183,20 +174,20 @@ impl Default for GrpcApiConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum GatewaySessionStorageConfig {
-    Redis(RedisConfig),
-    Sqlite(DbSqliteConfig),
+pub enum SessionStoreConfig {
+    Redis(RedisSessionStoreConfig),
+    Sqlite(SqliteSessionStoreConfig),
 }
 
-impl SafeDisplay for GatewaySessionStorageConfig {
+impl SafeDisplay for SessionStoreConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         match self {
-            GatewaySessionStorageConfig::Redis(redis) => {
+            SessionStoreConfig::Redis(redis) => {
                 let _ = writeln!(&mut result, "redis:");
                 let _ = writeln!(&mut result, "{}", redis.to_safe_string_indented());
             }
-            GatewaySessionStorageConfig::Sqlite(sqlite) => {
+            SessionStoreConfig::Sqlite(sqlite) => {
                 let _ = writeln!(&mut result, "sqlite:");
                 let _ = writeln!(&mut result, "{}", sqlite.to_safe_string_indented());
             }
@@ -205,15 +196,57 @@ impl SafeDisplay for GatewaySessionStorageConfig {
     }
 }
 
-impl Default for GatewaySessionStorageConfig {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RedisSessionStoreConfig {
+    #[serde(with = "humantime_serde")]
+    pub pending_login_expiration: std::time::Duration,
+    #[serde(flatten)]
+    pub redis_config: RedisConfig,
+}
+
+impl Default for RedisSessionStoreConfig {
     fn default() -> Self {
-        Self::default_redis()
+        Self {
+            pending_login_expiration: Duration::from_hours(1),
+            redis_config: RedisConfig::default(),
+        }
     }
 }
 
-impl GatewaySessionStorageConfig {
-    pub fn default_redis() -> Self {
-        Self::Redis(RedisConfig::default())
+impl SafeDisplay for RedisSessionStoreConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "pending_login_expiration: {:?}",
+            self.pending_login_expiration
+        );
+        let _ = writeln!(&mut result, "{}", self.redis_config.to_safe_string());
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SqliteSessionStoreConfig {
+    #[serde(with = "humantime_serde")]
+    pub pending_login_expiration: std::time::Duration,
+    #[serde(with = "humantime_serde")]
+    pub cleanup_interval: std::time::Duration,
+    #[serde(flatten)]
+    pub sqlite_config: DbSqliteConfig,
+}
+
+impl SafeDisplay for SqliteSessionStoreConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "pending_login_expiration: {:?}",
+            self.pending_login_expiration
+        );
+        let _ = writeln!(&mut result, "cleanup_interval: {:?}", self.cleanup_interval);
+        let _ = writeln!(&mut result, "{}", self.sqlite_config.to_safe_string());
+        result
     }
 }
 

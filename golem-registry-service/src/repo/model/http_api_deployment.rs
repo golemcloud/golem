@@ -15,6 +15,7 @@
 use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
@@ -24,13 +25,13 @@ use golem_common::model::diff::Hashable;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::{
-    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
+    HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentId,
+    HttpApiDeploymentRevision,
 };
 use golem_service_base::repo::RepoError;
-use sqlx::encode::IsNull;
-use sqlx::error::BoxDynError;
-use sqlx::{Database, FromRow};
-use std::collections::BTreeSet;
+use golem_service_base::repo::blob::Blob;
+use sqlx::FromRow;
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -45,52 +46,10 @@ pub enum HttpApiDeploymentRepoError {
 
 error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 
-// stored as string containing a json array
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentTypeSet(pub BTreeSet<AgentTypeName>);
-
-impl<DB: Database> sqlx::Type<DB> for AgentTypeSet
-where
-    String: sqlx::Type<DB>,
-{
-    fn type_info() -> DB::TypeInfo {
-        <String as sqlx::Type<DB>>::type_info()
-    }
-
-    fn compatible(ty: &DB::TypeInfo) -> bool {
-        <String as sqlx::Type<DB>>::compatible(ty)
-    }
-}
-
-impl<'q, DB: Database> sqlx::Encode<'q, DB> for AgentTypeSet
-where
-    String: sqlx::Encode<'q, DB>,
-{
-    fn encode_by_ref(
-        &self,
-        buf: &mut <DB as Database>::ArgumentBuffer<'q>,
-    ) -> Result<IsNull, BoxDynError> {
-        let serialized = serde_json::to_string(&self.0)?;
-        serialized.encode(buf)
-    }
-
-    fn size_hint(&self) -> usize {
-        match serde_json::to_string(&self.0) {
-            Ok(string) => string.size_hint(),
-            Err(_) => 0,
-        }
-    }
-}
-
-impl<'r, DB: Database> sqlx::Decode<'r, DB> for AgentTypeSet
-where
-    &'r str: sqlx::Decode<'r, DB>,
-{
-    fn decode(value: <DB as Database>::ValueRef<'r>) -> Result<Self, BoxDynError> {
-        let deserialized: BTreeSet<AgentTypeName> =
-            serde_json::from_str(<&'r str>::decode(value)?)?;
-        Ok(Self(deserialized))
-    }
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct HttpApiDeploymentData {
+    pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -111,8 +70,7 @@ pub struct HttpApiDeploymentRevisionRecord {
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
 
-    // json string array as string
-    pub agent_types: AgentTypeSet,
+    pub data: Blob<HttpApiDeploymentData>,
 }
 
 impl HttpApiDeploymentRevisionRecord {
@@ -132,7 +90,7 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn creation(
         http_api_deployment_id: HttpApiDeploymentId,
-        agent_types: BTreeSet<AgentTypeName>,
+        agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         actor: AccountId,
     ) -> Self {
         let mut value = Self {
@@ -140,7 +98,7 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: HttpApiDeploymentRevision::INITIAL.into(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
-            agent_types: AgentTypeSet(agent_types),
+            data: Blob::new(HttpApiDeploymentData { agents }),
         };
         value.update_hash();
         value
@@ -152,7 +110,9 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: value.revision.into(),
             hash: SqlBlake3Hash::empty(),
             audit,
-            agent_types: AgentTypeSet(value.agent_types),
+            data: Blob::new(HttpApiDeploymentData {
+                agents: value.agents,
+            }),
         };
         value.update_hash();
         value
@@ -168,13 +128,28 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: current_revision_id,
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
-            agent_types: AgentTypeSet(BTreeSet::new()),
+            data: Blob::new(HttpApiDeploymentData {
+                agents: BTreeMap::new(),
+            }),
         }
     }
 
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
-            agent_types: self.agent_types.0.iter().map(|had| had.0.clone()).collect(),
+            agents: self
+                .data
+                .value()
+                .agents
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.0.clone(),
+                        diff::HttpApiDeploymentAgentOptions {
+                            security_scheme: v.security_scheme.as_ref().map(|v| v.0.clone()),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -208,7 +183,7 @@ impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
-            agent_types: value.revision.agent_types.0,
+            agents: value.revision.data.into_value().agents,
             created_at: value.entity_created_at.into(),
         })
     }

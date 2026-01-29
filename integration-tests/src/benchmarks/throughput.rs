@@ -27,7 +27,9 @@ use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
     HttpApiRoute, RouteMethod, WorkerGatewayBinding,
 };
-use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
+};
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -38,7 +40,7 @@ use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use tracing::{info, Level};
 
 pub struct ThroughputEcho {
@@ -670,7 +672,10 @@ impl ThroughputBenchmark {
 
         let http_api_deployment_creation = HttpApiDeploymentCreation {
             domain: domain.clone(),
-            agent_types: [AgentTypeName("benchmark-agent".to_string())].into(),
+            agents: BTreeMap::from_iter([(
+                AgentTypeName("benchmark-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            )]),
         };
 
         client

@@ -17,7 +17,30 @@ DELETE FROM component_plugin_installations;
 DELETE FROM component_revisions;
 DELETE FROM components;
 
-ALTER TABLE http_api_deployment_revisions RENAME COLUMN http_api_definitions TO agent_types;
+DROP TABLE http_api_deployment_revisions;
+
+CREATE TABLE http_api_deployment_revisions
+(
+    http_api_deployment_id UUID      NOT NULL,
+    revision_id            BIGINT    NOT NULL,
+
+    hash                   BYTEA     NOT NULL,
+
+    created_at             TIMESTAMP NOT NULL,
+    created_by             UUID      NOT NULL,
+    deleted                BOOLEAN   NOT NULL,
+
+    data                   BYTEA      NOT NULL,
+
+    CONSTRAINT http_api_deployment_revisions_pk
+        PRIMARY KEY (http_api_deployment_id, revision_id),
+    CONSTRAINT http_api_deployment_revisions_deployments_fk
+        FOREIGN KEY (http_api_deployment_id)
+            REFERENCES http_api_deployments
+);
+
+CREATE INDEX http_api_deployment_revisions_latest_revision_by_id_idx
+    ON http_api_deployment_revisions (http_api_deployment_id, revision_id DESC);
 
 DROP TABLE deployment_compiled_http_api_definition_routes;
 DROP TABLE deployment_domain_http_api_definitions;
