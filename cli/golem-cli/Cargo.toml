@@ -101,6 +101,7 @@ terminal_size = { workspace = true }
 textwrap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+mcp-sdk-rs = "0.3.3"
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
 toml = { workspace = true }

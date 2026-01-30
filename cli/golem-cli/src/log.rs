@@ -173,6 +173,13 @@ pub fn set_log_output(output: Output) {
     LOG_STATE.write().unwrap().set_output(output);
 }
 
+pub fn take_log_buffer() -> Vec<String> {
+    let mut buffer = LOG_STATE_BUFFER.write().unwrap();
+    let result = buffer.clone();
+    buffer.clear();
+    result
+}
+
 pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
     logln_internal(&format!(
         "{} {}",
