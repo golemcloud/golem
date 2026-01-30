@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{GOLEM_RUST_VERSION, GOLEM_TS_VERSION};
 use fancy_regex::{Match, Regex};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase, ToTitleCase};
 use serde::{Deserialize, Serialize};
@@ -480,10 +481,41 @@ pub(crate) enum Transform {
 
 #[derive(Debug, Clone, Default)]
 pub struct SdkOverrides {
-    pub rust_path: Option<String>,
-    pub rust_version: Option<String>,
+    pub golem_rust_path: Option<String>,
+    pub golem_rust_version: Option<String>,
     pub ts_packages_path: Option<String>,
     pub ts_version: Option<String>,
+}
+
+impl SdkOverrides {
+    pub fn ts_package_version_or_path(&self, package_name: &str) -> String {
+        match &self.ts_packages_path {
+            Some(ts_packages_path) => {
+                format!("{}/{}", ts_packages_path, package_name)
+            }
+            None => self
+                .ts_version
+                .as_deref()
+                .unwrap_or(GOLEM_TS_VERSION)
+                .to_string(),
+        }
+    }
+
+    pub fn golem_rust_version_or_path(&self) -> String {
+        match &self.golem_rust_path {
+            Some(rust_path) => {
+                format!(r#"path = "{}""#, rust_path)
+            }
+            _ => {
+                format!(
+                    r#"version = "{}""#,
+                    self.golem_rust_version
+                        .as_deref()
+                        .unwrap_or(GOLEM_RUST_VERSION)
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]

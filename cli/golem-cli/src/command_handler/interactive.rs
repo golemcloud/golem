@@ -324,7 +324,7 @@ impl InteractiveHandler {
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.some_or_err()?;
                 Ok(app_ctx
-                    .application
+                    .application()
                     .component(component_name)
                     .component_type())
             };
@@ -351,7 +351,7 @@ impl InteractiveHandler {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
             app_ctx
-                .application
+                .application()
                 .component_names()
                 .cloned()
                 .collect::<Vec<_>>()
@@ -499,13 +499,13 @@ impl InteractiveHandler {
                     let app_ctx = self.ctx.app_context_lock().await;
                     let app_ctx = app_ctx.some_or_err()?;
                     app_ctx
-                        .application
+                        .application()
                         .component_names()
                         .filter(|component_name| {
                             validate_component_type_for_dependency_type(
                                 dependency_type,
                                 app_ctx
-                                    .application
+                                    .application()
                                     .component(component_name)
                                     .component_type(),
                             )

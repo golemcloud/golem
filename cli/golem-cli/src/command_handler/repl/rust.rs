@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod rust;
-pub mod type_naming;
-pub mod typescript;
+use crate::context::Context;
+use crate::model::repl::BridgeReplArgs;
+use std::sync::Arc;
 
-use camino::Utf8Path;
-use golem_common::model::agent::{AgentType, AgentTypeName};
-use heck::ToKebabCase;
-
-pub trait BridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self>
-    where
-        Self: Sized;
-    fn generate(&mut self) -> anyhow::Result<()>;
+pub struct RustRepl {
+    _ctx: Arc<Context>,
 }
 
-pub fn bridge_client_directory_name(agent_type_name: &AgentTypeName) -> String {
-    format!("{}-client", agent_type_name.as_str().to_kebab_case())
+impl RustRepl {
+    pub fn new(ctx: Arc<Context>) -> Self {
+        Self { _ctx: ctx }
+    }
+
+    pub async fn run(&self, _args: BridgeReplArgs) -> anyhow::Result<()> {
+        todo!("Rust REPL not implemented")
+    }
 }

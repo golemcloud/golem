@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::{TaskResultMarker, TaskResultMarkerHashSource};
-use crate::app::context::ApplicationContext;
+use crate::app::context::BuildContext;
 use crate::fs;
 use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
@@ -263,10 +263,10 @@ type EmptyTaskUpToDateCheck =
     TaskUpToDateCheck<EmptyIter, EmptyIter, PathBuf, PathBuf, EmptyFn, EmptyFn>;
 
 impl EmptyTaskUpToDateCheck {
-    pub fn empty(ctx: &ApplicationContext) -> Self {
+    pub fn empty(ctx: &BuildContext<'_>) -> Self {
         Self {
-            marker_dir: ctx.application.task_result_marker_dir(),
-            skip_check: ctx.config.skip_up_to_date_checks,
+            marker_dir: ctx.application().task_result_marker_dir(),
+            skip_check: ctx.skip_up_to_date_checks(),
             task_result_marker: None,
             sources: std::iter::empty::<PathBuf>,
             targets: std::iter::empty::<PathBuf>,
@@ -274,6 +274,6 @@ impl EmptyTaskUpToDateCheck {
     }
 }
 
-pub fn new_task_up_to_date_check(ctx: &ApplicationContext) -> EmptyTaskUpToDateCheck {
+pub fn new_task_up_to_date_check(ctx: &BuildContext<'_>) -> EmptyTaskUpToDateCheck {
     EmptyTaskUpToDateCheck::empty(ctx)
 }

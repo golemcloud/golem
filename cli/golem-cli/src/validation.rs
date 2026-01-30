@@ -99,6 +99,21 @@ impl<T> ValidatedResult<T> {
         }
     }
 
+    pub async fn map_async<U, F>(self, f: F) -> ValidatedResult<U>
+    where
+        F: AsyncFnOnce(T) -> U,
+    {
+        match self {
+            ValidatedResult::Ok(value) => ValidatedResult::Ok(f(value).await),
+            ValidatedResult::OkWithWarns(value, warns) => {
+                ValidatedResult::OkWithWarns(f(value).await, warns)
+            }
+            ValidatedResult::WarnsAndErrors(warns, errors) => {
+                ValidatedResult::WarnsAndErrors(warns, errors)
+            }
+        }
+    }
+
     pub fn and_then<U, F>(self, f: F) -> ValidatedResult<U>
     where
         F: FnOnce(T) -> ValidatedResult<U>,
@@ -107,6 +122,22 @@ impl<T> ValidatedResult<T> {
             ValidatedResult::Ok(value) => f(value),
             ValidatedResult::OkWithWarns(value, warns) => {
                 ValidatedResult::from_value_and_warns((), warns).combine(f(value), |_, value| value)
+            }
+            ValidatedResult::WarnsAndErrors(warns, errors) => {
+                ValidatedResult::WarnsAndErrors(warns, errors)
+            }
+        }
+    }
+
+    pub async fn and_then_async<U, F>(self, f: F) -> ValidatedResult<U>
+    where
+        F: AsyncFnOnce(T) -> ValidatedResult<U>,
+    {
+        match self {
+            ValidatedResult::Ok(value) => f(value).await,
+            ValidatedResult::OkWithWarns(value, warns) => {
+                ValidatedResult::from_value_and_warns((), warns)
+                    .combine(f(value).await, |_, value| value)
             }
             ValidatedResult::WarnsAndErrors(warns, errors) => {
                 ValidatedResult::WarnsAndErrors(warns, errors)
@@ -136,11 +167,6 @@ impl<T> ValidatedResult<T> {
         }
     }
 
-    pub fn merge_and_get<U>(self, other: ValidatedResult<U>) -> (ValidatedResult<()>, Option<U>) {
-        let next = self.combine(other, |_, other| other);
-        next.take()
-    }
-
     pub fn expect_error<U>(self) -> ValidatedResult<U> {
         match self {
             ValidatedResult::Ok(_) => panic!("Expected error"),
@@ -149,6 +175,13 @@ impl<T> ValidatedResult<T> {
                 ValidatedResult::WarnsAndErrors(warns, errors)
             }
         }
+    }
+}
+
+impl ValidatedResult<()> {
+    pub fn merge_and_get<U>(self, other: ValidatedResult<U>) -> (ValidatedResult<()>, Option<U>) {
+        let next = self.combine(other, |_, other| other);
+        next.take()
     }
 }
 

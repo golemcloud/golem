@@ -1765,7 +1765,7 @@ impl WorkerCommandHandler {
                             log_text_view(&WorkerNameHelp);
                             logln("");
                             log_text_view(&AvailableComponentNamesHelp(
-                                app_ctx.application.component_names().cloned().collect(),
+                                app_ctx.application().component_names().cloned().collect(),
                             ));
                             bail!(NonSuccessfulExit);
                         }
@@ -1910,7 +1910,10 @@ impl WorkerCommandHandler {
                 match app_ctx {
                     Some(app_ctx) if environment.is_manifest_scoped() => {
                         let fuzzy_search = FuzzySearch::new(
-                            app_ctx.application.component_names().map(|cn| cn.as_str()),
+                            app_ctx
+                                .application()
+                                .component_names()
+                                .map(|cn| cn.as_str()),
                         );
                         match fuzzy_search.find(&component_name.0) {
                             Ok(match_) => {
@@ -1942,7 +1945,7 @@ impl WorkerCommandHandler {
                                     log_text_view(&WorkerNameHelp);
                                     logln("");
                                     log_text_view(&AvailableComponentNamesHelp(
-                                        app_ctx.application.component_names().cloned().collect(),
+                                        app_ctx.application().component_names().cloned().collect(),
                                     ));
 
                                     bail!(NonSuccessfulExit);

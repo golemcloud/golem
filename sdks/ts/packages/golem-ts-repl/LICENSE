@@ -1,0 +1,69 @@
+# Golem Source License v1.0
+*last updated 19 May 2025*
+
+> **Notice:** This License is **not** an Open-Source license. Each version of Golem automatically becomes Open Source under the Change License on its Change Date.
+
+## 1 Definitions
+
+* **Licensor** - Golem Cloud, Inc., a Delaware corporation.
+* **Licensed Work ("Golem")** - the source-available project published by the Licensor, copyright 2023-2025 Golem Cloud, Inc.
+* **Change License** - Apache License, Version 2.0.
+* **Change Date** - four (4) years after the first public release of each version of Golem under this License.
+* **Affiliate** - any entity that, directly or indirectly, controls, is controlled by, or is under common control with a party, where "control" means ownership of more than fifty percent (50 %) of the voting interests or the power to direct management and policies.
+* **You / Your** - any individual or entity exercising rights in the Licensed Work.
+* **Third-Party Code-Execution Service** - any product or service (single-tenant *or* multi-tenant, branded or white-label) that enables an unaffiliated third party to deploy, upload, register, supply, or execute its own code, agents, workflows, or services on infrastructure You **own, operate, manage, or otherwise make available** and where that execution is powered, directly or indirectly, by the Licensed Work. Employees and contract staff acting on Your behalf are not third parties; **Affiliates are**.
+
+## 2 Grant of Rights & Use Restriction
+
+Subject to Sections 3-7 and 11, the Licensor grants You a worldwide, royalty-free right to copy, modify, create derivative works of, distribute, and make use of the Licensed Work **except** that, *before the Change Date*, You **may not** provide, sell, or resell the Licensed Work (or any work that incorporates it) as a Third-Party Code-Execution Service.
+
+It is irrelevant whether Golem's own APIs are exposed, wrapped, hidden, or embedded: if third-party code ultimately runs on Golem's execution engine, this prohibition applies.
+For clarity, it is **permitted** to integrate Golem into applications where end users submit data or content that is processed by Golem, provided those users cannot upload or execute their own code.
+
+Any scheme, technical or contractual, intended to evade this Section 2 while retaining effective use of the Licensed Work is deemed a breach of this License.
+
+## 3 Automatic Conversion on Change Date
+
+On the applicable Change Date each version of Golem is simultaneously relicensed to You under the Change License, and the rights granted in Section 2 for that version terminate.
+
+## 4 Commercial License Option
+
+If Your use is outside the scope permitted in Section 2 prior to the Change Date, You must obtain a separate commercial license from the Licensor or cease all use of the Licensed Work.
+
+## 5 Distribution Requirements
+
+Every copy of the Licensed Work or any derivative You distribute must include (a) this License in its entirety *or* a URL pointing unmodified to this License, and (b) a conspicuous copyright notice for the Licensor.
+
+## 6 Version Scope
+
+This License applies independently to each version of Golem. Parameters such as the Change Date may differ for later versions.
+
+## 7 Termination
+
+Any breach of this License immediately terminates Your rights for the current and all prior versions of the Licensed Work.
+
+## 8 Trademarks
+
+No trademark, service mark, or logo of the Licensor or its Affiliates is licensed under this document.
+
+## 9 Patents
+
+No patent license is granted until the Licensed Work converts to the Change License, after which the patent terms (if any) of the Change License govern.
+
+## 10 Disclaimer of Warranty & Limitation of Liability
+
+THE LICENSED WORK IS PROVIDED "AS IS" AND WITHOUT WARRANTY OF ANY KIND. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, AND SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR RELATING TO THE LICENSED WORK OR THIS LICENSE.
+
+## 11 Contributor Assignment
+
+1. **Assignment.** By submitting a **Contribution** (an original work you own) for inclusion in the Licensed Work, you assign to the Licensor all right, title, and interest - including copyright and, to the extent permitted, moral rights - in that Contribution.
+2. **License-back.** The Licensor grants you a perpetual, worldwide, royalty-free license to use, modify, and distribute your Contribution under this License.
+3. **Patent Grant.** You grant the Licensor a perpetual, worldwide, royalty-free, irrevocable license - with rights to sublicense - to make, use, sell, offer for sale, import, and otherwise exploit (i) the Contribution and (ii) the Contribution in combination with the Licensed Work.
+4. **Outbound Licensing.** The Licensor may distribute the Contribution under this License, the Change License, or any other license, provided the Contribution remains available under this License.
+5. **No Obligation to Use.** The Licensor may accept, modify, or decline any Contribution at its sole discretion.
+6. **Representations.** You represent that you have the legal authority to make the assignment and patent grant and that, to your knowledge, the Contribution does not infringe any third-party rights.
+7. **Disclaimer.** Contributions are provided by you **"AS IS."** The disclaimer and limitation of liability in Section 10 apply equally to you and your Contributions.
+
+## 12 Governing Law & Miscellaneous
+
+This License is governed by the laws of the State of Delaware, USA, excluding its conflict-of-laws principles. The United Nations Convention on Contracts for the International Sale of Goods does not apply. If any provision is held unenforceable, it will be reformed to the minimum extent necessary; the remaining provisions will remain in full force. Failure to enforce any provision is not a waiver. This License constitutes the entire agreement between the parties concerning the Licensed Work and may be modified only by the Licensor in writing.
