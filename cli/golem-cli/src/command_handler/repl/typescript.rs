@@ -93,7 +93,7 @@ impl TypeScriptRepl {
         new_task_up_to_date_check(&BuildContext::new(app_ctx, &BuildConfig::new()))
             .with_task_result_marker(GenerateBridgeReplMarkerHash {
                 language: GuestLanguage::TypeScript,
-                agent_type_names: repl_metadata.agents.keys().collect::<Vec<_>>().as_slice(),
+                agent_type_names: repl_metadata.agents.keys().sorted().as_slice(),
             })?
             .with_sources(|| {
                 repl_metadata
