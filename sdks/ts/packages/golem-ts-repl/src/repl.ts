@@ -17,6 +17,7 @@ import * as repl from 'node:repl';
 import * as process from 'node:process';
 import * as shellQuote from 'shell-quote';
 import * as childProcess from 'node:child_process';
+import pc from 'picocolors';
 
 export class Repl {
   private readonly config: Config;
@@ -29,9 +30,10 @@ export class Repl {
     const client_config = client_configuration_from_env();
 
     const r = repl.start({
-      useColors: true,
+      useColors: pc.isColorSupported,
       useGlobal: true,
       preview: false,
+      prompt: `${pc.cyan('golem-ts-repl')}[${pc.green(client_config.application)}][${pc.yellow(client_config.environment)}]${pc.red('>')} `,
     });
 
     r.defineCommand('deploy', {
@@ -52,9 +54,29 @@ export class Repl {
         ];
 
         const child = childProcess.spawn('golem', args, { stdio: 'inherit' });
-        await new Promise((resolve) => child.once('exit', resolve));
+        let result: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        } = await new Promise((resolve) =>
+          child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+            resolve({ code, signal });
+          }),
+        );
 
-        process.exit(75);
+        if (result.code === 0) {
+          reload();
+        }
+
+        this.resume();
+        this.displayPrompt();
+        this.clearBufferedCommand();
+      },
+    });
+
+    r.defineCommand('reload', {
+      help: 'Reload the REPL',
+      action() {
+        reload();
       },
     });
 
@@ -65,4 +87,8 @@ export class Repl {
       r.context[agentConfig.typeName] = agentConfig.package[agentConfig.typeName];
     }
   }
+}
+
+function reload() {
+  process.exit(75);
 }

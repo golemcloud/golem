@@ -47,7 +47,8 @@
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
   "dependencies": {
-    "shell-quote": "^1.8.3"
+    "shell-quote": "^1.8.3",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
