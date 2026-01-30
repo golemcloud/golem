@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::env_var_flag;
 use crate::app::build::task_result_marker::{ComponentGeneratorMarkerHash, TaskResultMarker};
 use crate::app::build::up_to_date_check::is_up_to_date;
 use crate::app::context::BuildContext;
@@ -21,7 +20,6 @@ use crate::fs::{delete_path_logged, PathExtra};
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::{BinaryComponentSource, DependencyType, DependentAppComponent};
 use crate::wasm_rpc_stubgen::cargo::regenerate_cargo_package_component;
-use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::wit_generate::{
     add_client_as_dependency_to_wit_dir, extract_exports_as_wit_dep,
     extract_wasm_interface_as_wit_dep, AddClientAsDepConfig, UpdateCargoToml,
@@ -32,12 +30,8 @@ use itertools::Itertools;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-// TODO: this step is not selected_component_names aware yet, for that we have to build / filter
-//         - based on wit deps and / or
-//         - based on rpc deps
-//       depending on the sub-step
-pub async fn gen_rpc(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    log_action("Generating", "RPC artifacts");
+pub async fn gen_wit(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    log_action("Generating", "WIT artifacts");
     let _indent = LogIndent::new();
 
     {
@@ -374,11 +368,15 @@ fn update_cargo_toml(
 }
 
 async fn build_client(
-    ctx: &BuildContext<'_>,
-    dependent_component: &DependentAppComponent,
+    _ctx: &BuildContext<'_>,
+    _dependent_component: &DependentAppComponent,
 ) -> anyhow::Result<bool> {
+    // TODO: WASM RPC cleanup
+    todo!("WASM RPC client generation is deprecated")
+
+    /*
     let stub_def = ctx
-        .application_context_mut()
+        .application_context()
         .component_stub_def(&dependent_component.name)?;
     let client_wit_root = stub_def.client_wit_root();
 
@@ -455,7 +453,7 @@ async fn build_client(
 
                         let offline = ctx.application_config().offline;
                         commands::generate::build(
-                            ctx.application_context_mut()
+                            ctx.application_context()
                                 .component_stub_def(&dependent_component.name)?,
                             &client_wasm,
                             &client_wit,
@@ -463,9 +461,7 @@ async fn build_client(
                         )
                         .await?;
 
-                        if !env_var_flag("WASM_RPC_KEEP_CLIENT_DIR") {
-                            delete_path_logged("client temp build dir", &client_wit_root)?;
-                        }
+                        delete_path_logged("client temp build dir", &client_wit_root)?;
 
                         Ok(())
                     }
@@ -491,7 +487,7 @@ async fn build_client(
                         fs::create_dir_all(&client_wit_root)?;
 
                         let stub_def = ctx
-                            .application_context_mut()
+                            .application_context()
                             .component_stub_def(&dependent_component.name)?;
                         commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
                     }
@@ -506,6 +502,7 @@ async fn build_client(
 
         Ok(true)
     }
+    */
 }
 
 fn add_client_deps(ctx: &BuildContext<'_>, component_name: &ComponentName) -> Result<bool, Error> {

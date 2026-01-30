@@ -24,8 +24,8 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
+use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::app::{BuildConfig, DependencyType};
 use crate::model::component::{
     ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
     SelectedComponents,
@@ -50,9 +50,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
-use golem_common::model::component_metadata::{
-    dynamic_linking_to_diffable, DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-};
+use golem_common::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
@@ -1227,11 +1225,14 @@ impl ComponentCommandHandler {
 }
 
 fn app_component_dynamic_linking(
-    app_ctx: &mut ApplicationContext,
-    component_name: &ComponentName,
+    _app_ctx: &mut ApplicationContext,
+    _component_name: &ComponentName,
 ) -> anyhow::Result<HashMap<String, DynamicLinkedInstance>> {
-    let mut mapping = Vec::new();
+    Ok(HashMap::new())
 
+    // TODO: WASM RPC cleanup
+    /*
+    let mut mapping = Vec::new();
     let wasm_rpc_deps = app_ctx
         .application()
         .component_dependencies(component_name)
@@ -1270,7 +1271,7 @@ fn app_component_dynamic_linking(
                 }),
             )
         })
-        .collect())
+        .collect())*/
 }
 
 fn resolve_env_vars(

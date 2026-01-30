@@ -258,7 +258,7 @@ pub struct ComponentStubInterfaces {
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[clap(rename_all = "kebab_case")]
 pub enum AppBuildStep {
-    GenRpc, // TODO: drop
+    GenWit,
     Componentize,
     Link,
     AddMetadata,

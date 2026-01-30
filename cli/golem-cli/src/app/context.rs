@@ -22,25 +22,23 @@ use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
     ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode,
-    BinaryComponentSource, BuildConfig, CleanMode, ComponentPresetSelector,
-    ComponentStubInterfaces, CustomBridgeSdkTarget, DependentComponent, DynamicHelpSections,
-    WithSource, DEFAULT_CONFIG_FILE_NAME,
+    BinaryComponentSource, BuildConfig, CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget,
+    DependentComponent, DynamicHelpSections, WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentName;
 use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tokio::sync::RwLockReadGuard;
@@ -155,9 +153,8 @@ pub struct ApplicationContext {
     application: Application,
     wit: tokio::sync::RwLock<ResolvedWitApplication>,
     calling_working_dir: PathBuf,
-    component_stub_defs: HashMap<ComponentName, StubDefinition>,
+    // component_stub_defs: HashMap<ComponentName, StubDefinition>, // TODO: WASM RPC cleanup
     common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
-    component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
     selected_component_names: BTreeSet<ComponentName>,
     remote_components: RemoteComponents,
     tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
@@ -263,9 +260,7 @@ impl ApplicationContext {
                         application,
                         wit: tokio::sync::RwLock::new(wit),
                         calling_working_dir,
-                        component_stub_defs: HashMap::new(),
                         common_wit_deps: OnceLock::new(),
-                        component_generated_base_wit_deps: HashMap::new(),
                         selected_component_names: BTreeSet::new(),
                         remote_components: RemoteComponents::new(
                             file_download_client,
@@ -300,8 +295,10 @@ impl ApplicationContext {
         )
     }
 
+    // TODO: WASM RPC cleanup
+    /*
     pub fn component_stub_def(
-        &mut self,
+        &self,
         component_name: &ComponentName,
     ) -> anyhow::Result<&StubDefinition> {
         if !self.component_stub_defs.contains_key(component_name) {
@@ -344,6 +341,7 @@ impl ApplicationContext {
         };
         Ok(result)
     }
+    */
 
     pub fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
         match self
@@ -363,26 +361,14 @@ impl ApplicationContext {
     }
 
     pub fn component_base_output_wit_deps(
-        &mut self,
+        &self,
         component_name: &ComponentName,
-    ) -> anyhow::Result<&WitDepsResolver> {
-        if !self
-            .component_generated_base_wit_deps
-            .contains_key(component_name)
-        {
-            self.component_generated_base_wit_deps.insert(
-                component_name.clone(),
-                WitDepsResolver::new(vec![self
-                    .application
-                    .component(component_name)
-                    .generated_base_wit()
-                    .join(naming::wit::DEPS_DIR)])?,
-            );
-        }
-        Ok(self
-            .component_generated_base_wit_deps
-            .get(component_name)
-            .unwrap())
+    ) -> anyhow::Result<WitDepsResolver> {
+        WitDepsResolver::new(vec![self
+            .application
+            .component(component_name)
+            .generated_base_wit()
+            .join(naming::wit::DEPS_DIR)])
     }
 
     pub fn select_components(
