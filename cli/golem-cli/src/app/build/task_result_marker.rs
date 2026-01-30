@@ -387,21 +387,24 @@ impl TaskResultMarkerHashSource for ExtractAgentTypeMarkerHash<'_> {
     }
 }
 
-pub struct GenerateBridgeReplMarkerHash {
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBridgeReplMarkerHash<'a> {
     pub language: GuestLanguage,
+    pub agent_type_names: &'a [&'a AgentTypeName],
 }
 
-impl TaskResultMarkerHashSource for GenerateBridgeReplMarkerHash {
+impl TaskResultMarkerHashSource for GenerateBridgeReplMarkerHash<'_> {
     fn kind() -> &'static str {
         "GenerateBridgeReplMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(self.language.to_string()))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(self.language.to_string()))
+        Ok(HashFromString(serde_json::to_string(self)?))
     }
 }
 

@@ -16,12 +16,13 @@ use crate::app::build::task_result_marker::GenerateBridgeReplMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
 use crate::bridge_gen::bridge_client_directory_name;
+use crate::command_handler::repl::load_repl_metadata;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogIndent};
 use crate::model::app::BuildConfig;
-use crate::model::repl::BridgeReplArgs;
+use crate::model::repl::{BridgeReplArgs, ReplMetadata};
 use crate::process::{CommandExt, ExitStatusExt};
 use golem_templates::model::GuestLanguage;
 use indoc::formatdoc;
@@ -47,15 +48,6 @@ impl TypeScriptRepl {
             let _indent = LogIndent::new();
 
             self.generate_repl_package(&args).await?;
-
-            if !args.repl_root_dir.join("node_modules").exists() {
-                Command::new("npm")
-                    .arg("install")
-                    .current_dir(&args.repl_root_dir)
-                    .stream_and_wait_for_status("TS REPL - npm install")
-                    .await?
-                    .check_exit_status()?;
-            }
         }
 
         loop {
@@ -86,54 +78,71 @@ impl TypeScriptRepl {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
+        let repl_metadata = load_repl_metadata(app_ctx, GuestLanguage::TypeScript).await?;
+
         let package_json_path = args.repl_root_dir.join("package.json");
         let tsconfig_json_path = args.repl_root_dir.join("tsconfig.json");
         let repl_ts_path = args.repl_root_dir.join("repl.ts");
-
-        new_task_up_to_date_check(&BuildContext::new(app_ctx, &BuildConfig::new()))
-            .with_task_result_marker(GenerateBridgeReplMarkerHash {
-                language: GuestLanguage::TypeScript,
-            })?
-            .with_sources(|| {
-                args.agent_type_names.iter().map(|agent_type_name| {
-                    args.repl_root_bridge_sdk_dir
-                        .join(bridge_client_directory_name(agent_type_name))
-                })
-            })
-            .with_targets(|| vec![&package_json_path, &tsconfig_json_path, &repl_ts_path])
-            .run_or_skip(
-                || {
-                    log_action("Generating", "TypeScript REPL package");
-                    let _indent = LogIndent::new();
-
-                    self.generate_package_json(args, &package_json_path)?;
-                    self.generate_tsconfig_json(args, &tsconfig_json_path)?;
-                    self.generate_repl_ts(args, &repl_ts_path)?;
-
-                    Ok(())
-                },
-                || {
-                    log_skipping_up_to_date("generating TypeScript REPL package");
-                },
-            )?;
-
-        Ok(())
-    }
-
-    fn generate_package_json(
-        &self,
-        args: &BridgeReplArgs,
-        package_json_path: &Path,
-    ) -> anyhow::Result<()> {
         let relative_bridge_sdk_unix_path = args
             .repl_root_bridge_sdk_dir
             .strip_prefix(&args.repl_root_dir)?
             .display()
             .to_string()
             .replace("\\", "/");
-        let workspaces = args
-            .agent_type_names
-            .iter()
+
+        new_task_up_to_date_check(&BuildContext::new(app_ctx, &BuildConfig::new()))
+            .with_task_result_marker(GenerateBridgeReplMarkerHash {
+                language: GuestLanguage::TypeScript,
+                agent_type_names: repl_metadata.agents.keys().collect::<Vec<_>>().as_slice(),
+            })?
+            .with_sources(|| {
+                repl_metadata
+                    .agents
+                    .values()
+                    .map(|agent| agent.client_dir.as_path())
+            })
+            .with_targets(|| vec![&package_json_path, &tsconfig_json_path, &repl_ts_path])
+            .run_async_or_skip(
+                async || {
+                    log_action("Generating", "TypeScript REPL package");
+                    let _indent = LogIndent::new();
+
+                    self.generate_package_json(
+                        &repl_metadata,
+                        &relative_bridge_sdk_unix_path,
+                        &package_json_path,
+                    )?;
+                    self.generate_tsconfig_json(
+                        &relative_bridge_sdk_unix_path,
+                        &tsconfig_json_path,
+                    )?;
+                    self.generate_repl_ts(&repl_metadata, &repl_ts_path)?;
+
+                    Command::new("npm")
+                        .arg("install")
+                        .current_dir(&args.repl_root_dir)
+                        .stream_and_wait_for_status("npm")
+                        .await?
+                        .check_exit_status()?;
+
+                    Ok(())
+                },
+                || {
+                    log_skipping_up_to_date("generating TypeScript REPL package");
+                },
+            )
+            .await
+    }
+
+    fn generate_package_json(
+        &self,
+        repl_metadata: &ReplMetadata,
+        relative_bridge_sdk_unix_path: &str,
+        package_json_path: &Path,
+    ) -> anyhow::Result<()> {
+        let workspaces = repl_metadata
+            .agents
+            .keys()
             .map(|agent_type_name| {
                 format!(
                     "{}/{}",
@@ -143,9 +152,9 @@ impl TypeScriptRepl {
             })
             .collect::<Vec<_>>();
 
-        let dependencies = args
-            .agent_type_names
-            .iter()
+        let dependencies = repl_metadata
+            .agents
+            .keys()
             .map(|agent_type_name| (bridge_client_directory_name(agent_type_name), "*"))
             .collect::<BTreeMap<_, _>>();
 
@@ -170,7 +179,7 @@ impl TypeScriptRepl {
 
     fn generate_tsconfig_json(
         &self,
-        args: &BridgeReplArgs,
+        relative_bridge_sdk_unix_path: &str,
         tsconfig_json_path: &Path,
     ) -> anyhow::Result<()> {
         let tsconfig_json = json!({
@@ -187,7 +196,8 @@ impl TypeScriptRepl {
             "target": "ES2022"
           },
           "include": [
-            format!("{}/ts/**/*.ts", args.repl_root_bridge_sdk_dir.display())
+            "repl.ts",
+            format!("{}/**/*.ts", relative_bridge_sdk_unix_path)
           ]
         });
 
@@ -197,14 +207,17 @@ impl TypeScriptRepl {
         )
     }
 
-    fn generate_repl_ts(&self, args: &BridgeReplArgs, repl_ts_path: &Path) -> anyhow::Result<()> {
-        let agents_config = args
-            .agent_type_names
-            .iter()
+    fn generate_repl_ts(
+        &self,
+        repl_metadata: &ReplMetadata,
+        repl_ts_path: &Path,
+    ) -> anyhow::Result<()> {
+        let agents_config = repl_metadata
+            .agents
+            .keys()
             .map(|agent_type_name| {
                 formatdoc! {"
                     '{agent_type_name}': {{
-                      typeName: '{agent_type_name}',
                       clientPackageName: '{client_package_name}',
                       package: await import('{client_package_name}'),
                     }}",

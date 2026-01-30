@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::ApplicationContext;
 use crate::command::shared_args::DeployArgs;
 use crate::command_handler::repl::rib::CliRibRepl;
 use crate::command_handler::repl::rust::RustRepl;
@@ -23,7 +24,7 @@ use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::repl::{BridgeReplArgs, ReplLanguage};
+use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata};
 use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
 use anyhow::{anyhow, bail};
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -162,20 +163,12 @@ impl ReplHandler {
             )
             .await?;
 
-        let agent_type_names = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            let wit = app_ctx.wit().await;
-            wit.get_all_extracted_agent_type_names().await
-        };
-
         let args = BridgeReplArgs {
             environment,
             script,
             stream_logs,
             repl_root_dir,
             repl_root_bridge_sdk_dir,
-            agent_type_names,
         };
 
         match language {
@@ -319,4 +312,14 @@ impl ReplHandler {
 
         Ok(env_vars)
     }
+}
+
+async fn load_repl_metadata(
+    app_ctx: &ApplicationContext,
+    language: GuestLanguage,
+) -> anyhow::Result<ReplMetadata> {
+    let metadata = serde_json::from_str(&fs::read_to_string(
+        app_ctx.application().repl_metadata_json(language),
+    )?)?;
+    Ok(metadata)
 }

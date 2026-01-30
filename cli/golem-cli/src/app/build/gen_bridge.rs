@@ -9,26 +9,46 @@ use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent};
 use crate::model::app::{BridgeSdkTarget, CustomBridgeSdkTarget};
+use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
+use std::collections::BTreeMap;
 
 pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let targets = {
-        let mut targets = match &ctx.custom_bridge_sdk_target() {
-            Some(custom_target) => collect_custom_targets(ctx, custom_target).await?,
-            None => collect_manifest_targets(ctx).await?,
-        };
+    let mut targets = match &ctx.custom_bridge_sdk_target() {
+        Some(custom_target) => collect_custom_targets(ctx, custom_target).await?,
+        None => collect_manifest_targets(ctx).await?,
+    };
 
-        if let Some(target) = ctx.repl_bridge_sdk_target() {
-            targets.extend(collect_custom_targets(ctx, target).await?);
+    if let Some(target) = ctx.repl_bridge_sdk_target() {
+        let repl_targets = collect_custom_targets(ctx, target).await?;
+
+        let mut repl_meta_by_lang = BTreeMap::<GuestLanguage, ReplMetadata>::new();
+        for target in &repl_targets {
+            repl_meta_by_lang
+                .entry(target.target_language)
+                .or_default()
+                .agents
+                .insert(
+                    target.agent_type.type_name.clone(),
+                    ReplAgentMetadata {
+                        client_dir: target.output_dir.clone(),
+                    },
+                );
+        }
+        for (language, repl_meta) in repl_meta_by_lang {
+            fs::write_str(
+                ctx.application().repl_metadata_json(language),
+                &serde_json::to_string(&repl_meta)?,
+            )?
         }
 
-        targets
-    };
+        targets.extend(repl_targets);
+    }
 
     if targets.is_empty() {
         return Ok(());

@@ -14,15 +14,14 @@
 
 import { env } from 'node:process';
 
-export interface Config {
+export type Config = {
   agents: Record<string, AgentConfig>;
-}
+};
 
-export interface AgentConfig {
-  typeName: string;
+export type AgentConfig = {
   clientPackageName: string;
   package: any;
-}
+};
 
 export type GolemServer =
   | { type: 'local' }

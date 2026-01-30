@@ -701,6 +701,10 @@ impl Application {
         self.repl_root_dir(language).join("bridge-sdk")
     }
 
+    pub fn repl_metadata_json(&self, language: GuestLanguage) -> PathBuf {
+        self.repl_root_dir(language).join("repl-metadata.json")
+    }
+
     pub fn rib_repl_history_file(&self) -> PathBuf {
         self.temp_dir().join(".rib_repl_history")
     }

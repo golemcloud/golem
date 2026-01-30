@@ -272,7 +272,7 @@ impl AppCommandHandler {
             if let Some(repl_bridge_sdk_target) = build_args.repl_bridge_sdk_target {
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.some_or_err()?;
-                build_config = build_config.with_custom_bridge_sdk_target(
+                build_config = build_config.with_repl_bridge_sdk_target(
                     app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
                 );
             }
@@ -583,7 +583,7 @@ impl AppCommandHandler {
             if let Some(repl_bridge_sdk_target) = config.repl_bridge_sdk_target {
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.some_or_err()?;
-                build_config = build_config.with_custom_bridge_sdk_target(
+                build_config = build_config.with_repl_bridge_sdk_target(
                     app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
                 );
             }

@@ -36,6 +36,13 @@ export class Repl {
       prompt: `${pc.cyan('golem-ts-repl')}[${pc.green(client_config.application)}][${pc.yellow(client_config.environment)}]${pc.red('>')} `,
     });
 
+    for (let agentTypeName in this.config.agents) {
+      const agentConfig = this.config.agents[agentTypeName];
+      let configure = agentConfig.package.configure as ConfigureClient;
+      configure(client_config);
+      r.context[agentTypeName] = agentConfig.package[agentTypeName];
+    }
+
     r.defineCommand('deploy', {
       help: 'Deploy the current Golem Application',
       async action(raw_args: string) {
@@ -79,13 +86,6 @@ export class Repl {
         reload();
       },
     });
-
-    for (let agentTypeName in this.config.agents) {
-      const agentConfig = this.config.agents[agentTypeName];
-      let configure = agentConfig.package.configure as ConfigureClient;
-      configure(client_config);
-      r.context[agentConfig.typeName] = agentConfig.package[agentConfig.typeName];
-    }
   }
 }
 

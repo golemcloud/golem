@@ -15,6 +15,8 @@
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_templates::model::GuestLanguage;
+use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -82,5 +84,16 @@ pub struct BridgeReplArgs {
     pub stream_logs: bool,
     pub repl_root_dir: PathBuf,
     pub repl_root_bridge_sdk_dir: PathBuf,
-    pub agent_type_names: Vec<AgentTypeName>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplMetadata {
+    pub agents: HashMap<AgentTypeName, ReplAgentMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplAgentMetadata {
+    pub client_dir: PathBuf,
 }
