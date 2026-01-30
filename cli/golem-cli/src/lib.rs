@@ -32,6 +32,8 @@ pub mod error;
 pub mod fs;
 pub mod fuzzy;
 pub mod log;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod model;
 pub mod validation;
 pub mod wasm_rpc_stubgen;

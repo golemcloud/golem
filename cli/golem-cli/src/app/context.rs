@@ -732,7 +732,7 @@ fn load_raw_apps(
     }
 }
 
-fn collect_sources_and_switch_to_app_root(
+pub fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
 ) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
     let calling_working_dir = std::env::current_dir()
@@ -800,7 +800,7 @@ fn collect_sources_and_switch_to_app_root(
     })
 }
 
-fn find_main_source() -> Option<PathBuf> {
+pub fn find_main_source() -> Option<PathBuf> {
     let mut current_dir = std::env::current_dir().expect("Failed to get current dir");
     let mut last_source: Option<PathBuf> = None;
 

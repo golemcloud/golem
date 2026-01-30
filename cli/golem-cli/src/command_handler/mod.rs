@@ -102,7 +102,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     // NOTE: setting log_output_for_help also means that we are loading the context for showing
     //       help or messages with help, meaning validation warns and confirms should be silenced
     //       for the manifest
-    async fn new(
+    pub async fn new(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
         hooks: Arc<Hooks>,
@@ -140,18 +140,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
             GolemCliCommandParseResult::FullMatch(command) => {
                 #[cfg(feature = "server-commands")]
-                let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
-                    Hooks::override_verbosity(command.global_flags.verbosity())
-                } else {
-                    command.global_flags.verbosity()
-                };
+                let verbosity =
+                    if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. })) {
+                        Hooks::override_verbosity(command.global_flags.verbosity())
+                    } else {
+                        command.global_flags.verbosity()
+                    };
                 #[cfg(feature = "server-commands")]
-                let pretty_mode = if matches!(command.subcommand, GolemCliSubcommand::Server { .. })
-                {
-                    Hooks::override_pretty_mode()
-                } else {
-                    false
-                };
+                let pretty_mode =
+                    if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. })) {
+                        Hooks::override_pretty_mode()
+                    } else {
+                        false
+                    };
                 #[cfg(not(feature = "server-commands"))]
                 let verbosity = command.global_flags.verbosity();
                 #[cfg(not(feature = "server-commands"))]
@@ -257,46 +258,35 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         })
     }
 
-    async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
         match command.subcommand {
             // App scoped root commands
-            GolemCliSubcommand::New {
+            Some(GolemCliSubcommand::New {
                 application_name,
                 language,
-            } => {
+            }) => {
                 self.ctx
                     .app_handler()
                     .cmd_new(application_name, language)
                     .await
             }
-            GolemCliSubcommand::Build {
+            Some(GolemCliSubcommand::Build {
                 component_name,
                 build: build_args,
-            } => {
+            }) => {
                 self.ctx
                     .app_handler()
                     .cmd_build(component_name, build_args)
                     .await
             }
-            GolemCliSubcommand::GenerateBridge {
-                language,
-                component_name,
-                agent_type_name,
-                output_dir,
-            } => {
-                self.ctx
-                    .bridge_handler()
-                    .cmd_generate_bridge(language, component_name, agent_type_name, output_dir)
-                    .await
-            }
-            GolemCliSubcommand::Repl {
+            Some(GolemCliSubcommand::Repl {
                 component_name,
                 revision,
                 deploy_args,
                 script,
                 script_file,
                 disable_stream,
-            } => {
+            }) => {
                 self.ctx
                     .rib_repl_handler()
                     .cmd_repl(
@@ -309,7 +299,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     )
                     .await
             }
-            GolemCliSubcommand::Deploy {
+            Some(GolemCliSubcommand::Deploy {
                 plan,
                 stage,
                 approve_staging_steps,
@@ -317,7 +307,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 revision,
                 force_build,
                 deploy_args,
-            } => {
+            }) => {
                 self.ctx
                     .app_handler()
                     .cmd_deploy(
@@ -331,70 +321,69 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     )
                     .await
             }
-            GolemCliSubcommand::Clean { component_name } => {
+            Some(GolemCliSubcommand::Clean { component_name }) => {
                 self.ctx.app_handler().cmd_clean(component_name).await
             }
-            GolemCliSubcommand::UpdateAgents {
+            Some(GolemCliSubcommand::UpdateAgents {
                 component_name,
                 update_mode,
                 r#await,
-            } => {
+            }) => {
                 self.ctx
                     .app_handler()
                     .cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
-            GolemCliSubcommand::RedeployAgents { component_name } => {
+            Some(GolemCliSubcommand::RedeployAgents { component_name }) => {
                 self.ctx
                     .app_handler()
                     .cmd_redeploy_workers(component_name.component_name)
                     .await
             }
-            GolemCliSubcommand::Diagnose { component_name } => {
-                self.ctx.app_handler().cmd_diagnose(component_name).await
-            }
-            GolemCliSubcommand::ListAgentTypes {} => {
-                self.ctx.app_handler().cmd_list_agent_types().await
-            }
-            GolemCliSubcommand::Exec { subcommand } => {
-                self.ctx.app_handler().exec_custom_command(subcommand).await
-            }
-
-            // Other entities
-            GolemCliSubcommand::Environment { subcommand } => {
+            Some(GolemCliSubcommand::Environment { subcommand }) => {
                 self.ctx
                     .environment_handler()
                     .handle_command(subcommand)
                     .await
             }
-            GolemCliSubcommand::Component { subcommand } => {
+            Some(GolemCliSubcommand::Component { subcommand }) => {
                 self.ctx
                     .component_handler()
                     .handle_command(subcommand)
                     .await
             }
-            GolemCliSubcommand::Agent { subcommand } => {
+            Some(GolemCliSubcommand::Agent { subcommand }) => {
                 self.ctx.worker_handler().handle_command(subcommand).await
             }
-            GolemCliSubcommand::Api { subcommand } => {
+            Some(GolemCliSubcommand::Api { subcommand }) => {
                 self.ctx.api_handler().handle_command(subcommand).await
             }
-            GolemCliSubcommand::Plugin { subcommand } => {
+            Some(GolemCliSubcommand::Plugin { subcommand }) => {
                 self.ctx.plugin_handler().handle_command(subcommand).await
             }
-            GolemCliSubcommand::Profile { subcommand } => {
+            Some(GolemCliSubcommand::Profile { subcommand }) => {
                 self.ctx.profile_handler().handle_command(subcommand).await
             }
             #[cfg(feature = "server-commands")]
-            GolemCliSubcommand::Server { subcommand } => {
+            Some(GolemCliSubcommand::Server { subcommand }) => {
                 self.hooks
                     .handler_server_commands(self.ctx.clone(), subcommand)
                     .await
             }
-            GolemCliSubcommand::Cloud { subcommand } => {
+            Some(GolemCliSubcommand::Cloud { subcommand }) => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
-            GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
+            Some(GolemCliSubcommand::Completion { shell }) => self.cmd_completion(shell),
+            Some(GolemCliSubcommand::Diagnose { component_name }) => {
+                self.ctx.app_handler().cmd_diagnose(component_name).await
+            }
+            Some(GolemCliSubcommand::ListAgentTypes {}) => {
+                self.ctx.app_handler().cmd_list_agent_types().await
+            }
+            Some(GolemCliSubcommand::Exec { subcommand }) => {
+                self.ctx.app_handler().exec_custom_command(subcommand).await
+            }
+            None => Err(anyhow::anyhow!("Missing subcommand")),
         }
     }
 
