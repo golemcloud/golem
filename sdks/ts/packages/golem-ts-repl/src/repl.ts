@@ -33,7 +33,11 @@ export class Repl {
       useColors: pc.isColorSupported,
       useGlobal: true,
       preview: false,
-      prompt: `${pc.cyan('golem-ts-repl')}[${pc.green(client_config.application)}][${pc.yellow(client_config.environment)}]${pc.red('>')} `,
+      prompt:
+        `${pc.cyan('golem-ts-repl')}` +
+        `[${pc.green(client_config.application)}]` +
+        `[${pc.yellow(client_config.environment)}]` +
+        `${pc.red('>')} `,
     });
 
     for (let agentTypeName in this.config.agents) {

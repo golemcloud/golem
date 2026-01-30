@@ -223,19 +223,19 @@ impl TypeScriptRepl {
                     }}",
                     client_package_name = bridge_client_directory_name(agent_type_name)
                 }
-                .lines()
-                .enumerate()
-                .map(|(idx, l)| {
-                    if idx == 0 {
-                        l.to_string()
-                    } else {
-                        format!("    {l}")
-                    }
-                })
-                .join("\n")
             })
             .collect::<Vec<_>>()
-            .join(",\n");
+            .join(",\n")
+            .lines()
+            .enumerate()
+            .map(|(idx, l)| {
+                if idx == 0 {
+                    l.to_string()
+                } else {
+                    format!("    {}", l)
+                }
+            })
+            .join("\n");
 
         let repl_ts = formatdoc! {"
             import 'tsx/patch-repl';
@@ -243,7 +243,7 @@ impl TypeScriptRepl {
 
             const repl = new Repl({{
               agents: {{
-                {agents_config}
+              {agents_config}
               }}
             }});
 
