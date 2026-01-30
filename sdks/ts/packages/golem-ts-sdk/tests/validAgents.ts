@@ -149,19 +149,14 @@ export class FooAgent extends BaseAgent {
 
     await remoteClient.fun2.trigger('foo');
 
-    await remoteClient.fun2.schedule(
-      { seconds: 50000n, nanoseconds: 0 },
-      'foo',
-    );
+    await remoteClient.fun2.schedule({ seconds: 50000n, nanoseconds: 0 }, 'foo');
   }
 
   async fun15(param: UnstructuredText): Promise<UnstructuredText> {
     return param;
   }
 
-  async fun16(
-    param: UnstructuredText<['en', 'de']>,
-  ): Promise<UnstructuredText<['en', 'de']>> {
+  async fun16(param: UnstructuredText<['en', 'de']>): Promise<UnstructuredText<['en', 'de']>> {
     return param;
   }
 
@@ -171,9 +166,7 @@ export class FooAgent extends BaseAgent {
     return param;
   }
 
-  async fun18(
-    param: MultimodalAdvanced<TextOrImage>,
-  ): Promise<MultimodalAdvanced<TextOrImage>> {
+  async fun18(param: MultimodalAdvanced<TextOrImage>): Promise<MultimodalAdvanced<TextOrImage>> {
     return param;
   }
 
@@ -221,9 +214,7 @@ export class FooAgent extends BaseAgent {
     return param;
   }
 
-  async fun30(
-    param: Result<boolean, string>,
-  ): Promise<Result<boolean, string>> {
+  async fun30(param: Result<boolean, string>): Promise<Result<boolean, string>> {
     return param;
   }
 

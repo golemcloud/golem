@@ -19,10 +19,7 @@ import * as WitType from '../mapping/types/WitType';
 import { MethodParams } from '@golemcloud/golem-ts-types-core';
 import { TypeScope } from '../mapping/types/scope';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
-import {
-  getMultimodalDataSchemaFromTypeInternal,
-  TypeInfoInternal,
-} from '../typeInfoInternal';
+import { getMultimodalDataSchemaFromTypeInternal, TypeInfoInternal } from '../typeInfoInternal';
 import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
@@ -42,12 +39,7 @@ export function resolveMethodInputSchema(
     const [paramName, paramType] = params[0];
 
     if (isMultimodalType(paramType)) {
-      return buildSingleMultimodalInputSchema(
-        agentClassName,
-        methodName,
-        paramName,
-        paramType,
-      );
+      return buildSingleMultimodalInputSchema(agentClassName, methodName, paramName, paramType);
     }
   }
 
@@ -70,9 +62,7 @@ function buildSingleMultimodalInputSchema(
   const multimodalDetails = getMultimodalParamDetails(parameterType.element);
 
   if (Either.isLeft(multimodalDetails)) {
-    return Either.left(
-      `Failed to get multimodal details: ${multimodalDetails.val}`,
-    );
+    return Either.left(`Failed to get multimodal details: ${multimodalDetails.val}`);
   }
 
   const typeInfo: TypeInfoInternal = {
@@ -114,8 +104,7 @@ function buildMethodParameterSchemas(
           parameterInfo[1],
           parameterSchemaCollection,
         ),
-        (err) =>
-          `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
+        (err) => `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
       ),
     ),
   );
@@ -133,15 +122,10 @@ function processMethodParameter(
   const paramTypeName = parameterType.name;
 
   if (paramTypeName && paramTypeName === 'Principal') {
-    AgentMethodParamRegistry.setType(
-      agentClassName,
-      methodName,
-      parameterName,
-      {
-        tag: 'principal',
-        tsType: parameterType,
-      },
-    );
+    AgentMethodParamRegistry.setType(agentClassName, methodName, parameterName, {
+      tag: 'principal',
+      tsType: parameterType,
+    });
 
     accumulator.addPrincipalParameter(parameterName);
 
@@ -157,16 +141,11 @@ function processMethodParameter(
       );
     }
 
-    AgentMethodParamRegistry.setType(
-      agentClassName,
-      methodName,
-      parameterName,
-      {
-        tag: 'unstructured-text',
-        val: textDescriptor.val,
-        tsType: parameterType,
-      },
-    );
+    AgentMethodParamRegistry.setType(agentClassName, methodName, parameterName, {
+      tag: 'unstructured-text',
+      val: textDescriptor.val,
+      tsType: parameterType,
+    });
 
     const elementSchema: ElementSchema = {
       tag: 'unstructured-text',
@@ -187,16 +166,11 @@ function processMethodParameter(
       );
     }
 
-    AgentMethodParamRegistry.setType(
-      agentClassName,
-      methodName,
-      parameterName,
-      {
-        tag: 'unstructured-binary',
-        val: binaryDescriptor.val,
-        tsType: parameterType,
-      },
-    );
+    AgentMethodParamRegistry.setType(agentClassName, methodName, parameterName, {
+      tag: 'unstructured-binary',
+      val: binaryDescriptor.val,
+      tsType: parameterType,
+    });
 
     const elementSchema: ElementSchema = {
       tag: 'unstructured-binary',
@@ -218,17 +192,12 @@ function processMethodParameter(
       const witType = typeInfo[0];
       const analysedType = typeInfo[1];
 
-      AgentMethodParamRegistry.setType(
-        agentClassName,
-        methodName,
-        parameterName,
-        {
-          tag: 'analysed',
-          val: analysedType,
-          tsType: parameterType,
-          witType: witType,
-        },
-      );
+      AgentMethodParamRegistry.setType(agentClassName, methodName, parameterName, {
+        tag: 'analysed',
+        val: analysedType,
+        tsType: parameterType,
+        witType: witType,
+      });
 
       const elementSchema: ElementSchema = {
         tag: 'component-model',

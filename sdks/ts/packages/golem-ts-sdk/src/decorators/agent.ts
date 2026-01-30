@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  AgentType,
-  DataValue,
-  AgentConstructor,
-  AgentMode,
-  Principal,
-} from 'golem:agent/common';
+import { AgentType, DataValue, AgentConstructor, AgentMode, Principal } from 'golem:agent/common';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -34,10 +28,7 @@ import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegis
 import { createCustomError } from '../internal/agentError';
 import { AgentConstructorParamRegistry } from '../internal/registry/agentConstructorParamRegistry';
 import { AgentConstructorRegistry } from '../internal/registry/agentConstructorRegistry';
-import {
-  deserializeDataValue,
-  ParameterDetail,
-} from '../internal/mapping/values/dataValue';
+import { deserializeDataValue, ParameterDetail } from '../internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from '../host/hostapi';
 import { getHttpMountDetails } from '../internal/http/mount';
 import { validateHttpMount } from '../internal/http/validation';
@@ -214,22 +205,13 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    const constructorDataSchema = getAgentConstructorSchema(
-      agentClassName.value,
-      classMetadata,
-    );
+    const constructorDataSchema = getAgentConstructorSchema(agentClassName.value, classMetadata);
 
     const httpMount = getHttpMountDetails(options);
 
-    const methods = getAgentMethodSchema(
-      classMetadata,
-      agentClassName.value,
-      httpMount,
-    );
+    const methods = getAgentMethodSchema(classMetadata, agentClassName.value, httpMount);
 
-    const agentTypeName = new AgentClassName(
-      options?.name || agentClassName.value,
-    );
+    const agentTypeName = new AgentClassName(options?.name || agentClassName.value);
 
     if (AgentInitiatorRegistry.exists(agentTypeName.value)) {
       throw new Error(
@@ -248,8 +230,7 @@ export function agent(options?: AgentDecoratorOptions) {
     const defaultPromptHint = `Enter the following parameters: ${constructorParameterNames}`;
 
     const agentTypePromptHint =
-      AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ??
-      defaultPromptHint;
+      AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ?? defaultPromptHint;
 
     const constructor: AgentConstructor = {
       name: agentClassName.value,
@@ -274,21 +255,19 @@ export function agent(options?: AgentDecoratorOptions) {
 
     AgentTypeRegistry.register(agentClassName, agentType);
 
-    const constructorParamTypes: ParameterDetail[] | undefined =
-      TypeMetadata.get(agentClassName.value)?.constructorArgs.map((arg) => {
-        const typeInfo = AgentConstructorParamRegistry.getParamType(
-          agentClassName.value,
-          arg.name,
+    const constructorParamTypes: ParameterDetail[] | undefined = TypeMetadata.get(
+      agentClassName.value,
+    )?.constructorArgs.map((arg) => {
+      const typeInfo = AgentConstructorParamRegistry.getParamType(agentClassName.value, arg.name);
+
+      if (!typeInfo) {
+        throw new Error(
+          `Unsupported type for constructor parameter ${arg.name} in agent ${agentClassName}`,
         );
+      }
 
-        if (!typeInfo) {
-          throw new Error(
-            `Unsupported type for constructor parameter ${arg.name} in agent ${agentClassName}`,
-          );
-        }
-
-        return { name: arg.name, type: typeInfo };
-      });
+      return { name: arg.name, type: typeInfo };
+    });
 
     if (!constructorParamTypes) {
       throw new Error(
@@ -297,17 +276,9 @@ export function agent(options?: AgentDecoratorOptions) {
     }
 
     (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
-    (ctor as any).newPhantom = getNewPhantomRemoteClient(
-      agentClassName,
-      agentType,
-      ctor,
-    );
+    (ctor as any).newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
 
-    (ctor as any).getPhantom = getPhantomRemoteClient(
-      agentClassName,
-      agentType,
-      ctor,
-    );
+    (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue, principal: Principal) => {

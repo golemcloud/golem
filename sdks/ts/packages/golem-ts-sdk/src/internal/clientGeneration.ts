@@ -16,12 +16,7 @@ import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as wasmRpc from 'golem:rpc/types@0.2.2';
 import * as WitValue from './mapping/values/WitValue';
 import * as Either from '../newTypes/either';
-import {
-  getAgentType,
-  makeAgentId,
-  RegisteredAgentType,
-  Uuid,
-} from 'golem:agent/host';
+import { getAgentType, makeAgentId, RegisteredAgentType, Uuid } from 'golem:agent/host';
 import { AgentClassName } from '../agentClassName';
 import {
   AgentType,
@@ -67,11 +62,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const shared = new WasmRpxProxyHandlerShared(
-    metadata,
-    agentClassName,
-    agentType,
-  );
+  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
@@ -82,9 +73,11 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   };
 }
 
-export function getPhantomRemoteClient<
-  T extends new (phantomId: Uuid, ...args: any[]) => any,
->(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
+export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: any[]) => any>(
+  agentClassName: AgentClassName,
+  agentType: AgentType,
+  ctor: T,
+) {
   const metadata = TypeMetadata.get(ctor.name);
 
   if (!metadata) {
@@ -93,11 +86,7 @@ export function getPhantomRemoteClient<
     );
   }
 
-  const shared = new WasmRpxProxyHandlerShared(
-    metadata,
-    agentClassName,
-    agentType,
-  );
+  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (finalPhantomId: Uuid, ...args: any[]) => {
     const instance = Object.create(ctor.prototype);
@@ -108,9 +97,11 @@ export function getPhantomRemoteClient<
   };
 }
 
-export function getNewPhantomRemoteClient<
-  T extends new (...args: any[]) => any,
->(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
+export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>(
+  agentClassName: AgentClassName,
+  agentType: AgentType,
+  ctor: T,
+) {
   const metadata = TypeMetadata.get(ctor.name);
 
   if (!metadata) {
@@ -118,11 +109,7 @@ export function getNewPhantomRemoteClient<
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const shared = new WasmRpxProxyHandlerShared(
-    metadata,
-    agentClassName,
-    agentType,
-  );
+  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
@@ -156,11 +143,7 @@ class WasmRpxProxyHandlerShared {
   readonly constructorParamTypes: TypeInfoInternal[];
   readonly cachedMethodInfo: Map<string, CachedMethodInfo> = new Map();
 
-  constructor(
-    metadata: ClassMetadata,
-    agentClassName: AgentClassName,
-    agentType: AgentType,
-  ) {
+  constructor(metadata: ClassMetadata, agentClassName: AgentClassName, agentType: AgentType) {
     this.metadata = metadata;
     this.agentClassName = agentClassName;
     this.agentType = agentType;
@@ -183,14 +166,8 @@ class WasmRpxProxyHandlerShared {
   constructAgentId(args: any[], phantomId?: Uuid): wasmRpc.AgentId {
     const registeredAgentType = this.getRegisteredAgentType();
 
-    if (
-      args.length === 1 &&
-      this.constructorParamTypes[0].tag === 'multimodal'
-    ) {
-      const dataValueEither = serializeToDataValue(
-        args[0],
-        this.constructorParamTypes[0],
-      );
+    if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
+      const dataValueEither = serializeToDataValue(args[0], this.constructorParamTypes[0]);
 
       if (Either.isLeft(dataValueEither)) {
         throw new Error(
@@ -198,11 +175,7 @@ class WasmRpxProxyHandlerShared {
         );
       }
 
-      const agentId = makeAgentId(
-        this.agentClassName.value,
-        dataValueEither.val,
-        phantomId,
-      );
+      const agentId = makeAgentId(this.agentClassName.value, dataValueEither.val, phantomId);
 
       return {
         componentId: registeredAgentType.implementedBy,
@@ -218,10 +191,7 @@ class WasmRpxProxyHandlerShared {
         case 'analysed':
           const witValue = Either.getOrThrowWith(
             WitValue.fromTsValueDefault(arg, typeInfoInternal.val),
-            (err) =>
-              new Error(
-                `Failed to encode constructor parameter ${arg}: ${err}`,
-              ),
+            (err) => new Error(`Failed to encode constructor parameter ${arg}: ${err}`),
           );
           const elementValue: ElementValue = {
             tag: 'component-model',
@@ -230,8 +200,7 @@ class WasmRpxProxyHandlerShared {
           elementValues.push(elementValue);
           break;
         case 'unstructured-text': {
-          const textReference: TextReference =
-            serializeTsValueToTextReference(arg);
+          const textReference: TextReference = serializeTsValueToTextReference(arg);
 
           const elementValue: ElementValue = {
             tag: 'unstructured-text',
@@ -242,8 +211,7 @@ class WasmRpxProxyHandlerShared {
           break;
         }
         case 'unstructured-binary':
-          const binaryReference: BinaryReference =
-            serializeTsValueToBinaryReference(arg);
+          const binaryReference: BinaryReference = serializeTsValueToBinaryReference(arg);
 
           const elementValueBinary: ElementValue = {
             tag: 'unstructured-binary',
@@ -253,9 +221,7 @@ class WasmRpxProxyHandlerShared {
           elementValues.push(elementValueBinary);
           break;
         case 'multimodal':
-          throw new Error(
-            'Multimodal constructor parameters are not supported in remote calls',
-          );
+          throw new Error('Multimodal constructor parameters are not supported in remote calls');
       }
     }
 
@@ -264,11 +230,7 @@ class WasmRpxProxyHandlerShared {
       val: elementValues,
     };
 
-    const agentId = makeAgentId(
-      this.agentClassName.value,
-      constructorDataValue,
-      phantomId,
-    );
+    const agentId = makeAgentId(this.agentClassName.value, constructorDataValue, phantomId);
 
     return {
       componentId: registeredAgentType.implementedBy,
@@ -293,9 +255,7 @@ class WasmRpxProxyHandlerShared {
       const paramNames = Array.from(methodParams.keys());
 
       const paramTypeMap =
-        AgentMethodParamRegistry.get(this.agentClassName.value)?.get(
-          methodName,
-        ) ?? new Map();
+        AgentMethodParamRegistry.get(this.agentClassName.value)?.get(methodName) ?? new Map();
 
       const params = [];
       for (const paramName of paramNames) {
@@ -312,10 +272,7 @@ class WasmRpxProxyHandlerShared {
 
       const kebabName = convertAgentMethodNameToKebab(methodName);
       const witFunctionName = `${this.agentClassName.asWit}.{${kebabName}}`;
-      const returnType = AgentMethodRegistry.getReturnType(
-        this.agentClassName.value,
-        methodName,
-      );
+      const returnType = AgentMethodRegistry.getReturnType(this.agentClassName.value, methodName);
 
       if (!returnType) {
         throw new Error(
@@ -342,9 +299,7 @@ class WasmRpxProxyHandlerShared {
       const registeredAgentType = getAgentType(this.agentClassName.value);
 
       if (!registeredAgentType) {
-        throw new Error(
-          `There are no components implementing ${this.agentClassName.value}`,
-        );
+        throw new Error(`There are no components implementing ${this.agentClassName.value}`);
       }
 
       this.cachedRegisteredAgentType = registeredAgentType;
@@ -359,18 +314,14 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
   private readonly witAgentId: wasmRpc.AgentId;
   private readonly wasmRpc: wasmRpc.WasmRpc;
 
-  private readonly methodProxyCache = new Map<
-    string,
-    RemoteMethod<any[], any>
-  >();
+  private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
 
   private readonly getIdMethod: () => AgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
     const [_typeName, _params, phantomId] = this.agentId.parsed();
     return phantomId;
   };
-  private readonly getAgentTypeMethod: () => AgentType = () =>
-    this.shared.agentType;
+  private readonly getAgentTypeMethod: () => AgentType = () => this.shared.agentType;
 
   constructor(shared: WasmRpxProxyHandlerShared, witAgentId: wasmRpc.AgentId) {
     this.shared = shared;
@@ -444,8 +395,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
         rpcResult.tag === 'err'
           ? (() => {
               throw new Error(
-                'Remote agent returned error result: ' +
-                  JSON.stringify(rpcResult.val),
+                'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
               );
             })()
           : rpcResult.val;
@@ -462,18 +412,13 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
     function invokeSchedule(ts: wasmRpc.Datetime, ...fnArgs: any[]) {
       const parameterWitValues = serializeArgs(methodInfo.params, fnArgs);
-      wasmRpc.scheduleInvocation(
-        ts,
-        methodInfo.witFunctionName,
-        parameterWitValues,
-      );
+      wasmRpc.scheduleInvocation(ts, methodInfo.witFunctionName, parameterWitValues);
     }
 
     const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
 
     methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
-    methodFn.schedule = (ts: wasmRpc.Datetime, ...args: any[]) =>
-      invokeSchedule(ts, ...args);
+    methodFn.schedule = (ts: wasmRpc.Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
 
     return methodFn as RemoteMethod<any[], any>;
   }
@@ -505,9 +450,7 @@ function convertToValue(
 
       if (Array.isArray(arg)) {
         for (const elem of arg) {
-          const index = types.findIndex(
-            (paramDetail) => elem.tag === paramDetail.name,
-          );
+          const index = types.findIndex((paramDetail) => elem.tag === paramDetail.name);
 
           if (index === -1) {
             return Either.left(
@@ -518,9 +461,7 @@ function convertToValue(
           const result = convertToValue(arg[index].val, types[index].type);
 
           if (Either.isLeft(result)) {
-            return Either.left(
-              `Failed to serialize multimodal element: ${result.val}`,
-            );
+            return Either.left(`Failed to serialize multimodal element: ${result.val}`);
           }
 
           values.push({
@@ -540,10 +481,7 @@ function convertToValue(
   }
 }
 
-function serializeArgs(
-  params: CachedParamInfo[],
-  fnArgs: any[],
-): WitValue.WitValue[] {
+function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): WitValue.WitValue[] {
   const result: WitValue.WitValue[] = [];
   for (const [index, fnArg] of fnArgs.entries()) {
     const param = params[index];
@@ -560,15 +498,10 @@ function serializeArgs(
 function unwrapResult(witValue: WitValue.WitValue): Value.Value {
   const value = Value.fromWitValue(witValue);
 
-  return value.kind === 'tuple' && value.value.length > 0
-    ? value.value[0]
-    : value;
+  return value.kind === 'tuple' && value.value.length > 0 ? value.value[0] : value;
 }
 
-function deserializeRpcResult(
-  rpcResult: Value.Value,
-  typeInfoInternal: TypeInfoInternal,
-): any {
+function deserializeRpcResult(rpcResult: Value.Value, typeInfoInternal: TypeInfoInternal): any {
   switch (typeInfoInternal.tag) {
     case 'analysed':
       const dataValue = createSingleElementTupleDataValue({
@@ -591,8 +524,7 @@ function deserializeRpcResult(
           { tag: 'anonymous' },
         ),
 
-        (err) =>
-          new Error(`Failed to deserialize return value of RPC call: ${err}`),
+        (err) => new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
 
     case 'unstructured-text':
@@ -616,8 +548,7 @@ function deserializeRpcResult(
           ],
           { tag: 'anonymous' },
         ),
-        (err) =>
-          new Error(`Failed to deserialize return value of RPC call: ${err}`),
+        (err) => new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
 
     case 'unstructured-binary':
@@ -641,8 +572,7 @@ function deserializeRpcResult(
           ],
           { tag: 'anonymous' },
         ),
-        (err) =>
-          new Error(`Failed to deserialize return value of RPC call: ${err}`),
+        (err) => new Error(`Failed to deserialize return value of RPC call: ${err}`),
       )[0];
 
     case 'multimodal':
@@ -653,34 +583,30 @@ function deserializeRpcResult(
         case 'list':
           const values = rpcResult.value;
 
-          const nameAndElementValues: [string, ElementValue][] = values.map(
-            (value, idx) => {
-              switch (value.kind) {
-                case 'variant':
-                  const caseIdx = value.caseIdx;
-                  const paramDetail = multimodalParamsInfo[caseIdx];
-                  const caseValue = value.caseValue;
+          const nameAndElementValues: [string, ElementValue][] = values.map((value, idx) => {
+            switch (value.kind) {
+              case 'variant':
+                const caseIdx = value.caseIdx;
+                const paramDetail = multimodalParamsInfo[caseIdx];
+                const caseValue = value.caseValue;
 
-                  if (!caseValue) {
-                    throw new Error(
-                      `Missing case value in multimodal return value at index ${idx}`,
-                    );
-                  }
+                if (!caseValue) {
+                  throw new Error(`Missing case value in multimodal return value at index ${idx}`);
+                }
 
-                  const elementValue = convertNonMultimodalValueToElementValue(
-                    caseValue,
-                    paramDetail.type,
-                  );
+                const elementValue = convertNonMultimodalValueToElementValue(
+                  caseValue,
+                  paramDetail.type,
+                );
 
-                  return [paramDetail.name, elementValue];
+                return [paramDetail.name, elementValue];
 
-                default:
-                  throw new Error(
-                    `Invalid kind in multimodal return value at index ${idx}: expected variant, got ${value.kind}`,
-                  );
-              }
-            },
-          );
+              default:
+                throw new Error(
+                  `Invalid kind in multimodal return value at index ${idx}: expected variant, got ${value.kind}`,
+                );
+            }
+          });
 
           const dataValue: DataValue = {
             tag: 'multimodal',
@@ -699,10 +625,7 @@ function deserializeRpcResult(
               // and multimodal cannot contain Principal type inside
               { tag: 'anonymous' },
             ),
-            (err) =>
-              new Error(
-                `Failed to deserialize multimodal return value: ${err}`,
-              ),
+            (err) => new Error(`Failed to deserialize multimodal return value: ${err}`),
           )[0];
       }
   }
@@ -728,9 +651,7 @@ function convertNonMultimodalValueToElementValue(
       };
 
     case 'principal':
-      throw new Error(
-        `Internal error: Value of 'Principal' should not appear in RPC calls`,
-      );
+      throw new Error(`Internal error: Value of 'Principal' should not appear in RPC calls`);
 
     case 'unstructured-binary':
       const binaryReference = convertValueToBinaryReference(rpcValueUnwrapped);
@@ -767,9 +688,7 @@ function convertValueToTextReference(value: Value.Value): TextReference {
               };
 
             default:
-              throw new Error(
-                `Invalid URL value type in value: ${urlValue.kind}`,
-              );
+              throw new Error(`Invalid URL value type in value: ${urlValue.kind}`);
           }
 
         case 1:
@@ -784,8 +703,7 @@ function convertValueToTextReference(value: Value.Value): TextReference {
             case 'record':
               const record = inlineValue.value;
               const data = record[0];
-              const languageCodeField =
-                record.length > 1 ? record[1] : undefined;
+              const languageCodeField = record.length > 1 ? record[1] : undefined;
 
               switch (data.kind) {
                 case 'string':
@@ -839,14 +757,10 @@ function convertValueToTextReference(value: Value.Value): TextReference {
                   }
 
                 default:
-                  throw new Error(
-                    `Invalid inline text data type: expected string`,
-                  );
+                  throw new Error(`Invalid inline text data type: expected string`);
               }
             default:
-              throw new Error(
-                `Invalid inline text value type in value: ${inlineValue.kind}`,
-              );
+              throw new Error(`Invalid inline text value type in value: ${inlineValue.kind}`);
           }
       }
   }
@@ -875,9 +789,7 @@ function convertValueToBinaryReference(value: Value.Value): BinaryReference {
               };
 
             default:
-              throw new Error(
-                `Invalid URL value type in value: ${urlValue.kind}`,
-              );
+              throw new Error(`Invalid URL value type in value: ${urlValue.kind}`);
           }
 
         case 1:
@@ -923,15 +835,11 @@ function convertValueToBinaryReference(value: Value.Value): BinaryReference {
                     },
                   };
                 default:
-                  throw new Error(
-                    `Invalid inline binary mime type type: expected string`,
-                  );
+                  throw new Error(`Invalid inline binary mime type type: expected string`);
               }
 
             default:
-              throw new Error(
-                `Invalid inline binary value type in value: ${inlineValue.kind}`,
-              );
+              throw new Error(`Invalid inline binary value type in value: ${inlineValue.kind}`);
           }
       }
   }

@@ -1,0 +1,8 @@
+.metadata
+dist
+node_modules
+package-lock.json
+packages/golem-ts-sdk/agent-template
+packages/golem-ts-sdk/types
+pnpm-lock.yaml
+wit

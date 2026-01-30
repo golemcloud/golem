@@ -1,10 +1,7 @@
 import { describe } from 'vitest';
 import { AgentType } from 'golem:agent/common';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import {
-  ComplexHttpAgentClassName,
-  SimpleHttpAgentClassName,
-} from './testUtils';
+import { ComplexHttpAgentClassName, SimpleHttpAgentClassName } from './testUtils';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 describe('Http Agent class', () => {
@@ -29,14 +26,10 @@ describe('Http Agent class', () => {
   });
 
   it('should register HTTP endpoint details with endpoint details', () => {
-    const simpleHttpAgent = AgentMethodRegistry.get(
-      SimpleHttpAgentClassName.value,
-    )?.get('greet');
+    const simpleHttpAgent = AgentMethodRegistry.get(SimpleHttpAgentClassName.value)?.get('greet');
 
     if (!simpleHttpAgent) {
-      throw new Error(
-        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
-      );
+      throw new Error('SimpleHttpAgent.greet method not found in AgentMethodRegistry');
     }
 
     expect(simpleHttpAgent.httpEndpoint).toBeDefined();
@@ -131,14 +124,12 @@ describe('Http Agent class', () => {
   });
 
   it('should register simple HTTP endpoint details with catch all var', () => {
-    const complexHttpAgent = AgentMethodRegistry.get(
-      ComplexHttpAgentClassName.value,
-    )?.get('catchAllFun');
+    const complexHttpAgent = AgentMethodRegistry.get(ComplexHttpAgentClassName.value)?.get(
+      'catchAllFun',
+    );
 
     if (!complexHttpAgent) {
-      throw new Error(
-        'ComplexHttpAgent.catchAllFun method not found in AgentMethodRegistry',
-      );
+      throw new Error('ComplexHttpAgent.catchAllFun method not found in AgentMethodRegistry');
     }
 
     expect(complexHttpAgent.httpEndpoint).toBeDefined();
@@ -161,14 +152,12 @@ describe('Http Agent class', () => {
   });
 
   it('should register simple HTTP endpoint details with left over parameters in request body', () => {
-    const complexHttpAgent = AgentMethodRegistry.get(
-      ComplexHttpAgentClassName.value,
-    )?.get('greetPost');
+    const complexHttpAgent = AgentMethodRegistry.get(ComplexHttpAgentClassName.value)?.get(
+      'greetPost',
+    );
 
     if (!complexHttpAgent) {
-      throw new Error(
-        'ComplexHttpAgent.greetPost method not found in AgentMethodRegistry',
-      );
+      throw new Error('ComplexHttpAgent.greetPost method not found in AgentMethodRegistry');
     }
 
     expect(complexHttpAgent.httpEndpoint).toBeDefined();
@@ -197,14 +186,12 @@ describe('Http Agent class', () => {
   });
 
   it('should register complex HTTP endpoint details with endpoint details', () => {
-    const complexHttpAgentMetadata = AgentMethodRegistry.get(
-      ComplexHttpAgentClassName.value,
-    )?.get('greetCustom2');
+    const complexHttpAgentMetadata = AgentMethodRegistry.get(ComplexHttpAgentClassName.value)?.get(
+      'greetCustom2',
+    );
 
     if (!complexHttpAgentMetadata) {
-      throw new Error(
-        'SimpleHttpAgent.greet method not found in AgentMethodRegistry',
-      );
+      throw new Error('SimpleHttpAgent.greet method not found in AgentMethodRegistry');
     }
 
     expect(complexHttpAgentMetadata.httpEndpoint).toBeDefined();

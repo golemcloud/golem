@@ -7,8 +7,8 @@
     "build-agent-template": "pnpm --filter @golemcloud/golem-ts-sdk run build-agent-template",
     "lint": "pnpm -r run lint",
     "test": "pnpm -r run test",
-    "format": "pnpm -r run format",
-    "format:check": "pnpm -r run format:check",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "clean": "rm -rf dist node_modules packages/*/dist packages/*/node_modules packages/*/.metadata packages/golem-ts-sdk/agent-template"
   },
   "devDependencies": {

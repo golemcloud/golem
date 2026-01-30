@@ -33,15 +33,15 @@ type WordMode = 'Boundary' | 'Lowercase' | 'Uppercase';
 
 // Cache for combining mark detection (U+0300-U+036F range covers most diacritics)
 const COMBINING_MARK_START = 0x0300;
-const COMBINING_MARK_END = 0x036F;
+const COMBINING_MARK_END = 0x036f;
 
 function isCombiningMarkFast(code: number): boolean {
   // Fast path for common combining marks (U+0300-U+036F)
   if (code >= COMBINING_MARK_START && code <= COMBINING_MARK_END) return true;
   // Fallback for other mark ranges (rare)
-  if (code >= 0x1AB0 && code <= 0x1AFF) return true; // Extended combining
-  if (code >= 0x1DC0 && code <= 0x1DFF) return true; // Phonetic extensions
-  if (code >= 0x20D0 && code <= 0x20FF) return true; // Combining diacritical marks for symbols
+  if (code >= 0x1ab0 && code <= 0x1aff) return true; // Extended combining
+  if (code >= 0x1dc0 && code <= 0x1dff) return true; // Phonetic extensions
+  if (code >= 0x20d0 && code <= 0x20ff) return true; // Combining diacritical marks for symbols
   return false;
 }
 
@@ -174,10 +174,9 @@ export function convertOptionalTypeNameToKebab(typeName: string | undefined): st
 }
 
 export function convertAgentMethodNameToKebab(methodName: string): string {
-  return toKebab(methodName)
+  return toKebab(methodName);
 }
 
-export function convertVariantTypeNameToKebab(typeName: string): string{
-  return toKebab(typeName)
+export function convertVariantTypeNameToKebab(typeName: string): string {
+  return toKebab(typeName);
 }
-

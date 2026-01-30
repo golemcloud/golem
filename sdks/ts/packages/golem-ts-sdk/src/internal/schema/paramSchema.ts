@@ -42,9 +42,7 @@ export type ParameterSchema =
   | { tag: 'component-model'; name: string; schema: ElementSchema };
 
 // Remove principal parameters
-function getDataSchema(
-  parameterSchemaCollection: ParameterSchema[],
-): DataSchema {
+function getDataSchema(parameterSchemaCollection: ParameterSchema[]): DataSchema {
   let nameAndSchema: [string, ElementSchema][] = [];
 
   for (const paramSchema of parameterSchemaCollection) {
