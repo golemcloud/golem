@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  client_configuration_from_env,
-  Config,
-  ConfigureClient,
-} from './config';
+import { client_configuration_from_env, Config, ConfigureClient } from './config';
 import * as repl from 'node:repl';
 import * as process from 'node:process';
 import * as shellQuote from 'shell-quote';
@@ -45,9 +41,7 @@ export class Repl {
 
         const parsed_args = shellQuote.parse((raw_args ?? '').trim());
 
-        let args = parsed_args.filter(
-          (t): t is string => typeof t === 'string' && t.length > 0,
-        );
+        let args = parsed_args.filter((t): t is string => typeof t === 'string' && t.length > 0);
         args = [
           'deploy',
           '--environment',
@@ -68,8 +62,7 @@ export class Repl {
       const agentConfig = this.config.agents[agentTypeName];
       let configure = agentConfig.package.configure as ConfigureClient;
       configure(client_config);
-      r.context[agentConfig.typeName] =
-        agentConfig.package[agentConfig.typeName];
+      r.context[agentConfig.typeName] = agentConfig.package[agentConfig.typeName];
     }
   }
 }
