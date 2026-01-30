@@ -174,21 +174,41 @@ impl<Hooks: CommandHandlerHooks + 'static> ServerHandler for McpHandler<Hooks> {
     ) -> Result<serde_json::Value, Error> {
         match method {
             "tools/list" => {
-                let tools = vec![Tool {
-                    name: "run_command".to_string(),
-                    description: "Run any Golem CLI command with string arguments. Example arguments: ['component', 'list'], ['worker', 'invoke', '--component-name', 'foo', '--function', 'bar']".to_string(),
-                    input_schema: Some(ToolSchema {
-                        properties: Some(serde_json::json!({
-                            "args": {
-                                "type": "array",
-                                "items": { "type": "string" },
-                                "description": "Arguments to pass to golem CLI (excluding 'golem' itself)"
-                            }
-                        })),
-                        required: Some(vec!["args".to_string()]),
-                    }),
-                    annotations: None,
-                }];
+                let tools = vec![
+                    Tool {
+                        name: "run_command".to_string(),
+                        description: "Run any Golem CLI command with string arguments. Example arguments: ['component', 'list'], ['worker', 'invoke', '--component-name', 'foo', '--function', 'bar']".to_string(),
+                        input_schema: Some(ToolSchema {
+                            properties: Some(serde_json::json!({
+                                "args": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Arguments to pass to golem CLI (excluding 'golem' itself)"
+                                }
+                            })),
+                            required: Some(vec!["args".to_string()]),
+                        }),
+                        annotations: None,
+                    },
+                    Tool {
+                        name: "get_info".to_string(),
+                        description: "Get general information about the Golem environment, profiles, and versions.".to_string(),
+                        input_schema: Some(ToolSchema {
+                            properties: Some(serde_json::json!({})),
+                            required: None,
+                        }),
+                        annotations: None,
+                    },
+                    Tool {
+                        name: "list_components".to_string(),
+                        description: "List all components in the current Golem account/profile.".to_string(),
+                        input_schema: Some(ToolSchema {
+                            properties: Some(serde_json::json!({})),
+                            required: None,
+                        }),
+                        annotations: None,
+                    }
+                ];
                 Ok(serde_json::to_value(ListToolsResult {
                     tools,
                     next_cursor: None,
@@ -204,24 +224,41 @@ impl<Hooks: CommandHandlerHooks + 'static> ServerHandler for McpHandler<Hooks> {
                     Error::protocol(ErrorCode::InvalidParams, "Missing arguments")
                 })?;
 
-                if name == "run_command" {
-                    let args: Vec<String> =
-                        serde_json::from_value(arguments.get("args").cloned().unwrap_or_default())
-                            .map_err(|e| {
-                                Error::protocol(
-                                    ErrorCode::InvalidParams,
-                                    format!("Invalid args: {}", e),
-                                )
-                            })?;
+                match name {
+                    "run_command" => {
+                        let args: Vec<String> =
+                            serde_json::from_value(arguments.get("args").cloned().unwrap_or_default())
+                                .map_err(|e| {
+                                    Error::protocol(
+                                        ErrorCode::InvalidParams,
+                                        format!("Invalid args: {}", e),
+                                    )
+                                })?;
 
-                    let result = self.invoke_cli(args).await?;
-                    let tool_result = ToolResult {
-                        content: vec![MessageContent::Text { text: result }],
-                        structured_content: None,
-                    };
-                    Ok(serde_json::to_value(tool_result)?)
-                } else {
-                    Err(Error::protocol(
+                        let result = self.invoke_cli(args).await?;
+                        let tool_result = ToolResult {
+                            content: vec![MessageContent::Text { text: result }],
+                            structured_content: None,
+                        };
+                        Ok(serde_json::to_value(tool_result)?)
+                    }
+                    "get_info" => {
+                        let result = self.invoke_cli(vec!["--version".to_string()]).await?;
+                        let tool_result = ToolResult {
+                            content: vec![MessageContent::Text { text: result }],
+                            structured_content: None,
+                        };
+                        Ok(serde_json::to_value(tool_result)?)
+                    }
+                    "list_components" => {
+                        let result = self.invoke_cli(vec!["component".to_string(), "list".to_string()]).await?;
+                        let tool_result = ToolResult {
+                            content: vec![MessageContent::Text { text: result }],
+                            structured_content: None,
+                        };
+                        Ok(serde_json::to_value(tool_result)?)
+                    }
+                    _ => Err(Error::protocol(
                         ErrorCode::MethodNotFound,
                         format!("Tool not found: {}", name),
                     ))
