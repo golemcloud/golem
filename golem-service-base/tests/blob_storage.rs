@@ -24,7 +24,7 @@ use futures::stream::BoxStream;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
-use golem_service_base::config::S3BlobStorageConfig;
+use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -128,7 +128,11 @@ impl GetBlobStorage for S3Test {
             region: "us-east-1".to_string(),
             object_prefix: self.prefixed.clone().unwrap_or_default(),
             aws_endpoint_url: Some(format!("http://127.0.0.1:{host_port}")),
-            use_minio_credentials: true,
+            aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
+                "minioadmin",
+                "minioadmin",
+                "test",
+            )),
             ..std::default::Default::default()
         };
         create_buckets(host_port, &config).await;
