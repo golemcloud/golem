@@ -67,6 +67,7 @@ mod plugin;
 mod profile;
 mod rib_repl;
 mod worker;
+mod mcp;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
@@ -258,7 +259,17 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     }
 
     async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
-        match command.subcommand {
+        // Check for MCP server mode FIRST
+        if command.serve {
+            return self.ctx.mcp_handler().run_server().await;
+        }
+
+        // Require a subcommand if not in serve mode
+        let subcommand = command.subcommand.ok_or_else(|| {
+            anyhow!("No subcommand provided. Use --help for usage information, or --serve for MCP server mode.")
+        })?;
+
+        match subcommand {
             // App scoped root commands
             GolemCliSubcommand::New {
                 application_name,
@@ -432,6 +443,7 @@ pub trait Handlers {
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn rib_repl_handler(&self) -> RibReplHandler;
     fn worker_handler(&self) -> WorkerCommandHandler;
+    fn mcp_handler(&self) -> mcp::McpCommandHandler;
 }
 
 impl Handlers for Arc<Context> {
@@ -527,6 +539,10 @@ impl Handlers for Arc<Context> {
 
     fn worker_handler(&self) -> WorkerCommandHandler {
         WorkerCommandHandler::new(self.clone())
+    }
+
+    fn mcp_handler(&self) -> mcp::McpCommandHandler {
+        mcp::McpCommandHandler::new(self.clone())
     }
 }
 
