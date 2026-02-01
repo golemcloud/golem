@@ -740,6 +740,13 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
+    /// Start MCP server mode for AI agent integration
+    #[cfg(feature = "mcp-server")]
+    Serve {
+        /// Port to run the MCP server on (default: stdin/stdout for stdio transport)
+        #[arg(long)]
+        port: Option<u16>,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell

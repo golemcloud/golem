@@ -391,6 +391,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     .handler_server_commands(self.ctx.clone(), subcommand)
                     .await
             }
+            #[cfg(feature = "mcp-server")]
+            GolemCliSubcommand::Serve { port } => {
+                use crate::mcp::{start_mcp_server, McpServerConfig};
+                start_mcp_server(McpServerConfig { port })
+                    .await
+                    .map_err(|e| anyhow::anyhow!("MCP server error: {}", e))
+            }
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }

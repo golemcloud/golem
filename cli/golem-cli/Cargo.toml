@@ -13,6 +13,7 @@ build = "build.rs"
 [features]
 default = []
 server-commands = []
+mcp-server = ["rust-mcp-sdk"]
 
 [lib]
 harness = false
@@ -125,6 +126,9 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
+
+# MCP Server support (optional)
+rust-mcp-sdk = { version = "0.8", optional = true }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
 openssl = { workspace = true }
