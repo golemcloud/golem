@@ -181,7 +181,11 @@ impl<Hooks: CommandHandlerHooks + 'static> McpHandler<Hooks> {
                             Err(e) => Err(Error::protocol(ErrorCode::InternalError, format!("CLI Error: {}", e))),
                         }
                     }
-                    _ => Err(Error::protocol(ErrorCode::InvalidParams, "Invalid command arguments")),
+                    GolemCliCommandParseResult::ErrorWithPartialMatch { error, .. }
+                    | GolemCliCommandParseResult::Error { error, .. } => {
+                        // clap "errors" include --version and --help output, which we want to return as success
+                        Ok(error.render().to_string())
+                    }
                 }
             });
             let _ = tx.send(res);
