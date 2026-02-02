@@ -149,13 +149,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
             GolemCliCommandParseResult::FullMatch(command) => {
                 #[cfg(feature = "server-commands")]
-                let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
+                let verbosity = if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. })) {
                     Hooks::override_verbosity(command.global_flags.verbosity())
                 } else {
                     command.global_flags.verbosity()
                 };
                 #[cfg(feature = "server-commands")]
-                let pretty_mode = if matches!(command.subcommand, GolemCliSubcommand::Server { .. })
+                let pretty_mode = if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. }))
                 {
                     Hooks::override_pretty_mode()
                 } else {

@@ -14,17 +14,19 @@
 
 use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
 use crate::command_handler::{CommandHandler, CommandHandlerHooks};
-use crate::log::{set_log_output, take_log_buffer, LogOutput, Output};
+use crate::log::{set_log_output, take_log_buffer, Output};
 use async_trait::async_trait;
 use mcp_sdk_rs::error::{Error, ErrorCode};
 use mcp_sdk_rs::server::{Server, ServerHandler};
 use mcp_sdk_rs::transport::stdio::StdioTransport;
+use mcp_sdk_rs::transport::{Message, Transport};
 use mcp_sdk_rs::types::{
     ClientCapabilities, Implementation, ListResourcesResult, ListToolsResult, MessageContent,
     Resource, ServerCapabilities, Tool, ToolResult, ToolSchema,
 };
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use futures_util::StreamExt;
 
 pub struct McpHandler<Hooks: CommandHandlerHooks + 'static> {
     handler: Arc<CommandHandler<Hooks>>,
@@ -36,116 +38,119 @@ impl<Hooks: CommandHandlerHooks + 'static> McpHandler<Hooks> {
     }
 
     pub async fn run(self, _port: Option<u16>) -> anyhow::Result<()> {
-        // Redirect all logs to None initially to avoid polluting stdout
         set_log_output(Output::None);
 
-        let (stdin_tx, stdin_rx): (
-            tokio::sync::mpsc::Sender<String>,
-            tokio::sync::mpsc::Receiver<String>,
-        ) = tokio::sync::mpsc::channel(32);
-        let (stdout_tx, mut stdout_rx): (
-            tokio::sync::mpsc::Sender<String>,
-            tokio::sync::mpsc::Receiver<String>,
-        ) = tokio::sync::mpsc::channel(32);
+        let (stdin_tx, stdin_rx) = tokio::sync::mpsc::channel::<String>(100);
+        let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::channel::<String>(100);
 
-        // Stdin reader task
         tokio::spawn(async move {
-            let mut stdin = BufReader::new(tokio::io::stdin());
-            let mut line = String::new();
-            while let Ok(n) = stdin.read_line(&mut line).await {
-                if n == 0 {
-                    break;
-                }
-                let _ = stdin_tx.send(line.clone()).await;
-                line.clear();
+            let stdin = tokio::io::stdin();
+            let mut reader = BufReader::new(stdin).lines();
+            while let Ok(std::option::Option::Some(line)) = reader.next_line().await {
+                let _ = stdin_tx.send(line).await;
             }
         });
 
-        // Stdout writer task
         tokio::spawn(async move {
             let mut stdout = tokio::io::stdout();
-            while let Some(msg) = stdout_rx.recv().await {
+            while let std::option::Option::Some(msg) = stdout_rx.recv().await {
                 let _ = stdout.write_all(msg.as_bytes()).await;
                 let _ = stdout.write_all(b"\n").await;
                 let _ = stdout.flush().await;
             }
         });
 
-        let transport = Arc::new(StdioTransport::new(stdin_rx, stdout_tx));
+        struct LenientTransport {
+            inner: Arc<StdioTransport>,
+        }
+
+        #[async_trait]
+        impl Transport for LenientTransport {
+            async fn send(&self, message: Message) -> Result<(), Error> {
+                self.inner.send(message).await
+            }
+
+            fn receive(&self) -> std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<Message, Error>> + Send>> {
+                let inner = self.inner.clone();
+                Box::pin(inner.receive().map(|res| {
+                    match res {
+                        Ok(mut msg) => {
+                            if let Message::Request(ref mut req) = msg {
+                                if req.method == "initialize" {
+                                    if let std::option::Option::Some(ref mut params) = req.params {
+                                        if let serde_json::Value::Object(ref mut p) = params {
+                                            let client_info = p.get("clientInfo").cloned();
+                                            let implementation = p.get("implementation").cloned();
+                                            if let std::option::Option::Some(ci) = client_info {
+                                                if !p.contains_key("implementation") {
+                                                    p.insert("implementation".to_string(), ci);
+                                                }
+                                            } else if let std::option::Option::Some(imp) = implementation {
+                                                if !p.contains_key("clientInfo") {
+                                                    p.insert("clientInfo".to_string(), imp);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(msg)
+                        }
+                        Err(e) => Err(e),
+                    }
+                }))
+            }
+
+            async fn close(&self) -> Result<(), Error> {
+                self.inner.close().await
+            }
+        }
+
+        let transport = Arc::new(LenientTransport {
+            inner: Arc::new(StdioTransport::new(stdin_rx, stdout_tx)),
+        });
         let handler = Arc::new(self);
         let server = Server::new(transport, handler);
 
-        server.start().await.map_err(|e| anyhow::anyhow!(e))?;
+        server.start().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         Ok(())
     }
 
     async fn invoke_cli(&self, args: Vec<String>) -> Result<String, Error> {
-        let mut full_args = vec!["golem".to_string()];
-        full_args.extend(args);
-
-        let parse_result = GolemCliCommand::try_parse_from_lenient(&full_args, true);
-
-        let command = match parse_result {
-            GolemCliCommandParseResult::FullMatch(cmd) => cmd,
-            GolemCliCommandParseResult::Error { error, .. } => {
-                return Err(Error::protocol(
-                    ErrorCode::InvalidParams,
-                    format!("Parse error: {}", error),
-                ));
-            }
-            GolemCliCommandParseResult::ErrorWithPartialMatch { error, .. } => {
-                return Err(Error::protocol(
-                    ErrorCode::InvalidParams,
-                    format!("Parse error: {}", error),
-                ));
-            }
-        };
-
-        // Capture output
-        let _log_capture = LogOutput::new(Output::BufferedUntilErr);
-
         let handler = self.handler.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
 
-        // Technical Note for Reviewers:
-        // We use spawn_blocking with a dedicated local runtime to handle CLI commands
-        // that may involve !Send futures or logic (e.g., from cargo-component).
-        // This ensures compatibility with Golem's existing CLI architecture while
-        // maintaining the MCP server's stability.
-        let result = tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|e| {
-                    Error::protocol(
-                        ErrorCode::InternalError,
-                        format!("Failed to build local runtime: {}", e),
-                    )
-                })?;
+                .unwrap();
+            let res = rt.block_on(async {
+                let mut full_args = vec!["golem".to_string()];
+                full_args.extend(args);
 
-            rt.block_on(async { handler.handle_command(command).await })
-                .map_err(|e| {
-                    Error::protocol(ErrorCode::RequestFailed, format!("Command failed: {}", e))
-                })
-        })
-        .await
-        .map_err(|e| Error::protocol(ErrorCode::InternalError, format!("Task panicked: {}", e)))?;
+                match GolemCliCommand::try_parse_from_lenient(full_args, true) {
+                    GolemCliCommandParseResult::FullMatch(command) => {
+                        let _ = take_log_buffer();
+                        set_log_output(Output::BufferedUntilErr);
+                        let result = handler.handle_command(command).await;
+                        let log_lines = take_log_buffer();
+                        let output = log_lines.join("\n");
+                        set_log_output(Output::None);
 
-        match result {
-            Ok(_) => {
-                let logs = take_log_buffer();
-                Ok(logs.join("\n"))
-            }
-            Err(e) => {
-                let logs = take_log_buffer();
-                let mut message = format!("{}", e);
-                if !logs.is_empty() {
-                    message.push_str("\n\nLogs:\n");
-                    message.push_str(&logs.join("\n"));
+                        match result {
+                            Ok(_) => Ok(output),
+                            Err(e) => Err(Error::protocol(ErrorCode::InternalError, format!("CLI Error: {}", e))),
+                        }
+                    }
+                    _ => Err(Error::protocol(ErrorCode::InvalidParams, "Invalid command arguments")),
                 }
-                Err(e)
-            }
-        }
+            });
+            let _ = tx.send(res);
+        });
+
+        rx.await.map_err(|_| Error::protocol(ErrorCode::InternalError, "Internal thread finished unexpectedly"))?
     }
 }
 
@@ -157,9 +162,11 @@ impl<Hooks: CommandHandlerHooks + 'static> ServerHandler for McpHandler<Hooks> {
         _capabilities: ClientCapabilities,
     ) -> Result<ServerCapabilities, Error> {
         Ok(ServerCapabilities {
-            tools: Some(serde_json::json!({})),
+            experimental: None,
+            logging: None,
+            prompts: None,
             resources: Some(serde_json::json!({})),
-            ..Default::default()
+            tools: Some(serde_json::json!({})),
         })
     }
 
@@ -170,121 +177,88 @@ impl<Hooks: CommandHandlerHooks + 'static> ServerHandler for McpHandler<Hooks> {
     async fn handle_method(
         &self,
         method: &str,
-        params: Option<serde_json::Value>,
+        params: std::option::Option<serde_json::Value>,
     ) -> Result<serde_json::Value, Error> {
         match method {
             "tools/list" => {
-                let tools = vec![Tool {
-                    name: "run_command".to_string(),
-                    description: "Run any Golem CLI command with string arguments. Example arguments: ['component', 'list'], ['worker', 'invoke', '--component-name', 'foo', '--function', 'bar']".to_string(),
-                    input_schema: Some(ToolSchema {
-                        properties: Some(serde_json::json!({
-                            "args": {
-                                "type": "array",
-                                "items": { "type": "string" },
-                                "description": "Arguments to pass to golem CLI (excluding 'golem' itself)"
-                            }
-                        })),
-                        required: Some(vec!["args".to_string()]),
-                    }),
-                    annotations: None,
-                }];
-                Ok(serde_json::to_value(ListToolsResult {
-                    tools,
+                let result = ListToolsResult {
+                    tools: vec![
+                        Tool {
+                            name: "run_command".to_string(),
+                            description: "Run a Golem CLI command with full arguments".to_string(),
+                            input_schema: std::option::Option::Some(ToolSchema {
+                                properties: std::option::Option::Some(serde_json::json!({
+                                    "args": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "The command line arguments for golem cli"
+                                    }
+                                })),
+                                required: std::option::Option::Some(vec!["args".to_string()]),
+                            }),
+                            annotations: None,
+                        },
+                        Tool {
+                            name: "get_info".to_string(),
+                            description: "Get environmental and cluster details".to_string(),
+                            input_schema: std::option::Option::Some(ToolSchema {
+                                properties: std::option::Option::Some(serde_json::json!({})),
+                                required: None,
+                            }),
+                            annotations: None,
+                        },
+                    ],
                     next_cursor: None,
-                })?)
+                };
+                Ok(serde_json::to_value(result).unwrap())
             }
             "tools/call" => {
-                let params = params
-                    .ok_or_else(|| Error::protocol(ErrorCode::InvalidParams, "Missing params"))?;
-                let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-                    Error::protocol(ErrorCode::InvalidParams, "Missing tool name")
-                })?;
-                let arguments = params.get("arguments").ok_or_else(|| {
-                    Error::protocol(ErrorCode::InvalidParams, "Missing arguments")
-                })?;
+                let params_obj = params.ok_or_else(|| Error::protocol(ErrorCode::InvalidParams, "Missing parameters"))?;
+                let name = params_obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| Error::protocol(ErrorCode::InvalidParams, "Missing name"))?;
+                let arguments = params_obj.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({}));
 
-                if name == "run_command" {
-                    let args: Vec<String> =
-                        serde_json::from_value(arguments.get("args").cloned().unwrap_or_default())
-                            .map_err(|e| {
-                                Error::protocol(
-                                    ErrorCode::InvalidParams,
-                                    format!("Invalid args: {}", e),
-                                )
-                            })?;
+                let output = match name {
+                    "run_command" => {
+                        let args = arguments.get("args")
+                            .and_then(|v| v.as_array())
+                            .ok_or_else(|| Error::protocol(ErrorCode::InvalidParams, "Missing args array"))?;
+                        let arg_strings: Vec<String> = args.iter()
+                            .map(|v| v.as_str().unwrap_or_default().to_string())
+                            .collect();
+                        self.invoke_cli(arg_strings).await?
+                    },
+                    "get_info" => {
+                        self.invoke_cli(vec!["--version".to_string()]).await?
+                    },
+                    _ => return Err(Error::protocol(ErrorCode::MethodNotFound, format!("Unknown tool: {}", name))),
+                };
 
-                    let result = self.invoke_cli(args).await?;
-                    let tool_result = ToolResult {
-                        content: vec![MessageContent::Text { text: result }],
-                        structured_content: None,
-                    };
-                    Ok(serde_json::to_value(tool_result)?)
-                } else {
-                    Err(Error::protocol(
-                        ErrorCode::MethodNotFound,
-                        format!("Tool not found: {}", name),
-                    ))
-                }
+                let result = ToolResult {
+                    content: vec![MessageContent::Text {
+                        text: output,
+                    }],
+                    structured_content: None,
+                };
+                Ok(serde_json::to_value(result).unwrap())
             }
             "resources/list" => {
                 let mut resources = Vec::new();
-                for entry in walkdir::WalkDir::new(".")
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_name() == "golem.yaml")
-                {
-                    let path = entry.path().to_string_lossy().to_string();
+                if std::path::Path::new("golem.yaml").exists() {
                     resources.push(Resource {
-                        uri: format!("file://{}", path),
-                        name: format!("Golem Manifest ({})", path),
-                        description: Some(format!("The Golem application manifest at {}", path)),
-                        mime_type: Some("application/yaml".to_string()),
+                        uri: "file://./golem.yaml".to_string(),
+                        name: "Golem Project Manifest".to_string(),
+                        description: Some("The manifest file for the current Golem project".to_string()),
+                        mime_type: Some("application/x-yaml".to_string()),
                         size: None,
                     });
                 }
-                Ok(serde_json::to_value(ListResourcesResult {
+                let result = ListResourcesResult {
                     resources,
                     next_cursor: None,
-                })?)
+                };
+                Ok(serde_json::to_value(result).unwrap())
             }
-            "resources/read" => {
-                let params = params
-                    .ok_or_else(|| Error::protocol(ErrorCode::InvalidParams, "Missing params"))?;
-                let uri = params
-                    .get("uri")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::protocol(ErrorCode::InvalidParams, "Missing uri"))?;
-
-                if let Some(path) = uri.strip_prefix("file://") {
-                    let content = std::fs::read_to_string(path).map_err(|e| {
-                        Error::protocol(
-                            ErrorCode::InternalError,
-                            format!("Failed to read file: {}", e),
-                        )
-                    })?;
-
-                    let result = serde_json::json!({
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "application/yaml",
-                                "text": content
-                            }
-                        ]
-                    });
-                    Ok(result)
-                } else {
-                    Err(Error::protocol(
-                        ErrorCode::InvalidParams,
-                        "Unsupported URI scheme",
-                    ))
-                }
-            }
-            _ => Err(Error::protocol(
-                ErrorCode::MethodNotFound,
-                format!("Method not found: {}", method),
-            )),
+            _ => Err(Error::protocol(ErrorCode::MethodNotFound, format!("Method not found: {}", method))),
         }
     }
 }
