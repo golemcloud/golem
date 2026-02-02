@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::agentic::{agent_registry, get_resolved_agent};
+use crate::golem_agentic::golem::agent::common::HttpMountDetails;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
+use crate::golem_ai::golem::agent::common::CorsOptions;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 use crate::{
@@ -24,8 +26,6 @@ use crate::{
         AgentError, AgentType, DataValue, Guest, Principal,
     },
 };
-use crate::golem_agentic::golem::agent::common::HttpMountDetails;
-use crate::golem_ai::golem::agent::common::CorsOptions;
 
 pub struct Component;
 

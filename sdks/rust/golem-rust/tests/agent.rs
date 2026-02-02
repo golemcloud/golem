@@ -30,7 +30,6 @@ mod tests {
     use std::fmt::Debug;
     use test_r::test;
 
-
     #[agent_definition(mount = "http", auth = true)]
     trait AgentWithHttpMount {
         fn new(init: UserId) -> Self;
@@ -665,5 +664,4 @@ mod tests {
             );
         }
     }
-
 }

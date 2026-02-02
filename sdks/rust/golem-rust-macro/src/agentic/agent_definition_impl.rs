@@ -24,11 +24,8 @@ use syn::ItemTrait;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{
-    parse::{Parse},
-    Expr, ExprLit, ExprArray, Lit, Token, punctuated::Punctuated, Error,
-};
 use syn::parse::Parser;
+use syn::{parse::Parse, punctuated::Punctuated, Error, Expr, ExprArray, ExprLit, Lit, Token};
 
 struct ParsedHttpMount {
     mount: Option<syn::LitStr>,
@@ -44,33 +41,54 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                 if let Some(ident) = left.path.get_ident() {
                     match ident.to_string().as_str() {
                         "mount" => {
-                            if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = &*assign.right {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Str(lit), ..
+                            }) = &*assign.right
+                            {
                                 out.mount = Some(lit.clone());
                                 return Ok(());
                             } else {
-                                return Err(Error::new_spanned(&assign.right, "mount must be a string literal"));
+                                return Err(Error::new_spanned(
+                                    &assign.right,
+                                    "mount must be a string literal",
+                                ));
                             }
                         }
                         "auth" => {
-                            if let Expr::Lit(ExprLit { lit: Lit::Bool(b), .. }) = &*assign.right {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Bool(b), ..
+                            }) = &*assign.right
+                            {
                                 out.auth = b.value;
                                 return Ok(());
                             } else {
-                                return Err(Error::new_spanned(&assign.right, "auth must be a boolean literal"));
+                                return Err(Error::new_spanned(
+                                    &assign.right,
+                                    "auth must be a boolean literal",
+                                ));
                             }
                         }
                         "cors" => {
                             if let Expr::Array(ExprArray { elems, .. }) = &*assign.right {
                                 for elem in elems {
-                                    if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = elem {
+                                    if let Expr::Lit(ExprLit {
+                                        lit: Lit::Str(lit), ..
+                                    }) = elem
+                                    {
                                         out.cors.push(lit.clone());
                                     } else {
-                                        return Err(Error::new_spanned(elem, "cors entries must be string literals"));
+                                        return Err(Error::new_spanned(
+                                            elem,
+                                            "cors entries must be string literals",
+                                        ));
                                     }
                                 }
                                 return Ok(());
                             } else {
-                                return Err(Error::new_spanned(&assign.right, "cors must be an array of string literals"));
+                                return Err(Error::new_spanned(
+                                    &assign.right,
+                                    "cors must be an array of string literals",
+                                ));
                             }
                         }
                         _ => {}
@@ -85,20 +103,38 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                     for arg in &call.args {
                         if let Expr::Assign(assign) = arg {
                             let key = if let Expr::Path(p) = &*assign.left {
-                                p.path.get_ident()
-                                    .ok_or_else(|| Error::new_spanned(&assign.left, "header key must be an identifier"))?
+                                p.path
+                                    .get_ident()
+                                    .ok_or_else(|| {
+                                        Error::new_spanned(
+                                            &assign.left,
+                                            "header key must be an identifier",
+                                        )
+                                    })?
                                     .to_string()
                             } else {
-                                return Err(Error::new_spanned(&assign.left, "header key must be an identifier"));
+                                return Err(Error::new_spanned(
+                                    &assign.left,
+                                    "header key must be an identifier",
+                                ));
                             };
-                            let val = if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = &*assign.right {
+                            let val = if let Expr::Lit(ExprLit {
+                                lit: Lit::Str(lit), ..
+                            }) = &*assign.right
+                            {
                                 lit.clone()
                             } else {
-                                return Err(Error::new_spanned(&assign.right, "header value must be string literal"));
+                                return Err(Error::new_spanned(
+                                    &assign.right,
+                                    "header value must be string literal",
+                                ));
                             };
                             out.headers.push((key, val));
                         } else {
-                            return Err(Error::new_spanned(arg, "invalid headers syntax, must be key = value"));
+                            return Err(Error::new_spanned(
+                                arg,
+                                "invalid headers syntax, must be key = value",
+                            ));
                         }
                     }
                     return Ok(());
@@ -109,10 +145,15 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
         _ => {}
     }
 
-    Err(Error::new_spanned(expr, "Unknown agent_definition parameter"))
+    Err(Error::new_spanned(
+        expr,
+        "Unknown agent_definition parameter",
+    ))
 }
 
-pub fn parse_definition_attributes(attrs: TokenStream) -> Result<(proc_macro2::TokenStream, Option<proc_macro2::TokenStream>), Error> {
+pub fn parse_definition_attributes(
+    attrs: TokenStream,
+) -> Result<(proc_macro2::TokenStream, Option<proc_macro2::TokenStream>), Error> {
     let mut mode = quote! {
         golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
     };
@@ -138,7 +179,8 @@ pub fn parse_definition_attributes(attrs: TokenStream) -> Result<(proc_macro2::T
                 mode = quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral };
                 continue;
             } else if p.path.is_ident("durable") {
-                mode = quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable };
+                mode =
+                    quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable };
                 continue;
             }
         }
@@ -147,15 +189,30 @@ pub fn parse_definition_attributes(attrs: TokenStream) -> Result<(proc_macro2::T
         if let Expr::Assign(assign) = expr {
             if let Expr::Path(left) = &*assign.left {
                 if left.path.is_ident("mode") {
-                    if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = &*assign.right {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(lit), ..
+                    }) = &*assign.right
+                    {
                         mode = match lit.value().as_str() {
-                            "ephemeral" => quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral },
-                            "durable" => quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable },
-                            other => return Err(Error::new_spanned(lit, format!("invalid mode `{}`", other))),
+                            "ephemeral" => {
+                                quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral }
+                            }
+                            "durable" => {
+                                quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable }
+                            }
+                            other => {
+                                return Err(Error::new_spanned(
+                                    lit,
+                                    format!("invalid mode `{}`", other),
+                                ))
+                            }
                         };
                         continue;
                     } else {
-                        return Err(Error::new_spanned(&assign.right, "mode must be a string literal"));
+                        return Err(Error::new_spanned(
+                            &assign.right,
+                            "mode must be a string literal",
+                        ));
                     }
                 }
             }

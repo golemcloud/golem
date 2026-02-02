@@ -26,6 +26,7 @@ pub use schema::*;
 pub use wit_utils::*;
 
 mod agent;
+mod agent_definition_options;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
@@ -37,4 +38,3 @@ mod schema;
 mod unstructured_binary;
 mod unstructured_text;
 mod wit_utils;
-mod agent_definition_options;
