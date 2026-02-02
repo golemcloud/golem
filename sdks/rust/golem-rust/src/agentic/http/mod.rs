@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use mount::make_http_mount_details;
+pub use mount::get_http_mount_details;
 mod mount;
 mod path;
 mod validations;

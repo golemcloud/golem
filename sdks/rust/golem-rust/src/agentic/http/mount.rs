@@ -14,12 +14,12 @@
 
 use crate::agentic::http::path::parse_path;
 use crate::golem_agentic::golem::agent::common::{
-    AuthDetails, CorsOptions, HttpMountDetails, PathSegment, PathVariable, SystemVariable,
+    AuthDetails, CorsOptions, HttpMountDetails
 };
 
 use crate::agentic::http::validations::reject_query_param_in_string;
 
-pub fn make_http_mount_details(
+pub fn get_http_mount_details(
     path: &str,
     auth: bool,
     phantom_agent: bool,

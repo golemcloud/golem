@@ -22,237 +22,22 @@ use crate::agentic::{
 use syn::spanned::Spanned;
 use syn::ItemTrait;
 
+use crate::agentic::agent_definition_attributes::{
+    parse_agent_definition_attributes, AgentDefinitionAttributes,
+};
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse::Parser;
-use syn::{punctuated::Punctuated, Error, Expr, ExprArray, ExprLit, Lit, Token};
-
-struct ParsedHttpMount {
-    mount: Option<syn::LitStr>,
-    cors: Vec<syn::LitStr>,
-    auth: bool,
-    headers: Vec<(String, syn::LitStr)>,
-}
-
-fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> {
-    match expr {
-        Expr::Assign(assign) => {
-            if let Expr::Path(left) = &*assign.left {
-                if let Some(ident) = left.path.get_ident() {
-                    match ident.to_string().as_str() {
-                        "mount" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Str(lit), ..
-                            }) = &*assign.right
-                            {
-                                out.mount = Some(lit.clone());
-                                return Ok(());
-                            } else {
-                                return Err(Error::new_spanned(
-                                    &assign.right,
-                                    "mount must be a string literal",
-                                ));
-                            }
-                        }
-                        "auth" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Bool(b), ..
-                            }) = &*assign.right
-                            {
-                                out.auth = b.value;
-                                return Ok(());
-                            } else {
-                                return Err(Error::new_spanned(
-                                    &assign.right,
-                                    "auth must be a boolean literal",
-                                ));
-                            }
-                        }
-                        "cors" => {
-                            if let Expr::Array(ExprArray { elems, .. }) = &*assign.right {
-                                for elem in elems {
-                                    if let Expr::Lit(ExprLit {
-                                        lit: Lit::Str(lit), ..
-                                    }) = elem
-                                    {
-                                        out.cors.push(lit.clone());
-                                    } else {
-                                        return Err(Error::new_spanned(
-                                            elem,
-                                            "cors entries must be string literals",
-                                        ));
-                                    }
-                                }
-                                return Ok(());
-                            } else {
-                                return Err(Error::new_spanned(
-                                    &assign.right,
-                                    "cors must be an array of string literals",
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        Expr::Call(call) => {
-            if let Expr::Path(func) = &*call.func {
-                if func.path.is_ident("headers") {
-                    for arg in &call.args {
-                        if let Expr::Assign(assign) = arg {
-                            let key = if let Expr::Path(p) = &*assign.left {
-                                p.path
-                                    .get_ident()
-                                    .ok_or_else(|| {
-                                        Error::new_spanned(
-                                            &assign.left,
-                                            "header key must be an identifier",
-                                        )
-                                    })?
-                                    .to_string()
-                            } else {
-                                return Err(Error::new_spanned(
-                                    &assign.left,
-                                    "header key must be an identifier",
-                                ));
-                            };
-                            let val = if let Expr::Lit(ExprLit {
-                                lit: Lit::Str(lit), ..
-                            }) = &*assign.right
-                            {
-                                lit.clone()
-                            } else {
-                                return Err(Error::new_spanned(
-                                    &assign.right,
-                                    "header value must be string literal",
-                                ));
-                            };
-                            out.headers.push((key, val));
-                        } else {
-                            return Err(Error::new_spanned(
-                                arg,
-                                "invalid headers syntax, must be key = value",
-                            ));
-                        }
-                    }
-                    return Ok(());
-                }
-            }
-        }
-
-        _ => {}
-    }
-
-    Err(Error::new_spanned(
-        expr,
-        "Unknown agent_definition parameter",
-    ))
-}
-
-pub fn parse_definition_attributes(
-    attrs: TokenStream,
-) -> Result<(proc_macro2::TokenStream, Option<proc_macro2::TokenStream>), Error> {
-    let mut mode = quote! {
-        golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
-    };
-    let mut http = ParsedHttpMount {
-        mount: None,
-        cors: vec![],
-        auth: false,
-        headers: vec![],
-    };
-
-    if attrs.is_empty() {
-        return Ok((mode, None));
-    }
-
-    // Parse comma-separated expressions
-    let parser = Punctuated::<Expr, Token![,]>::parse_terminated;
-    let exprs = parser.parse(attrs.into())?;
-
-    for expr in exprs.iter() {
-        // shorthand mode: ephemeral / durable
-        if let Expr::Path(p) = expr {
-            if p.path.is_ident("ephemeral") {
-                mode = quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral };
-                continue;
-            } else if p.path.is_ident("durable") {
-                mode =
-                    quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable };
-                continue;
-            }
-        }
-
-        // mode = "..."
-        if let Expr::Assign(assign) = expr {
-            if let Expr::Path(left) = &*assign.left {
-                if left.path.is_ident("mode") {
-                    if let Expr::Lit(ExprLit {
-                        lit: Lit::Str(lit), ..
-                    }) = &*assign.right
-                    {
-                        mode = match lit.value().as_str() {
-                            "ephemeral" => {
-                                quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral }
-                            }
-                            "durable" => {
-                                quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable }
-                            }
-                            other => {
-                                return Err(Error::new_spanned(
-                                    lit,
-                                    format!("invalid mode `{}`", other),
-                                ))
-                            }
-                        };
-                        continue;
-                    } else {
-                        return Err(Error::new_spanned(
-                            &assign.right,
-                            "mode must be a string literal",
-                        ));
-                    }
-                }
-            }
-        }
-
-        // parse HTTP options
-        parse_http_expr(expr, &mut http)?;
-    }
-
-    let http_tokens = http.mount.map(|mount| {
-        let cors = http.cors;
-        let auth = http.auth;
-
-        quote! {
-            golem_rust::agentic::make_http_mount_details(
-                #mount,
-                #auth,
-                false,
-                golem_rust::golem_agentic::golem::agent::common::CorsOptions {
-                    allowed_patterns: vec![ #( #cors.to_string() ),* ],
-                },
-                None
-            ).expect("Invalid HTTP mount configuration")
-        }
-    });
-
-    Ok((mode, http_tokens))
-}
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
 
-    let (agent_mode, http_options) = match parse_definition_attributes(attrs) {
+    let AgentDefinitionAttributes {
+        agent_mode,
+        http_mount,
+    } = match parse_agent_definition_attributes(attrs) {
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
     };
-
-    // if let Some(options) = http_options {
-    //     dbg!(&options.to_string());
-    // }
 
     let type_parameters = agent_definition_trait
         .generics
@@ -269,7 +54,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     match get_agent_type_with_remote_client(
         &agent_definition_trait,
         agent_mode,
-        http_options,
+        http_mount,
         &type_parameters,
     ) {
         Ok(agent_type_with_remote_client) => {
