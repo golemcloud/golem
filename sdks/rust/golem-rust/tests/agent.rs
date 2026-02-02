@@ -22,7 +22,7 @@ mod tests {
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, AuthDetails, CorsOptions, PathSegment, PathVariable,
+        AgentMode, AgentType, AuthDetails, CorsOptions, PathSegment,
     };
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;

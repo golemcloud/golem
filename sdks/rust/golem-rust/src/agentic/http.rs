@@ -9,7 +9,9 @@
 // Unless required by applicable law or agreed to in writing, software is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use crate::golem_agentic::golem::agent::common::{PathSegment, PathVariable, SystemVariable};
+use crate::golem_agentic::golem::agent::common::{
+    AuthDetails, CorsOptions, HttpMountDetails, PathSegment, PathVariable, SystemVariable,
+};
 use std::fmt;
 
 #[derive(Debug)]
@@ -22,6 +24,49 @@ impl fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+fn reject_query_param_in_string(path: &str, entity_name: &str) -> Result<(), String> {
+    if path.contains('?') {
+        return Err(format!("{} cannot contain query parameters", entity_name));
+    }
+
+    Ok(())
+}
+
+pub fn make_http_mount_details(
+    path: &str,
+    auth: bool,
+    phantom_agent: bool,
+    cors_options: CorsOptions,
+    web_suffix: Option<String>,
+) -> Result<HttpMountDetails, String> {
+    reject_query_param_in_string(path, "HTTP mount path")?;
+
+    let segments = parse_path(path).map_err(|e| e.to_string())?;
+
+    let web_suffix = match web_suffix {
+        Some(suffix) => {
+            reject_query_param_in_string(&suffix, "webhook_suffix")?;
+
+            let parsed_suffix = parse_path(&suffix).map_err(|e| e.to_string())?;
+
+            if parsed_suffix.is_empty() {
+                return Err("webhook_suffix cannot be empty if provided".to_string());
+            }
+
+            parsed_suffix
+        }
+        None => vec![],
+    };
+
+    Ok(HttpMountDetails {
+        path_prefix: segments,
+        auth_details: Some(AuthDetails { required: auth }),
+        phantom_agent,
+        cors_options: cors_options.clone(),
+        webhook_suffix: web_suffix,
+    })
+}
 
 fn reject_empty_string(name: &str, entity_name: &str) -> Result<(), ParseError> {
     if name.is_empty() {
@@ -81,7 +126,9 @@ fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError
         match name {
             "agent-type" => Ok(PathSegment::SystemVariable(SystemVariable::AgentType)),
             "agent-version" => Ok(PathSegment::SystemVariable(SystemVariable::AgentVersion)),
-            _ => Err(ParseError(format!("Unknown system variable \"{}\"", name))),
+            _ => Ok(PathSegment::PathVariable(PathVariable {
+                variable_name: name.to_string(),
+            })),
         }
     } else if segment.contains('{') || segment.contains('}') {
         return Err(ParseError(format!(
@@ -96,7 +143,10 @@ fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
+    use crate::agentic::parse_path;
+    use crate::golem_agentic::golem::agent::common::{PathSegment, PathVariable};
+    use test_r::test;
 
     #[test]
     fn test_parse_path_basic() {

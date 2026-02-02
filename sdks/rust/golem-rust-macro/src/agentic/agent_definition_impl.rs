@@ -25,7 +25,7 @@ use syn::ItemTrait;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::Parser;
-use syn::{parse::Parse, punctuated::Punctuated, Error, Expr, ExprArray, ExprLit, Lit, Token};
+use syn::{punctuated::Punctuated, Error, Expr, ExprArray, ExprLit, Lit, Token};
 
 struct ParsedHttpMount {
     mount: Option<syn::LitStr>,
@@ -227,19 +227,15 @@ pub fn parse_definition_attributes(
         let auth = http.auth;
 
         quote! {
-            golem_rust::golem_agentic::golem::agent::common::HttpMountDetails {
-                path_prefix: golem_rust::agentic::parse_path(#mount).expect("Invalid HTTP mount path"),
-                auth_details: Some(
-                    golem_rust::golem_agentic::golem::agent::common::AuthDetails {
-                        required: #auth
-                    }
-                ),
-                phantom_agent: false,
-                cors_options: golem_rust::golem_agentic::golem::agent::common::CorsOptions {
+            golem_rust::agentic::make_http_mount_details(
+                #mount,
+                #auth,
+                false,
+                golem_rust::golem_agentic::golem::agent::common::CorsOptions {
                     allowed_patterns: vec![ #( #cors.to_string() ),* ],
                 },
-                webhook_suffix: vec![],
-            }
+                None
+            ).expect("Invalid HTTP mount configuration")
         }
     });
 
