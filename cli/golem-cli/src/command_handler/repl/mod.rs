@@ -131,13 +131,13 @@ impl ReplHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        let (repl_root_dir, repl_root_bridge_sdk_dir, repl_bridge_sdk_target) = {
+        let args = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
 
             let repl_root_dir = app_ctx.application().repl_root_dir(language);
             fs::create_dir_all(&repl_root_dir)?;
-            let repl_root_dir = repl_root_dir.canonicalize()?;
+            let repl_root_dir = fs::canonicalize_path(&repl_root_dir)?;
 
             let repl_bridge_sdk_target = app_ctx.new_repl_bridge_sdk_target(language);
             let repl_root_bridge_sdk_dir = repl_bridge_sdk_target
@@ -145,31 +145,32 @@ impl ReplHandler {
                 .clone()
                 .expect("Missing target dir");
             fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
-            let repl_root_bridge_sdk_dir = repl_root_bridge_sdk_dir.canonicalize()?;
+            let repl_root_bridge_sdk_dir = fs::canonicalize_path(&repl_root_bridge_sdk_dir)?;
 
-            (
+            let repl_history_file_path = app_ctx.application().repl_history_file(language.into());
+            fs::create_dir_all(fs::parent_or_err(&repl_history_file_path)?)?;
+            let repl_history_file_path = fs::canonicalize_path(&repl_history_file_path)?;
+
+            BridgeReplArgs {
+                environment,
+                script,
+                stream_logs,
                 repl_root_dir,
                 repl_root_bridge_sdk_dir,
                 repl_bridge_sdk_target,
-            )
+                repl_history_file_path: repl_history_file_path.into(),
+            }
         };
 
         self.ctx
             .app_handler()
             .build(
-                &BuildConfig::new().with_repl_bridge_sdk_target(repl_bridge_sdk_target),
+                &BuildConfig::new()
+                    .with_repl_bridge_sdk_target(args.repl_bridge_sdk_target.clone()),
                 vec![],
                 &ApplicationComponentSelectMode::All,
             )
             .await?;
-
-        let args = BridgeReplArgs {
-            environment,
-            script,
-            stream_logs,
-            repl_root_dir,
-            repl_root_bridge_sdk_dir,
-        };
 
         match language {
             GuestLanguage::Rust => RustRepl::new(self.ctx.clone()).run(args).await,

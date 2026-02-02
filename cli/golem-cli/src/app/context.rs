@@ -17,7 +17,7 @@ use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::remote_components::RemoteComponents;
-use crate::fs::{compile_and_collect_globs, PathExtra};
+use crate::fs;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
@@ -807,8 +807,8 @@ fn collect_sources_and_switch_to_app_root(
     let _indent = LogIndent::new();
 
     fn collect_by_main_source(source: &Path) -> Option<ValidatedResult<BTreeSet<PathBuf>>> {
-        let source_ext = PathExtra::new(&source);
-        let source_dir = source_ext.parent().unwrap();
+        let source_dir =
+            fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
         std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
 
         let includes = includes_from_yaml_file(source);
@@ -816,12 +816,11 @@ fn collect_sources_and_switch_to_app_root(
             Some(ValidatedResult::Ok(BTreeSet::from([source.to_path_buf()])))
         } else {
             Some(
-                ValidatedResult::from_result(compile_and_collect_globs(source_dir, &includes)).map(
-                    |mut sources| {
+                ValidatedResult::from_result(fs::compile_and_collect_globs(source_dir, &includes))
+                    .map(|mut sources| {
                         sources.insert(0, source.to_path_buf());
                         sources.into_iter().collect()
-                    },
-                ),
+                    }),
             )
         }
     }

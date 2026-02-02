@@ -33,6 +33,7 @@ use crate::model::app_raw::{
 };
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
+use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
@@ -362,15 +363,21 @@ impl Context {
         &self.config_dir
     }
 
-    pub async fn rib_repl_history_file(&self) -> anyhow::Result<PathBuf> {
+    pub async fn repl_history_file(&self, language: ReplLanguage) -> anyhow::Result<PathBuf> {
         let app_ctx = self.app_context_lock().await;
         let history_file = match app_ctx.opt()? {
-            Some(app_ctx) => app_ctx.application().rib_repl_history_file().to_path_buf(),
-            None => self.config_dir.join(".rib_repl_history"),
+            Some(app_ctx) => app_ctx
+                .application()
+                .repl_history_file(language)
+                .to_path_buf(),
+            None => self
+                .config_dir
+                .join(language.to_string())
+                .join(".repl_history"),
         };
         debug!(
             history_file = %history_file.display(),
-            "Selected Rib REPL history file"
+            "Selected {language} REPL history file"
         );
         Ok(history_file)
     }

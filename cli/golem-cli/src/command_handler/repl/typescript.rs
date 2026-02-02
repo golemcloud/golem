@@ -83,12 +83,11 @@ impl TypeScriptRepl {
         let package_json_path = args.repl_root_dir.join("package.json");
         let tsconfig_json_path = args.repl_root_dir.join("tsconfig.json");
         let repl_ts_path = args.repl_root_dir.join("repl.ts");
-        let relative_bridge_sdk_unix_path = args
-            .repl_root_bridge_sdk_dir
-            .strip_prefix(&args.repl_root_dir)?
-            .display()
-            .to_string()
-            .replace("\\", "/");
+        let relative_bridge_sdk_unix_path = fs::path_to_str(fs::strip_prefix_or_err(
+            &args.repl_root_bridge_sdk_dir,
+            &args.repl_root_dir,
+        )?)?
+        .replace("\\", "/");
 
         new_task_up_to_date_check(&BuildContext::new(app_ctx, &BuildConfig::new()))
             .with_task_result_marker(GenerateBridgeReplMarkerHash {
@@ -116,7 +115,11 @@ impl TypeScriptRepl {
                         &relative_bridge_sdk_unix_path,
                         &tsconfig_json_path,
                     )?;
-                    self.generate_repl_ts(&repl_metadata, &repl_ts_path)?;
+                    self.generate_repl_ts(
+                        &repl_metadata,
+                        &repl_ts_path,
+                        &args.repl_history_file_path,
+                    )?;
 
                     Command::new("npm")
                         .arg("install")
@@ -188,7 +191,7 @@ impl TypeScriptRepl {
             "declaration": true,
             "esModuleInterop": true,
             "forceConsistentCasingInFileNames": true,
-            "module": "ES2022",
+            "module": "NodeNext",
             "moduleResolution": "nodenext",
             "skipLibCheck": true,
             "sourceMap": true,
@@ -211,20 +214,21 @@ impl TypeScriptRepl {
         &self,
         repl_metadata: &ReplMetadata,
         repl_ts_path: &Path,
+        repl_history_file_path: &Path,
     ) -> anyhow::Result<()> {
         let agents_config = repl_metadata
             .agents
             .keys()
             .map(|agent_type_name| {
-                formatdoc! {"
+                Ok::<String, anyhow::Error>(formatdoc! {"
                     '{agent_type_name}': {{
-                      clientPackageName: '{client_package_name}',
-                      package: await import('{client_package_name}'),
+                      clientPackageName: {client_package_name},
+                      package: await import({client_package_name}),
                     }}",
-                    client_package_name = bridge_client_directory_name(agent_type_name)
-                }
+                    client_package_name = js_string_literal(bridge_client_directory_name(agent_type_name))?
+                })
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>, _>>()?
             .join(",\n")
             .lines()
             .enumerate()
@@ -238,18 +242,25 @@ impl TypeScriptRepl {
             .join("\n");
 
         let repl_ts = formatdoc! {"
-            import 'tsx/patch-repl';
-            const {{ Repl }} = await import('@golem/golem-ts-repl');
+                import 'tsx/patch-repl';
+                const {{ Repl }} = await import('@golem/golem-ts-repl');
 
-            const repl = new Repl({{
-              agents: {{
-              {agents_config}
-              }}
-            }});
+                const repl = new Repl({{
+                  agents: {{
+                  {agents_config}
+                  }},
+                  replHistoryFile: {repl_history_file_path},
+                }});
 
-            await repl.run();
-        "};
+                await repl.run();
+            ",
+            repl_history_file_path = js_string_literal(repl_history_file_path.display().to_string())?,
+        };
 
         fs::write_str(repl_ts_path, repl_ts)
     }
+}
+
+fn js_string_literal(s: impl AsRef<str>) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(s.as_ref())?)
 }

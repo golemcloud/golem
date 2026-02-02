@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_templates::model::GuestLanguage;
@@ -23,7 +24,7 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, EnumIter)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum ReplLanguage {
     Rib,
     Rust,
@@ -77,6 +78,15 @@ impl FromStr for ReplLanguage {
     }
 }
 
+impl From<GuestLanguage> for ReplLanguage {
+    fn from(guest_language: GuestLanguage) -> Self {
+        match guest_language {
+            GuestLanguage::Rust => ReplLanguage::Rust,
+            GuestLanguage::TypeScript => ReplLanguage::TypeScript,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BridgeReplArgs {
     pub environment: ResolvedEnvironmentIdentity,
@@ -84,6 +94,8 @@ pub struct BridgeReplArgs {
     pub stream_logs: bool,
     pub repl_root_dir: PathBuf,
     pub repl_root_bridge_sdk_dir: PathBuf,
+    pub repl_bridge_sdk_target: CustomBridgeSdkTarget,
+    pub repl_history_file_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

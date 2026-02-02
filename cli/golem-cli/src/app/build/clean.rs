@@ -1,6 +1,5 @@
 use crate::app::context::BuildContext;
-use crate::fs::compile_and_collect_globs;
-use crate::fs::delete_path_logged;
+use crate::fs;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::{CleanMode, DependencyType};
 use golem_common::model::component::ComponentName;
@@ -54,7 +53,7 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
                         .unwrap_or_else(|| component_source_dir.to_path_buf());
 
                     paths.extend(
-                        compile_and_collect_globs(&build_dir, &build_step.targets())?
+                        fs::compile_and_collect_globs(&build_dir, &build_step.targets())?
                             .into_iter()
                             .map(|path| ("build output", path)),
                     );
@@ -71,7 +70,7 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
         };
 
         for (context, path) in paths {
-            delete_path_logged(context, &path)?;
+            fs::delete_path_logged(context, &path)?;
         }
     }
 
@@ -95,9 +94,9 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
                                 let _indent = LogIndent::new();
 
                                 let dep_component = ctx.application().component(&dep.name);
-                                delete_path_logged("client wit", &dep_component.client_wit())?;
+                                fs::delete_path_logged("client wit", &dep_component.client_wit())?;
                                 if dep.dep_type == DependencyType::StaticWasmRpc {
-                                    delete_path_logged(
+                                    fs::delete_path_logged(
                                         "client wasm",
                                         &dep_component.client_wasm(),
                                     )?;
@@ -112,13 +111,13 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
             let _indent = LogIndent::new();
 
             for clean in ctx.application().common_clean() {
-                delete_path_logged("common clean target", &clean.source.join(&clean.value))?;
+                fs::delete_path_logged("common clean target", &clean.source.join(&clean.value))?;
             }
 
             log_action("Cleaning", "application build dir");
             let _indent = LogIndent::new();
 
-            delete_path_logged("temp dir", ctx.application().temp_dir())?;
+            fs::delete_path_logged("temp dir", ctx.application().temp_dir())?;
         }
         CleanMode::SelectedComponentsOnly => {
             // NOP

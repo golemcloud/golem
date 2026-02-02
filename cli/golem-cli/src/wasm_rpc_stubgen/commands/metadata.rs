@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::fs::{create_dir_all, PathExtra};
+use crate::fs;
 use crate::wasm_metadata::{AddMetadata, AddMetadataField};
 use anyhow::Context;
-use std::fs;
 use std::path::Path;
 use wit_parser::PackageName;
 
@@ -27,8 +26,7 @@ pub fn add_metadata(
     root_package_name: PackageName,
     target: &impl AsRef<Path>,
 ) -> anyhow::Result<()> {
-    let wasm = fs::read(source)
-        .with_context(|| format!("Reading linked WASM from {:?}", source.as_ref()))?;
+    let wasm = fs::read(source).context("Failed reading linked WASM")?;
 
     let mut metadata = AddMetadata::default();
     metadata.name = AddMetadataField::Set(format!(
@@ -44,10 +42,8 @@ pub fn add_metadata(
         .to_wasm(&wasm)
         .context("Adding name and version metadata to the linked WASM")?;
 
-    create_dir_all(PathExtra::new(target).parent()?)
-        .with_context(|| format!("Failed to create target dir for {:?}", target.as_ref()))?;
+    fs::create_dir_all(fs::parent_or_err(target.as_ref())?)?;
 
-    fs::write(target, &updated_wasm)
-        .with_context(|| format!("Writing final linked WASM to {:?}", target.as_ref()))?;
+    fs::write(target, &updated_wasm).context("Failed writing final linked WASM")?;
     Ok(())
 }

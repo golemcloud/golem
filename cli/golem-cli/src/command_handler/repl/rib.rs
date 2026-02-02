@@ -20,6 +20,7 @@ use crate::log::{logln, set_log_output, Output};
 use crate::model::component::{ComponentRevisionSelection, ComponentView};
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
+use crate::model::repl::ReplLanguage;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
 use crate::model::worker::WorkerName;
@@ -70,7 +71,7 @@ impl CliRibRepl {
         command_registry.register(commands::Logs::new(self.stream_logs.clone()));
 
         let mut repl = RibRepl::bootstrap(RibReplConfig {
-            history_file: Some(self.ctx.rib_repl_history_file().await?),
+            history_file: Some(self.ctx.repl_history_file(ReplLanguage::Rust).await?),
             dependency_manager: self.clone(),
             worker_function_invoke: self.clone(),
             printer: None,

@@ -22,8 +22,7 @@ use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
 use crate::error::NonSuccessfulExit;
-use crate::fs::compile_and_collect_globs;
-use crate::fs::delete_path_logged;
+use crate::fs;
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
 };
@@ -442,8 +441,8 @@ pub async fn execute_external_command(
     let (sources, targets) = {
         if !command.sources.is_empty() && !command.targets.is_empty() {
             (
-                compile_and_collect_globs(&build_dir, &command.sources)?,
-                compile_and_collect_globs(&build_dir, &command.targets)?,
+                fs::compile_and_collect_globs(&build_dir, &command.sources)?,
+                fs::compile_and_collect_globs(&build_dir, &command.targets)?,
             )
         } else {
             (vec![], vec![])
@@ -480,7 +479,7 @@ pub async fn execute_external_command(
                     let _ident = LogIndent::new();
                     for dir in &command.rmdirs {
                         let dir = build_dir.join(dir);
-                        delete_path_logged("directory", &dir)?;
+                        fs::delete_path_logged("directory", &dir)?;
                     }
                 }
 

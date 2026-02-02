@@ -23,6 +23,7 @@ use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::property::Property;
 use crate::model::component::AppComponentType;
+use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
@@ -705,8 +706,11 @@ impl Application {
         self.repl_root_dir(language).join("repl-metadata.json")
     }
 
-    pub fn rib_repl_history_file(&self) -> PathBuf {
-        self.temp_dir().join(".rib_repl_history")
+    pub fn repl_history_file(&self, language: ReplLanguage) -> PathBuf {
+        self.temp_dir()
+            .join("repl-history")
+            .join(language.to_string())
+            .join(".repl_history")
     }
 
     pub fn component<'a>(&'a self, component_name: &'a ComponentName) -> Component<'a> {
@@ -1756,8 +1760,6 @@ impl PluginInstallation {
 }
 
 mod app_builder {
-    use crate::fs::PathExtra;
-    use crate::fuzzy;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
@@ -1771,6 +1773,7 @@ mod app_builder {
     use crate::model::cascade::store::Store;
     use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
+    use crate::{fs, fuzzy};
     use colored::Colorize;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -2061,9 +2064,8 @@ mod app_builder {
             validation.with_context(
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
-                    let app_source = PathExtra::new(&app.source);
-                    let app_source_dir = app_source.parent().unwrap();
-                    self.all_sources.insert(app_source.to_path_buf());
+                    let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
+                    self.all_sources.insert(app.source.clone());
 
                     if let Some(dir) = app.application.temp_dir {
                         if self

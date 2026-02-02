@@ -1,7 +1,6 @@
 use crate::app::build::command::ensure_common_deps_for_tool;
 use crate::app::context::ToolsWithEnsuredCommonDeps;
 use crate::fs;
-use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::Application;
 use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -1219,13 +1218,12 @@ impl WitDepsResolver {
             let _indent = LogIndent::new();
 
             for source in self.package_sources(&package_name)? {
-                let source = PathExtra::new(source);
-                let source_parent = PathExtra::new(source.parent()?);
+                let source_parent = fs::parent_or_err(&source)?;
 
                 let target = target_deps_dir
                     .join(naming::wit::DEPS_DIR)
-                    .join(source_parent.file_name_to_string()?)
-                    .join(source.file_name_to_string()?);
+                    .join(fs::file_name_to_str(source_parent)?)
+                    .join(fs::file_name_to_str(source)?);
 
                 log_action(
                     "Copying",

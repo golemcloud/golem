@@ -16,7 +16,6 @@ use crate::app::build::task_result_marker::{ComponentGeneratorMarkerHash, TaskRe
 use crate::app::build::up_to_date_check::is_up_to_date;
 use crate::app::context::BuildContext;
 use crate::fs;
-use crate::fs::{delete_path_logged, PathExtra};
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::{BinaryComponentSource, DependencyType, DependentAppComponent};
 use crate::wasm_rpc_stubgen::cargo::regenerate_cargo_package_component;
@@ -129,7 +128,7 @@ async fn create_generated_base_wit(
                 (async {
                     let _indent = LogIndent::new();
 
-                    delete_path_logged(
+                    fs::delete_path_logged(
                         "generated base wit directory",
                         &component_generated_base_wit,
                     )?;
@@ -305,7 +304,7 @@ async fn create_generated_wit(
 
             task_result_marker.result((|| {
                 let _indent = LogIndent::new();
-                delete_path_logged("generated wit directory", &component_generated_wit)?;
+                fs::delete_path_logged("generated wit directory", &component_generated_wit)?;
                 copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
                 add_client_deps(ctx, component_name)?;
                 Ok(true)
@@ -330,13 +329,8 @@ fn update_cargo_toml(
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
     let component = ctx.application().component(component_name);
-    let component_source_wit = PathExtra::new(component.source_wit());
-    let component_source_wit_parent = component_source_wit.parent().with_context(|| {
-        anyhow!(
-            "Failed to get parent for component {}",
-            component_name.as_str().log_color_highlight()
-        )
-    })?;
+    let component_source_wit = component.source_wit();
+    let component_source_wit_parent = fs::parent_or_err(&component_source_wit)?;
     let cargo_toml = component_source_wit_parent.join("Cargo.toml");
 
     if !cargo_toml.exists() {
