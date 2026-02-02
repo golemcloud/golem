@@ -1,54 +1,21 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://license.golem.cloud/LICENSE
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// Unless required by applicable law or agreed to in writing, software is distributed on an "AS IS" BASIS,
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::{
-    AuthDetails, CorsOptions, HttpMountDetails, PathSegment, PathVariable, SystemVariable,
-};
+use crate::agentic::http::validations::reject_empty_string;
+use crate::golem_agentic::golem::agent::common::{PathSegment, PathVariable, SystemVariable};
 
-pub fn make_http_mount_details(
-    path: &str,
-    auth: bool,
-    phantom_agent: bool,
-    cors_options: CorsOptions,
-    web_suffix: Option<String>,
-) -> Result<HttpMountDetails, String> {
-    reject_query_param_in_string(path, "HTTP mount path")?;
-
-    let segments = parse_path(path).map_err(|e| e.to_string())?;
-
-    let web_suffix = match web_suffix {
-        Some(suffix) => {
-            reject_query_param_in_string(&suffix, "webhook_suffix")?;
-
-            let parsed_suffix = parse_path(&suffix).map_err(|e| e.to_string())?;
-
-            if parsed_suffix.is_empty() {
-                return Err("webhook_suffix cannot be empty if provided".to_string());
-            }
-
-            parsed_suffix
-        }
-        None => vec![],
-    };
-
-    Ok(HttpMountDetails {
-        path_prefix: segments,
-        auth_details: Some(AuthDetails { required: auth }),
-        phantom_agent,
-        cors_options: cors_options.clone(),
-        webhook_suffix: web_suffix,
-    })
-}
-
-fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
+pub fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
     if !path.starts_with('/') {
         return Err("HTTP mount must start with '/'".to_string());
     }
@@ -64,7 +31,7 @@ fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
     Ok(parsed)
 }
 
-fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String> {
+pub fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String> {
     if segment.is_empty() {
         return Err("Empty path segment (\"//\") is not allowed".to_string());
     }
@@ -110,25 +77,10 @@ fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String> {
     }
 }
 
-fn reject_query_param_in_string(path: &str, entity_name: &str) -> Result<(), String> {
-    if path.contains('?') {
-        return Err(format!("{} cannot contain query parameters", entity_name));
-    }
-
-    Ok(())
-}
-
-fn reject_empty_string(name: &str, entity_name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err(format!("{} cannot be empty", entity_name));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
 
-    use crate::agentic::http::parse_path;
+    use crate::agentic::http::path::parse_path;
     use crate::golem_agentic::golem::agent::common::{PathSegment, PathVariable};
     use test_r::test;
 
