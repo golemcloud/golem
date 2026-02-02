@@ -228,14 +228,14 @@ pub fn parse_definition_attributes(
 
         quote! {
             golem_rust::golem_agentic::golem::agent::common::HttpMountDetails {
-                path_prefix: golem_rust::golem_agentic::golem::agent::http::parse_path(#mount),
+                path_prefix: golem_rust::agentic::parse_path(#mount).expect("Invalid HTTP mount path"),
                 auth_details: Some(
                     golem_rust::golem_agentic::golem::agent::common::AuthDetails {
                         required: #auth
                     }
                 ),
                 phantom_agent: false,
-                cors_options: golem_rust::golem_agentic::golem::agent::http::CorsOptions {
+                cors_options: golem_rust::golem_agentic::golem::agent::common::CorsOptions {
                     allowed_patterns: vec![ #( #cors.to_string() ),* ],
                 },
                 webhook_suffix: vec![],
@@ -270,7 +270,12 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         return async_trait_in_agent_definition_error(&agent_definition_trait).into();
     }
 
-    match get_agent_type_with_remote_client(&agent_definition_trait, agent_mode, http_options, &type_parameters) {
+    match get_agent_type_with_remote_client(
+        &agent_definition_trait,
+        agent_mode,
+        http_options,
+        &type_parameters,
+    ) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
                 agent_type,

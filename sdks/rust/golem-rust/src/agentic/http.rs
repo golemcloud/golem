@@ -9,15 +9,8 @@
 // Unless required by applicable law or agreed to in writing, software is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
+use crate::golem_agentic::golem::agent::common::{PathSegment, PathVariable, SystemVariable};
 use std::fmt;
-
-#[derive(Debug, Clone)]
-pub enum PathSegment {
-    Literal { val: String },
-    PathVariable { variable_name: String },
-    RemainingPathVariable { variable_name: String },
-    SystemVariable { val: String }, // e.g., "agent-type", "agent-version"
-}
 
 #[derive(Debug)]
 pub struct ParseError(pub String);
@@ -55,11 +48,15 @@ pub fn parse_path(path: &str) -> Result<Vec<PathSegment>, ParseError> {
 
 fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError> {
     if segment.is_empty() {
-        return Err(ParseError("Empty path segment (\"//\") is not allowed".to_string()));
+        return Err(ParseError(
+            "Empty path segment (\"//\") is not allowed".to_string(),
+        ));
     }
 
     if segment != segment.trim() {
-        return Err(ParseError("Whitespace is not allowed in path segments".to_string()));
+        return Err(ParseError(
+            "Whitespace is not allowed in path segments".to_string(),
+        ));
     }
 
     if segment.starts_with('{') && segment.ends_with('}') {
@@ -76,18 +73,16 @@ fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError
             }
             let variable_name = &name[1..];
             reject_empty_string(variable_name, "remaining path variable")?;
-            return Ok(PathSegment::RemainingPathVariable {
+            return Ok(PathSegment::RemainingPathVariable(PathVariable {
                 variable_name: variable_name.to_string(),
-            });
+            }));
         }
 
-        if name == "agent-type" || name == "agent-version" {
-            return Ok(PathSegment::SystemVariable { val: name.to_string() });
+        match name {
+            "agent-type" => Ok(PathSegment::SystemVariable(SystemVariable::AgentType)),
+            "agent-version" => Ok(PathSegment::SystemVariable(SystemVariable::AgentVersion)),
+            _ => Err(ParseError(format!("Unknown system variable \"{}\"", name))),
         }
-
-        Ok(PathSegment::PathVariable {
-            variable_name: name.to_string(),
-        })
     } else if segment.contains('{') || segment.contains('}') {
         return Err(ParseError(format!(
             "Path segment \"{}\" must be a whole variable like \"{{id}}\" and cannot mix literals and variables",
@@ -95,9 +90,7 @@ fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError
         )));
     } else {
         reject_empty_string(segment, "Literal path segment")?;
-        Ok(PathSegment::Literal {
-            val: segment.to_string(),
-        })
+        Ok(PathSegment::Literal(segment.to_string()))
     }
 }
 
@@ -111,7 +104,9 @@ mod tests {
         let parsed = parse_path(path).unwrap();
         assert_eq!(parsed.len(), 3);
         match &parsed[2] {
-            PathSegment::PathVariable { variable_name } => assert_eq!(variable_name, "id"),
+            PathSegment::PathVariable(PathVariable { variable_name }) => {
+                assert_eq!(variable_name, "id")
+            }
             _ => panic!("expected PathVariable"),
         }
     }
@@ -121,7 +116,9 @@ mod tests {
         let path = "/foo/{*rest}";
         let parsed = parse_path(path).unwrap();
         match &parsed[1] {
-            PathSegment::RemainingPathVariable { variable_name } => assert_eq!(variable_name, "rest"),
+            PathSegment::RemainingPathVariable(PathVariable { variable_name }) => {
+                assert_eq!(variable_name, "rest")
+            }
             _ => panic!("expected RemainingPathVariable"),
         }
     }

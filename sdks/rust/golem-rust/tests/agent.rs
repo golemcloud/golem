@@ -21,7 +21,9 @@ mod tests {
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
+    use golem_rust::golem_agentic::golem::agent::common::{
+        AgentMode, AgentType, AuthDetails, CorsOptions, PathSegment, PathVariable,
+    };
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
@@ -29,24 +31,6 @@ mod tests {
     use golem_rust_macro::{description, prompt};
     use std::fmt::Debug;
     use test_r::test;
-
-    #[agent_definition(mount = "http", auth = true)]
-    trait AgentWithHttpMount {
-        fn new(init: UserId) -> Self;
-        fn echo(&self, message: String) -> String;
-    }
-
-    struct AgentWithHttpMountImpl {}
-    #[agent_implementation]
-    impl AgentWithHttpMount for AgentWithHttpMountImpl {
-        fn new(_init: UserId) -> Self {
-            AgentWithHttpMountImpl {}
-        }
-
-        fn echo(&self, message: String) -> String {
-            message
-        }
-    }
 
     #[agent_definition]
     trait SampleAgent: BaseAgent {
@@ -663,5 +647,58 @@ mod tests {
                 "EchoEphemeralExplicit should be Ephemeral"
             );
         }
+    }
+
+    #[agent_definition(
+        mount = "/abc",
+        auth = true,
+        cors = ["https://example.com", "https://another.com"]
+    )]
+    trait AgentWithHttpMount {
+        fn new(init: UserId) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentWithHttpMountImpl {}
+    #[agent_implementation]
+    impl AgentWithHttpMount for AgentWithHttpMountImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithHttpMountImpl {}
+        }
+
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[test]
+    fn test_agent_with_http() {
+        use golem_rust::agentic::get_all_agent_types;
+
+        let agent_types = get_all_agent_types();
+
+        let agent = agent_types
+            .iter()
+            .find(|a| a.type_name == "AgentWithHttpMount")
+            .expect("AgentWithHttpMount not found");
+
+        let _expected_http_mount_details =
+            golem_rust::golem_agentic::golem::agent::common::HttpMountDetails {
+                path_prefix: vec![PathSegment::Literal("abc".to_string())],
+                auth_details: Some(AuthDetails { required: true }),
+                phantom_agent: false,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![
+                        "https://example.com".to_string(),
+                        "https://another.com".to_string(),
+                    ],
+                },
+                webhook_suffix: vec![],
+            };
+
+        assert!(
+            agent.http_mount.is_some(),
+            "HTTP mount details should be set"
+        );
     }
 }
