@@ -62,37 +62,73 @@ impl<Hooks: CommandHandlerHooks + 'static> McpHandler<Hooks> {
 
         struct LenientTransport {
             inner: Arc<StdioTransport>,
+            init_id: Arc<tokio::sync::Mutex<std::option::Option<mcp_sdk_rs::protocol::RequestId>>>,
         }
 
         #[async_trait]
         impl Transport for LenientTransport {
-            async fn send(&self, message: Message) -> Result<(), Error> {
+            async fn send(&self, mut message: Message) -> Result<(), Error> {
+                if let Message::Response(ref mut res) = message {
+                    let mut lock = self.init_id.lock().await;
+                    if let std::option::Option::Some(ref id) = *lock {
+                        if res.id == *id {
+                            if let std::option::Option::Some(original_result) = res.result.take() {
+                                let wrapped = serde_json::json!({
+                                    "protocolVersion": "2024-11-05",
+                                    "capabilities": original_result,
+                                    "serverInfo": {
+                                        "name": "golem-cli",
+                                        "version": "0.1.0"
+                                    }
+                                });
+                                res.result = std::option::Option::Some(wrapped);
+                            }
+                            *lock = std::option::Option::None;
+                        }
+                    }
+                }
                 self.inner.send(message).await
             }
 
             fn receive(&self) -> std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<Message, Error>> + Send>> {
                 let inner = self.inner.clone();
-                Box::pin(inner.receive().map(|res| {
+                let init_id = self.init_id.clone();
+                Box::pin(inner.receive().map(move |res| {
                     match res {
                         Ok(mut msg) => {
-                            if let Message::Request(ref mut req) = msg {
-                                if req.method == "initialize" {
-                                    if let std::option::Option::Some(ref mut params) = req.params {
-                                        if let serde_json::Value::Object(ref mut p) = params {
-                                            let client_info = p.get("clientInfo").cloned();
-                                            let implementation = p.get("implementation").cloned();
-                                            if let std::option::Option::Some(ci) = client_info {
-                                                if !p.contains_key("implementation") {
-                                                    p.insert("implementation".to_string(), ci);
-                                                }
-                                            } else if let std::option::Option::Some(imp) = implementation {
-                                                if !p.contains_key("clientInfo") {
-                                                    p.insert("clientInfo".to_string(), imp);
+                            match msg {
+                                Message::Request(ref mut req) => {
+                                    if req.method == "initialize" {
+                                        // Save the ID for fixing the response later
+                                        let id = req.id.clone();
+                                        let init_id_clone = init_id.clone();
+                                        tokio::spawn(async move {
+                                            *init_id_clone.lock().await = std::option::Option::Some(id);
+                                        });
+
+                                        if let std::option::Option::Some(ref mut params) = req.params {
+                                            if let serde_json::Value::Object(ref mut p) = params {
+                                                let client_info = p.get("clientInfo").cloned();
+                                                let implementation = p.get("implementation").cloned();
+                                                if let std::option::Option::Some(ci) = client_info {
+                                                    if !p.contains_key("implementation") {
+                                                        p.insert("implementation".to_string(), ci);
+                                                    }
+                                                } else if let std::option::Option::Some(imp) = implementation {
+                                                    if !p.contains_key("clientInfo") {
+                                                        p.insert("clientInfo".to_string(), imp);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+                                Message::Notification(ref mut notif) => {
+                                    if notif.method == "notifications/initialized" {
+                                        notif.method = "initialized".to_string();
+                                    }
+                                }
+                                _ => {}
                             }
                             Ok(msg)
                         }
@@ -108,6 +144,7 @@ impl<Hooks: CommandHandlerHooks + 'static> McpHandler<Hooks> {
 
         let transport = Arc::new(LenientTransport {
             inner: Arc::new(StdioTransport::new(stdin_rx, stdout_tx)),
+            init_id: Arc::new(tokio::sync::Mutex::new(std::option::Option::None)),
         });
         let handler = Arc::new(self);
         let server = Server::new(transport, handler);
@@ -181,36 +218,34 @@ impl<Hooks: CommandHandlerHooks + 'static> ServerHandler for McpHandler<Hooks> {
     ) -> Result<serde_json::Value, Error> {
         match method {
             "tools/list" => {
-                let result = ListToolsResult {
-                    tools: vec![
-                        Tool {
-                            name: "run_command".to_string(),
-                            description: "Run a Golem CLI command with full arguments".to_string(),
-                            input_schema: std::option::Option::Some(ToolSchema {
-                                properties: std::option::Option::Some(serde_json::json!({
+                let result = serde_json::json!({
+                    "tools": [
+                        {
+                            "name": "run_command",
+                            "description": "Run a Golem CLI command with full arguments",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
                                     "args": {
                                         "type": "array",
                                         "items": { "type": "string" },
                                         "description": "The command line arguments for golem cli"
                                     }
-                                })),
-                                required: std::option::Option::Some(vec!["args".to_string()]),
-                            }),
-                            annotations: None,
+                                },
+                                "required": ["args"]
+                            }
                         },
-                        Tool {
-                            name: "get_info".to_string(),
-                            description: "Get environmental and cluster details".to_string(),
-                            input_schema: std::option::Option::Some(ToolSchema {
-                                properties: std::option::Option::Some(serde_json::json!({})),
-                                required: None,
-                            }),
-                            annotations: None,
-                        },
-                    ],
-                    next_cursor: None,
-                };
-                Ok(serde_json::to_value(result).unwrap())
+                        {
+                            "name": "get_info",
+                            "description": "Get environmental and cluster details",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        }
+                    ]
+                });
+                Ok(result)
             }
             "tools/call" => {
                 let params_obj = params.ok_or_else(|| Error::protocol(ErrorCode::InvalidParams, "Missing parameters"))?;
