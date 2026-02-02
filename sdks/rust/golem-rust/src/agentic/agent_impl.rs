@@ -24,6 +24,8 @@ use crate::{
         AgentError, AgentType, DataValue, Guest, Principal,
     },
 };
+use crate::golem_agentic::golem::agent::common::HttpMountDetails;
+use crate::golem_ai::golem::agent::common::CorsOptions;
 
 pub struct Component;
 

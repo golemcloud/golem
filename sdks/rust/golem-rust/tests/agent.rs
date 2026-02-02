@@ -30,6 +30,25 @@ mod tests {
     use std::fmt::Debug;
     use test_r::test;
 
+
+    #[agent_definition(mount = "http", auth = true)]
+    trait AgentWithHttpMount {
+        fn new(init: UserId) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentWithHttpMountImpl {}
+    #[agent_implementation]
+    impl AgentWithHttpMount for AgentWithHttpMountImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithHttpMountImpl {}
+        }
+
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
     #[agent_definition]
     trait SampleAgent: BaseAgent {
         fn new(init: String) -> Self;
@@ -312,7 +331,7 @@ mod tests {
     }
 
     // Test: #[agent_definition(mode = "ephemeral")]
-    #[agent_definition(mode = "ephemeral", mount = "/mnt/data")]
+    #[agent_definition(mode = "ephemeral")]
     trait EchoEphemeralExplicit {
         fn new(init: UserId) -> Self;
         fn echo(&self, message: String) -> String;
@@ -646,4 +665,5 @@ mod tests {
             );
         }
     }
+
 }

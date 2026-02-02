@@ -18,121 +18,184 @@ use crate::agentic::{
     generic_type_in_agent_return_type_error, generic_type_in_constructor_error, get_remote_client,
     multiple_constructor_methods_error, no_constructor_method_error,
 };
-use proc_macro::TokenStream;
-use quote::quote;
+
 use syn::spanned::Spanned;
 use syn::ItemTrait;
 
-fn handle_assign(assign: syn::ExprAssign, options: &mut AgentDefinitionOptions) {
-    let key = match &*assign.left {
-        syn::Expr::Path(p) if p.path.is_ident("mode") => "mode",
-        syn::Expr::Path(p) if p.path.is_ident("mount") => "mount",
-        _ => panic!("Unknown agent definition attribute"),
-    };
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{
+    parse::{Parse},
+    Expr, ExprLit, ExprArray, Lit, Token, punctuated::Punctuated, Error,
+};
+use syn::parse::Parser;
 
-    match key {
-        "mode" => {
-            options.mode = parse_mode(&assign.right);
-        }
-        "mount" => {
-            options.http_mount_path_prefix = parse_mount_prefix(&assign.right);
-        }
-        _ => unreachable!(),
-    }
+struct ParsedHttpMount {
+    mount: Option<syn::LitStr>,
+    cors: Vec<syn::LitStr>,
+    auth: bool,
+    headers: Vec<(String, syn::LitStr)>,
 }
 
-fn parse_mount_prefix(expr: &syn::Expr) -> Vec<String> {
+fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> {
     match expr {
-        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => {
-            vec![s.value()]
-        }
-        syn::Expr::Array(arr) => arr.elems.iter().map(|e| {
-            match e {
-                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => s.value(),
-                _ => panic!("mount must be string literals"),
-            }
-        }).collect(),
-        _ => panic!("Invalid mount syntax"),
-    }
-}
-
-
-fn parse_mode(expr: &syn::Expr) -> AgentMode {
-    match expr {
-        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => match s.value().as_str() {
-            "ephemeral" => AgentMode::Ephemeral,
-            "durable" => AgentMode::Durable,
-            _ => panic!("Invalid agent mode"),
-        },
-        syn::Expr::Path(p) if p.path.is_ident("ephemeral") => AgentMode::Ephemeral,
-        syn::Expr::Path(p) if p.path.is_ident("durable") => AgentMode::Durable,
-        _ => panic!("Invalid agent mode"),
-    }
-}
-
-
-fn parse_definition_attributes(attrs: TokenStream) -> proc_macro2::TokenStream {
-    if attrs.is_empty() {
-        return quote! {
-            golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
-        };
-    }
-
-    if let Ok(ident) = syn::parse2::<syn::Ident>(attrs.clone().into()) {
-        // Shorthand case: just "ephemeral"
-        if ident == "ephemeral" {
-            return quote! {
-                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
-            };
-        }
-    }
-
-    // Try parsing the full expression: mode = "..." or mode = ...
-    if let Ok(expr) = syn::parse2::<syn::ExprAssign>(attrs.into()) {
-        if let syn::Expr::Path(left) = &*expr.left {
-            if left.path.is_ident("mode") {
-                // Extract the right side
-                match &*expr.right {
-                    syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(lit_str),
-                        ..
-                    }) => {
-                        if lit_str.value() == "ephemeral" {
-                            return quote! {
-                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
-                            };
-                        } else if lit_str.value() == "durable" {
-                            return quote! {
-                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
-                            };
+        Expr::Assign(assign) => {
+            if let Expr::Path(left) = &*assign.left {
+                if let Some(ident) = left.path.get_ident() {
+                    match ident.to_string().as_str() {
+                        "mount" => {
+                            if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = &*assign.right {
+                                out.mount = Some(lit.clone());
+                                return Ok(());
+                            } else {
+                                return Err(Error::new_spanned(&assign.right, "mount must be a string literal"));
+                            }
                         }
-                    }
-                    syn::Expr::Path(path) => {
-                        if path.path.is_ident("ephemeral") {
-                            return quote! {
-                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
-                            };
-                        } else if path.path.is_ident("durable") {
-                            return quote! {
-                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
-                            };
+                        "auth" => {
+                            if let Expr::Lit(ExprLit { lit: Lit::Bool(b), .. }) = &*assign.right {
+                                out.auth = b.value;
+                                return Ok(());
+                            } else {
+                                return Err(Error::new_spanned(&assign.right, "auth must be a boolean literal"));
+                            }
                         }
+                        "cors" => {
+                            if let Expr::Array(ExprArray { elems, .. }) = &*assign.right {
+                                for elem in elems {
+                                    if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = elem {
+                                        out.cors.push(lit.clone());
+                                    } else {
+                                        return Err(Error::new_spanned(elem, "cors entries must be string literals"));
+                                    }
+                                }
+                                return Ok(());
+                            } else {
+                                return Err(Error::new_spanned(&assign.right, "cors must be an array of string literals"));
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-            if left.path.is_ident("mount") {
+        }
 
+        Expr::Call(call) => {
+            if let Expr::Path(func) = &*call.func {
+                if func.path.is_ident("headers") {
+                    for arg in &call.args {
+                        if let Expr::Assign(assign) = arg {
+                            let key = if let Expr::Path(p) = &*assign.left {
+                                p.path.get_ident()
+                                    .ok_or_else(|| Error::new_spanned(&assign.left, "header key must be an identifier"))?
+                                    .to_string()
+                            } else {
+                                return Err(Error::new_spanned(&assign.left, "header key must be an identifier"));
+                            };
+                            let val = if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = &*assign.right {
+                                lit.clone()
+                            } else {
+                                return Err(Error::new_spanned(&assign.right, "header value must be string literal"));
+                            };
+                            out.headers.push((key, val));
+                        } else {
+                            return Err(Error::new_spanned(arg, "invalid headers syntax, must be key = value"));
+                        }
+                    }
+                    return Ok(());
+                }
             }
         }
+
+        _ => {}
     }
 
-    panic!("Invalid agent mode - use `mode = ephemeral` or `mode = durable`");
+    Err(Error::new_spanned(expr, "Unknown agent_definition parameter"))
+}
+
+pub fn parse_definition_attributes(attrs: TokenStream) -> Result<(proc_macro2::TokenStream, Option<proc_macro2::TokenStream>), Error> {
+    let mut mode = quote! {
+        golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+    };
+    let mut http = ParsedHttpMount {
+        mount: None,
+        cors: vec![],
+        auth: false,
+        headers: vec![],
+    };
+
+    if attrs.is_empty() {
+        return Ok((mode, None));
+    }
+
+    // Parse comma-separated expressions
+    let parser = Punctuated::<Expr, Token![,]>::parse_terminated;
+    let exprs = parser.parse(attrs.into())?;
+
+    for expr in exprs.iter() {
+        // shorthand mode: ephemeral / durable
+        if let Expr::Path(p) = expr {
+            if p.path.is_ident("ephemeral") {
+                mode = quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral };
+                continue;
+            } else if p.path.is_ident("durable") {
+                mode = quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable };
+                continue;
+            }
+        }
+
+        // mode = "..."
+        if let Expr::Assign(assign) = expr {
+            if let Expr::Path(left) = &*assign.left {
+                if left.path.is_ident("mode") {
+                    if let Expr::Lit(ExprLit { lit: Lit::Str(lit), .. }) = &*assign.right {
+                        mode = match lit.value().as_str() {
+                            "ephemeral" => quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral },
+                            "durable" => quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable },
+                            other => return Err(Error::new_spanned(lit, format!("invalid mode `{}`", other))),
+                        };
+                        continue;
+                    } else {
+                        return Err(Error::new_spanned(&assign.right, "mode must be a string literal"));
+                    }
+                }
+            }
+        }
+
+        // parse HTTP options
+        parse_http_expr(expr, &mut http)?;
+    }
+
+    let http_tokens = http.mount.map(|mount| {
+        let cors = http.cors;
+        let auth = http.auth;
+
+        quote! {
+            golem_rust::golem_agentic::golem::agent::http::HttpMountDetails {
+                path_prefix: golem_rust::golem_agentic::golem::agent::http::parse_path(#mount),
+                auth_details: Some(
+                    golem_rust::golem_agentic::golem::agent::http::AuthDetails {
+                        required: #auth
+                    }
+                ),
+                phantom_agent: false,
+                cors_options: golem_rust::golem_agentic::golem::agent::http::CorsOptions {
+                    allowed_patterns: vec![ #( #cors.to_string() ),* ],
+                },
+                webhook_suffix: vec![],
+            }
+        }
+    });
+
+    Ok((mode, http_tokens))
 }
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
-    let agent_mode = parse_definition_attributes(attrs);
+
+    let (agent_mode, http_options) = match parse_definition_attributes(attrs) {
+        Ok(v) => v,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let type_parameters = agent_definition_trait
         .generics
