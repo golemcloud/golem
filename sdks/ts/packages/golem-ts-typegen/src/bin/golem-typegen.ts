@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { Project } from 'ts-morph';
-import chalk from 'chalk';
+import pc from 'picocolors';
 import logSymbols from 'log-symbols';
 import { saveAndClearInMemoryMetadata, updateMetadataFromSourceFiles } from '../index.js';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
@@ -36,12 +36,12 @@ program
         excludeOverriddenMethods: boolean;
       },
     ) => {
-      console.log(logSymbols.info, chalk.cyan('Starting type metadata generation…'));
+      console.log(logSymbols.info, pc.cyan('Starting type metadata generation…'));
 
       const project = new Project({ tsConfigFilePath: path.resolve(tsconfig) });
       const sourceFiles = project.getSourceFiles(options.files);
 
-      console.log(logSymbols.info, chalk.blue(`Processing ${sourceFiles.length} source files…`));
+      console.log(logSymbols.info, pc.blue(`Processing ${sourceFiles.length} source files…`));
 
       const genConfig = {
         sourceFiles: sourceFiles,
@@ -56,14 +56,14 @@ program
 
       console.log(
         logSymbols.success,
-        chalk.green(`Metadata tracked for: ${Array.from(result.keys()).join(', ')}`),
+        pc.green(`Metadata tracked for: ${Array.from(result.keys()).join(', ')}`),
       );
 
-      console.log(logSymbols.info, chalk.yellow('Saving metadata…'));
+      console.log(logSymbols.info, pc.yellow('Saving metadata…'));
 
       const filePath = saveAndClearInMemoryMetadata();
 
-      console.log(logSymbols.success, chalk.green(`Metadata saved successfully in ${filePath}!`));
+      console.log(logSymbols.success, pc.green(`Metadata saved successfully in ${filePath}!`));
     },
   );
 
