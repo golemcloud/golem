@@ -227,10 +227,10 @@ pub fn parse_definition_attributes(
         let auth = http.auth;
 
         quote! {
-            golem_rust::golem_agentic::golem::agent::http::HttpMountDetails {
+            golem_rust::golem_agentic::golem::agent::common::HttpMountDetails {
                 path_prefix: golem_rust::golem_agentic::golem::agent::http::parse_path(#mount),
                 auth_details: Some(
-                    golem_rust::golem_agentic::golem::agent::http::AuthDetails {
+                    golem_rust::golem_agentic::golem::agent::common::AuthDetails {
                         required: #auth
                     }
                 ),
@@ -254,6 +254,10 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         Err(err) => return err.to_compile_error().into(),
     };
 
+    // if let Some(options) = http_options {
+    //     dbg!(&options.to_string());
+    // }
+
     let type_parameters = agent_definition_trait
         .generics
         .type_params()
@@ -266,7 +270,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         return async_trait_in_agent_definition_error(&agent_definition_trait).into();
     }
 
-    match get_agent_type_with_remote_client(&agent_definition_trait, agent_mode, &type_parameters) {
+    match get_agent_type_with_remote_client(&agent_definition_trait, agent_mode, http_options, &type_parameters) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
                 agent_type,
@@ -328,6 +332,7 @@ struct AgentTypeWithRemoteClient {
 fn get_agent_type_with_remote_client(
     agent_definition_trait: &ItemTrait,
     mode_value: proc_macro2::TokenStream,
+    http_options: Option<proc_macro2::TokenStream>,
     type_parameters: &[String],
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
     let agent_def_trait_ident = &agent_definition_trait.ident;
@@ -342,6 +347,16 @@ fn get_agent_type_with_remote_client(
             }
         }
     }
+
+    let http_options = if let Some(options) = http_options {
+        quote! {
+            Some(#options)
+        }
+    } else {
+        quote! {
+            None
+        }
+    };
 
     let methods = agent_definition_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
@@ -634,8 +649,7 @@ fn get_agent_type_with_remote_client(
                 dependencies: vec![],
                 constructor: #agent_constructor,
                 mode: #mode_value,
-                // TODO
-                http_mount: None,
+                http_mount: #http_options,
             }
         },
         remote_client,
