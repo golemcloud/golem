@@ -12,26 +12,6 @@
 use crate::golem_agentic::golem::agent::common::{
     AuthDetails, CorsOptions, HttpMountDetails, PathSegment, PathVariable, SystemVariable,
 };
-use std::fmt;
-
-#[derive(Debug)]
-pub struct ParseError(pub String);
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ParseError: {}", self.0)
-    }
-}
-
-impl std::error::Error for ParseError {}
-
-fn reject_query_param_in_string(path: &str, entity_name: &str) -> Result<(), String> {
-    if path.contains('?') {
-        return Err(format!("{} cannot contain query parameters", entity_name));
-    }
-
-    Ok(())
-}
 
 pub fn make_http_mount_details(
     path: &str,
@@ -68,16 +48,9 @@ pub fn make_http_mount_details(
     })
 }
 
-fn reject_empty_string(name: &str, entity_name: &str) -> Result<(), ParseError> {
-    if name.is_empty() {
-        return Err(ParseError(format!("{} cannot be empty", entity_name)));
-    }
-    Ok(())
-}
-
-pub fn parse_path(path: &str) -> Result<Vec<PathSegment>, ParseError> {
+fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
     if !path.starts_with('/') {
-        return Err(ParseError("HTTP mount must start with '/'".to_string()));
+        return Err("HTTP mount must start with '/'".to_string());
     }
 
     let segments: Vec<&str> = path.split('/').skip(1).collect();
@@ -91,17 +64,13 @@ pub fn parse_path(path: &str) -> Result<Vec<PathSegment>, ParseError> {
     Ok(parsed)
 }
 
-fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError> {
+fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String> {
     if segment.is_empty() {
-        return Err(ParseError(
-            "Empty path segment (\"//\") is not allowed".to_string(),
-        ));
+        return Err("Empty path segment (\"//\") is not allowed".to_string());
     }
 
     if segment != segment.trim() {
-        return Err(ParseError(
-            "Whitespace is not allowed in path segments".to_string(),
-        ));
+        return Err("Whitespace is not allowed in path segments".to_string());
     }
 
     if segment.starts_with('{') && segment.ends_with('}') {
@@ -111,10 +80,10 @@ fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError
 
         if name.starts_with('*') {
             if !is_last {
-                return Err(ParseError(format!(
+                return Err(format!(
                     "Remaining path variable \"{}\" is only allowed as the last path segment",
                     name
-                )));
+                ));
             }
             let variable_name = &name[1..];
             reject_empty_string(variable_name, "remaining path variable")?;
@@ -131,20 +100,35 @@ fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, ParseError
             })),
         }
     } else if segment.contains('{') || segment.contains('}') {
-        return Err(ParseError(format!(
+        return Err(format!(
             "Path segment \"{}\" must be a whole variable like \"{{id}}\" and cannot mix literals and variables",
             segment
-        )));
+        ));
     } else {
         reject_empty_string(segment, "Literal path segment")?;
         Ok(PathSegment::Literal(segment.to_string()))
     }
 }
 
+fn reject_query_param_in_string(path: &str, entity_name: &str) -> Result<(), String> {
+    if path.contains('?') {
+        return Err(format!("{} cannot contain query parameters", entity_name));
+    }
+
+    Ok(())
+}
+
+fn reject_empty_string(name: &str, entity_name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(format!("{} cannot be empty", entity_name));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 
-    use crate::agentic::parse_path;
+    use crate::agentic::http::parse_path;
     use crate::golem_agentic::golem::agent::common::{PathSegment, PathVariable};
     use test_r::test;
 
