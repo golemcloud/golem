@@ -34,7 +34,7 @@ pub fn get_http_endpoint_details(
         None => vec![],
     };
 
-    let http_method = match method.to_uppercase().as_str() {
+    let http_method = match method {
         "get" => HttpMethod::Get,
         "post" => HttpMethod::Post,
         "put" => HttpMethod::Put,

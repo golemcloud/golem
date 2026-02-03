@@ -25,7 +25,7 @@ use syn::ItemTrait;
 use crate::agentic::agent_definition_attributes::{
     parse_agent_definition_attributes, AgentDefinitionAttributes,
 };
-use crate::agentic::agent_definition_http_endpoint::extract_http_endpoints;
+use crate::agentic::agent_definition_http_endpoint::{extract_http_endpoints, ParsedHttpEndpointDetails};
 use proc_macro::TokenStream;
 use quote::quote;
 
@@ -170,11 +170,39 @@ fn get_agent_type_with_remote_client(
 
             let method_description = extract_description(&trait_fn.attrs).unwrap_or_default();
             let method_prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
-            let endpoint_details = extract_http_endpoints(&trait_fn.attrs);
+            let parsed_endpoint_details: Vec<ParsedHttpEndpointDetails> =
+                extract_http_endpoints(&trait_fn.attrs);
 
-            if !endpoint_details.is_empty() {
-                dbg!(&endpoint_details);
-            }
+            let endpoint_details_tokens = parsed_endpoint_details.iter().map(|parsed| {
+                let method = &parsed.http_method;
+                let path = &parsed.path_suffix;
+
+                let auth = if let Some(auth) = parsed.auth_details {
+                    quote! { Some(#auth) }
+                } else {
+                    quote! { None }
+                };
+
+                let cors_options_tokens = parsed.cors_options.iter().map(|c| quote! { #c.to_string() });
+                let header_vars_tokens = parsed.header_vars.iter().map(|(k,v)| {
+                    quote! { (#k.to_string(), #v.to_string()) }
+                });
+
+                quote! {
+                    golem_rust::agentic::get_http_endpoint_details(
+                        #method,
+                        #path,
+                        #auth,
+                        vec![#(#cors_options_tokens),*],
+                        vec![#(#header_vars_tokens),*],
+                    ).expect("Invalid HTTP endpoint configuration")
+                }
+            });
+
+            let endpoint_details = quote! {
+                vec![#(#endpoint_details_tokens),*]
+            };
+
             let mut input_schema_logic = vec![];
 
             let mut output_schema_logic = vec![];
@@ -298,8 +326,7 @@ fn get_agent_type_with_remote_client(
                     },
                     input_schema: #input_schema,
                     output_schema: #output_schema,
-                    // TODO
-                    http_endpoint: Vec::new(),
+                    http_endpoint: #endpoint_details,
                 }
             })
         } else {

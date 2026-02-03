@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use mount::*;
+pub use endpoint::*;
 pub use validations::*;
 
 mod endpoint;
