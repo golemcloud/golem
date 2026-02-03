@@ -35,8 +35,10 @@ const APIDetails = () => {
         const result = [] as Deployment[];
         response.forEach((deployment: Deployment) => {
           if (deployment.apiDefinitions.length > 0) {
-            deployment.apiDefinitions.forEach(apiDefinition => {
-              if (apiDefinition.version === version) {
+            deployment.apiDefinitions.forEach(apiDefString => {
+              // Parse "id@version" format
+              const [, apiVersion] = apiDefString.split("@");
+              if (apiVersion === version) {
                 result.push(deployment);
               }
             });
@@ -136,7 +138,7 @@ const APIDetails = () => {
                 {deployments.length > 0 ? (
                   deployments.map(deployment => (
                     <div
-                      key={deployment.createdAt + deployment.site.host}
+                      key={deployment.createdAt + deployment.domain}
                       className="flex items-center justify-between rounded-lg border p-4 cursor-pointer"
                       onClick={() => navigate(`/app/${appId}/deployments`)}
                     >
@@ -144,7 +146,7 @@ const APIDetails = () => {
                         <div className="flex items-center gap-2">
                           <Globe className="h-4 w-4" />
                           <span className="font-medium">
-                            {deployment.site.host}
+                            {deployment.domain}
                           </span>
                         </div>
                       </div>
