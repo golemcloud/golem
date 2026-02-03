@@ -394,7 +394,10 @@ mod tests {
 
     use super::*;
     use crate::agentic::{Schema, StructuredSchema};
-    use crate::golem_agentic::golem::agent::common::{AuthDetails, CorsOptions, PathVariable};
+    use crate::golem_agentic::golem::agent::common::{
+        AuthDetails, BinaryDescriptor, CorsOptions, HeaderVariable, HttpMethod, PathVariable,
+        QueryVariable,
+    };
     use golem_rust_macro::AllowedMimeTypes;
     use golem_wasm::agentic::unstructured_binary::UnstructuredBinary;
     use std::collections::HashSet;
@@ -561,5 +564,196 @@ mod tests {
             err,
             "Agent constructor variable 'org' is not provided by the HTTP mount path."
         );
+    }
+
+    fn make_schema(
+        normal_vars: Vec<&str>,
+        principal_vars: Vec<&str>,
+        unstructured_vars: Vec<&str>,
+    ) -> EnrichedDataSchema {
+        let mut fields = vec![];
+
+        for name in normal_vars {
+            fields.push((
+                name.to_string(),
+                EnrichedSchema::ElementSchema(String::get_type().get_element_schema().unwrap()),
+            ));
+        }
+
+        for name in principal_vars {
+            fields.push((
+                name.to_string(),
+                EnrichedSchema::AutoInjected(AutoInjectedSchema::Principal),
+            ));
+        }
+
+        for name in unstructured_vars {
+            fields.push((
+                name.to_string(),
+                EnrichedSchema::ElementSchema(ElementSchema::UnstructuredBinary(
+                    BinaryDescriptor { restrictions: None },
+                )),
+            ));
+        }
+
+        EnrichedDataSchema::Tuple(fields)
+    }
+
+    fn make_endpoint(
+        http_method: HttpMethod,
+        path_vars: Vec<&str>,
+        header_vars: Vec<(&str, &str)>,
+        query_vars: Vec<&str>,
+        auth: Option<bool>,
+        cors: Vec<&str>,
+    ) -> HttpEndpointDetails {
+        HttpEndpointDetails {
+            http_method,
+            path_suffix: path_vars
+                .into_iter()
+                .map(|name| {
+                    PathSegment::PathVariable(PathVariable {
+                        variable_name: name.to_string(),
+                    })
+                })
+                .collect(),
+            header_vars: header_vars
+                .into_iter()
+                .map(|(header_name, variable_name)| HeaderVariable {
+                    header_name: header_name.to_string(),
+                    variable_name: variable_name.to_string(),
+                })
+                .collect(),
+            query_vars: query_vars
+                .into_iter()
+                .map(|var| QueryVariable {
+                    query_param_name: var.to_string(),
+                    variable_name: var.to_string(),
+                })
+                .collect(),
+            auth_details: auth.map(|b| AuthDetails { required: b }),
+            cors_options: CorsOptions {
+                allowed_patterns: cors.into_iter().map(|s| s.to_string()).collect(),
+            },
+        }
+    }
+
+    fn make_agent_method(
+        name: &str,
+        input_schema: EnrichedDataSchema,
+        endpoints: Vec<HttpEndpointDetails>,
+    ) -> EnrichedAgentMethod {
+        EnrichedAgentMethod {
+            name: name.to_string(),
+            description: "".to_string(),
+            prompt_hint: None,
+            input_schema,
+            output_schema: EnrichedDataSchema::Tuple(vec![]),
+            http_endpoint: endpoints,
+        }
+    }
+
+    #[test]
+    fn test_no_http_endpoints() {
+        let agent_method = make_agent_method("foo", make_schema(vec!["x"], vec![], vec![]), vec![]);
+        assert!(validate_http_endpoint("AgentA", &agent_method, None).is_ok());
+    }
+
+    #[test]
+    fn test_http_endpoint_without_mount() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec!["x"],
+            vec![],
+            vec![],
+            Some(true),
+            vec![],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema(vec!["x"], vec![], vec![]),
+            vec![endpoint],
+        );
+        let err = validate_http_endpoint("AgentA", &agent_method, None).unwrap_err();
+        assert!(err.contains("defines HTTP endpoints but the agent is not mounted over HTTP"));
+    }
+
+    #[test]
+    fn test_valid_endpoint() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec!["x"],
+            vec![("X-Test", "x")],
+            vec!["x"],
+            Some(true),
+            vec!["*"],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema(vec!["x"], vec![], vec![]),
+            vec![endpoint],
+        );
+        let mount = mount_with_segments(vec![path_var("foo")]);
+        assert!(validate_http_endpoint("AgentA", &agent_method, Some(&mount)).is_ok());
+    }
+
+    #[test]
+    fn test_header_principal_error() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec![],
+            vec![("X-Test", "p")],
+            vec![],
+            Some(true),
+            vec![],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema(vec![], vec!["p"], vec![]),
+            vec![endpoint],
+        );
+        let mount = mount_with_segments(vec![path_var("foo")]);
+        let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
+        assert!(err.contains("cannot be used for parameters of type 'Principal'"));
+    }
+
+    #[test]
+    fn test_header_unstructured_binary_error() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec![],
+            vec![("X-Test", "b")],
+            vec![],
+            Some(true),
+            vec![],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema(vec![], vec![], vec!["b"]),
+            vec![endpoint],
+        );
+        let mount = mount_with_segments(vec![path_var("foo")]);
+        let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
+        assert!(err.contains("cannot be used for method parameters of type 'UnstructuredBinary'"));
+    }
+
+    #[test]
+    fn test_path_variable_not_in_method_params() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec!["y"],
+            vec![],
+            vec![],
+            Some(true),
+            vec![],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema(vec!["x"], vec![], vec![]),
+            vec![endpoint],
+        );
+        let mount = mount_with_segments(vec![path_var("foo")]);
+        let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
+        assert!(err.contains("is not defined in method input parameters"));
     }
 }
