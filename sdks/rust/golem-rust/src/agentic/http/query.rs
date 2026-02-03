@@ -31,10 +31,6 @@ pub fn parse_query(query: &str) -> Result<Vec<QueryVariable>, String> {
                 return Err(format!(r#"Invalid query segment "{}""#, pair));
             }
 
-            if value != value.trim() {
-                return Err("Whitespace is not allowed in query variables".to_string());
-            }
-
             if !value.starts_with('{') || !value.ends_with('}') {
                 return Err(format!(
                     r#"Query value for "{}" must be a variable reference"#,
@@ -43,6 +39,10 @@ pub fn parse_query(query: &str) -> Result<Vec<QueryVariable>, String> {
             }
 
             let variable_name = &value[1..value.len() - 1];
+
+            if variable_name != variable_name.trim() {
+                return Err("Whitespace is not allowed in query variables".to_string());
+            }
 
             reject_empty_string(
                 variable_name,
@@ -55,4 +55,74 @@ pub fn parse_query(query: &str) -> Result<Vec<QueryVariable>, String> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn test_empty_query() {
+        let res = parse_query("").unwrap();
+        assert!(res.is_empty());
+    }
+
+    #[test]
+    fn test_single_valid_query_variable() {
+        let res = parse_query("x={var}").unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].query_param_name, "x");
+        assert_eq!(res[0].variable_name, "var");
+    }
+
+    #[test]
+    fn test_multiple_valid_query_variables() {
+        let res = parse_query("x={var}&y={another}").unwrap();
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].query_param_name, "x");
+        assert_eq!(res[0].variable_name, "var");
+        assert_eq!(res[1].query_param_name, "y");
+        assert_eq!(res[1].variable_name, "another");
+    }
+
+    #[test]
+    fn test_invalid_missing_value() {
+        let err = parse_query("x=").unwrap_err();
+        assert!(err.contains("Invalid query segment"));
+    }
+
+    #[test]
+    fn test_invalid_missing_key() {
+        let err = parse_query("={var}").unwrap_err();
+        assert!(err.contains("Invalid query segment"));
+    }
+
+    #[test]
+    fn test_whitespace_in_value() {
+        let err = parse_query("x={ var }").unwrap_err();
+        assert_eq!(err, "Whitespace is not allowed in query variables");
+    }
+
+    #[test]
+    fn test_value_not_wrapped_in_braces() {
+        let err = parse_query("x=var").unwrap_err();
+        assert!(err.contains("must be a variable reference"));
+    }
+
+    #[test]
+    fn test_empty_variable_name() {
+        let err = parse_query("x={}").unwrap_err();
+        assert!(err.contains("cannot be an empty string"));
+    }
+
+    #[test]
+    fn test_complex_mixed_query() {
+        let res = parse_query("foo={f}&bar={b}").unwrap();
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].query_param_name, "foo");
+        assert_eq!(res[0].variable_name, "f");
+        assert_eq!(res[1].query_param_name, "bar");
+        assert_eq!(res[1].variable_name, "b");
+    }
 }
