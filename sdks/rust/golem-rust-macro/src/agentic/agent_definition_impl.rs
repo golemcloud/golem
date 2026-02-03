@@ -172,6 +172,9 @@ fn get_agent_type_with_remote_client(
             let method_prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
             let endpoint_details = extract_http_endpoints(&trait_fn.attrs);
 
+            if !endpoint_details.is_empty() {
+                dbg!(&endpoint_details);
+            }
             let mut input_schema_logic = vec![];
 
             let mut output_schema_logic = vec![];

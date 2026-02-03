@@ -15,6 +15,7 @@
 pub use mount::*;
 pub use validations::*;
 
+mod endpoint;
 mod mount;
 mod path;
 mod validations;

@@ -28,7 +28,7 @@ mod tests {
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
-    use golem_rust_macro::{description, prompt};
+    use golem_rust_macro::{description, endpoint, prompt};
     use std::fmt::Debug;
     use test_r::test;
 
@@ -656,6 +656,8 @@ mod tests {
     )]
     trait AgentWithHttpMount {
         fn new(init: UserId) -> Self;
+
+        #[endpoint(get="/echo/{message}", cors=["https://example.com"], auth=true, headers("X-Custom"="message"))]
         fn echo(&self, message: String) -> String;
     }
 

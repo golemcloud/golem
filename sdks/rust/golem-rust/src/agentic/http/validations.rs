@@ -17,6 +17,8 @@ use crate::golem_agentic::golem::agent::common::{
 };
 use std::collections::HashSet;
 
+// This validation is applied along with other details in the definition
+// unlike basic parsing of the HTTP mount which is done earlier.
 pub fn validate_http_mount(
     agent_class_name: &str,
     agent_mount: &HttpMountDetails,
