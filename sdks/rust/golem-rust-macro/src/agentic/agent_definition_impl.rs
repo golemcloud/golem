@@ -80,6 +80,14 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                         ).expect("HTTP mount validation failed");
                     }
 
+                    for method in &agent_type.methods {
+                        golem_rust::agentic::validate_http_endpoint(
+                            &agent_type.type_name,
+                            method,
+                            agent_type.http_mount.as_ref(),
+                        ).expect("Agent method HTTP endpoint validation failed");
+                    }
+
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
