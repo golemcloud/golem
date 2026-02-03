@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use syn::parse::Parser;
+
 #[derive(Debug)]
 pub struct ParsedHttpEndpointDetails {
     pub http_method: String,
@@ -21,9 +23,7 @@ pub struct ParsedHttpEndpointDetails {
     pub cors_options: Vec<String>,
 }
 
-pub fn extract_http_endpoints(
-    attrs: &[syn::Attribute],
-) -> Vec<ParsedHttpEndpointDetails> {
+pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpointDetails> {
     let mut endpoints = Vec::new();
 
     for attr in attrs {
@@ -31,64 +31,90 @@ pub fn extract_http_endpoints(
             continue;
         }
 
+        let syn::Meta::List(list) = &attr.meta else {
+            continue;
+        };
+
         let mut http_method: Option<String> = None;
         let mut path_suffix: Option<String> = None;
         let mut header_vars: Vec<(String, String)> = Vec::new();
         let mut auth_details: bool = false;
         let mut cors_options: Vec<String> = Vec::new();
 
-        let _ = attr.parse_nested_meta(|meta| {
-            let ident = meta.path.get_ident().map(|i| i.to_string());
+        let parser = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
 
-            match ident.as_deref() {
+        let Ok(items) = parser.parse2(list.tokens.clone()) else {
+            continue;
+        };
+
+        for item in items {
+            match item {
                 // get = "/echo/{message}"
-                Some("get") | Some("post") | Some("put") | Some("delete") => {
-                    let value: syn::LitStr = meta.value()?.parse()?;
-                    http_method = Some(ident.unwrap());
-                    path_suffix = Some(value.value());
-                    Ok(())
+                syn::Meta::NameValue(nv)
+                    if nv.path.is_ident("get")
+                        || nv.path.is_ident("post")
+                        || nv.path.is_ident("put")
+                        || nv.path.is_ident("delete") =>
+                {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = nv.value
+                    {
+                        http_method = Some(nv.path.get_ident().unwrap().to_string());
+                        path_suffix = Some(s.value());
+                    }
                 }
 
                 // auth = true
-                Some("auth") => {
-                    let value: syn::LitBool = meta.value()?.parse()?;
-                    auth_details = value.value;
-                    Ok(())
-                }
-
-                // headers("X-Custom" = "message")
-                Some("headers") => {
-                    meta.parse_nested_meta(|header| {
-                        // Parse: "X-Custom" = "message"
-                        let key: syn::LitStr = header.input.parse()?;
-                        header.input.parse::<syn::Token![=]>()?;
-                        let value: syn::LitStr = header.input.parse()?;
-
-                        header_vars.push((key.value(), value.value()));
-                        Ok(())
-                    })
+                syn::Meta::NameValue(nv) if nv.path.is_ident("auth") => {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Bool(b),
+                        ..
+                    }) = nv.value
+                    {
+                        auth_details = b.value;
+                    }
                 }
 
                 // cors = ["https://example.com"]
-                Some("cors") => {
-                    let expr: syn::Expr = meta.value()?.parse()?;
-                    if let syn::Expr::Array(arr) = expr {
+                syn::Meta::NameValue(nv) if nv.path.is_ident("cors") => {
+                    if let syn::Expr::Array(arr) = nv.value {
                         for elem in arr.elems {
                             if let syn::Expr::Lit(syn::ExprLit {
-                                                      lit: syn::Lit::Str(s),
-                                                      ..
-                                                  }) = elem
+                                lit: syn::Lit::Str(s),
+                                ..
+                            }) = elem
                             {
                                 cors_options.push(s.value());
                             }
                         }
                     }
-                    Ok(())
                 }
 
-                _ => Ok(()),
+                // headers("X-Custom" = "message")
+                syn::Meta::List(ml) if ml.path.is_ident("headers") => {
+                    let mut input = ml.tokens.clone().into_iter();
+
+                    let mut parser = syn::parse::Parser::parse2(
+                        |input: syn::parse::ParseStream| {
+                            while !input.is_empty() {
+                                let key: syn::LitStr = input.parse()?;
+                                input.parse::<syn::Token![=]>()?;
+                                let value: syn::LitStr = input.parse()?;
+                                header_vars.push((key.value(), value.value()));
+
+                                let _ = input.parse::<syn::Token![,]>();
+                            }
+                            Ok(())
+                        },
+                        ml.tokens.clone(),
+                    );
+                }
+
+                _ => {}
             }
-        });
+        }
 
         if let (Some(method), Some(path)) = (http_method, path_suffix) {
             endpoints.push(ParsedHttpEndpointDetails {
