@@ -19,6 +19,10 @@ use crate::golem_agentic::golem::agent::common::{
 };
 use std::collections::HashSet;
 
+// An enriched representation is a different view of the agent type that will include
+// extra details such as auto-injected schemas such as Principal
+// The agent registry will hold this information for the generated `initiate` , `invoke` and rpc calls
+// to look up so that these parameters can be injected automatically by the platform
 #[derive(Clone)]
 pub struct EnrichedAgentType {
     pub type_name: String,
