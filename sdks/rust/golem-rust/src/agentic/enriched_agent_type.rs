@@ -1,0 +1,135 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::HashSet;
+use crate::agentic::AutoInjectedSchema;
+use crate::golem_agentic::golem::agent::common::{
+    AgentType, AgentConstructor, AgentDependency, AgentMethod, AgentMode, DataSchema, ElementSchema, HttpEndpointDetails,
+    HttpMountDetails,
+};
+
+#[derive(Clone)]
+    pub struct EnrichedAgentType {
+    pub type_name: String,
+    pub description: String,
+    pub constructor: EnrichedAgentConstructor,
+    pub methods: Vec<EnrichedAgentMethod>,
+    pub dependencies: Vec<AgentDependency>,
+    pub mode: AgentMode,
+    pub http_mount: Option<HttpMountDetails>,
+}
+
+impl EnrichedAgentType {
+    pub fn principal_params_in_constructor(&self) -> HashSet<String> {
+        let mut principal_params = HashSet::new();
+
+        if let EnrichedDataSchema::Tuple(fields) = &self.constructor.input_schema {
+            for (name, schema) in fields {
+                if let EnrichedSchema::AutoInjected(AutoInjectedSchema::Principal) = schema {
+                    principal_params.insert(name.clone());
+                }
+            }
+        }
+
+        principal_params
+    }
+
+    pub fn to_agent_type(&self) -> AgentType {
+       AgentType {
+           type_name: self.type_name.clone(),
+           description: self.description.clone(),
+           constructor: self.constructor.to_agent_constructor(),
+           methods: self.methods.iter().map(|m| m.to_agent_method()).collect(),
+           dependencies: self.dependencies.clone(),
+           mode: self.mode.clone(),
+           http_mount: self.http_mount.clone(),
+       }
+    }
+}
+
+#[derive(Clone)]
+pub struct EnrichedAgentMethod {
+    pub name: String,
+    pub description: String,
+    pub http_endpoint: Vec<HttpEndpointDetails>,
+    pub prompt_hint: Option<String>,
+    pub input_schema: EnrichedDataSchema,
+    pub output_schema: EnrichedDataSchema,
+}
+
+impl EnrichedAgentMethod {
+    pub fn to_agent_method(&self) -> AgentMethod {
+        AgentMethod {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            http_endpoint: self.http_endpoint.clone(),
+            prompt_hint: self.prompt_hint.clone(),
+            input_schema: self.input_schema.to_data_schema(),
+            output_schema: self.output_schema.to_data_schema(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct EnrichedAgentConstructor {
+    pub name: Option<String>,
+    pub description: String,
+    pub prompt_hint: Option<String>,
+    pub input_schema: EnrichedDataSchema,
+}
+
+impl EnrichedAgentConstructor {
+    pub fn to_agent_constructor(&self) -> AgentConstructor {
+        AgentConstructor {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            prompt_hint: self.prompt_hint.clone(),
+            input_schema: self.input_schema.to_data_schema(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum EnrichedDataSchema {
+    Tuple(Vec<(String, EnrichedSchema)>),
+    // Disallow any auto-injected schemas within multimodal
+    Multimodal(Vec<(String, ElementSchema)>),
+}
+
+impl EnrichedDataSchema {
+    pub fn to_data_schema(&self) -> DataSchema {
+        match self {
+            EnrichedDataSchema::Tuple(fields) => {
+                let fields_without_auto_injected = fields
+                    .iter()
+                    .filter_map(|(name, schema)| match schema {
+                        EnrichedSchema::ElementSchema(element_schema) => {
+                            Some((name.clone(), element_schema.clone()))
+                        }
+                        EnrichedSchema::AutoInjected(_) => None,
+                    })
+                    .collect::<Vec<(String, ElementSchema)>>();
+
+                DataSchema::Tuple(fields_without_auto_injected)
+            }
+            EnrichedDataSchema::Multimodal(variants) => DataSchema::Multimodal(variants.clone()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum EnrichedSchema {
+    ElementSchema(ElementSchema),
+    AutoInjected(AutoInjectedSchema),
+}

@@ -221,6 +221,9 @@ mod tests {
                         StructuredSchema::Multimodal(_) => {
                             panic!("Multimodal schema not supported in this test constructor")
                         }
+                        StructuredSchema::AutoInjected(_) => {
+                            panic!("AutoInjected schema not supported in this test constructor")
+                        }
                     };
 
                     (name.to_string(), element_schema)

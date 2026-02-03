@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::enriched_agent_type::EnrichedAgentType;
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
@@ -32,7 +33,7 @@ pub struct State {
 
 #[derive(Default)]
 pub struct AgentTypes {
-    pub agent_types: HashMap<AgentTypeName, AgentType>,
+    pub agent_types: HashMap<AgentTypeName, EnrichedAgentType>,
 }
 
 static mut STATE: Option<State> = None;
@@ -66,10 +67,13 @@ pub fn get_all_agent_types() -> Vec<AgentType> {
         .agent_types
         .values()
         .cloned()
+        .map(|e| e.to_agent_type())
         .collect()
 }
 
-pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
+pub fn get_enriched_agent_type_by_name(
+    agent_type_name: &AgentTypeName,
+) -> Option<EnrichedAgentType> {
     let state = get_state();
 
     state
@@ -80,7 +84,13 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
         .cloned()
 }
 
-pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: AgentType) {
+pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
+    let enriched = get_enriched_agent_type_by_name(agent_type_name);
+
+    enriched.map(|e| e.to_agent_type())
+}
+
+pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: EnrichedAgentType) {
     get_state()
         .agent_types
         .borrow_mut()
