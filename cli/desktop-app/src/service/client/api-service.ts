@@ -80,12 +80,10 @@ export class APIService {
     ])) as Promise<Array<{ id: string; version: string }>>;
   };
 
-  public deployDefinition = async (appId: string, definitionId: string) => {
-    return await this.cliService.callCLI(appId, "api", [
-      "definition",
-      "deploy",
-      definitionId,
-    ]);
+  public deployDefinition = async (appId: string, _definitionId: string) => {
+    // CLI v1.4.2: api definition deploy removed, use root deploy command instead
+    // This deploys the entire application including all API definitions
+    return await this.cliService.callCLI(appId, "deploy", []);
   };
 
   public getApi = async (
@@ -141,19 +139,9 @@ export class APIService {
       throw new Error(`API definition ${id}@${version} not found`);
     }
 
-    const apiDefList = await this.getUploadedDefinitions(appId);
-
-    // Step 2: Call CLI to delete from server FIRST
-    if (apiDefList.find(def => def.id === id && def.version === version)) {
-      await this.cliService.callCLI(appId, "api", [
-        "definition",
-        "delete",
-        `--id=${id}`,
-        `--version=${version}`,
-      ]);
-    }
-
-    // Step 3: Only if CLI succeeds, remove from YAML file (both definition and deployments)
+    // CLI v1.4.2: api definition delete command removed
+    // Only delete from YAML file (both definition and deployments)
+    // Server-side deletion is no longer supported via CLI
     await this.deleteApiFromYaml(appId, id, version, apiToDelete.componentId);
   };
 

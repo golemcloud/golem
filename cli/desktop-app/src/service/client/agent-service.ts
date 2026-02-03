@@ -45,11 +45,12 @@ export class AgentService {
     );
     const params = [
       "list",
+      "--component-name",
       component.componentName!,
       `--max-count=${param.count}`,
     ];
     if (param.precise) {
-      params.push(`--precise`);
+      params.push("--precise");
     }
     return (await this.cliService.callCLI(appId, "agent", params)) as Promise<{
       workers: Agent[];
@@ -284,10 +285,13 @@ export class AgentService {
     appId: string,
     componentId: string,
   ): Promise<AgentTypeSchema[]> {
-    // golem-cli app list-agent-types --format=json
-    const result = (await this.cliService.callCLI(appId, "app", [
+    // golem-cli list-agent-types --format=json (v1.4.2: moved to root level)
+    const result = (await this.cliService.callCLI(
+      appId,
       "list-agent-types",
-    ])) as AgentTypeSchema[];
-    return result.filter(spec => spec.implementedBy == componentId);
+      [],
+    )) as AgentTypeSchema[];
+    console.log(result);
+    return result.filter(spec => spec.implementedBy.componentId == componentId);
   }
 }

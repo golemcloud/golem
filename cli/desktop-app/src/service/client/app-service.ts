@@ -15,19 +15,21 @@ export class AppService {
    */
   public checkHealth = async (): Promise<void> => {
     const appCacheDirPath = await localDataDir();
+    // Use 'plugin list' as it works from any directory and actually connects to the server
+    // This is more reliable than 'api deployment list' which requires app context
     await invoke("call_golem_command", {
-      command: "api",
-      subcommands: ["deployment", "list"],
+      command: "plugin",
+      subcommands: ["list"],
       folderPath: appCacheDirPath,
     });
   };
 
   public buildApp = async (appId: string, componentNames?: string[]) => {
-    const subcommands = ["build"];
+    const subcommands: string[] = [];
     if (componentNames && componentNames.length > 0) {
       subcommands.push(...componentNames);
     }
-    return await this.cliService.callCLIWithLogs(appId, "app", subcommands);
+    return await this.cliService.callCLIWithLogs(appId, "build", subcommands);
   };
 
   public updateAgents = async (
@@ -35,14 +37,18 @@ export class AppService {
     componentNames?: string[],
     updateMode: string = "auto",
   ) => {
-    const subcommands = ["update-agents"];
+    const subcommands: string[] = [];
     if (updateMode) {
       subcommands.push("--update-mode", updateMode);
     }
     if (componentNames && componentNames.length > 0) {
       subcommands.push(...componentNames);
     }
-    return await this.cliService.callCLIWithLogs(appId, "app", subcommands);
+    return await this.cliService.callCLIWithLogs(
+      appId,
+      "update-agents",
+      subcommands,
+    );
   };
 
   public deployAgents = async (
@@ -50,21 +56,21 @@ export class AppService {
     componentNames?: string[],
     updateAgents?: boolean,
   ) => {
-    const subcommands = ["deploy"];
+    const subcommands: string[] = [];
     if (updateAgents) {
       subcommands.push("--update-agents");
     }
     if (componentNames && componentNames.length > 0) {
       subcommands.push(...componentNames);
     }
-    return await this.cliService.callCLIWithLogs(appId, "app", subcommands);
+    return await this.cliService.callCLIWithLogs(appId, "deploy", subcommands);
   };
 
   public cleanApp = async (appId: string, componentNames?: string[]) => {
-    const subcommands = ["clean"];
+    const subcommands: string[] = [];
     if (componentNames && componentNames.length > 0) {
       subcommands.push(...componentNames);
     }
-    return await this.cliService.callCLIWithLogs(appId, "app", subcommands);
+    return await this.cliService.callCLIWithLogs(appId, "clean", subcommands);
   };
 }
