@@ -19,7 +19,7 @@ pub struct ParsedHttpEndpointDetails {
     pub http_method: String,
     pub path_suffix: String,
     pub header_vars: Vec<(String, String)>,
-    pub auth_details: bool,
+    pub auth_details: Option<bool>,
     pub cors_options: Vec<String>,
 }
 
@@ -38,7 +38,7 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
         let mut http_method: Option<String> = None;
         let mut path_suffix: Option<String> = None;
         let mut header_vars: Vec<(String, String)> = Vec::new();
-        let mut auth_details: bool = false;
+        let mut auth_details: Option<bool> = None;
         let mut cors_options: Vec<String> = Vec::new();
 
         let parser = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
@@ -49,7 +49,6 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
 
         for item in items {
             match item {
-                // get = "/echo/{message}"
                 syn::Meta::NameValue(nv)
                     if nv.path.is_ident("get")
                         || nv.path.is_ident("post")
@@ -66,18 +65,16 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
                     }
                 }
 
-                // auth = true
                 syn::Meta::NameValue(nv) if nv.path.is_ident("auth") => {
                     if let syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Bool(b),
                         ..
                     }) = nv.value
                     {
-                        auth_details = b.value;
+                        auth_details = Some(b.value);
                     }
                 }
 
-                // cors = ["https://example.com"]
                 syn::Meta::NameValue(nv) if nv.path.is_ident("cors") => {
                     if let syn::Expr::Array(arr) = nv.value {
                         for elem in arr.elems {
@@ -92,11 +89,8 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
                     }
                 }
 
-                // headers("X-Custom" = "message")
                 syn::Meta::List(ml) if ml.path.is_ident("headers") => {
-                    let mut input = ml.tokens.clone().into_iter();
-
-                    let mut parser = syn::parse::Parser::parse2(
+                    let _ = Parser::parse2(
                         |input: syn::parse::ParseStream| {
                             while !input.is_empty() {
                                 let key: syn::LitStr = input.parse()?;

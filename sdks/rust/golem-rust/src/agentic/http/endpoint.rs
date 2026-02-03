@@ -13,40 +13,71 @@
 // limitations under the License.
 
 use crate::agentic::http::path::parse_path;
-use crate::agentic::reject_query_param_in_string;
-use crate::golem_agentic::golem::agent::common::{AuthDetails, CorsOptions, HttpMountDetails};
+use crate::agentic::http::query::parse_query;
+use crate::golem_agentic::golem::agent::common::{
+    AuthDetails, CorsOptions, HeaderVariable, HttpEndpointDetails, HttpMethod,
+};
 
 pub fn get_http_endpoint_details(
+    method: &str,
     path: &str,
-    auth: bool,
-    phantom_agent: bool,
-    cors_options: CorsOptions,
-    web_suffix: Option<String>,
-) -> Result<HttpMountDetails, String> {
-    reject_query_param_in_string(path, "HTTP mount path")?;
+    auth: Option<bool>,
+    cors_options: Vec<String>,
+    http_headers: Vec<(String, String)>,
+) -> Result<HttpEndpointDetails, String> {
+    let PathAndQuery { path, query } = split_path_and_query(path);
 
-    let segments = parse_path(path).map_err(|e| e.to_string())?;
+    let path_suffix = parse_path(&path).map_err(|e| e.to_string())?;
 
-    let web_suffix = match web_suffix {
-        Some(suffix) => {
-            reject_query_param_in_string(&suffix, "webhook_suffix")?;
-
-            let parsed_suffix = parse_path(&suffix).map_err(|e| e.to_string())?;
-
-            if parsed_suffix.is_empty() {
-                return Err("webhook_suffix cannot be empty if provided".to_string());
-            }
-
-            parsed_suffix
-        }
+    let query_vars = match query {
+        Some(q) => parse_query(q.as_str()).map_err(|e| e.to_string())?,
         None => vec![],
     };
 
-    Ok(HttpMountDetails {
-        path_prefix: segments,
-        auth_details: Some(AuthDetails { required: auth }),
-        phantom_agent,
-        cors_options: cors_options.clone(),
-        webhook_suffix: web_suffix,
+    let http_method = match method.to_uppercase().as_str() {
+        "get" => HttpMethod::Get,
+        "post" => HttpMethod::Post,
+        "put" => HttpMethod::Put,
+        "delete" => HttpMethod::Delete,
+        "patch" => HttpMethod::Patch,
+        "head" => HttpMethod::Head,
+        "options" => HttpMethod::Options,
+        "connect" => HttpMethod::Connect,
+        "trace" => HttpMethod::Trace,
+        other => return Err(format!("Unsupported HTTP method: {}", other)),
+    };
+
+    let header_vars: Vec<HeaderVariable> = http_headers
+        .into_iter()
+        .map(|(header_name, variable_name)| HeaderVariable {
+            header_name,
+            variable_name,
+        })
+        .collect();
+
+    Ok(HttpEndpointDetails {
+        http_method,
+        path_suffix,
+        header_vars,
+        query_vars,
+        auth_details: auth.map(|required| AuthDetails { required }),
+        cors_options: CorsOptions {
+            allowed_patterns: cors_options,
+        },
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PathAndQuery {
+    path: String,
+    query: Option<String>,
+}
+
+fn split_path_and_query(path_with_query: &str) -> PathAndQuery {
+    let mut parts = path_with_query.splitn(2, '?');
+
+    PathAndQuery {
+        path: parts.next().unwrap_or("").to_string(),
+        query: parts.next().map(|q| q.to_string()),
+    }
 }

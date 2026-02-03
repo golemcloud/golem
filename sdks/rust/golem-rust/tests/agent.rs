@@ -657,7 +657,10 @@ mod tests {
     trait AgentWithHttpMount {
         fn new(init: UserId) -> Self;
 
+        #[prompt("Echoes the message back")]
+        #[description("Echoes the message back")]
         #[endpoint(get="/echo/{message}", cors=["https://example.com"], auth=true, headers("X-Custom"="message"))]
+        #[endpoint(post="/echo/{message}", cors=["https://example.com"], auth=true, headers("X-Custom"="message"))]
         fn echo(&self, message: String) -> String;
     }
 

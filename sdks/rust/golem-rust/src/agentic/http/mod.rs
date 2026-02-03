@@ -18,4 +18,5 @@ pub use validations::*;
 mod endpoint;
 mod mount;
 mod path;
+mod query;
 mod validations;
