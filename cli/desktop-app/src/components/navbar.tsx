@@ -28,6 +28,7 @@ const Navbar = ({ showNav = true }: NavbarProps) => {
               <NavLink to={`/app/${appId}/components`}>Components</NavLink>
               <NavLink to={`/app/${appId}/apis`}>APIs</NavLink>
               <NavLink to={`/app/${appId}/deployments`}>Deployments</NavLink>
+              <NavLink to={`/app/${appId}/environments`}>Environments</NavLink>
               <NavLink to={`/app/${appId}/plugins`}>Plugins</NavLink>
             </div>
           )}
