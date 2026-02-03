@@ -22,6 +22,7 @@ pub use multimodal_derivation::*;
 pub use schema_derivation::*;
 
 mod agent_definition_attributes;
+mod agent_definition_http_endpoint;
 mod agent_definition_impl;
 mod agent_implementation_impl;
 mod allowed_language_derivation;

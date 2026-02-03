@@ -25,6 +25,7 @@ use syn::ItemTrait;
 use crate::agentic::agent_definition_attributes::{
     parse_agent_definition_attributes, AgentDefinitionAttributes,
 };
+use crate::agentic::agent_definition_http_endpoint::extract_http_endpoints;
 use proc_macro::TokenStream;
 use quote::quote;
 
@@ -169,6 +170,7 @@ fn get_agent_type_with_remote_client(
 
             let method_description = extract_description(&trait_fn.attrs).unwrap_or_default();
             let method_prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
+            let endpoint_details = extract_http_endpoints(&trait_fn.attrs);
 
             let mut input_schema_logic = vec![];
 
