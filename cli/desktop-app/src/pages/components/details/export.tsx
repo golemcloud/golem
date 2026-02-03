@@ -91,11 +91,13 @@ export default function Exports() {
     API.componentService.getComponentByIdAsKey(appId!).then(response => {
       const fetched = response[componentId];
       if (!fetched) return;
+      console.log(fetched);
 
       const versions = fetched.versionList || [];
       setVersionList(versions);
 
       const selectedVersion = versions[versions.length - 1] || 0;
+      console.log("version", selectedVersion);
       setVersionChange(selectedVersion);
       setComponent(fetched);
     });
@@ -104,7 +106,7 @@ export default function Exports() {
   useEffect(() => {
     if (!component.versions?.length) return;
     const componentDetails = component.versions.find(
-      data => data.componentVersion === versionChange,
+      data => data.componentRevision === versionChange,
     );
     if (!componentDetails) {
       setResult([]);
@@ -149,7 +151,7 @@ export default function Exports() {
               </div>
               {versionList.length > 0 && (
                 <Select
-                  defaultValue={versionChange.toString()}
+                  defaultValue={(versionChange || 0).toString()}
                   onValueChange={version => handleVersionChange(+version)}
                 >
                   <SelectTrigger className="w-[80px]">
