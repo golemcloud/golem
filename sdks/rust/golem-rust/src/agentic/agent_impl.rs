@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::{agent_registry, get_resolved_agent};
-use crate::golem_agentic::golem::agent::common::HttpMountDetails;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
-use crate::golem_ai::golem::agent::common::CorsOptions;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 use crate::{
@@ -33,7 +31,7 @@ impl Guest for Component {
     fn initialize(
         agent_type: String,
         input: DataValue,
-        _principal: Principal,
+        principal: Principal,
     ) -> Result<(), AgentError> {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
@@ -58,7 +56,7 @@ impl Guest for Component {
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
 
         with_agent_initiator(
-            |initiator| async move { initiator.initiate(input).await.map(|_| ()) },
+            |initiator| async move { initiator.initiate(input, principal).await.map(|_| ()) },
             &agent_type_name,
         )
     }
@@ -68,14 +66,14 @@ impl Guest for Component {
     fn invoke(
         method_name: String,
         input: DataValue,
-        _principal: Principal,
+        principal: Principal,
     ) -> Result<DataValue, AgentError> {
         with_agent_instance_async(|resolved_agent| async move {
             resolved_agent
                 .agent
                 .borrow_mut()
                 .as_mut()
-                .invoke(method_name, input)
+                .invoke(method_name, input, principal)
                 .await
         })
     }
@@ -122,8 +120,13 @@ impl LoadSnapshotGuest for Component {
         let (agent_type_name, agent_parameters, _) =
             parse_agent_id(&id).map_err(|e| e.to_string())?;
 
+        // TODO; https://github.com/golemcloud/golem/issues/2612
         with_agent_initiator(
-            |initiator| async move { initiator.initiate(agent_parameters).await },
+            |initiator| async move {
+                initiator
+                    .initiate(agent_parameters, Principal::Anonymous)
+                    .await
+            },
             &AgentTypeName(agent_type_name),
         )
         .map_err(|e| e.to_string())?;

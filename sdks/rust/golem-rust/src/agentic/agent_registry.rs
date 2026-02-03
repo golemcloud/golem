@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::enriched_agent_type::EnrichedAgentType;
+use crate::agentic::{EnrichedDataSchema, EnrichedSchema};
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
@@ -23,7 +24,6 @@ use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
-use crate::agentic::{EnrichedDataSchema, EnrichedSchema};
 
 #[derive(Default)]
 pub struct State {
@@ -199,13 +199,13 @@ pub fn get_method_parameter_type(
     agent_type_name: &AgentTypeName,
     method_name: &str,
     parameter_index: usize,
-) -> Option<ElementSchema> {
-    let agent_type = get_agent_type_by_name(agent_type_name)?;
+) -> Option<EnrichedSchema> {
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
 
     match &method.input_schema {
-        crate::golem_agentic::golem::agent::common::DataSchema::Tuple(items) => {
+        EnrichedDataSchema::Tuple(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
                 Some(element_schema.clone())
@@ -213,10 +213,10 @@ pub fn get_method_parameter_type(
                 None
             }
         }
-        crate::golem_agentic::golem::agent::common::DataSchema::Multimodal(items) => {
+        EnrichedDataSchema::Multimodal(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
-                Some(element_schema.clone())
+                Some(EnrichedSchema::ElementSchema(element_schema.clone()))
             } else {
                 None
             }

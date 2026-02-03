@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use crate::agentic::AutoInjectedSchema;
 use crate::golem_agentic::golem::agent::common::{
-    AgentType, AgentConstructor, AgentDependency, AgentMethod, AgentMode, DataSchema, ElementSchema, HttpEndpointDetails,
-    HttpMountDetails,
+    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, DataSchema,
+    ElementSchema, HttpEndpointDetails, HttpMountDetails,
 };
+use std::collections::HashSet;
 
 #[derive(Clone)]
-    pub struct EnrichedAgentType {
+pub struct EnrichedAgentType {
     pub type_name: String,
     pub description: String,
     pub constructor: EnrichedAgentConstructor,
@@ -46,15 +46,15 @@ impl EnrichedAgentType {
     }
 
     pub fn to_agent_type(&self) -> AgentType {
-       AgentType {
-           type_name: self.type_name.clone(),
-           description: self.description.clone(),
-           constructor: self.constructor.to_agent_constructor(),
-           methods: self.methods.iter().map(|m| m.to_agent_method()).collect(),
-           dependencies: self.dependencies.clone(),
-           mode: self.mode.clone(),
-           http_mount: self.http_mount.clone(),
-       }
+        AgentType {
+            type_name: self.type_name.clone(),
+            description: self.description.clone(),
+            constructor: self.constructor.to_agent_constructor(),
+            methods: self.methods.iter().map(|m| m.to_agent_method()).collect(),
+            dependencies: self.dependencies.clone(),
+            mode: self.mode.clone(),
+            http_mount: self.http_mount.clone(),
+        }
     }
 }
 
