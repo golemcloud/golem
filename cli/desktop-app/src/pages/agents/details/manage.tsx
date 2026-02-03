@@ -61,7 +61,7 @@ export default function AgentManage() {
         .then(response => {
           const agent = response.metadata;
           setAgentDetails(agent);
-          setUpgradeTo(`${agent?.componentVersion}`);
+          setUpgradeTo(`${agent?.componentRevision}`);
         });
     }
   }, [componentId, agentName]);
@@ -114,7 +114,7 @@ export default function AgentManage() {
 
   const versionListGreaterThan =
     componentList.versionList?.filter(
-      version => version > agentDetails?.componentVersion,
+      version => version > agentDetails?.componentRevision,
     ) || [];
 
   return (
@@ -222,13 +222,13 @@ export default function AgentManage() {
             {/* Current Component Version */}
             <div className="grid grid-cols-4 items-center gap-4">
               <Label
-                htmlFor="componentVersion"
+                htmlFor="componentRevision"
                 className="text-right text-sm font-medium"
               >
                 Current Version
               </Label>
               <Input
-                defaultValue={agentDetails?.componentVersion}
+                defaultValue={agentDetails?.componentRevision}
                 className="col-span-3 bg-muted/50"
                 disabled
               />
@@ -280,7 +280,7 @@ export default function AgentManage() {
                   ) : (
                     <div className="p-2 text-center text-sm text-muted-foreground">
                       No versions available above v
-                      {agentDetails?.componentVersion}
+                      {agentDetails?.componentRevision}
                     </div>
                   )}
                 </SelectContent>

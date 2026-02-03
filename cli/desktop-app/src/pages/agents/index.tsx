@@ -46,6 +46,7 @@ export default function AgentList() {
         agent.workerName?.toLowerCase().includes(lowerCaseQuery) ||
         agent.status?.toLowerCase().includes(lowerCaseQuery),
     );
+    console.log(filtered);
     setFilteredAgents(filtered);
   }, [searchQuery, agentList]);
 
@@ -138,14 +139,14 @@ export default function AgentList() {
                           Version
                         </div>
                         <div className="text-lg font-semibold">
-                          v{agent.componentVersion}
+                          v{agent.componentRevision}
                         </div>
                       </div>
                     </div>
                     <div className="py-2 flex gap-2 text-sm">
-                      <Badge variant="outline" className="rounded-sm">
+                      {/* <Badge variant="outline" className="rounded-sm">
                         Args: {agent.args.length}
-                      </Badge>
+                      </Badge> */}
                       <Badge variant="outline" className="rounded-sm">
                         Env: {Object.keys(agent.env).length}
                       </Badge>
