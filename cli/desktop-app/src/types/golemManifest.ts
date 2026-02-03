@@ -1,3 +1,5 @@
+import { ManifestEnvironment } from "./environment";
+
 export interface GolemApplicationManifest {
   includes?: string[];
   tempDir?: string;
@@ -8,7 +10,8 @@ export interface GolemApplicationManifest {
   clean?: string[];
   customCommands?: Record<string, ExternalCommand[]>;
   httpApi?: HttpApi;
-  profiles?: Record<string, Profile>;
+  profiles?: Record<string, Profile>; // Legacy - deprecated in CLI v1.4.2+
+  environments?: Record<string, ManifestEnvironment>; // New in CLI v1.4.2+
 }
 
 export interface ComponentTemplate
@@ -125,7 +128,7 @@ export interface HttpApiDefinitionRoute {
 export interface HttpApiRouteBinding {
   type?: "default" | "cors-preflight" | "file-server" | "http-handler";
   componentName?: string;
-  componentVersion?: number;
+  componentRevision?: number;
   idempotencyKey?: string;
   invocationContext?: string;
   response?: string;

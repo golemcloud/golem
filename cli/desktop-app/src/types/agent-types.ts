@@ -46,5 +46,8 @@ export interface AgentTypeSchema {
     }>;
     dependencies: string[];
   };
-  implementedBy: string;
+  implementedBy: {
+    componentId: string;
+    componentRevision: number;
+  };
 }
