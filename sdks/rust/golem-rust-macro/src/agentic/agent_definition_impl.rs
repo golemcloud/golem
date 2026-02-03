@@ -67,6 +67,15 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 fn __register_agent_type() {
                     let agent_type = #agent_type;
 
+                    if let Some(http_mount) = &agent_type.http_mount {
+                        golem_rust::agentic::validate_http_mount(
+                            &agent_type.type_name,
+                            &http_mount,
+                            &agent_type.constructor,
+                            &std::collections::HashSet::new()
+                        ).expect("HTTP mount validation failed");
+                    }
+
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type

@@ -104,7 +104,6 @@ pub fn parse_agent_definition_attributes(
             quote! { None }
         };
 
-
         quote! {
             golem_rust::agentic::get_http_mount_details(
                 #mount,

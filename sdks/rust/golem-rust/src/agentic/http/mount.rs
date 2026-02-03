@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::http::path::parse_path;
-use crate::golem_agentic::golem::agent::common::{
-    AuthDetails, CorsOptions, HttpMountDetails
-};
+use crate::golem_agentic::golem::agent::common::{AuthDetails, CorsOptions, HttpMountDetails};
 
 use crate::agentic::http::validations::reject_query_param_in_string;
 

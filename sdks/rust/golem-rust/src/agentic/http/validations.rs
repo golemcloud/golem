@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::{AgentConstructor, DataSchema, HttpMountDetails, PathSegment, ElementSchema};
+use crate::golem_agentic::golem::agent::common::{
+    AgentConstructor, DataSchema, ElementSchema, HttpMountDetails, PathSegment,
+};
+use std::collections::HashSet;
 
 pub fn validate_http_mount(
     agent_class_name: &str,
     agent_mount: &HttpMountDetails,
     agent_constructor: &AgentConstructor,
-    parameters_for_principal: &std::collections::HashSet<String>,
+    parameters_for_principal: &HashSet<String>,
 ) -> Result<(), String> {
-    let constructor_input_params =
-        collect_constructor_input_parameter_names(agent_constructor);
+    let constructor_input_params = collect_constructor_input_parameter_names(agent_constructor);
 
     validate_no_catch_all_in_http_mount(agent_class_name, agent_mount)?;
     validate_constructor_params_are_http_safe(agent_class_name, agent_constructor)?;
@@ -32,29 +34,46 @@ pub fn validate_http_mount(
     Ok(())
 }
 
+pub(crate) fn reject_query_param_in_string(path: &str, entity_name: &str) -> Result<(), String> {
+    if path.contains('?') {
+        return Err(format!("{} cannot contain query parameters", entity_name));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn reject_empty_string(name: &str, entity_name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(format!("{} cannot be empty", entity_name));
+    }
+    Ok(())
+}
+
 fn validate_no_catch_all_in_http_mount(
     agent_class_name: &str,
     agent_mount: &HttpMountDetails,
 ) -> Result<(), String> {
-    if let Some(catch_all_variable) = agent_mount
-        .path_prefix
-        .iter()
-        .find_map(|segment| match segment {
-           PathSegment::RemainingPathVariable(variable) => Some(&variable.variable_name),
-            _ => None,
-        })
+    if let Some(catch_all_variable) =
+        agent_mount
+            .path_prefix
+            .iter()
+            .find_map(|segment| match segment {
+                PathSegment::RemainingPathVariable(variable) => Some(&variable.variable_name),
+                _ => None,
+            })
     {
         return Err(format!(
             "HTTP mount for agent '{}' cannot contain catch-all path variable '{}'",
-            agent_class_name,
-            catch_all_variable
+            agent_class_name, catch_all_variable
         ));
     }
 
     Ok(())
 }
 
-fn collect_http_mount_variables(agent_mount: &HttpMountDetails) -> std::collections::HashSet<String> {
+fn collect_http_mount_variables(
+    agent_mount: &HttpMountDetails,
+) -> std::collections::HashSet<String> {
     let mut vars = std::collections::HashSet::new();
 
     for segment in &agent_mount.path_prefix {
@@ -72,7 +91,6 @@ fn collect_http_mount_variables(agent_mount: &HttpMountDetails) -> std::collecti
 fn collect_constructor_input_parameter_names(
     agent_constructor: &AgentConstructor,
 ) -> std::collections::HashSet<String> {
-
     let mut param_names = std::collections::HashSet::new();
 
     match &agent_constructor.input_schema {
@@ -86,8 +104,6 @@ fn collect_constructor_input_parameter_names(
 
     param_names
 }
-
-
 
 fn validate_constructor_params_are_http_safe(
     agent_class_name: &str,
@@ -122,7 +138,7 @@ fn validate_constructor_params_are_http_safe(
 
 fn validate_mount_variables_are_not_principal(
     agent_mount: &HttpMountDetails,
-    parameters_for_principal: &std::collections::HashSet<String>,
+    parameters_for_principal: &HashSet<String>,
 ) -> Result<(), String> {
     for segment in &agent_mount.path_prefix {
         if let PathSegment::PathVariable(variable) = segment {
@@ -145,8 +161,8 @@ fn validate_mount_variables_exist_in_constructor(
     constructor_vars: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     for (segment_index, segment) in agent_mount.path_prefix.iter().enumerate() {
-        if segment.tag == "path-variable" {
-            let variable_name = &segment.val.variable_name;
+        if let PathSegment::PathVariable(path_variable) = segment {
+            let variable_name = &path_variable.variable_name;
 
             if !constructor_vars.contains(variable_name) {
                 return Err(format!(
@@ -161,19 +177,20 @@ fn validate_mount_variables_exist_in_constructor(
     Ok(())
 }
 
+fn validate_constructor_vars_are_satisfied(
+    agent_mount: &HttpMountDetails,
+    constructor_vars: &std::collections::HashSet<String>,
+) -> Result<(), String> {
+    let provided_vars = collect_http_mount_variables(agent_mount);
 
-
-pub fn reject_query_param_in_string(path: &str, entity_name: &str) -> Result<(), String> {
-    if path.contains('?') {
-        return Err(format!("{} cannot contain query parameters", entity_name));
+    for constructor_var in constructor_vars {
+        if !provided_vars.contains(constructor_var) {
+            return Err(format!(
+                "Agent constructor variable '{}' is not provided by the HTTP mount path.",
+                constructor_var,
+            ));
+        }
     }
 
-    Ok(())
-}
-
-pub fn reject_empty_string(name: &str, entity_name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err(format!("{} cannot be empty", entity_name));
-    }
     Ok(())
 }

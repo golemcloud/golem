@@ -650,7 +650,7 @@ mod tests {
     }
 
     #[agent_definition(
-        mount = "/abc",
+        mount = "/abc/{init}",
         auth = true,
         cors = ["https://example.com", "https://another.com"]
     )]
