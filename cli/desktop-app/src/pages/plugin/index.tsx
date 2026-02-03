@@ -62,6 +62,7 @@ export default function PluginListPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {plugins.map(pluginGroup => {
             const latestVersion = pluginGroup.versions[0]; // Versions are sorted descending
+            console.log(latestVersion, pluginGroup);
             if (!latestVersion) return null;
             return (
               <Card
@@ -99,26 +100,26 @@ export default function PluginListPage() {
                       {latestVersion.type}
                     </Badge>
                     {latestVersion.type === "Oplog Processor" &&
-                      latestVersion.oplogProcessorComponentVersion !==
+                      latestVersion.oplogProcessorComponentRevision !==
                         undefined && (
                         <Badge
                           variant="outline"
                           className="rounded-full text-sm"
                         >
                           Component Version:{" "}
-                          {latestVersion.oplogProcessorComponentVersion}
+                          {latestVersion.oplogProcessorComponentRevision}
                         </Badge>
                       )}
                     <Badge
                       variant="outline"
                       className="flex items-center rounded-full text-sm"
                     >
-                      {latestVersion.scope.toLowerCase() === "global" ? (
+                      {latestVersion.spec?.type.toLowerCase() === "global" ? (
                         <Globe className="w-4 h-4 mr-1" />
                       ) : (
                         <Component className="w-4 h-4 mr-1" />
                       )}
-                      {latestVersion.scope} (scope)
+                      {latestVersion.spec?.type} (scope)
                     </Badge>
                   </div>
                 </CardContent>

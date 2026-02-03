@@ -176,11 +176,11 @@ export function PluginView() {
                           {currentVersion.oplogProcessorComponentId}
                         </Badge>
                       )}
-                      {currentVersion.oplogProcessorComponentVersion !==
+                      {currentVersion.oplogProcessorComponentRevision !==
                         undefined && (
                         <Badge variant="outline">
                           Component Version:{" "}
-                          {currentVersion.oplogProcessorComponentVersion}
+                          {currentVersion.oplogProcessorComponentRevision}
                         </Badge>
                       )}
                     </>
