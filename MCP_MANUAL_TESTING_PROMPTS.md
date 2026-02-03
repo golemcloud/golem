@@ -1,38 +1,14 @@
 # Manual Testing Prompts for Golem CLI MCP Server
 
-This document contains a comprehensive list of prompts to test the Golem CLI MCP server integration in Claude (via Cursor) and Cursor directly.
+This document contains a comprehensive list of prompts to test the Golem CLI MCP server integration in Claude Desktop and Gemini CLI.
 
 ## Prerequisites
 
 ### Transport Modes
 
 The `golem-cli` MCP server supports **two transport modes**:
-1. **HTTP mode** (default): For HTTP clients like Cursor, Claude Code
-2. **Stdio mode**: For stdio clients like Claude Desktop
-
-### Setup for Cursor / Claude Code (HTTP)
-
-1. **Start the MCP Server:**
-   ```bash
-   target\debug\golem-cli.exe mcp-server start --host 127.0.0.1 --port 3000
-   ```
-
-2. **Configure Cursor MCP Settings:**
-   Add to your Cursor MCP configuration:
-   ```json
-   {
-     "mcpServers": {
-       "golem-cli": {
-         "url": "http://127.0.0.1:3000/mcp"
-       }
-     }
-   }
-   ```
-
-3. **Verify Server is Running:**
-   ```bash
-   python test_mcp_cursor.py
-   ```
+1. **HTTP mode** (default): For HTTP clients
+2. **Stdio mode**: For stdio clients like Claude Desktop and Gemini CLI
 
 ### Setup for Claude Desktop (stdio)
 
@@ -442,7 +418,7 @@ Use this checklist to verify all functionality:
 ### Integration
 - [ ] Multiple tools can be called in sequence
 - [ ] Results can be combined and analyzed
-- [ ] Tools work with other Cursor/Claude capabilities
+- [ ] Tools work with other MCP client capabilities
 - [ ] Performance is acceptable
 
 ### User Experience
@@ -516,9 +492,9 @@ Use this checklist to verify all functionality:
 ## Troubleshooting
 
 ### If tools are not available:
-1. Check server is running: `python test_mcp_cursor.py`
-2. Verify Cursor MCP settings are correct
-3. Restart Cursor to reload MCP configuration
+1. Check server is running: `python list_mcp_tools.py`
+2. Verify MCP settings are correct
+3. Restart the MCP client to reload configuration
 4. Check server logs for errors
 
 ### If tools return errors:
@@ -544,7 +520,7 @@ The MCP integration is working correctly if:
 - ✅ Errors are handled gracefully
 - ✅ Multiple tools can be used in workflows
 - ✅ Performance is acceptable (< 5s per call)
-- ✅ Integration with other Cursor features works
+- ✅ Integration with other MCP client features works
 
 ---
 

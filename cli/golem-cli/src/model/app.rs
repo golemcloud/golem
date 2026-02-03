@@ -1192,7 +1192,7 @@ impl<'a> Component<'a> {
     pub fn temp_linked_wasm(&self) -> PathBuf {
         self.temp_dir
             .join("temp-linked-wasm")
-            .join(format!("{}.wasm", self.component_name.as_str()))
+            .join(format!("{}.wasm", self.name_as_safe_path_elem()))
     }
 
     /// The final linked component WASM
@@ -1204,9 +1204,9 @@ impl<'a> Component<'a> {
                 .cloned()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
-                    self.temp_dir
-                        .join("final-linked-wasm")
-                        .join(format!("{}.wasm", self.component_name.as_str()))
+                self.temp_dir
+                            .join("final-linked-wasm")
+                            .join(format!("{}.wasm", self.name_as_safe_path_elem()))
                 }),
         )
     }

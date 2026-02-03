@@ -35,6 +35,16 @@ name = "mcp_integration_test"
 path = "tests/mcp_integration.rs"
 test = true
 
+[[test]]
+name = "mcp_stdio_integration"
+path = "tests/mcp_stdio_integration.rs"
+test = true
+
+[[test]]
+name = "mcp_server_unit"
+path = "tests/mcp_server_unit.rs"
+test = true
+
 
 [dependencies]
 golem-templates = { workspace = true }

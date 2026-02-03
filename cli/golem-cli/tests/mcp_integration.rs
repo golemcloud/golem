@@ -1,12 +1,11 @@
 // Integration tests for MCP Server
-// These tests verify the MCP server functionality end-to-end
+// These tests verify the MCP server functionality end-to-end.
 
+use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 use std::time::Duration;
-use std::sync::atomic::{AtomicU16, Ordering};
+use tokio::process::Command;
 use tokio::time::sleep;
 use serde_json::json;
-use tokio::process::Command;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 
 // Dynamic port allocation to prevent conflicts
@@ -72,208 +71,165 @@ async fn spawn_mcp_server() -> (McpServerHandle, u16) {
         .arg("--port")
         .arg(port.to_string())
         .kill_on_drop(true)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
 
     let mut child = command.spawn().expect("Failed to spawn golem-cli mcp-server");
     
-    sleep(Duration::from_millis(200)).await;  // Reduced from 500ms
+    sleep(Duration::from_millis(800)).await;  // Allow server to bind and accept
     
     if let Ok(Some(status)) = child.try_wait() {
-        let output = child.wait_with_output().await.expect("Failed to wait for output");
-        eprintln!("MCP Server exited with status: {}", status);
-        eprintln!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
-        eprintln!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+        let _ = child.wait().await;
+        eprintln!("MCP Server exited early with status: {}", status);
         panic!("MCP Server failed to start");
     }
 
     let server_url = format!("http://127.0.0.1:{}", port);
-    assert!(wait_for_server(&server_url, 20).await, "MCP Server did not start");  // Reduced from 50
+    assert!(wait_for_server(&server_url, 60).await, "MCP Server did not start");
 
     (McpServerHandle { child, port }, port)
 }
 
 /// Helper function to check if server is ready
 async fn wait_for_server(url: &str, max_attempts: u32) -> bool {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("reqwest client");
     for _ in 0..max_attempts {
-        if reqwest::get(url).await.is_ok() {
-            return true;
+        if let Ok(r) = client.get(url).send().await {
+            if r.status().is_success() {
+                return true;
+            }
         }
-        sleep(Duration::from_millis(50)).await;  // Reduced from 100ms
+        sleep(Duration::from_millis(100)).await;
     }
     false
 }
 
-/// MCP client using a single persistent TCP connection
-/// This ensures session persistence since LocalSessionManager is connection-based
-struct McpClient {
-    stream: tokio::net::TcpStream,
-    request_id: std::sync::atomic::AtomicI32,
-    port: u16,
+/// MCP client using reqwest. Uses mcp-session-id from initialize response for subsequent requests
+/// since the server tracks session by connection and we use a new TCP connection per request.
+struct ReqwestMcpClient {
+    client: reqwest::Client,
+    base_url: String,
+    request_id: AtomicI32,
+    session_id: std::sync::Mutex<Option<String>>,
     is_initialized: bool,
 }
 
-impl McpClient {
-    async fn new(port: u16) -> Result<Self, String> {
-        let addr = format!("127.0.0.1:{}", port);
-        let stream = tokio::net::TcpStream::connect(&addr)
-            .await
-            .map_err(|e| format!("Failed to connect: {}", e))?;
-        
-        Ok(Self {
-            stream,
-            request_id: std::sync::atomic::AtomicI32::new(1),
-            port,
+impl ReqwestMcpClient {
+    fn new(port: u16) -> Self {
+        let base_url = format!("http://127.0.0.1:{}/mcp", port);
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("reqwest client");
+        Self {
+            client,
+            base_url,
+            request_id: AtomicI32::new(1),
+            session_id: std::sync::Mutex::new(None),
             is_initialized: false,
-        })
+        }
     }
-    
-    async fn send_http(&mut self, body: &str) -> Result<String, String> {
-        let request = format!(
-            "POST /mcp HTTP/1.1\r\n\
-            Host: 127.0.0.1:{}\r\n\
-            Connection: keep-alive\r\n\
-            Content-Type: application/json\r\n\
-            Accept: application/json, text/event-stream\r\n\
-            Content-Length: {}\r\n\
-            \r\n\
-            {}",
-            self.port, body.len(), body
-        );
-        
-        self.stream.write_all(request.as_bytes())
-            .await
-            .map_err(|e| format!("Write error: {}", e))?;
-        self.stream.flush()
-            .await
-            .map_err(|e| format!("Flush error: {}", e))?;
-        
-        // Read response
-        let mut buffer = Vec::new();
-        let mut temp = [0u8; 4096];
-        let mut saw_data = false;
-        
-        loop {
-            match tokio::time::timeout(Duration::from_secs(2), self.stream.read(&mut temp)).await {  // Reduced from 5s
-                Ok(Ok(n)) => {
-                    if n == 0 {
-                        break;
-                    }
-                    buffer.extend_from_slice(&temp[..n]);
-                    let text = String::from_utf8_lossy(&buffer);
-                    if text.contains("data: ") {
-                        saw_data = true;
-                        if text.ends_with("\n\n") || text.ends_with("\r\n\r\n") {
-                            break;
-                        }
-                    }
-                    if buffer.len() > 1_000_000 {
-                        break;
-                    }
-                }
-                Ok(Err(e)) => return Err(format!("Read error: {}", e)),
-                Err(_) => {
-                    if saw_data && buffer.len() > 100 {
-                        break;
-                    }
-                    continue;
-                }
+
+    fn build_request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
+        let mut req = self
+            .client
+            .post(&self.base_url)
+            .json(body)
+            .header("Accept", "application/json, text/event-stream");
+        if let Ok(guard) = self.session_id.lock() {
+            if let Some(ref id) = *guard {
+                req = req.header("mcp-session-id", id.as_str());
             }
         }
-        
-        Ok(String::from_utf8_lossy(&buffer).to_string())
+        req
     }
-    
-    
-    async fn request(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
-        if method == "initialize" {
-            return self.request_internal(method, params).await;
+
+    async fn post_mcp(&self, body: &serde_json::Value) -> Result<(Option<String>, String), String> {
+        let resp = self
+            .build_request(body)
+            .send()
+            .await
+            .map_err(|e| format!("POST error: {}", e))?;
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let text = resp.text().await.map_err(|e| format!("body error: {}", e))?;
+        if !status.is_success() {
+            return Err(format!(
+                "HTTP {}: {}",
+                status,
+                text.lines().next().unwrap_or("")
+            ));
         }
-        
-        // Ensure session is initialized on this connection
-        if !self.is_initialized {
-            self.initialize().await?;
-        }
-        
-        self.request_internal(method, params).await
+        let sid = headers
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        Ok((sid, text))
     }
-    
+
     async fn request_internal(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
         let id = self.request_id.fetch_add(1, Ordering::SeqCst);
-        
-        let request_body = json!({
+        let body = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params
         });
-        
-        let body_str = serde_json::to_string(&request_body)
-            .map_err(|e| format!("Serialize error: {}", e))?;
-        
-        let response_text = self.send_http(&body_str).await?;
-        
-        // Parse HTTP response
-        if !response_text.contains("200 OK") {
-            let error_msg = response_text.lines()
-                .find(|l| l.contains("data: "))
-                .and_then(|l| l.strip_prefix("data: "))
-                .unwrap_or(&response_text[..response_text.len().min(200)]);
-            return Err(format!("HTTP error: {}", error_msg));
+        let (sid, text) = self.post_mcp(&body).await?;
+        if let Some(s) = sid {
+            if let Ok(mut g) = self.session_id.lock() {
+                *g = Some(s);
+            }
         }
-        
-        // Extract JSON from SSE
-        let json_str = response_text
+        let json_str = text
             .lines()
             .find(|line| line.starts_with("data: "))
-            .map(|line| line.trim_start_matches("data: "))
-            .ok_or_else(|| format!("No data line in response: {}", &response_text[..200]))?;
-        
-        serde_json::from_str(json_str)
-            .map_err(|e| format!("Parse error: {} - JSON: {}", e, json_str))
+            .and_then(|line| {
+                let s = line.trim_start_matches("data: ").trim();
+                if s.is_empty() { None } else { Some(s) }
+            })
+            .ok_or_else(|| format!("No data line in response: {}", &text[..text.len().min(300)]))?;
+        serde_json::from_str(json_str).map_err(|e| format!("Parse error: {} - {}", e, json_str))
     }
-    
+
     async fn initialize(&mut self) -> Result<(), String> {
         let params = json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
+            "clientInfo": { "name": "test-client", "version": "1.0.0" }
         });
-        
         let response = self.request_internal("initialize", params).await?;
-        
         if response.get("error").is_some() {
             return Err(format!("Initialize error: {:?}", response["error"]));
         }
-        
-        // Verify we got a result
         if response.get("result").is_none() {
             return Err(format!("Initialize missing result: {:?}", response));
         }
-        
-        // Send initialized notification on same connection
-        let notification = json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-            "params": {}
-        });
-        
-        let notify_body = serde_json::to_string(&notification)
-            .map_err(|e| format!("Serialize error: {}", e))?;
-        
-        let _ = self.send_http(&notify_body).await?;
-        
+        let notify = json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} });
+        let _ = self.post_mcp(&notify).await?;
         self.is_initialized = true;
         Ok(())
     }
+
+    async fn request(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+        if method == "initialize" {
+            return self.request_internal(method, params).await;
+        }
+        if !self.is_initialized {
+            self.initialize().await?;
+        }
+        self.request_internal(method, params).await
+    }
 }
 
-async fn spawn_server_and_client() -> (McpServerHandle, McpClient) {
+async fn spawn_server_and_client() -> (McpServerHandle, ReqwestMcpClient) {
     let (server, port) = spawn_mcp_server().await;
-    let mut client = McpClient::new(port).await.expect("Failed to create client");
+    let mut client = ReqwestMcpClient::new(port);
     client.initialize().await.expect("Failed to initialize session");
     (server, client)
 }
@@ -298,7 +254,6 @@ async fn test_server_health_endpoint() {
 async fn test_mcp_initialize() {
     let (_server, _client) = spawn_server_and_client().await;
     // If we got here, initialization succeeded
-    assert!(true);
 }
 
 #[tokio::test]

@@ -2,17 +2,29 @@
 
 ## Quick Test
 
-To run all MCP integration tests:
+To run the full MCP test suite (unit, integration, E2E, manual, Playwright exploratory):
 
-```powershell
-.\run_all_mcp_tests.ps1
+```bash
+python run_all_mcp_tests.py
 ```
 
-This script will:
-1. Build the MCP integration tests
-2. Run all tests with proper output
-3. Show a summary of results
-4. Save full output to `mcp_test_results.txt`
+This script runs:
+1. **Unit tests** – `cargo test --test mcp_server_unit` (7 tests: DTOs, request/response serde)
+2. **Integration HTTP** – `cargo test --test mcp_integration_test` (7 tests: health, initialize, list tools, tool schemas, list_agent_types, list_components, nonexistent tool)
+3. **Integration Stdio** – `cargo test --test mcp_stdio_integration` (6 tests)
+4. **E2E** – `test_mcp_e2e.py` (HTTP + stdio)
+5. **Stdio manual** – `test_mcp_stdio.py`
+6. **Playwright exploratory** – `test_mcp_playwright.py`
+
+## Unit Tests
+
+MCP-specific unit tests live in `cli/golem-cli/tests/mcp_server_unit.rs`:
+
+```bash
+cargo test --package golem-cli --test mcp_server_unit
+```
+
+They cover `ListAgentTypesResponse`, `ListComponentsResponse`, `McpComponentDto`, `McpWorkerDto`, `GetComponentRequest`, and related serde roundtrips.
 
 ## Manual Testing
 
@@ -22,9 +34,9 @@ This script will:
 .\target\debug\golem-cli.exe mcp-server start --host 127.0.0.1 --port 13337
 ```
 
-Or use the helper script:
+Or use the cargo command directly:
 ```powershell
-.\start_server.ps1
+cargo run -p golem-cli -- mcp-server start --port 13337
 ```
 
 ### 2. Test the Health Endpoint
@@ -35,60 +47,20 @@ Invoke-WebRequest -Uri "http://127.0.0.1:13337" -UseBasicParsing
 
 Should return: "Hello from Golem CLI MCP Server!"
 
-### 3. Test MCP Protocol
+### 3. Verification Script
 
-The MCP protocol requires a specific handshake:
+We have provided a robust Python script to verify the MCP protocol end-to-end:
 
-1. **Initialize**: Send an `initialize` request
-2. **Initialized Notification**: Send `notifications/initialized` 
-3. **Use Tools**: Now you can call `tools/list`, `tools/call`, etc.
-
-Example PowerShell test:
-
-```powershell
-# Initialize
-$body = @{
-    jsonrpc = "2.0"
-    id = 1
-    method = "initialize"
-    params = @{
-        protocolVersion = "2024-11-05"
-        capabilities = @{}
-        clientInfo = @{
-            name = "test-client"
-            version = "1.0.0"
-        }
-    }
-} | ConvertTo-Json -Depth 10
-
-$headers = @{
-    "Content-Type" = "application/json"
-    "Accept" = "application/json, text/event-stream"
-}
-
-$response = Invoke-WebRequest -Uri "http://127.0.0.1:13337/mcp" -Method Post -Body $body -Headers $headers -UseBasicParsing -SessionVariable session
-Write-Host $response.Content
-
-# Send initialized notification
-$notify = @{
-    jsonrpc = "2.0"
-    method = "notifications/initialized"
-    params = @{}
-} | ConvertTo-Json
-
-Invoke-WebRequest -Uri "http://127.0.0.1:13337/mcp" -Method Post -Body $notify -Headers $headers -UseBasicParsing -WebSession $session
-
-# List tools
-$listTools = @{
-    jsonrpc = "2.0"
-    id = 2
-    method = "tools/list"
-    params = @{}
-} | ConvertTo-Json
-
-$response = Invoke-WebRequest -Uri "http://127.0.0.1:13337/mcp" -Method Post -Body $listTools -Headers $headers -UseBasicParsing -WebSession $session
-Write-Host $response.Content
+```bash
+python verify_mcp.py
 ```
+
+This script will:
+1. Initialize the session using `curl`.
+2. Handle the `mcp-session-id` header and cookies automatically.
+3. Perform the full handshake.
+4. Verify tool listing and execution.
+
 
 ## Important Notes
 
@@ -135,10 +107,9 @@ The MCP server currently provides these tools:
 
 ## Test Structure
 
-The integration tests are located at:
-```
-cli/golem-cli/tests/mcp_integration.rs
-```
+- **Unit:** `cli/golem-cli/tests/mcp_server_unit.rs`
+- **Integration HTTP:** `cli/golem-cli/tests/mcp_integration.rs`
+- **Integration Stdio:** `cli/golem-cli/tests/mcp_stdio_integration.rs`
 
 Key test helpers:
 - `spawn_mcp_server()`: Starts a test server instance

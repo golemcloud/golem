@@ -1,0 +1,11 @@
+app: shopping-app
+components:
+  shopping-cart:
+    linkedWasm: ../../golem-wasm/wasm/shopping-cart.wasm
+    env: {}
+
+environments:
+  local:
+    server: local
+  cloud:
+    server: cloud

@@ -17,6 +17,7 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
+use crate::command::mcp_server::McpServerSubcommand;
 use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
@@ -126,6 +127,20 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 let pretty_mode = false;
 
                 init_tracing(verbosity, pretty_mode);
+
+                // Detect MCP stdio mode early and set log output to stderr
+                // This prevents "Selected a..." messages from being logged to stdout
+                let is_mcp_stdio = matches!(
+                    &command.subcommand,
+                    Some(GolemCliSubcommand::McpServer {
+                        subcommand: McpServerSubcommand::Start(args)
+                    }) if args.transport == "stdio"
+                );
+
+                if is_mcp_stdio {
+                    // Stdout is reserved for JSON-RPC. Suppress all CLI logging to avoid polluting responses.
+                    set_log_output(Output::None);
+                }
 
                 match Self::new_with_init_hint_error_handler(
                     command.global_flags.clone(),
@@ -357,6 +372,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 self.ctx.profile_handler().handle_command(subcommand).await
             }
             GolemCliSubcommand::McpServer { subcommand } => {
+                // MCP server can run without a full environment configuration
+                // Tools will return empty lists if environment is not configured
                 self.ctx.mcp_server_handler().handle(subcommand).await
             }
 

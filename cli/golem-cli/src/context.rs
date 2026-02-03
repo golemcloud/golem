@@ -23,7 +23,7 @@ use crate::config::{
 };
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
-use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
+use crate::log::{is_log_suppressed, log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{
     AppBuildStep, ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName,
     WithSource,
@@ -623,7 +623,7 @@ impl Context {
 
     fn log_context_selection_once(&self) {
         self.selected_context_logging.get_or_init(|| {
-            if self.help_mode {
+            if self.help_mode || is_log_suppressed() {
                 return;
             }
 

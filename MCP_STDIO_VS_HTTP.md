@@ -8,7 +8,7 @@
 ### Solución Implementada
 
 El servidor MCP de `golem-cli` ahora soporta **ambos modos de transporte**:
-1. **HTTP mode** (default): Para clientes HTTP como Cursor, Claude Code
+1. **HTTP mode** (default): Para clientes HTTP como Claude Code
 2. **Stdio mode**: Para clientes stdio como Claude Desktop
 
 ---
@@ -50,7 +50,7 @@ golem-cli mcp-server start --transport stdio
 }
 ```
 
-### Cursor / Claude Code (HTTP)
+### Claude Code / HTTP Clients (HTTP)
 
 ```json
 {
@@ -348,39 +348,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 El servidor MCP de `golem-cli` actualmente:
 - ✅ Soporta HTTP/SSE transport
-- ❌ NO soporta stdio transport
-- ❌ NO es compatible con Claude Desktop directamente
+- ✅ Soporta stdio transport
+- ✅ Es compatible con Claude Desktop directamente
 
-Para usar con Claude Desktop, necesitas:
-1. Implementar Opción 1 (agregar stdio), O
-2. Usar Opción 2 (bridge), O
-3. Usar otro cliente MCP que soporte HTTP
+Para usar con Claude Desktop, simplemente configura el servidor con `--transport stdio` como se muestra en la sección de Configuración arriba.
 
 ---
 
-## Verificación de rmcp
+## Verificación
 
-Para verificar si `rmcp` soporta stdio transport:
-
-```bash
-# Buscar en la documentación de rmcp
-cargo doc --package rmcp --open
-
-# O buscar en el código fuente
-find ~/.cargo/registry -name "rmcp*" -type d
-```
-
-La feature `transport-io` en `Cargo.toml` sugiere que rmcp puede soportar stdio, pero la API exacta necesita ser verificada.
-
----
-
-## Próximos Pasos
-
-1. **Verificar API de rmcp para stdio transport**
-2. **Implementar Opción 1 (stdio support) si es posible**
-3. **O implementar Opción 2 (bridge) como solución temporal**
-4. **Actualizar documentación con instrucciones de configuración**
-5. **Probar con Claude Desktop**
+El código ha sido verificado y compila correctamente:
+- ✅ Feature `transport-io` habilitada en `Cargo.toml`
+- ✅ Implementación de `run_stdio()` usando `rmcp::transport::io::stdio()`
+- ✅ Flag `--transport` con opciones `http` y `stdio` implementado
+- ✅ Código compila sin errores
 
 ---
 

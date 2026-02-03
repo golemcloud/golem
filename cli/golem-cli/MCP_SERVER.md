@@ -155,9 +155,9 @@ curl -X POST http://127.0.0.1:3000/mcp \
 
 ## Integration with AI Agents
 
-### Claude Code / Cursor (HTTP/SSE mode - default)
+### HTTP/SSE Clients (default)
 
-Configure Claude Code or Cursor to use the Golem CLI MCP server by adding it to your MCP configuration:
+Configure HTTP/SSE clients to use the Golem CLI MCP server by adding it to your MCP configuration:
 
 ```json
 {

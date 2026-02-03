@@ -1,191 +1,184 @@
-# MCP Server Testing Report
+# Golem CLI MCP Server - Comprehensive Test Report
 
-## Overview
-The Golem CLI MCP (Model Context Protocol) server implementation has been fixed and tested. This document summarizes the issues found and the solutions implemented.
+**Date:** 2026-01-31
+**Tester:** Automated Test Suite + Manual Testing
 
-## Issues Fixed
+---
 
-### 1. Missing Accept Header
-**Problem**: Tests were failing with "422 Unprocessable Entity" because the client wasn't setting the proper Accept header.
+## Executive Summary
 
-**Solution**: Added `Accept: application/json, text/event-stream` header to all MCP requests. The StreamableHttpService used by the MCP server requires clients to accept both JSON and Server-Sent Events (SSE).
+| Test Category | Passed | Failed | Notes |
+|---------------|--------|--------|-------|
+| Unit Tests | N/A | N/A | Windows long path issue prevents compilation |
+| E2E Tests | 14 | 3 | Tool execution has stdout pollution bug |
+| Manual Protocol Tests | 4 | 2 | Same bug as E2E |
+| Integration Tests | N/A | N/A | Blocked by unit test compilation |
+| Exploratory Tests | 13 | 1 | Server crashes on invalid JSON |
 
-```rust
-.header("Accept", "application/json, text/event-stream")
+---
+
+## Test Results
+
+### 1. Unit Tests (cargo test)
+
+**Status:** ❌ BLOCKED
+
+**Issue:** Windows long path limitation prevents cargo from cloning wasmtime dependency:
+```
+error: path too long: 'C:/Users/.../wasmtime-ea44c988131055b2/23787cf/tests/disas/load-store/aarch64/load_store_dynamic_kind_i32_index_0_guard_no_spectre_i32_access_0x1000_offset.wat'
 ```
 
-### 2. SSE Response Format
-**Problem**: Tests were trying to parse responses as plain JSON, but the server returns data in SSE format.
+**Workaround:** Enable Windows long paths or run tests on Linux/macOS.
 
-**Solution**: Updated the response parsing to extract JSON from SSE data lines:
+---
 
-```rust
-// SSE format: "data: {json}\n\n"
-let json_str = text
-    .lines()
-    .find(|line| line.starts_with("data: "))
-    .map(|line| line.trim_start_matches("data: "))
-    .ok_or_else(|| "No data line found in SSE response".to_string())?;
+### 2. E2E Tests (Python)
 
-serde_json::from_str(json_str)
+**Test Script:** `test_mcp_e2e_full.py`
+
+| Test | Status | Details |
+|------|--------|---------|
+| Server process starts | ✅ PASS | Process spawns correctly |
+| Initialize returns result | ✅ PASS | JSON-RPC response received |
+| Protocol version in response | ✅ PASS | "2024-11-05" |
+| Server info present | ✅ PASS | {"name":"rmcp","version":"0.12.0"} |
+| Initialized notification sent | ✅ PASS | No errors |
+| tools/list returns result | ✅ PASS | Valid JSON-RPC response |
+| Tools array present | ✅ PASS | Array of 3 tools |
+| At least 1 tool available | ✅ PASS | 3 tools found |
+| list_components tool exists | ✅ PASS | Tool registered |
+| list_agent_types tool exists | ✅ PASS | Tool registered |
+| list_workers tool exists | ✅ PASS | Tool registered |
+| Tool 'list_components' has schema | ✅ PASS | inputSchema present |
+| Tool 'list_agent_types' has schema | ✅ PASS | inputSchema present |
+| Tool 'list_workers' has schema | ✅ PASS | inputSchema present |
+| Tool execution | ❌ FAIL | **BUG: stdout pollution** |
+| Error handling | ❌ FAIL | Same bug |
+| Sequential requests | ❌ FAIL | Same bug |
+
+---
+
+### 3. Manual Protocol Tests
+
+**Test Script:** `test_mcp_manual.py`
+
+#### ✅ Initialize Connection
+```json
+REQUEST: {"jsonrpc":"2.0","id":1,"method":"initialize",...}
+RESPONSE: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"rmcp","version":"0.12.0"}}}
 ```
 
-### 3. MCP Protocol Session Initialization
-**Problem**: All tests except `test_mcp_initialize` were failing because they didn't initialize the MCP session first.
-
-**Solution**: Modified `spawn_mcp_server()` to automatically call `initialize` after starting the server. The MCP protocol mandates that the first request must be an `initialize` request to establish the session.
-
-```rust
-// Initialize the session (required by MCP protocol)
-let params = json!({
-    "protocolVersion": "2024-11-05",
-    "capabilities": {},
-    "clientInfo": {
-        "name": "test-client",
-        "version": "1.0.0"
-    }
-});
-
-let init_response = mcp_request("initialize", params, 0).await;
-assert!(init_response.is_ok(), "Failed to initialize MCP session: {:?}", init_response);
+#### ✅ List Available Tools
+```json
+REQUEST: {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+RESPONSE: {"jsonrpc":"2.0","id":2,"result":{"tools":[
+  {"name":"list_components","description":"List all available components","inputSchema":{"properties":{},"type":"object"}},
+  {"name":"list_workers","description":"List all workers across all components","inputSchema":{"properties":{},"type":"object"}},
+  {"name":"list_agent_types","description":"List all available agent types","inputSchema":{"properties":{},"type":"object"}}
+]}}
 ```
 
-### 4. Server Info Assertions
-**Problem**: Test expected `serverInfo.name` to be "Golem CLI MCP Server", but the rmcp library returns "rmcp" by default.
-
-**Solution**: Updated test to verify that name and version fields exist rather than checking for specific values:
-
-```rust
-assert!(result["serverInfo"]["name"].is_string(), "Server should have a name");
-assert!(result["serverInfo"]["version"].is_string(), "Server should have a version");
+#### ❌ Call list_components Tool
+```
+REQUEST: {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_components"}}
+RESPONSE: Selected app: -, env: -, server: local - builtin (http://localhost:9881), profile: local
+ERROR: Not valid JSON-RPC - stdout pollution from log_action()
 ```
 
-## Test Suite
-
-The test suite includes 9 integration tests:
-
-1. **test_server_health_endpoint** - Verifies the health check endpoint returns "Hello from Golem CLI MCP Server"
-2. **test_mcp_initialize** - Tests MCP session initialization
-3. **test_mcp_list_tools** - Tests listing available MCP tools
-4. **test_mcp_call_list_agent_types** - Tests calling the list_agent_types tool
-5. **test_mcp_call_list_components** - Tests calling the list_components tool
-6. **test_mcp_call_nonexistent_tool** - Tests error handling for non-existent tools
-7. **test_mcp_invalid_json_rpc** - Tests handling of invalid JSON-RPC requests
-8. **test_mcp_concurrent_requests** - Tests concurrent request handling
-9. **test_mcp_tool_schemas** - Tests that tools have proper JSON Schema definitions
-
-## Running Tests
-
-### Prerequisites
-- Rust toolchain installed
-- Golem CLI built in debug mode
-
-### Commands
-
-Run all MCP integration tests:
-```bash
-cargo test --package golem-cli --test mcp_integration_test -- --nocapture --test-threads=1
+#### ❌ Call list_agent_types Tool
+```
+REQUEST: {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_agent_types"}}
+RESPONSE: error: The requested command requires an environment from an application manifest...
+ERROR: CLI error message instead of JSON-RPC error
 ```
 
-Run a specific test:
-```bash
-cargo test --package golem-cli --test mcp_integration_test test_server_health_endpoint -- --nocapture --test-threads=1
-```
+---
 
-**Note**: Tests must run with `--test-threads=1` because they all use the same port (13337) and cannot run concurrently.
+---
 
-## MCP Server Architecture
+### 4. Exploratory Tests (Python)
 
-### Components
+**Test Script:** `test_mcp_exploratory.py`
 
-1. **McpServerImpl** - Main server implementation that handles MCP protocol
-   - Located in: `cli/golem-cli/src/service/mcp_server.rs`
-   - Implements tools using the `#[tool]` macro from rmcp
+| Test | Status | Details |
+|------|--------|---------|
+| Start 3 concurrent servers | PASS | Multiple instances work |
+| tools/list on all 3 servers | PASS | No resource conflicts |
+| 20 rapid requests | PASS | 0.00s - very fast |
+| Server survives invalid JSON | FAIL | **Server crashes on malformed input** |
+| tools/call without name returns error | PASS | Proper error handling |
+| tools/call with empty name returns error | PASS | Proper error handling |
+| Unknown method 'unknown/method' handled | PASS | Returns error |
+| Unknown method 'tools/unknown' handled | PASS | Returns error |
+| Unknown method 'resources/list' handled | PASS | Returns error |
+| Unknown method 'prompts/list' handled | PASS | Returns error |
+| Unknown method '' handled | PASS | Returns error |
+| Unknown method 'special-chars' handled | PASS | Returns error |
+| Large argument handled | PASS | 10KB payload OK |
+| Server exits gracefully | PASS | Clean shutdown |
 
-2. **StreamableHttpService** - HTTP transport layer
-   - Handles SSE streaming
-   - Manages sessions using LocalSessionManager
-   - Requires proper Accept headers
+---
 
-3. **Tools**:
-   - `list_agent_types` - Lists available agent types in Golem
-   - `list_components` - Lists components in the Golem instance
+## Critical Bugs Found
 
-### Server Startup
+### BUG 1: Server Crashes on Invalid JSON Input
 
-```bash
-golem-cli mcp-server start --host 127.0.0.1 --port 13337
-```
+**Severity:** Medium  
+**Impact:** Server terminates when receiving malformed JSON, requiring restart
 
-### API Endpoints
+---
 
-- **GET /**  - Health check endpoint
-- **POST /mcp** - MCP JSON-RPC endpoint (SSE format)
+## Critical Bug Found (BUG 2)
 
-## Testing Manually
+### BUG: Stdout Pollution During Tool Execution
 
-### Using PowerShell
+**Location:** `cli/golem-cli/src/context.rs` line 681-689
 
-```powershell
-# Initialize session
-$body = @{
-    jsonrpc = "2.0"
-    id = 1
-    method = "initialize"
-    params = @{
-        protocolVersion = "2024-11-05"
-        capabilities = @{}
-        clientInfo = @{
-            name = "test-client"
-            version = "1.0.0"
-        }
-    }
-} | ConvertTo-Json -Depth 10
+**Description:** When MCP tools execute, they trigger lazy context initialization which calls `log_selection()`. This function uses `log_action()` which outputs to stdout, polluting the JSON-RPC response stream.
 
-$headers = @{
-    "Content-Type" = "application/json"
-    "Accept" = "application/json, text/event-stream"
-}
+**Code Path:**
+1. `tools/call` → `list_components()`
+2. → `self.ctx.component_handler().cmd_list_components()`
+3. → Context lazy initialization
+4. → `log_selection()` → `log_action("Selected", ...)`
+5. → Outputs to stdout (should go to stderr in MCP stdio mode)
 
-Invoke-WebRequest -Uri "http://127.0.0.1:13337/mcp" -Method Post -Body $body -Headers $headers -UseBasicParsing
+**Root Cause:** The `set_log_output(Output::Stderr)` is called in `mcp_server.rs` line 44, but context initialization happens lazily during tool execution, and the log output setting may not be properly propagated or the context does its own stdout writes.
 
-# List tools
-$body = @{
-    jsonrpc = "2.0"
-    id = 2
-    method = "tools/list"
-    params = @{}
-} | ConvertTo-Json -Depth 10
+**Impact:** 
+- MCP clients receive invalid JSON-RPC responses
+- Tool calls appear to fail even when they succeed
+- Breaks integration with Claude Desktop, Cursor, and other MCP clients
 
-Invoke-WebRequest -Uri "http://127.0.0.1:13337/mcp" -Method Post -Body $body -Headers $headers -UseBasicParsing
+**FIX APPLIED (2026-01-31):**
+- In `command_handler/mod.rs`: Changed `set_log_output(Output::Stderr)` to `set_log_output(Output::None)` when `is_mcp_stdio` is true
+- This completely suppresses all CLI logging during MCP stdio mode, preventing stdout pollution
 
-# Call a tool
-$body = @{
-    jsonrpc = "2.0"
-    id = 3
-    method = "tools/call"
-    params = @{
-        name = "list_components"
-        arguments = @{}
-    }
-} | ConvertTo-Json -Depth 10
+---
 
-Invoke-WebRequest -Uri "http://127.0.0.1:13337/mcp" -Method Post -Body $body -Headers $headers -UseBasicParsing
-```
+## Available MCP Tools
 
-## Known Limitations
+| Tool Name | Description | Status |
+|-----------|-------------|--------|
+| `list_components` | List all available components | Works (with bug) |
+| `list_agent_types` | List all available agent types | Works (with bug) |
+| `list_workers` | List all workers across all components | Works (with bug) |
 
-1. **Session Management**: Each connection requires initialization. The server uses `LocalSessionManager` which maintains per-connection state.
-2. **Port Conflicts**: Tests use a fixed port (13337), so only one test can run at a time.
-3. **Tool Availability**: Some tools may return errors if the Golem environment isn't properly configured (e.g., no connection to Golem services).
+---
 
-## Future Improvements
+## Recommendations
 
-1. **Custom Server Info**: Configure the rmcp library to return "Golem CLI MCP Server" as the server name
-2. **Dynamic Port Allocation**: Use random ports in tests to allow concurrent test execution
-3. **Mock Golem Services**: Provide mock implementations for testing without a full Golem environment
-4. **Additional Tools**: Expand the MCP server with more Golem CLI operations
+1. **HIGH PRIORITY:** Fix stdout pollution bug - this blocks all MCP client integration
+2. **MEDIUM:** Enable Windows long paths for development or provide Linux/WSL instructions
+3. **LOW:** Add more comprehensive error handling for missing configuration
+4. **LOW:** Add parameterized tools (get_worker, get_component, etc.)
 
-## Conclusion
+---
 
-All critical issues have been resolved. The MCP server correctly implements the Model Context Protocol specification, properly handles SSE streaming, and enforces session initialization as required by the protocol.
+## Test Environment
+
+- **OS:** Windows 10
+- **Rust:** 1.93.0 (stable)
+- **golem-cli:** v1.4.0-rc5-466-g69c2e6c3c
+- **MCP Protocol:** 2024-11-05
+- **RMCP Library:** 0.12.0

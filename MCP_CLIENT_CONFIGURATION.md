@@ -6,16 +6,12 @@ This guide shows how to configure the Golem CLI MCP server for different clients
 
 We provide Python scripts to automatically configure each client:
 
-- **Cursor**: `configure_mcp_cursor.py` (HTTP/SSE mode)
 - **Claude Desktop**: `configure_mcp_claude.py` (stdio mode)
 - **Gemini CLI**: `configure_mcp_gemini.py` (stdio mode)
 
 Run the appropriate script for your client:
 
 ```bash
-# For Cursor
-python configure_mcp_cursor.py
-
 # For Claude Desktop
 python configure_mcp_claude.py
 
@@ -27,46 +23,7 @@ python configure_mcp_gemini.py
 
 ## Manual Configuration
 
-### 1. Cursor (HTTP/SSE Mode)
-
-Cursor uses HTTP/SSE transport for MCP servers.
-
-**Configuration File**: `%APPDATA%\Cursor\User\globalStorage\mcp.json`
-
-**Configuration**:
-```json
-{
-  "mcpServers": {
-    "golem-cli": {
-      "url": "http://127.0.0.1:3000/mcp"
-    }
-  }
-}
-```
-
-**Steps**:
-1. Start the MCP server in HTTP/SSE mode (default):
-   ```bash
-   golem-cli mcp-server start
-   ```
-   
-   Or with custom host/port:
-   ```bash
-   golem-cli mcp-server start --host 127.0.0.1 --port 3000
-   ```
-
-2. Add the configuration to Cursor's MCP config file
-
-3. Restart Cursor
-
-**Notes**:
-- The server must be running before Cursor can connect
-- Uses HTTP/SSE (Streamable HTTP) transport
-- Server endpoint: `http://127.0.0.1:3000/mcp`
-
----
-
-### 2. Claude Desktop (Stdio Mode)
+### 1. Claude Desktop (Stdio Mode)
 
 Claude Desktop uses stdio transport for MCP servers.
 
@@ -111,7 +68,7 @@ Claude Desktop uses stdio transport for MCP servers.
 
 ---
 
-### 3. Gemini CLI (Stdio Mode)
+### 2. Gemini CLI (Stdio Mode)
 
 Gemini CLI uses stdio transport for MCP servers (if supported).
 
@@ -163,7 +120,7 @@ Gemini CLI uses stdio transport for MCP servers (if supported).
 
 ### HTTP/SSE Mode (Default)
 
-Used by: **Cursor**, **Claude Code**, and other HTTP-based clients
+Used by: **Claude Code** and other HTTP-based clients
 
 - **Transport**: HTTP/SSE (Streamable HTTP)
 - **Command**: `golem-cli mcp-server start` (or with `--transport http`)
@@ -205,7 +162,7 @@ The executable will be at:
 
 ## Verifying Configuration
 
-### For HTTP/SSE Clients (Cursor)
+### For HTTP/SSE Clients
 
 1. Start the server:
    ```bash
@@ -223,10 +180,9 @@ The executable will be at:
    ```bash
    curl -X POST http://127.0.0.1:3000/mcp \
      -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
    ```
-
-4. Check that Cursor can connect (restart Cursor and check MCP status)
 
 ### For Stdio Clients (Claude Desktop, Gemini CLI)
 
@@ -244,17 +200,6 @@ The executable will be at:
 ---
 
 ## Troubleshooting
-
-### Cursor
-
-**Problem**: Cursor can't connect to the MCP server
-
-**Solutions**:
-1. Verify the server is running: `curl http://127.0.0.1:3000/`
-2. Check the configuration file path and format
-3. Verify the URL in the config matches the server address
-4. Check Cursor's logs for connection errors
-5. Restart Cursor after configuration changes
 
 ### Claude Desktop
 
@@ -283,20 +228,6 @@ The executable will be at:
 ---
 
 ## Configuration Examples
-
-### Complete Cursor Configuration
-```json
-{
-  "mcpServers": {
-    "golem-cli": {
-      "url": "http://127.0.0.1:3000/mcp"
-    },
-    "other-server": {
-      "url": "http://127.0.0.1:3001/mcp"
-    }
-  }
-}
-```
 
 ### Complete Claude Desktop Configuration
 ```json
@@ -329,6 +260,5 @@ The executable will be at:
 
 | Client | Transport | Config File | Script |
 |--------|-----------|-------------|--------|
-| **Cursor** | HTTP/SSE | `%APPDATA%\Cursor\User\globalStorage\mcp.json` | `configure_mcp_cursor.ps1` |
-| **Claude Desktop** | stdio | `%APPDATA%\Claude\claude_desktop_config.json` | `configure_mcp_claude.ps1` |
-| **Gemini CLI** | stdio | `%USERPROFILE%\.gemini\mcp_config.json` | `configure_mcp_gemini.ps1` |
+| **Claude Desktop** | stdio | `%APPDATA%\Claude\claude_desktop_config.json` | `configure_mcp_claude.py` |
+| **Gemini CLI** | stdio | `%USERPROFILE%\.gemini\mcp_config.json` | `configure_mcp_gemini.py` |

@@ -3,7 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use crate::command::mcp_server::{McpServerStartArgs, McpServerSubcommand};
 use crate::context::Context;
-use crate::log::logln;
+use crate::log::{logln, set_log_output, Output};
 use crate::service::mcp_server::McpServerImpl;
 
 
@@ -40,7 +40,9 @@ impl McpServerCommandHandlerDefault {
 
         match args.transport.as_str() {
             "stdio" => {
-                logln("Starting MCP server in stdio mode");
+                // MUST set before any tool runs - stdout is exclusively for JSON-RPC
+                set_log_output(Output::None);
+                eprintln!("Starting MCP server in stdio mode");
                 self.run_stdio(service).await
             }
             "http" | _ => {

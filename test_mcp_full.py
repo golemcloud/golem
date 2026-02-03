@@ -86,7 +86,7 @@ def test_initialize(session):
         "protocolVersion": "2024-11-05",
         "capabilities": {},
         "clientInfo": {
-            "name": "cursor-test",
+            "name": "mcp-test",
             "version": "1.0.0"
         }
     }
@@ -227,8 +227,8 @@ def main():
     print_info("="*60)
     print_info(f"\nServer URL: {MCP_URL}")
     print_info(f"Available tools: {len(tool_names)}")
-    print_info("\nThe MCP server is ready for Cursor integration!")
-    print_info("\nAdd to Cursor MCP settings:")
+    print_info("\nThe MCP server is ready for MCP client integration!")
+    print_info("\nAdd to your MCP client settings:")
     print_info('{')
     print_info('  "mcpServers": {')
     print_info('    "golem-cli": {')

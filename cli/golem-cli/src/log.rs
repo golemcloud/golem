@@ -90,6 +90,10 @@ impl LogState {
         self.max_width = terminal_width().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
     }
 
+    fn output(&self) -> Output {
+        self.output
+    }
+
     fn set_output(&mut self, output: Output) {
         let switching_from_buffered_to_err =
             self.output == Output::BufferedUntilErr && output == Output::Stderr;
@@ -171,6 +175,11 @@ impl Drop for LogOutput {
 pub fn set_log_output(output: Output) {
     debug!(output=?output, "set log output");
     LOG_STATE.write().unwrap().set_output(output);
+}
+
+/// Returns true if logging is suppressed (e.g. MCP stdio mode where stdout is reserved for JSON-RPC)
+pub fn is_log_suppressed() -> bool {
+    LOG_STATE.read().unwrap().output() == Output::None
 }
 
 pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {

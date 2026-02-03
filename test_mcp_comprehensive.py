@@ -1,175 +1,165 @@
 #!/usr/bin/env python3
-"""Comprehensive MCP Server Integration Test Suite."""
+"""Comprehensive MCP server testing with tool calls"""
 
-import os
-import subprocess
+import json
 import sys
+import io
 import time
-from pathlib import Path
-from colorama import init, Fore, Style
+from list_mcp_tools import McpClient
 
-init(autoreset=True)
+# Fix Unicode encoding on Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-project_dir = Path(r"C:\Users\matias.magni2\Documents\dev\mine\Algora\golem")
-os.chdir(project_dir)
-
-cargo_path = Path(r"C:\Users\matias.magni2\.cargo\bin\cargo.exe")
-
-print(f"{Fore.CYAN}{'=' * 40}")
-print(f"{Fore.CYAN}MCP Server Integration Test Suite")
-print(f"{Fore.CYAN}{'=' * 40}")
-print()
-
-# Step 1: Kill existing processes
-print(f"{Fore.YELLOW}[1/4] Killing any existing golem-cli processes...")
-try:
-    subprocess.run(
-        ["taskkill", "/F", "/IM", "golem-cli.exe"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False
-    )
-except:
-    pass
-time.sleep(2)
-
-# Step 2: Run integration tests
-print()
-print(f"{Fore.YELLOW}[2/4] Running all MCP integration tests...")
-env = os.environ.copy()
-env["RUST_BACKTRACE"] = "1"
-
-result = subprocess.run(
-    [
-        str(cargo_path),
-        "test",
-        "--package", "golem-cli",
-        "--test", "mcp_integration",
-        "--",
-        "--nocapture",
-        "--test-threads=1"
-    ],
-    env=env,
-    cwd=project_dir
-)
-
-if result.returncode != 0:
-    print()
-    print(f"{Fore.RED}{'=' * 40}")
-    print(f"{Fore.RED}[FAIL] TESTS FAILED - Check output above")
-    print(f"{Fore.RED}{'=' * 40}")
-    sys.exit(result.returncode)
-
-print()
-print(f"{Fore.GREEN}{'=' * 40}")
-print(f"{Fore.GREEN}[PASS] ALL TESTS PASSED!")
-print(f"{Fore.GREEN}{'=' * 40}")
-
-# Step 3: Start MCP server for manual testing
-print()
-print(f"{Fore.YELLOW}[3/4] Starting MCP server for manual testing...")
-binary_path = project_dir / "target" / "debug" / "golem-cli.exe"
-
-if binary_path.exists():
-    subprocess.Popen(
-        [
-            str(binary_path),
-            "mcp-server",
-            "start",
-            "--host", "127.0.0.1",
-            "--port", "13337"
-        ],
-        cwd=project_dir,
-        creationflags=subprocess.CREATE_NEW_CONSOLE
-    )
-    time.sleep(3)
-    
-    # Step 4: Test endpoints
-    print()
-    print(f"{Fore.YELLOW}[4/4] Testing MCP server endpoints...")
-    print()
-    
-    import requests
-    
-    print("Testing health endpoint...")
+def test_tool_call(client: McpClient, tool_name: str):
+    """Test calling an MCP tool"""
     try:
-        response = requests.get("http://127.0.0.1:13337", timeout=5)
-        print(response.text)
+        response = client.request("tools/call", {
+            "name": tool_name,
+            "arguments": {}
+        })
+        
+        if "error" in response:
+            return {"success": False, "error": response["error"]}
+        elif "result" in response:
+            return {"success": True, "result": response["result"]}
+        else:
+            return {"success": False, "error": "Unexpected response format"}
     except Exception as e:
-        print(f"Error: {e}")
-    
-    print()
-    print("Testing MCP initialize endpoint...")
-    try:
-        response = requests.post(
-            "http://127.0.0.1:13337/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "test-client",
-                        "version": "1.0.0"
-                    }
-                }
-            },
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            },
-            timeout=5
-        )
-        print(response.text[:500])  # Print first 500 chars
-    except Exception as e:
-        print(f"Error: {e}")
-    
-    print()
-    print("Testing tools/list endpoint...")
-    try:
-        response = requests.post(
-            "http://127.0.0.1:13337/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/list",
-                "params": {}
-            },
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            },
-            timeout=5
-        )
-        print(response.text[:500])  # Print first 500 chars
-    except Exception as e:
-        print(f"Error: {e}")
-    
-    print()
-    print(f"{Fore.CYAN}{'=' * 40}")
-    print(f"{Fore.CYAN}Manual Testing Complete")
-    print(f"{Fore.CYAN}MCP Server is running in background")
-    print(f"{Fore.CYAN}Press Ctrl+C to stop the server...")
-    print(f"{Fore.CYAN}{'=' * 40}")
-    
-    try:
-        input()  # Wait for user input
-    except KeyboardInterrupt:
-        pass
-    
-    print()
-    print("Stopping MCP server...")
-    try:
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "golem-cli.exe"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False
-        )
-    except:
-        pass
+        return {"success": False, "error": str(e)}
 
-print()
-print("Done!")
+def main():
+    print("=" * 70)
+    print("  Comprehensive MCP Server Testing")
+    print("=" * 70)
+    print()
+    
+    try:
+        client = McpClient("127.0.0.1", 3000)
+        
+        print("1. Connecting to MCP server...")
+        client.connect()
+        print("   ✓ Connected\n")
+        
+        print("2. Initializing MCP session...")
+        init_result = client.initialize()
+        if "result" in init_result:
+            server_info = init_result["result"].get("serverInfo", {})
+            print(f"   ✓ Initialized")
+            print(f"     Server: {server_info.get('name', 'unknown')} v{server_info.get('version', 'unknown')}")
+            print(f"     Protocol: {init_result['result'].get('protocolVersion', 'unknown')}")
+        else:
+            print(f"   ✗ Failed: {init_result}")
+            return 1
+        print()
+        
+        print("3. Listing available tools...")
+        tools = client.list_tools()
+        print(f"   ✓ Found {len(tools)} tool(s)\n")
+        
+        if not tools:
+            print("   ✗ No tools found - server might not be configured correctly")
+            return 1
+        
+        print("4. Testing tool calls...")
+        print()
+        all_success = True
+        
+        for i, tool in enumerate(tools, 1):
+            tool_name = tool.get('name')
+            tool_desc = tool.get('description', 'No description')
+            
+            print(f"   Tool {i}: {tool_name}")
+            print(f"   Description: {tool_desc}")
+            
+            result = test_tool_call(client, tool_name)
+            
+            if result["success"]:
+                print(f"   ✓ Call successful")
+                # Show summary of result
+                result_data = result.get("result", {})
+                if "content" in result_data:
+                    content = result_data["content"]
+                    if content and len(content) > 0:
+                        text_content = content[0].get("text", "")
+                        try:
+                            parsed = json.loads(text_content)
+                            # Show summary
+                            if isinstance(parsed, dict):
+                                keys = list(parsed.keys())
+                                print(f"   Result keys: {', '.join(keys[:5])}")
+                            else:
+                                print(f"   Result type: {type(parsed).__name__}")
+                        except:
+                            preview = text_content[:100]
+                            print(f"   Result preview: {preview}...")
+            else:
+                print(f"   ✗ Call failed: {result.get('error', 'Unknown error')}")
+                all_success = False
+            print()
+        
+        print("5. Testing additional MCP endpoints...")
+        print()
+        
+        # Test resources/list
+        print("   Testing resources/list...")
+        try:
+            resources_response = client.request("resources/list", {})
+            if "result" in resources_response:
+                resources = resources_response["result"].get("resources", [])
+                print(f"   ✓ Found {len(resources)} resource(s)")
+            elif "error" in resources_response:
+                error_code = resources_response["error"].get("code", -1)
+                if error_code == -32601:  # Method not found
+                    print(f"   - Resources not supported (method_not_found)")
+                else:
+                    print(f"   ✗ Error: {resources_response['error']}")
+            else:
+                print(f"   - No resources endpoint")
+        except Exception as e:
+            print(f"   - Resources not available: {e}")
+        print()
+        
+        # Test prompts/list
+        print("   Testing prompts/list...")
+        try:
+            prompts_response = client.request("prompts/list", {})
+            if "result" in prompts_response:
+                prompts = prompts_response["result"].get("prompts", [])
+                print(f"   ✓ Found {len(prompts)} prompt(s)")
+            elif "error" in prompts_response:
+                error_code = prompts_response["error"].get("code", -1)
+                if error_code == -32601:  # Method not found
+                    print(f"   - Prompts not supported (method_not_found)")
+                else:
+                    print(f"   ✗ Error: {prompts_response['error']}")
+            else:
+                print(f"   - No prompts endpoint")
+        except Exception as e:
+            print(f"   - Prompts not available: {e}")
+        print()
+        
+        client.close()
+        
+        print("=" * 70)
+        print("  Test Summary")
+        print("=" * 70)
+        print()
+        print(f"✓ Tools discovered: {len(tools)}")
+        print(f"✓ Tool calls: {'All successful' if all_success else 'Some failed'}")
+        print(f"✓ Server: Operational")
+        print()
+        
+        if all_success and len(tools) >= 3:
+            print("Server is working correctly!")
+        
+        return 0 if all_success else 1
+        
+    except Exception as e:
+        print(f"✗ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

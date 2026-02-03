@@ -1,0 +1,10 @@
+app: deploy-app
+
+components:
+  cart:
+    linkedWasm: ../golem-wasm/wasm/shopping-cart.wasm
+    env: {}
+
+environments:
+  cloud:
+    server: cloud
