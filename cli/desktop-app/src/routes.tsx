@@ -58,6 +58,9 @@ const ApiRoute = lazy(() =>
   })),
 );
 const CreateDeployment = lazy(() => import("@/pages/deployment/create"));
+const Environments = lazy(() => import("@/pages/environments"));
+const CreateEnvironment = lazy(() => import("@/pages/environments/create"));
+const EnvironmentDetails = lazy(() => import("@/pages/environments/details"));
 const ApiLayout = lazy(() =>
   import("@/pages/api/details/apis-layout").then(module => ({
     default: module.ApiLayout,
@@ -89,6 +92,9 @@ export const ROUTES = {
   APIS_DETAIL: "/app/:appId/apis/:apiName/version/:version",
   DEPLOYMENTS: "/app/:appId/deployments",
   DEPLOYMENTS_CREATE: "/app/:appId/deployments/create",
+  ENVIRONMENTS: "/app/:appId/environments",
+  ENVIRONMENTS_CREATE: "/app/:appId/environments/create",
+  ENVIRONMENTS_DETAIL: "/app/:appId/environments/:envName",
   PLUGINS: "/app/:appId/plugins",
   PLUGINS_CREATE: "/app/:appId/plugins/create",
   PLUGINS_DETAIL: "/app/:appId/plugins/:pluginId",
@@ -199,6 +205,18 @@ export const appRoutes: RouteObject[] = [
       {
         path: "deployments/create",
         element: <CreateDeployment />,
+      },
+      {
+        path: "environments",
+        element: <Environments />,
+      },
+      {
+        path: "environments/create",
+        element: <CreateEnvironment />,
+      },
+      {
+        path: "environments/:envName",
+        element: <EnvironmentDetails />,
       },
       {
         path: "plugins",
