@@ -14,10 +14,11 @@
 
 use crate::golem_agentic::{
     exports::golem::agent::guest::DataValue, golem::agent::common::AgentError,
+    golem::agent::common::Principal,
 };
 use async_trait::async_trait;
 
 #[async_trait(?Send)]
 pub trait AgentInitiator {
-    async fn initiate(&self, params: DataValue) -> Result<(), AgentError>;
+    async fn initiate(&self, params: DataValue, principal: Principal) -> Result<(), AgentError>;
 }

@@ -61,7 +61,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let ctor_ident = &constructor_method.sig.ident;
 
-    let ctor_params = extract_param_idents(constructor_method);
+    let ctor_param_idents = extract_param_idents(constructor_method);
 
     let base_agent_impl = generate_base_agent_impl(
         &impl_block,
@@ -77,7 +77,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let constructor_param_extraction_call_back = match constructor_kind {
         Asyncness::Future => {
             quote! {
-                let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_params),*).await;
+                let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_param_idents),*).await;
                 let agent_instance = Box::new(agent_instance_raw);
                 let agent_id = golem_rust::bindings::golem::api::host::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
@@ -88,7 +88,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         }
         Asyncness::Immediate => {
             quote! {
-                let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
+                let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_param_idents),*));
                 let agent_id = golem_rust::bindings::golem::api::host::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
                     golem_rust::agentic::ResolvedAgent::new(agent_instance)
@@ -99,7 +99,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     };
 
     let constructor_param_extraction = generate_constructor_extraction(
-        &ctor_params,
+        &ctor_param_idents,
         &trait_name_str_raw,
         constructor_param_extraction_call_back,
     );
@@ -136,6 +136,7 @@ fn extract_trait_name(impl_block: &syn::ItemImpl) -> (syn::Ident, String) {
     (trait_name, trait_name_str_raw)
 }
 
+// This will include all auto injected parameters too
 fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<syn::Ident> {
     method
         .sig
@@ -358,31 +359,56 @@ fn generate_constructor_extraction(
     agent_type_name: &str,
     call_back: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let extraction: Vec<proc_macro2::TokenStream> = ctor_params.iter().enumerate().map(|(i, ident)| {
+    
+    // this will be incremented as soon as we index into the `params` 
+    // tuple to extract each parameter into the `initiate` function
+    let input_param_index_init = quote! {
+      let mut input_param_index = 0;    
+    };
+    
+    let extraction: Vec<proc_macro2::TokenStream> = ctor_params.iter().enumerate().map(|(constructor_param_index, ident)| {
         let ident_result = format_ident!("{}_result", ident);
         quote! {
+            // params is the input to `initiate` function
             let #ident_result = match &params {
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
-                    let element_value_result = match values.get(#i) {
-                        Some(v) => Ok(v.clone()),
-                        None => Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", #agent_type_name))),
-                    };
-
-                    let element_value = element_value_result?;
-
-                    let element_schema = golem_rust::agentic::get_constructor_parameter_type(
+                    let enriched_schema = golem_rust::agentic::get_constructor_parameter_type(
                         &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
-                        #i,
+                        #constructor_param_index,
                     ).ok_or_else(|| {
                         golem_rust::agentic::internal_error(format!(
                             "Constructor parameter schema not found for agent: {}, parameter index: {}",
-                            #agent_type_name, #i
+                            #agent_type_name, #constructor_param_index
                         ))
                     })?;
-
-                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
-                        golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #i, e))
-                    })
+                    
+                    match enriched_schema {
+                        golem_rust::agentic::EnrichedSchema::AutoInjected(auto_injected_schema) => {
+                            match auto_injected_schema {
+                                golem_rust::agentic::AutoInjectedSchema::Principal => {
+                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal)), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
+                                        golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #constructor_param_index, e))
+                                    })
+                                }
+                            }
+                        }
+                        
+                        golem_rust::agentic::EnrichedSchema::Default(element_schema) => {
+                            let element_value_result = match values.get(input_param_index) {
+                                Some(v) => Ok(v.clone()),
+                                None => Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", #agent_type_name))),
+                            };
+                            
+                            let element_value = element_value_result?;
+                            
+                            // only increment the input_param_index for non auto injected parameters
+                            input_param_index += 1;
+                            
+                            golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
+                                golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #constructor_param_index, e))
+                            })
+                        }
+                    }
                 },
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(_) => {
                     // TODO; support multimodal and add call back logic since the parameter names differ for multimodal
@@ -395,6 +421,7 @@ fn generate_constructor_extraction(
     }).collect::<Vec<_>>();
 
     quote! {
+        #input_param_index_init
         #(#extraction)*
         #call_back
     }
@@ -409,7 +436,7 @@ fn generate_initiator_impl(
 
         #[golem_rust::async_trait::async_trait(?Send)]
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
-            async fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue)
+            async fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
                 -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 #constructor_param_extraction
             }
