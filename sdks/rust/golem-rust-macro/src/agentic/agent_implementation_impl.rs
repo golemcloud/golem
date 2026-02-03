@@ -201,7 +201,7 @@ fn build_match_arms(
                             "Failed serializing return value for method {}: {}",
                             #method_name, e
                         ))
-                    }).flat_map(|result_value| {
+                    }).and_then(|result_value| {
                         match result_value {
                             golem_rust::agentic::StructuredValue::Default(element_value) => {
                                  Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value]))
@@ -211,7 +211,7 @@ fn build_match_arms(
                             },
                             golem_rust::agentic::StructuredValue::AutoInjected(_) => {
                                 Err(golem_rust::agentic::custom_error(format!(
-                                    "Internal Error: Principal value cannot be returned from method {}",
+                                    "Principal value cannot be returned from method {}",
                                     #method_name
                                 )))
                             }
@@ -229,17 +229,17 @@ fn build_match_arms(
                             "Failed serializing return value for method {}: {}",
                             #method_name, e
                         ))
-                    }).flat_map(|result_val| {
+                    }).and_then(|result_val| {
                         match result_val {
                             golem_rust::agentic::StructuredValue::Default(element_value) => {
-                                Ok(olem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value]))
+                                Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value]))
                             },
                             golem_rust::agentic::StructuredValue::Multimodal(result) => {
                                 Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(result))
                             },
                             golem_rust::agentic::StructuredValue::AutoInjected(_) => {
                                 Err(golem_rust::agentic::custom_error(format!(
-                                    "Internal Error: Principal value cannot be returned from method {}",
+                                    "Principal value cannot be returned from method {}",
                                     #method_name
                                 )))
                             }
@@ -300,7 +300,7 @@ fn generate_method_param_extraction(
                         golem_rust::agentic::EnrichedSchema::AutoInjected(auto_injected_schema) => {
                             match auto_injected_schema {
                                 golem_rust::agentic::AutoInjectedSchema::Principal => {
-                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal)), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
+                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
                                         golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #original_method_param_idx, #method_name, e))
                                     })
                                 }
@@ -418,7 +418,7 @@ fn generate_constructor_extraction(
                         golem_rust::agentic::EnrichedSchema::AutoInjected(auto_injected_schema) => {
                             match auto_injected_schema {
                                 golem_rust::agentic::AutoInjectedSchema::Principal => {
-                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal)), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
+                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
                                         golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #constructor_param_index, e))
                                     })
                                 }

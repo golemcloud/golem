@@ -16,7 +16,7 @@ use crate::agentic::enriched_agent_type::EnrichedAgentType;
 use crate::agentic::{EnrichedDataSchema, EnrichedSchema};
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
-    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
+    golem_agentic::exports::golem::agent::guest::AgentType,
 };
 use golem_wasm::golem_rpc_0_2_x::types::parse_uuid;
 use golem_wasm::{AgentId, ComponentId};
@@ -67,7 +67,6 @@ pub fn get_all_agent_types() -> Vec<AgentType> {
         .borrow()
         .agent_types
         .values()
-        .cloned()
         .map(|e| e.to_agent_type())
         .collect()
 }

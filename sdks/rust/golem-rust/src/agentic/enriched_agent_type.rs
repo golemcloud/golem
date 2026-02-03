@@ -52,7 +52,7 @@ impl EnrichedAgentType {
             constructor: self.constructor.to_agent_constructor(),
             methods: self.methods.iter().map(|m| m.to_agent_method()).collect(),
             dependencies: self.dependencies.clone(),
-            mode: self.mode.clone(),
+            mode: self.mode,
             http_mount: self.http_mount.clone(),
         }
     }

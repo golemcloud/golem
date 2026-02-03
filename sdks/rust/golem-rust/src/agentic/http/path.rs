@@ -52,11 +52,12 @@ pub fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String
                     name
                 ));
             }
-            let variable_name = &name[1..];
-            reject_empty_string(variable_name, "remaining path variable")?;
-            return Ok(PathSegment::RemainingPathVariable(PathVariable {
-                variable_name: variable_name.to_string(),
-            }));
+            if let Some(variable_name) = name.strip_prefix('*') {
+                reject_empty_string(variable_name, "remaining path variable")?;
+                return Ok(PathSegment::RemainingPathVariable(PathVariable {
+                    variable_name: variable_name.to_string(),
+                }));
+            }
         }
 
         match name {
@@ -67,10 +68,10 @@ pub fn parse_segment(segment: &str, is_last: bool) -> Result<PathSegment, String
             })),
         }
     } else if segment.contains('{') || segment.contains('}') {
-        return Err(format!(
+        Err(format!(
             "Path segment \"{}\" must be a whole variable like \"{{id}}\" and cannot mix literals and variables",
             segment
-        ));
+        ))
     } else {
         reject_empty_string(segment, "Literal path segment")?;
         Ok(PathSegment::Literal(segment.to_string()))

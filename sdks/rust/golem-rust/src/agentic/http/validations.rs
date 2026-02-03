@@ -71,17 +71,12 @@ fn validate_no_catch_all_in_http_mount(
     Ok(())
 }
 
-fn collect_http_mount_variables(
-    agent_mount: &HttpMountDetails,
-) -> std::collections::HashSet<String> {
-    let mut vars = std::collections::HashSet::new();
+fn collect_http_mount_variables(agent_mount: &HttpMountDetails) -> HashSet<String> {
+    let mut vars = HashSet::new();
 
     for segment in &agent_mount.path_prefix {
-        match segment {
-            PathSegment::PathVariable(path_variable) => {
-                vars.insert(path_variable.variable_name.clone());
-            }
-            _ => {}
+        if let PathSegment::PathVariable(path_variable) = segment {
+            vars.insert(path_variable.variable_name.clone());
         }
     }
 
@@ -90,8 +85,8 @@ fn collect_http_mount_variables(
 
 fn collect_constructor_input_parameter_names(
     agent_constructor: &AgentConstructor,
-) -> std::collections::HashSet<String> {
-    let mut param_names = std::collections::HashSet::new();
+) -> HashSet<String> {
+    let mut param_names = HashSet::new();
 
     match &agent_constructor.input_schema {
         DataSchema::Tuple(name_and_schemas) => {
@@ -112,15 +107,12 @@ fn validate_constructor_params_are_http_safe(
     match &agent_constructor.input_schema {
         DataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
-                match param_schema {
-                    ElementSchema::UnstructuredBinary(_) => {
-                        return Err(format!(
+                if let ElementSchema::UnstructuredBinary(_) = param_schema {
+                    return Err(format!(
                             "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredBinary' when used with HTTP mount",
                             agent_class_name,
                             param_name,
                         ));
-                    }
-                    _ => {}
                 }
             }
         }

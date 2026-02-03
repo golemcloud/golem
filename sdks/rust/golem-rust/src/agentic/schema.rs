@@ -126,7 +126,7 @@ impl Schema for Principal {
         }
     }
 
-    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String>
+    fn from_wit_value(_wit_value: WitValue, _schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
