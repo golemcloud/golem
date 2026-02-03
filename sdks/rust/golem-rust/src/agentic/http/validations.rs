@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::{AutoInjectedSchema, EnrichedAgentMethod, EnrichedDataSchema, EnrichedSchema};
 use crate::golem_agentic::golem::agent::common::{
-    AgentConstructor, DataSchema, ElementSchema, HttpMountDetails, PathSegment,
+    AgentConstructor, DataSchema, ElementSchema, HttpEndpointDetails, HttpMountDetails, PathSegment,
 };
 use std::collections::HashSet;
 
@@ -32,6 +33,203 @@ pub fn validate_http_mount(
     validate_mount_variables_are_not_principal(agent_mount, parameters_for_principal)?;
     validate_mount_variables_exist_in_constructor(agent_mount, &constructor_input_params)?;
     validate_constructor_vars_are_satisfied(agent_mount, &constructor_input_params)?;
+
+    Ok(())
+}
+
+pub fn validate_http_endpoint(
+    agent_class_name: &str,
+    agent_method: &EnrichedAgentMethod,
+    http_mount_details: Option<&HttpMountDetails>,
+) -> Result<(), String> {
+    if agent_method.http_endpoint.is_empty() {
+        return Ok(());
+    }
+
+    validate_mount_is_defined_for_http_endpoint(
+        agent_class_name,
+        agent_method,
+        http_mount_details,
+    )?;
+
+    let method_vars_without_auto_injected_variables =
+        collect_method_input_vars(&agent_method.input_schema);
+
+    let principal_params = collect_principal_parameter_names(&agent_method.input_schema);
+
+    let unstructured_binary_params = collect_unstructured_binary_params(&agent_method.input_schema);
+
+    for endpoint in &agent_method.http_endpoint {
+        validate_endpoint_variables(
+            endpoint,
+            &method_vars_without_auto_injected_variables,
+            &principal_params,
+            &unstructured_binary_params,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn collect_principal_parameter_names(input_schema: &EnrichedDataSchema) -> HashSet<String> {
+    let mut principal_params = HashSet::new();
+
+    match input_schema {
+        EnrichedDataSchema::Tuple(name_and_schemas) => {
+            for (param_name, param_schema) in name_and_schemas {
+                if let EnrichedSchema::AutoInjected(auto_injected_schema) = param_schema {
+                    match auto_injected_schema {
+                        AutoInjectedSchema::Principal => {
+                            principal_params.insert(param_name.clone());
+                        }
+                    }
+                }
+            }
+        }
+        EnrichedDataSchema::Multimodal(_) => {}
+    }
+
+    principal_params
+}
+
+fn collect_unstructured_binary_params(input_schema: &EnrichedDataSchema) -> HashSet<String> {
+    let mut unstructured_binary_params = HashSet::new();
+
+    match input_schema {
+        EnrichedDataSchema::Tuple(name_and_schemas) => {
+            for (param_name, param_schema) in name_and_schemas {
+                if let EnrichedSchema::ElementSchema(element_schema) = param_schema {
+                    if let ElementSchema::UnstructuredBinary(_) = element_schema {
+                        unstructured_binary_params.insert(param_name.clone());
+                    }
+                }
+            }
+        }
+        EnrichedDataSchema::Multimodal(_) => {}
+    }
+
+    unstructured_binary_params
+}
+
+// Collects method input variable names, excluding auto-injected variables.
+fn collect_method_input_vars(input_schema: &EnrichedDataSchema) -> HashSet<String> {
+    let mut param_names = HashSet::new();
+
+    match input_schema {
+        EnrichedDataSchema::Tuple(name_and_schemas) => {
+            for (param_name, param_schema) in name_and_schemas {
+                if let EnrichedSchema::AutoInjected(_) = param_schema {
+                    continue;
+                }
+                param_names.insert(param_name.clone());
+            }
+        }
+        EnrichedDataSchema::Multimodal(_) => {}
+    }
+
+    param_names
+}
+
+fn validate_endpoint_variables(
+    endpoint: &HttpEndpointDetails,
+    method_vars: &HashSet<String>,
+    principal_params: &HashSet<String>,
+    unstructured_binary_params: &HashSet<String>,
+) -> Result<(), String> {
+    fn validate_variable(
+        variable_name: &str,
+        location: &str,
+        principal_params: &HashSet<String>,
+        unstructured_binary_params: &HashSet<String>,
+        method_vars: &HashSet<String>,
+        binary_error: &str,
+    ) -> Result<(), String> {
+        if principal_params.contains(variable_name) {
+            return Err(format!(
+                "HTTP endpoint {} variable '{}' cannot be used for parameters of type 'Principal'",
+                location, variable_name
+            ));
+        }
+
+        if unstructured_binary_params.contains(variable_name) {
+            return Err(binary_error.to_string());
+        }
+
+        if !method_vars.contains(variable_name) {
+            return Err(format!(
+                "HTTP endpoint {} variable '{}' is not defined in method input parameters.",
+                location, variable_name
+            ));
+        }
+
+        Ok(())
+    }
+
+    for var in &endpoint.header_vars {
+        validate_variable(
+            &var.variable_name,
+            "header",
+            &principal_params,
+            &unstructured_binary_params,
+            method_vars,
+            &format!(
+                "HTTP endpoint header variable '{}' cannot be used for method parameters of type 'UnstructuredBinary'",
+                var.variable_name
+            ),
+        )?;
+    }
+
+    for var in &endpoint.query_vars {
+        validate_variable(
+            &var.variable_name,
+            "query",
+            &principal_params,
+            &unstructured_binary_params,
+            method_vars,
+            &format!(
+                "HTTP endpoint query variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
+                var.variable_name
+            ),
+        )?;
+    }
+
+    for segment in &endpoint.path_suffix {
+        match segment {
+            PathSegment::RemainingPathVariable(path_variable)
+            | PathSegment::PathVariable(path_variable) => {
+                let name = &path_variable.variable_name;
+                validate_variable(
+                    name,
+                    "path",
+                    &principal_params,
+                    &unstructured_binary_params,
+                    method_vars,
+                    &format!(
+                        "HTTP endpoint path variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
+                        name
+                    ),
+                )?;
+            }
+            PathSegment::Literal(_) => {}
+            PathSegment::SystemVariable(_) => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_mount_is_defined_for_http_endpoint(
+    agent_class_name: &str,
+    agent_method: &EnrichedAgentMethod,
+    http_mount_details: Option<&HttpMountDetails>,
+) -> Result<(), String> {
+    if http_mount_details.is_none() && !agent_method.http_endpoint.is_empty() {
+        return Err(format!(
+            "Agent method '{}' of '{}' defines HTTP endpoints but the agent is not mounted over HTTP. \
+            Please specify mount details in 'agent' decorator.",
+            agent_method.name, agent_class_name
+        ));
+    }
 
     Ok(())
 }

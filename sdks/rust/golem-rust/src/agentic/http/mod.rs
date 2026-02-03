@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use mount::*;
 pub use endpoint::*;
+pub use mount::*;
 pub use validations::*;
 
 mod endpoint;

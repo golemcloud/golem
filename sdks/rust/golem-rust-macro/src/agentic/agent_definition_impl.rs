@@ -25,7 +25,9 @@ use syn::ItemTrait;
 use crate::agentic::agent_definition_attributes::{
     parse_agent_definition_attributes, AgentDefinitionAttributes,
 };
-use crate::agentic::agent_definition_http_endpoint::{extract_http_endpoints, ParsedHttpEndpointDetails};
+use crate::agentic::agent_definition_http_endpoint::{
+    extract_http_endpoints, ParsedHttpEndpointDetails,
+};
 use proc_macro::TokenStream;
 use quote::quote;
 
