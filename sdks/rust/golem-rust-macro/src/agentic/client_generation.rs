@@ -17,7 +17,7 @@ use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_r
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
-use syn::ItemTrait;
+use syn::{FnArg, ItemTrait, Type};
 
 pub fn get_remote_client(
     item_trait: &ItemTrait,
@@ -60,11 +60,15 @@ pub fn get_remote_client(
                     let multimodal_result = structured_values.remove(0).get_multimodal_value().expect("Constructor parameter type mismatch. Expected multimodal, found default");
                     golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(multimodal_result)
                 }
+
+                golem_rust::agentic::StructuredValue::AutoInjected(_) => {
+                    panic!("Internal Error: Trying to convert principal parameter to data value in RPC call");
+                }
             }
         };
     };
 
-    let get_client_method_name = if method_names.contains_get() {
+    let get_method_ident = if method_names.contains_get() {
         format_ident!("get_")
     } else {
         format_ident!("get")
@@ -77,7 +81,7 @@ pub fn get_remote_client(
         }
 
         impl #remote_client_type_name {
-            pub fn #get_client_method_name(#(#constructor_param_defs), *) -> #remote_client_type_name {
+            pub fn #get_method_ident(#(#constructor_param_defs), *) -> #remote_client_type_name {
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
@@ -206,12 +210,35 @@ fn get_remote_agent_methods_info(
 
             let remote_method_name_token = quote! { #remote_method_name };
 
-            let inputs: Vec<_> = method.sig.inputs.iter().collect();
+            let input_defs: Vec<&syn::FnArg> = method
+                .sig
+                .inputs
+                .iter()
+                .filter(|arg| {
+                    match arg {
+                       FnArg::Receiver(_) => true,
 
-            for input in method.sig.inputs.iter() {
-                if let syn::FnArg::Typed(pat_type) = input {
+                       FnArg::Typed(pat_type) => {
+                            let type_name = match &*pat_type.ty {
+                               Type::Path(type_path) => {
+                                    type_path.path.segments.last()
+                                        .map(|s| s.ident == "Principal")
+                                        .unwrap_or(false)
+                                }
+                                _ => false,
+                            };
+
+                            !type_name
+                        }
+                    }
+                })
+                .collect();
+
+
+            for fn_arg in method.sig.inputs.iter() {
+                if let FnArg::Typed(pat_type) = fn_arg {
                     let pat_type_name = match &*pat_type.ty {
-                        syn::Type::Path(type_path) => {
+                        Type::Path(type_path) => {
                             type_path.path.segments.last().unwrap().ident.to_string()
                         },
                         _ => "".to_string(),
@@ -223,21 +250,35 @@ fn get_remote_agent_methods_info(
                 }
             }
 
-            let input_idents: Vec<_> = method.sig
+            let input_param_idents: Vec<_> = method
+                .sig
                 .inputs
                 .iter()
                 .filter_map(|arg| {
                     if let syn::FnArg::Typed(pat_type) = arg {
-                        if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                            Some(pat_ident.ident.clone())
-                        } else {
-                            None
+                        let ident = match &*pat_type.pat {
+                            syn::Pat::Ident(pat_ident) => pat_ident.ident.clone(),
+                            _ => return None,
+                        };
+
+                        let type_name = match &*pat_type.ty {
+                            syn::Type::Path(type_path) => {
+                                type_path.path.segments.last()?.ident.to_string()
+                            }
+                            _ => return None,
+                        };
+
+                        // ensuring that principal values are not passed as parameters in RPC calls
+                        if type_name == "Principal" {
+                            return None;
                         }
+
+                        Some(ident)
                     } else {
                         None
                     }
-            })
-            .collect();
+                })
+                .collect();
 
             let fn_output_info = FunctionOutputInfo::from_signature(&method.sig);
 
@@ -261,9 +302,9 @@ fn get_remote_agent_methods_info(
             };
 
             Some(quote!{
-              pub async fn #method_name(#(#inputs),*) -> #return_type {
+              pub async fn #method_name(#(#input_defs),*) -> #return_type {
                 let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
-                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_param_idents).expect("Failed")),*];
 
                 let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                   #remote_method_name_token,
@@ -279,9 +320,9 @@ fn get_remote_agent_methods_info(
                 #process_invoke_result
               }
 
-              pub fn #trigger_method_name(#(#inputs),*) {
+              pub fn #trigger_method_name(#(#input_defs),*) {
                 let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
-                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_param_idents).expect("Failed")),*];
 
                 let rpc_result: Result<(), golem_rust::golem_wasm::RpcError> = self.wasm_rpc.invoke(
                   #remote_method_name_token,
@@ -291,9 +332,9 @@ fn get_remote_agent_methods_info(
                 rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
               }
 
-              pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime) {
+              pub fn #schedule_method_name(#(#input_defs),*, scheduled_time: golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime) {
                 let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
-                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_param_idents).expect("Failed")),*];
 
                 self.wasm_rpc.schedule_invocation(
                   scheduled_time,

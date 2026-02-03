@@ -356,13 +356,15 @@ fn get_agent_type_with_remote_client(
                             .into());
                         }
 
-                        constructor_param_defs.push(quote! {
-                            #param_ident: #ty
-                        });
+                        if type_name != "Principal" {
+                            constructor_param_defs.push(quote! {
+                                #param_ident: #ty
+                            });
 
-                        constructor_param_names.push(quote! {
-                            #param_ident
-                        });
+                            constructor_param_names.push(quote! {
+                                #param_ident
+                            });
+                        }
 
                         pat_ident.ident.to_string()
                     }
