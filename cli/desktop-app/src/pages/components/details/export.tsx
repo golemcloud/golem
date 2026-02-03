@@ -91,13 +91,11 @@ export default function Exports() {
     API.componentService.getComponentByIdAsKey(appId!).then(response => {
       const fetched = response[componentId];
       if (!fetched) return;
-      console.log(fetched);
 
       const versions = fetched.versionList || [];
       setVersionList(versions);
 
       const selectedVersion = versions[versions.length - 1] || 0;
-      console.log("version", selectedVersion);
       setVersionChange(selectedVersion);
       setComponent(fetched);
     });

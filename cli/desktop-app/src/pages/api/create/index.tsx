@@ -60,8 +60,7 @@ const CreateAPI = () => {
       navigate(
         `/app/${appId}/apis/${values.apiName}/version/${values.version}`,
       );
-    } catch (error) {
-      console.error("Failed to create API:", error);
+    } catch {
       form.setError("apiName", {
         type: "manual",
         message: "Failed to create API. Please try again.",

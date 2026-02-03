@@ -46,7 +46,6 @@ export default function AgentList() {
         agent.workerName?.toLowerCase().includes(lowerCaseQuery) ||
         agent.status?.toLowerCase().includes(lowerCaseQuery),
     );
-    console.log(filtered);
     setFilteredAgents(filtered);
   }, [searchQuery, agentList]);
 

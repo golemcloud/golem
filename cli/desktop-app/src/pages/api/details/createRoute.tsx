@@ -289,7 +289,7 @@ const CreateRoute = () => {
           }
         }
       } catch (error) {
-        console.error("Failed to fetch data:", error);
+        console.error("Error loading route data:", error);
         setFetchError("Failed to load required data. Please try again.");
       } finally {
         setIsLoading(false);

@@ -62,7 +62,6 @@ export default function PluginListPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {plugins.map(pluginGroup => {
             const latestVersion = pluginGroup.versions[0]; // Versions are sorted descending
-            console.log(latestVersion, pluginGroup);
             if (!latestVersion) return null;
             return (
               <Card

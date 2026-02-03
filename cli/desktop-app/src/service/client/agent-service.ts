@@ -291,7 +291,6 @@ export class AgentService {
       "list-agent-types",
       [],
     )) as AgentTypeSchema[];
-    console.log(result);
     return result.filter(spec => spec.implementedBy.componentId == componentId);
   }
 }

@@ -50,6 +50,7 @@ export default [
         { ignore: ["cmdk-input-wrapper"] },
       ],
       "no-useless-escape": "off",
+      "no-console": ["error", { allow: ["warn", "error"] }],
     },
     settings: {
       react: {
@@ -126,6 +127,7 @@ export default [
       "no-constant-binary-expression": "off",
       "no-unreachable": "off",
       "no-import-assign": "off",
+      "no-console": ["error", { allow: ["warn", "error"] }],
     },
     settings: {
       react: {
@@ -165,6 +167,7 @@ export default [
       "no-constant-binary-expression": "off",
       "no-unreachable": "off",
       "no-import-assign": "off",
+      "no-console": ["error", { allow: ["warn", "error"] }],
     },
   },
   {

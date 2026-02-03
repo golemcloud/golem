@@ -164,7 +164,6 @@ export default function CreateAgent() {
           appId!,
           componentId!,
         );
-        console.log(types);
 
         // Group agent types by their kebab-case API name (deduplicate)
         const uniqueTypesMap = new Map<string, AgentTypeSchema>();
@@ -175,7 +174,6 @@ export default function CreateAgent() {
             uniqueTypesMap.set(kebabCaseName, type);
           }
         });
-        console.log(Array.from(uniqueTypesMap.values()));
         setAgentTypes(Array.from(uniqueTypesMap.values()));
       } catch (error) {
         console.error("Failed to fetch agent types:", error);

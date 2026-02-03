@@ -124,9 +124,8 @@ vi.mock("react-hook-form", () => {
         e?.preventDefault?.();
         try {
           return await fn(sharedFormData);
-        } catch (error) {
+        } catch {
           // Don't re-throw the error here, let the component handle it
-          console.error("Form submission error:", error);
         }
       }),
       formState: { errors: {} },
