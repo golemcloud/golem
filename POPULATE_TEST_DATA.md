@@ -87,20 +87,28 @@ golem-cli --profile cloud app list-agent-types
 
 Once data is populated, test the MCP tools:
 
-### Using Python Test Script
+### Using Python Test Script with Cloud Data
 
 ```bash
-python test_mcp_e2e_full.py
+# Test with populated cloud data
+python test_mcp_cloud_profile.py
 ```
 
 ### Manual MCP Test
 
 ```bash
-# Start MCP server
-golem-cli mcp-server start --transport stdio
+# Start MCP server with cloud profile (from rust-deploy directory)
+cd rust-deploy
+golem-cli --profile cloud -E cloud mcp-server start --transport stdio
 
 # In another terminal, run:
 python test_mcp_manual.py
+```
+
+### Standard Tests (local profile)
+
+```bash
+python test_mcp_e2e_full.py
 ```
 
 ### Using Cursor/Claude
