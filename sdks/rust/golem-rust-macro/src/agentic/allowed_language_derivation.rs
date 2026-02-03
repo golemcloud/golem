@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
+use proc_macro2::Ident;
 use quote::quote;
 use syn::{parse_macro_input, Attribute, Data, DeriveInput, Lit};
 
-pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
+pub fn derive_allowed_languages(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let name = &ast.ident;
 
@@ -51,7 +52,7 @@ pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
     let code_strs: Vec<_> = lang_codes.iter().map(|s| s.as_str()).collect();
 
     let expanded = quote! {
-        impl golem_rust::agentic::AllowedLanguages for #name {
+        impl #golem_rust_crate_ident::agentic::AllowedLanguages for #name {
             fn all() -> &'static [&'static str] {
                 &[#(#code_strs),*]
             }

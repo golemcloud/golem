@@ -194,3 +194,177 @@ fn validate_constructor_vars_are_satisfied(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+
+    use test_r::test;
+
+    use super::*;
+    use crate::agentic::{Schema, StructuredSchema};
+    use crate::golem_agentic::golem::agent::common::{AuthDetails, CorsOptions, PathVariable};
+    use golem_rust_macro::AllowedMimeTypes;
+    use golem_wasm::agentic::unstructured_binary::UnstructuredBinary;
+    use std::collections::HashSet;
+
+    fn principal_params(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn constructor_with_params(params: Vec<(&str, StructuredSchema)>) -> AgentConstructor {
+        let data_schema = DataSchema::Tuple(
+            params
+                .into_iter()
+                .map(|(name, schema)| {
+                    let element_schema = match schema {
+                        StructuredSchema::Default(es) => es,
+                        StructuredSchema::Multimodal(_) => {
+                            panic!("Multimodal schema not supported in this test constructor")
+                        }
+                    };
+
+                    (name.to_string(), element_schema)
+                })
+                .collect(),
+        );
+
+        AgentConstructor {
+            name: None,
+            description: "".to_string(),
+            prompt_hint: None,
+            input_schema: data_schema,
+        }
+    }
+
+    fn mount_with_segments(segments: Vec<PathSegment>) -> HttpMountDetails {
+        HttpMountDetails {
+            path_prefix: segments,
+            auth_details: Some(AuthDetails { required: true }),
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: vec![],
+            },
+            webhook_suffix: vec![],
+        }
+    }
+
+    fn path_var(name: &str) -> PathSegment {
+        PathSegment::PathVariable(PathVariable {
+            variable_name: name.to_string(),
+        })
+    }
+
+    fn catch_all(name: &str) -> PathSegment {
+        PathSegment::RemainingPathVariable(PathVariable {
+            variable_name: name.to_string(),
+        })
+    }
+
+    fn literal() -> PathSegment {
+        PathSegment::Literal("literal".to_string())
+    }
+
+    #[test]
+    fn validate_http_mount_success() {
+        let constructor = constructor_with_params(vec![
+            ("user_id", String::get_type()),
+            ("org_id", String::get_type()),
+        ]);
+
+        let mount = mount_with_segments(vec![literal(), path_var("user_id"), path_var("org_id")]);
+
+        let principal_params = principal_params(&[]);
+
+        let result = validate_http_mount("MyAgent", &mount, &constructor, &principal_params);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn fails_on_catch_all_segment() {
+        let constructor = constructor_with_params(vec![("id", String::get_type())]);
+
+        let mount = mount_with_segments(vec![path_var("id"), catch_all("rest")]);
+
+        let err =
+            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+
+        assert_eq!(
+            err,
+            "HTTP mount for agent 'MyAgent' cannot contain catch-all path variable 'rest'"
+        );
+    }
+
+    #[derive(AllowedMimeTypes, Clone, Debug)]
+    enum MimeTypes {
+        #[mime_type("application/json")]
+        ApplicationJson,
+        Fr,
+    }
+
+    #[test]
+    fn fails_on_unstructured_binary_constructor_param() {
+        let constructor =
+            constructor_with_params(vec![("blob", UnstructuredBinary::<MimeTypes>::get_type())]);
+
+        let mount = mount_with_segments(vec![path_var("blob")]);
+
+        let err =
+            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+
+        assert_eq!(
+            err,
+            "Agent 'MyAgent' constructor parameter 'blob' cannot be of type 'UnstructuredBinary' when used with HTTP mount"
+        );
+    }
+
+    #[test]
+    fn fails_when_mount_variable_is_principal() {
+        let constructor = constructor_with_params(vec![("user", String::get_type())]);
+
+        let mount = mount_with_segments(vec![path_var("user")]);
+
+        let principal_params = principal_params(&["user"]);
+
+        let err =
+            validate_http_mount("MyAgent", &mount, &constructor, &principal_params).unwrap_err();
+
+        assert_eq!(
+            err,
+            "HTTP mount path variable 'user' cannot be used for constructor parameters of type 'Principal'"
+        );
+    }
+
+    #[test]
+    fn fails_when_mount_variable_not_in_constructor() {
+        let constructor = constructor_with_params(vec![("id", String::get_type())]);
+
+        let mount = mount_with_segments(vec![path_var("missing")]);
+
+        let err =
+            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+
+        assert_eq!(
+            err,
+            "HTTP mount path variable 'missing' (in path segment 0) is not defined in the agent constructor."
+        );
+    }
+
+    #[test]
+    fn fails_when_constructor_var_not_satisfied() {
+        let constructor = constructor_with_params(vec![
+            ("id", String::get_type()),
+            ("org", String::get_type()),
+        ]);
+
+        let mount = mount_with_segments(vec![path_var("id")]);
+
+        let err =
+            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+
+        assert_eq!(
+            err,
+            "Agent constructor variable 'org' is not provided by the HTTP mount path."
+        );
+    }
+}

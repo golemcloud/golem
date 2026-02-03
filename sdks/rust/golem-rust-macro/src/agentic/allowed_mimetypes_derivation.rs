@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
+use proc_macro2::Ident;
 use quote::quote;
 use syn::{parse_macro_input, Attribute, Data, DeriveInput, Lit};
 
-pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
+pub fn derive_allowed_mime_types(
+    input: TokenStream,
+    golem_rust_crate_ident: &Ident,
+) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let name = &ast.ident;
 
@@ -36,7 +40,6 @@ pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
         let v_ident = &variant.ident;
         variant_idents.push(v_ident);
 
-        // Default: lowercase variant name
         let mut mime_type = v_ident.to_string().to_lowercase();
 
         for attr in &variant.attrs {
@@ -52,7 +55,7 @@ pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
     let mime_strs: Vec<_> = mime_types.iter().map(|s| s.as_str()).collect();
 
     let expanded = quote! {
-        impl golem_rust::agentic::AllowedMimeTypes for #name {
+        impl #golem_rust_crate_ident::agentic::AllowedMimeTypes for #name {
             fn all() -> &'static [&'static str] {
                 &[#(#mime_strs),*]
             }
