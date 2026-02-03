@@ -4,6 +4,7 @@ import {
 } from "@/pages/dashboard/componentSection.tsx";
 import { APISection } from "@/pages/dashboard/apiSection.tsx";
 import { DeploymentSection } from "@/pages/dashboard/deploymentSection.tsx";
+import { EnvironmentSection } from "@/pages/dashboard/environmentSection.tsx";
 import { useEffect, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -327,6 +328,7 @@ export const Dashboard = () => {
       <div className="grid flex-1 grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6 min-h-[85vh] mb-8">
         <ComponentsSection ref={componentsSectionRef} />
         <div className="grid grid-cols-1 gap-4 flex-col">
+          <EnvironmentSection />
           <DeploymentSection />
           <APISection />
         </div>

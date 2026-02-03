@@ -202,7 +202,7 @@ describe("Dashboard", () => {
         {
           componentId: "test-component-1",
           componentName: "user-service",
-          componentVersion: 3,
+          componentRevision: 3,
           componentType: ComponentType.Durable,
           createdAt: "2024-01-01T00:00:00Z",
         },
@@ -212,13 +212,14 @@ describe("Dashboard", () => {
 
   const sampleDeployments: Deployment[] = [
     {
-      apiDefinitions: [{ id: "api-1", version: "1.0.0" }],
+      apiDefinitions: ["api-1@1.0.0"],
       createdAt: "2024-01-01T00:00:00Z",
       projectId: "project-1",
-      site: {
-        host: "production.example.com",
-        subdomain: "production",
-      },
+      domain: "production.example.com",
+      environmentId: "env-1",
+      hash: "abc123",
+      id: "deployment-1",
+      revision: 1,
     },
   ];
 
@@ -233,7 +234,7 @@ describe("Dashboard", () => {
           binding: {
             type: "http-handler",
             componentName: "user-service",
-            componentVersion: 1,
+            componentRevision: 1,
           },
         } as HttpApiDefinitionRoute,
       ],
