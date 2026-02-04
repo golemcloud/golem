@@ -275,7 +275,7 @@ impl SqliteSessionStore {
         current_time: i64,
     ) -> anyhow::Result<()> {
         let query =
-            sqlx::query("DELETE FROM oidc_pending_login WHERE expiry_time < ?;").bind(current_time);
+            sqlx::query("DELETE FROM oidc_pending_login WHERE expires_at < ?;").bind(current_time);
 
         pool.with_rw("session_store", "cleanup_expired_oidc_pending_login")
             .execute(query)
@@ -289,7 +289,7 @@ impl SqliteSessionStore {
         current_time: i64,
     ) -> anyhow::Result<()> {
         let query =
-            sqlx::query("DELETE FROM oidc_session WHERE expiry_time < ?;").bind(current_time);
+            sqlx::query("DELETE FROM oidc_session WHERE expires_at < ?;").bind(current_time);
 
         pool.with_rw("session_store", "cleanup_expired_oidc_session")
             .execute(query)
