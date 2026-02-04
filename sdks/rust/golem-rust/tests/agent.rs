@@ -21,7 +21,7 @@ mod tests {
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
+    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType, Principal};
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
@@ -728,5 +728,162 @@ mod tests {
         }
     }
 
-    // Auto Injected Principal
+    // Auto Injected Principal Compilation Tests
+    // Principal last parameter
+    #[agent_definition]
+    pub trait AgentWithPrincipalAutoInjection1 {
+        fn new(name: String, principal: Principal) -> Self;
+
+        fn foo(&self, name: String, principal: Principal) -> String;
+    }
+
+    pub struct AgentWithPrincipalAutoInjection1Impl;
+
+    #[agent_implementation]
+    impl AgentWithPrincipalAutoInjection1 for AgentWithPrincipalAutoInjection1Impl {
+        fn new(_name: String, _principal: Principal) -> Self {
+            Self
+        }
+
+        fn foo(&self, name: String, _principal: Principal) -> String {
+            name
+        }
+    }
+
+    // Auto Injected Principal Compilation Tests
+    // Principal in the middle
+    #[agent_definition]
+    pub trait AgentWithPrincipalAutoInjection2 {
+        fn new(name: String, text1: u64, principal: Principal, text: String) -> Self;
+
+        fn foo(&self, name: String, num: u64, principal: Principal, text: String) -> String;
+    }
+
+    pub struct AgentWithPrincipalAutoInjection2Impl;
+
+    #[agent_implementation]
+    impl AgentWithPrincipalAutoInjection2 for AgentWithPrincipalAutoInjection2Impl {
+        fn new(_name: String, _text1: u64, _principal: Principal, _text: String) -> Self {
+            Self
+        }
+
+        fn foo(&self, name: String, _num: u64, _principal: Principal, _text: String) -> String {
+            name
+        }
+    }
+
+    #[agent_definition]
+    pub trait AgentWithPrincipalAutoInjection3 {
+        fn new(name: String, text1: u64, principal: Principal, text: Option<String>) -> Self;
+
+        fn foo(
+            &self,
+            name: String,
+            text1: u64,
+            principal: Principal,
+            text: Option<String>,
+        ) -> String;
+
+        fn foo_without_principal_1(&self, name: String, num: u64) -> String;
+        fn foo_without_principal_2(&self, name: String, num: u64, text: String) -> String;
+        fn foo_without_principal_3(&self, name: String, num: u64, text: Option<String>) -> String;
+        fn foo_without_principal_4(
+            &self,
+            name: String,
+            num: u64,
+            text1: Option<String>,
+            text2: Option<String>,
+        ) -> String;
+        fn foo_without_principal_5(&self, name: String, num: u64, text: Option<String>) -> String;
+    }
+
+    pub struct AgentWithPrincipalAutoInjection5Impl;
+
+    #[agent_implementation]
+    impl AgentWithPrincipalAutoInjection3 for AgentWithPrincipalAutoInjection5Impl {
+        fn new(_name: String, _text1: u64, _principal: Principal, _text: Option<String>) -> Self {
+            Self
+        }
+
+        fn foo(
+            &self,
+            name: String,
+            _text1: u64,
+            _principal: Principal,
+            _text: Option<String>,
+        ) -> String {
+            name
+        }
+
+        fn foo_without_principal_1(&self, name: String, _num: u64) -> String {
+            name
+        }
+
+        fn foo_without_principal_2(&self, name: String, _num: u64, _text: String) -> String {
+            name
+        }
+
+        fn foo_without_principal_3(
+            &self,
+            name: String,
+            _num: u64,
+            _text: Option<String>,
+        ) -> String {
+            name
+        }
+
+        fn foo_without_principal_4(
+            &self,
+            name: String,
+            _num: u64,
+            _text1: Option<String>,
+            _text2: Option<String>,
+        ) -> String {
+            name
+        }
+
+        fn foo_without_principal_5(
+            &self,
+            name: String,
+            _num: u64,
+            _text: Option<String>,
+        ) -> String {
+            name
+        }
+    }
+
+    #[agent_definition]
+    pub trait RemoteAgentWithPrincipal {
+        fn new(name: String, principal: Principal) -> Self;
+        async fn foo(&self, name: String) -> String;
+    }
+
+    pub struct RemoteAgentWithPrincipalImpl;
+
+    #[agent_implementation]
+    impl RemoteAgentWithPrincipal for RemoteAgentWithPrincipalImpl {
+        fn new(_name: String, _principal: Principal) -> Self {
+            Self
+        }
+
+        async fn foo(&self, name: String) -> String {
+            AgentWithPrincipalAutoInjection1Client::get(name.clone())
+                .foo(name.clone())
+                .await;
+
+            AgentWithPrincipalAutoInjection2Client::get(name.clone(), 1, "required".into())
+                .foo(name.clone(), 1, "required".into())
+                .await;
+
+            AgentWithPrincipalAutoInjection3Client::get(
+                name.clone(),
+                1,
+                Some("not-undefined".into()),
+            )
+            .foo_without_principal_1("name".into(), 1)
+            .await;
+
+            "finished".into()
+        }
+    }
 }
