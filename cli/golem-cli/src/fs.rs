@@ -79,11 +79,11 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<u6
         .context("Failed to create target dir")
         .with_context(context)?;
 
-    let bytes = std::fs::copy(&from, &to).with_context(context)?;
+    let bytes = std::fs::copy(from, to).with_context(context)?;
 
     OpenOptions::new()
         .write(true)
-        .open(&to)
+        .open(to)
         .and_then(|file| file.set_modified(SystemTime::now()))
         .context("Failed to update target modification time")
         .with_context(context)?;
@@ -112,7 +112,7 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
         .context("Failed to create target dir")
         .with_context(context)?;
 
-    let content = read_to_string(&from).with_context(context)?;
+    let content = read_to_string(from).with_context(context)?;
 
     let transformed_content = transform(content)
         .context("Failed to transform source content")
@@ -120,7 +120,7 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
 
     let bytes_count = transformed_content.len();
 
-    write(&to, transformed_content.as_bytes())
+    write(to, transformed_content.as_bytes())
         .context("Failed to write transformed content")
         .with_context(context)?;
 
@@ -152,7 +152,7 @@ pub fn write_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Resu
 
     let target_parent = path.parent().with_context(context)?;
     create_dir_all(target_parent).with_context(context)?;
-    std::fs::write(&path, str.as_bytes()).with_context(context)
+    std::fs::write(path, str.as_bytes()).with_context(context)
 }
 
 pub fn append_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Result<()> {
@@ -162,7 +162,7 @@ pub fn append_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Res
     let context = || anyhow!("Failed to write string to {}", path.log_color_highlight());
     let mut file = OpenOptions::new()
         .append(true)
-        .open(&path)
+        .open(path)
         .with_context(context)?;
     file.write(str.as_bytes()).with_context(context).map(|_| ())
 }
@@ -174,7 +174,7 @@ pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> anyhow::Re
 
     let target_parent = path.parent().with_context(context)?;
     create_dir_all(target_parent).with_context(context)?;
-    std::fs::write(&path, contents).with_context(context)
+    std::fs::write(path, contents).with_context(context)
 }
 
 pub fn remove<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {

@@ -160,7 +160,7 @@ impl ReplHandler {
                 repl_root_dir,
                 repl_root_bridge_sdk_dir,
                 repl_bridge_sdk_target,
-                repl_history_file_path: repl_history_file_path.into(),
+                repl_history_file_path,
             }
         };
 

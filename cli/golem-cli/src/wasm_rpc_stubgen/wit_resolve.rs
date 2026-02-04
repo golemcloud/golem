@@ -1218,7 +1218,7 @@ impl WitDepsResolver {
             let _indent = LogIndent::new();
 
             for source in self.package_sources(&package_name)? {
-                let source_parent = fs::parent_or_err(&source)?;
+                let source_parent = fs::parent_or_err(source)?;
 
                 let target = target_deps_dir
                     .join(naming::wit::DEPS_DIR)

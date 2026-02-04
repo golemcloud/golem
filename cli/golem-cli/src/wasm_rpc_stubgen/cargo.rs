@@ -334,7 +334,7 @@ pub fn regenerate_cargo_package_component(
         )
     })?;
 
-    let raw_manifest = fs::read_to_string(&cargo_toml_path).with_context(|| {
+    let raw_manifest = fs::read_to_string(cargo_toml_path).with_context(|| {
         anyhow!(
             "Failed to read Cargo.toml at {}",
             cargo_toml_path.log_color_highlight()
@@ -501,11 +501,7 @@ pub fn regenerate_cargo_package_component(
         let mut dep = InlineTable::new();
         dep.insert(
             "path",
-            fs::path_to_str(fs::strip_prefix_or_err(
-                &package_sources.dir,
-                &project_root,
-            )?)?
-            .into(),
+            fs::path_to_str(fs::strip_prefix_or_err(&package_sources.dir, project_root)?)?.into(),
         );
 
         dependencies[&dep_name] = toml_edit::value(dep);

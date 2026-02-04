@@ -475,7 +475,7 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
                         .dest_wit_root
                         .join(naming::wit::DEPS_DIR)
                         .join(naming::wit::package_dep_dir_name_from_parser(package_name))
-                        .join(fs::file_name_to_str(&source)?),
+                        .join(fs::file_name_to_str(source)?),
                 });
             }
         } else if !can_skip(
@@ -495,7 +495,7 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
                     source: source.clone(),
                     target: config
                         .dest_wit_root
-                        .join(fs::strip_prefix_or_err(&source, &config.client_wit_root)?),
+                        .join(fs::strip_prefix_or_err(source, &config.client_wit_root)?),
                 });
             }
         } else {
