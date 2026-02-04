@@ -297,10 +297,10 @@ fn generate_method_param_extraction(
                     })?;
 
                     match enriched_schema {
-                        golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_injected_schema) => {
+                        golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_injected_schema) => {
                             match auto_injected_schema {
-                                golem_rust::agentic::AutoInjectedSchema::Principal => {
-                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
+                                golem_rust::agentic::AutoInjectedParamType::Principal => {
+                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInject(golem_rust::agentic::AutoInjectedParamType::Principal)).map_err(|e| {
                                         golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #original_method_param_idx, #method_name, e))
                                     })
                                 }
@@ -415,10 +415,10 @@ fn generate_constructor_extraction(
                     })?;
 
                     match enriched_schema {
-                        golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_injected_schema) => {
+                        golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_injected_schema) => {
                             match auto_injected_schema {
-                                golem_rust::agentic::AutoInjectedSchema::Principal => {
-                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
+                                golem_rust::agentic::AutoInjectedParamType::Principal => {
+                                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInject(golem_rust::agentic::AutoInjectedParamType::Principal)).map_err(|e| {
                                         golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #constructor_param_index, e))
                                     })
                                 }

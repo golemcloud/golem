@@ -255,8 +255,8 @@ fn get_agent_type_with_remote_client(
                             golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                 multi_modal_inputs.extend(name_and_types);
                             },
-                            golem_rust::agentic::StructuredSchema::AutoInjected(auto_inject_schema) => {
-                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_inject_schema)));
+                            golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
+                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_inject_schema)));
                             }
                         }
                     });
@@ -290,8 +290,8 @@ fn get_agent_type_with_remote_client(
                                 golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                     multi_modal_outputs.extend(name_and_types)
                                 },
-                                golem_rust::agentic::StructuredSchema::AutoInjected(auto_injected_schema) => {
-                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_injected_schema)));
+                                golem_rust::agentic::StructuredSchema::AutoInject(auto_injected_schema) => {
+                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_injected_schema)));
                                 }
                             }
                         });
@@ -304,9 +304,9 @@ fn get_agent_type_with_remote_client(
                     #input_schema_token
                     #(#input_schema_logic)*
                     if !multi_modal_inputs.is_empty() {
-                        golem_rust::agentic::EnrichedDataSchema::Multimodal(multi_modal_inputs)
+                        golem_rust::agentic::ExtendedDataSchema::Multimodal(multi_modal_inputs)
                     } else {
-                        golem_rust::agentic::EnrichedDataSchema::Tuple(default_inputs)
+                        golem_rust::agentic::ExtendedDataSchema::Tuple(default_inputs)
                     }
                 }
             };
@@ -316,9 +316,9 @@ fn get_agent_type_with_remote_client(
                     #output_schema_token
                     #(#output_schema_logic)*
                     if !multi_modal_outputs.is_empty() {
-                        golem_rust::agentic::EnrichedDataSchema::Multimodal(multi_modal_outputs)
+                        golem_rust::agentic::ExtendedDataSchema::Multimodal(multi_modal_outputs)
                     } else {
-                        golem_rust::agentic::EnrichedDataSchema::Tuple(default_outputs)
+                        golem_rust::agentic::ExtendedDataSchema::Tuple(default_outputs)
                     }
                 }
             };
@@ -424,8 +424,8 @@ fn get_agent_type_with_remote_client(
                         golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                             constructor_multi_modal_inputs.extend(name_and_types);
                         },
-                        golem_rust::agentic::StructuredSchema::AutoInjected(auto_inject_schema) => {
-                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_inject_schema)));
+                        golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
+                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_inject_schema)));
                         }
                     }
                 });
@@ -438,9 +438,9 @@ fn get_agent_type_with_remote_client(
             #constructor_schema_init
             #(#constructor_parameters_with_schema)*
             if !constructor_multi_modal_inputs.is_empty() {
-                golem_rust::agentic::EnrichedDataSchema::Multimodal(constructor_multi_modal_inputs)
+                golem_rust::agentic::ExtendedDataSchema::Multimodal(constructor_multi_modal_inputs)
             } else {
-                golem_rust::agentic::EnrichedDataSchema::Tuple(constructor_default_inputs)
+                golem_rust::agentic::ExtendedDataSchema::Tuple(constructor_default_inputs)
             }
         }
     };
@@ -474,7 +474,7 @@ fn get_agent_type_with_remote_client(
         {
          #constructor_data_schema_token
 
-         golem_rust::agentic::EnrichedAgentConstructor {
+         golem_rust::agentic::ExtendedAgentConstructor {
             name: #constructor_name,
             description: #constructor_description.to_string(),
             prompt_hint: #constructor_prompt_hint,
@@ -491,7 +491,7 @@ fn get_agent_type_with_remote_client(
 
     Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {
-            golem_rust::agentic::EnrichedAgentType {
+            golem_rust::agentic::ExtendedAgentType {
                 type_name: #agent_trait_name.to_string(),
                 description: #high_level_description_ident.to_string(),
                 methods: vec![#(#methods),*],

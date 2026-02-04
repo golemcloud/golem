@@ -40,13 +40,13 @@ pub trait Schema {
 
 #[derive(Debug)]
 pub enum StructuredSchema {
-    AutoInjected(AutoInjectedSchema),
+    AutoInject(AutoInjectedParamType),
     Default(ElementSchema),
     Multimodal(Vec<(String, ElementSchema)>),
 }
 
 #[derive(Debug, Clone)]
-pub enum AutoInjectedSchema {
+pub enum AutoInjectedParamType {
     Principal,
 }
 
@@ -55,7 +55,7 @@ impl StructuredSchema {
         match self {
             StructuredSchema::Default(element_schema) => Some(element_schema),
             StructuredSchema::Multimodal(_) => None,
-            StructuredSchema::AutoInjected(_) => None,
+            StructuredSchema::AutoInject(_) => None,
         }
     }
 }
@@ -101,7 +101,7 @@ impl StructuredValue {
 
 impl Schema for Principal {
     fn get_type() -> StructuredSchema {
-        StructuredSchema::AutoInjected(AutoInjectedSchema::Principal)
+        StructuredSchema::AutoInject(AutoInjectedParamType::Principal)
     }
 
     fn to_structured_value(self) -> Result<StructuredValue, String> {
@@ -120,7 +120,7 @@ impl Schema for Principal {
         match (value, schema) {
             (
                 StructuredValue::AutoInjected(AutoInjectedValue::Principal(principal)),
-                StructuredSchema::AutoInjected(AutoInjectedSchema::Principal),
+                StructuredSchema::AutoInject(AutoInjectedParamType::Principal),
             ) => Ok(principal),
             _ => Err("Mismatched value and schema for Principal".to_string()),
         }

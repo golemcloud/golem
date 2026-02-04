@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::AutoInjectedSchema;
+use crate::agentic::AutoInjectedParamType;
 use crate::golem_agentic::golem::agent::common::{
     AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, DataSchema,
     ElementSchema, HttpEndpointDetails, HttpMountDetails,
@@ -24,23 +24,24 @@ use std::collections::HashSet;
 // The agent registry will hold this information for the generated `initiate` , `invoke` and rpc calls
 // to look up so that these parameters can be injected automatically by the platform
 #[derive(Clone)]
-pub struct EnrichedAgentType {
+pub struct ExtendedAgentType {
     pub type_name: String,
     pub description: String,
-    pub constructor: EnrichedAgentConstructor,
+    pub constructor: ExtendedAgentConstructor,
     pub methods: Vec<EnrichedAgentMethod>,
     pub dependencies: Vec<AgentDependency>,
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
 }
 
-impl EnrichedAgentType {
+impl ExtendedAgentType {
     pub fn principal_params_in_constructor(&self) -> HashSet<String> {
         let mut principal_params = HashSet::new();
 
-        if let EnrichedDataSchema::Tuple(fields) = &self.constructor.input_schema {
+        if let ExtendedDataSchema::Tuple(fields) = &self.constructor.input_schema {
             for (name, schema) in fields {
-                if let EnrichedElementSchema::AutoInjected(AutoInjectedSchema::Principal) = schema {
+                if let EnrichedElementSchema::AutoInject(AutoInjectedParamType::Principal) = schema
+                {
                     principal_params.insert(name.clone());
                 }
             }
@@ -68,8 +69,8 @@ pub struct EnrichedAgentMethod {
     pub description: String,
     pub http_endpoint: Vec<HttpEndpointDetails>,
     pub prompt_hint: Option<String>,
-    pub input_schema: EnrichedDataSchema,
-    pub output_schema: EnrichedDataSchema,
+    pub input_schema: ExtendedDataSchema,
+    pub output_schema: ExtendedDataSchema,
 }
 
 impl EnrichedAgentMethod {
@@ -86,14 +87,14 @@ impl EnrichedAgentMethod {
 }
 
 #[derive(Clone)]
-pub struct EnrichedAgentConstructor {
+pub struct ExtendedAgentConstructor {
     pub name: Option<String>,
     pub description: String,
     pub prompt_hint: Option<String>,
-    pub input_schema: EnrichedDataSchema,
+    pub input_schema: ExtendedDataSchema,
 }
 
-impl EnrichedAgentConstructor {
+impl ExtendedAgentConstructor {
     pub fn to_agent_constructor(&self) -> AgentConstructor {
         AgentConstructor {
             name: self.name.clone(),
@@ -105,29 +106,31 @@ impl EnrichedAgentConstructor {
 }
 
 #[derive(Clone)]
-pub enum EnrichedDataSchema {
+pub enum ExtendedDataSchema {
     Tuple(Vec<(String, EnrichedElementSchema)>),
     // Disallow any auto-injected schemas within multimodal
+    // This simplifies the implementation as multimodal is not expected to have anything outside
+    // such as Principal
     Multimodal(Vec<(String, ElementSchema)>),
 }
 
-impl EnrichedDataSchema {
+impl ExtendedDataSchema {
     pub fn to_data_schema(&self) -> DataSchema {
         match self {
-            EnrichedDataSchema::Tuple(fields) => {
+            ExtendedDataSchema::Tuple(fields) => {
                 let fields_without_auto_injected = fields
                     .iter()
                     .filter_map(|(name, schema)| match schema {
                         EnrichedElementSchema::ElementSchema(element_schema) => {
                             Some((name.clone(), element_schema.clone()))
                         }
-                        EnrichedElementSchema::AutoInjected(_) => None,
+                        EnrichedElementSchema::AutoInject(_) => None,
                     })
                     .collect::<Vec<(String, ElementSchema)>>();
 
                 DataSchema::Tuple(fields_without_auto_injected)
             }
-            EnrichedDataSchema::Multimodal(variants) => DataSchema::Multimodal(variants.clone()),
+            ExtendedDataSchema::Multimodal(variants) => DataSchema::Multimodal(variants.clone()),
         }
     }
 }
@@ -135,5 +138,5 @@ impl EnrichedDataSchema {
 #[derive(Clone)]
 pub enum EnrichedElementSchema {
     ElementSchema(ElementSchema),
-    AutoInjected(AutoInjectedSchema),
+    AutoInject(AutoInjectedParamType),
 }

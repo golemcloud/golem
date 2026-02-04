@@ -727,4 +727,6 @@ mod tests {
             format!("Hello, {}!", name)
         }
     }
+
+    // Auto Injected Principal
 }

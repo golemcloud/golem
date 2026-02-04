@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::enriched_agent_type::EnrichedAgentType;
-use crate::agentic::{EnrichedDataSchema, EnrichedElementSchema};
+use crate::agentic::enriched_agent_type::ExtendedAgentType;
+use crate::agentic::{EnrichedElementSchema, ExtendedDataSchema};
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::exports::golem::agent::guest::AgentType,
@@ -34,7 +34,7 @@ pub struct State {
 
 #[derive(Default)]
 pub struct AgentTypes {
-    pub agent_types: HashMap<AgentTypeName, EnrichedAgentType>,
+    pub agent_types: HashMap<AgentTypeName, ExtendedAgentType>,
 }
 
 static mut STATE: Option<State> = None;
@@ -73,7 +73,7 @@ pub fn get_all_agent_types() -> Vec<AgentType> {
 
 pub fn get_enriched_agent_type_by_name(
     agent_type_name: &AgentTypeName,
-) -> Option<EnrichedAgentType> {
+) -> Option<ExtendedAgentType> {
     let state = get_state();
 
     state
@@ -90,7 +90,7 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
     enriched.map(|e| e.to_agent_type())
 }
 
-pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: EnrichedAgentType) {
+pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedAgentType) {
     get_state()
         .agent_types
         .borrow_mut()
@@ -175,7 +175,7 @@ pub fn get_constructor_parameter_type(
     let constructor = &agent_type.constructor;
 
     match &constructor.input_schema {
-        EnrichedDataSchema::Tuple(items) => {
+        ExtendedDataSchema::Tuple(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
                 Some(element_schema.clone())
@@ -183,7 +183,7 @@ pub fn get_constructor_parameter_type(
                 None
             }
         }
-        EnrichedDataSchema::Multimodal(items) => {
+        ExtendedDataSchema::Multimodal(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
                 Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))
@@ -204,7 +204,7 @@ pub fn get_method_parameter_type(
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
 
     match &method.input_schema {
-        EnrichedDataSchema::Tuple(items) => {
+        ExtendedDataSchema::Tuple(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
                 Some(element_schema.clone())
@@ -212,7 +212,7 @@ pub fn get_method_parameter_type(
                 None
             }
         }
-        EnrichedDataSchema::Multimodal(items) => {
+        ExtendedDataSchema::Multimodal(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
                 Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))

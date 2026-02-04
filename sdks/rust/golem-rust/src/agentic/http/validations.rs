@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::{
-    AutoInjectedSchema, EnrichedAgentMethod, EnrichedDataSchema, EnrichedElementSchema,
+    AutoInjectedParamType, EnrichedAgentMethod, EnrichedElementSchema, ExtendedDataSchema,
 };
 use crate::golem_agentic::golem::agent::common::{
     AgentConstructor, DataSchema, ElementSchema, HttpEndpointDetails, HttpMountDetails, PathSegment,
@@ -73,32 +73,32 @@ pub fn validate_http_endpoint(
     Ok(())
 }
 
-fn collect_principal_parameter_names(input_schema: &EnrichedDataSchema) -> HashSet<String> {
+fn collect_principal_parameter_names(input_schema: &ExtendedDataSchema) -> HashSet<String> {
     let mut principal_params = HashSet::new();
 
     match input_schema {
-        EnrichedDataSchema::Tuple(name_and_schemas) => {
+        ExtendedDataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
-                if let EnrichedElementSchema::AutoInjected(auto_injected_schema) = param_schema {
+                if let EnrichedElementSchema::AutoInject(auto_injected_schema) = param_schema {
                     match auto_injected_schema {
-                        AutoInjectedSchema::Principal => {
+                        AutoInjectedParamType::Principal => {
                             principal_params.insert(param_name.clone());
                         }
                     }
                 }
             }
         }
-        EnrichedDataSchema::Multimodal(_) => {}
+        ExtendedDataSchema::Multimodal(_) => {}
     }
 
     principal_params
 }
 
-fn collect_unstructured_binary_params(input_schema: &EnrichedDataSchema) -> HashSet<String> {
+fn collect_unstructured_binary_params(input_schema: &ExtendedDataSchema) -> HashSet<String> {
     let mut unstructured_binary_params = HashSet::new();
 
     match input_schema {
-        EnrichedDataSchema::Tuple(name_and_schemas) => {
+        ExtendedDataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
                 if let EnrichedElementSchema::ElementSchema(ElementSchema::UnstructuredBinary(_)) =
                     param_schema
@@ -107,26 +107,26 @@ fn collect_unstructured_binary_params(input_schema: &EnrichedDataSchema) -> Hash
                 }
             }
         }
-        EnrichedDataSchema::Multimodal(_) => {}
+        ExtendedDataSchema::Multimodal(_) => {}
     }
 
     unstructured_binary_params
 }
 
 // Collects method input variable names, excluding auto-injected variables.
-fn collect_method_input_vars(input_schema: &EnrichedDataSchema) -> HashSet<String> {
+fn collect_method_input_vars(input_schema: &ExtendedDataSchema) -> HashSet<String> {
     let mut param_names = HashSet::new();
 
     match input_schema {
-        EnrichedDataSchema::Tuple(name_and_schemas) => {
+        ExtendedDataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
-                if let EnrichedElementSchema::AutoInjected(_) = param_schema {
+                if let EnrichedElementSchema::AutoInject(_) = param_schema {
                     continue;
                 }
                 param_names.insert(param_name.clone());
             }
         }
-        EnrichedDataSchema::Multimodal(_) => {}
+        ExtendedDataSchema::Multimodal(_) => {}
     }
 
     param_names
@@ -418,7 +418,7 @@ mod tests {
                         StructuredSchema::Multimodal(_) => {
                             panic!("Multimodal schema not supported in this test constructor")
                         }
-                        StructuredSchema::AutoInjected(_) => {
+                        StructuredSchema::AutoInject(_) => {
                             panic!("AutoInjected schema not supported in this test constructor")
                         }
                     };
@@ -572,7 +572,7 @@ mod tests {
         normal_vars: Vec<&str>,
         principal_vars: Vec<&str>,
         unstructured_vars: Vec<&str>,
-    ) -> EnrichedDataSchema {
+    ) -> ExtendedDataSchema {
         let mut fields = vec![];
 
         for name in normal_vars {
@@ -587,7 +587,7 @@ mod tests {
         for name in principal_vars {
             fields.push((
                 name.to_string(),
-                EnrichedElementSchema::AutoInjected(AutoInjectedSchema::Principal),
+                EnrichedElementSchema::AutoInject(AutoInjectedParamType::Principal),
             ));
         }
 
@@ -600,7 +600,7 @@ mod tests {
             ));
         }
 
-        EnrichedDataSchema::Tuple(fields)
+        ExtendedDataSchema::Tuple(fields)
     }
 
     fn make_endpoint(
@@ -644,7 +644,7 @@ mod tests {
 
     fn make_agent_method(
         name: &str,
-        input_schema: EnrichedDataSchema,
+        input_schema: ExtendedDataSchema,
         endpoints: Vec<HttpEndpointDetails>,
     ) -> EnrichedAgentMethod {
         EnrichedAgentMethod {
@@ -652,7 +652,7 @@ mod tests {
             description: "".to_string(),
             prompt_hint: None,
             input_schema,
-            output_schema: EnrichedDataSchema::Tuple(vec![]),
+            output_schema: ExtendedDataSchema::Tuple(vec![]),
             http_endpoint: endpoints,
         }
     }
