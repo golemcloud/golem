@@ -98,10 +98,10 @@ fn collect_unstructured_binary_params(input_schema: &EnrichedDataSchema) -> Hash
     match input_schema {
         EnrichedDataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
-                if let EnrichedSchema::ElementSchema(element_schema) = param_schema {
-                    if let ElementSchema::UnstructuredBinary(_) = element_schema {
-                        unstructured_binary_params.insert(param_name.clone());
-                    }
+                if let EnrichedSchema::ElementSchema(ElementSchema::UnstructuredBinary(_)) =
+                    param_schema
+                {
+                    unstructured_binary_params.insert(param_name.clone());
                 }
             }
         }
@@ -169,8 +169,8 @@ fn validate_endpoint_variables(
         validate_variable(
             &var.variable_name,
             "header",
-            &principal_params,
-            &unstructured_binary_params,
+            principal_params,
+            unstructured_binary_params,
             method_vars,
             &format!(
                 "HTTP endpoint header variable '{}' cannot be used for method parameters of type 'UnstructuredBinary'",
@@ -183,8 +183,8 @@ fn validate_endpoint_variables(
         validate_variable(
             &var.variable_name,
             "query",
-            &principal_params,
-            &unstructured_binary_params,
+            principal_params,
+            unstructured_binary_params,
             method_vars,
             &format!(
                 "HTTP endpoint query variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
@@ -201,8 +201,8 @@ fn validate_endpoint_variables(
                 validate_variable(
                     name,
                     "path",
-                    &principal_params,
-                    &unstructured_binary_params,
+                    principal_params,
+                    unstructured_binary_params,
                     method_vars,
                     &format!(
                         "HTTP endpoint path variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
