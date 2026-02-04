@@ -35,11 +35,7 @@ export class AgentId {
    * @param parameters Constructor parameter values encoded as DataValue
    * @param phantomId Optional phantom ID
    */
-  static make(
-    agentTypeName: string,
-    parameters: DataValue,
-    phantomId?: Uuid,
-  ): AgentId {
+  static make(agentTypeName: string, parameters: DataValue, phantomId?: Uuid): AgentId {
     const value = makeAgentId(agentTypeName, parameters, phantomId);
     const result = new AgentId(value);
     result.parsedCache = [agentTypeName, parameters, phantomId];

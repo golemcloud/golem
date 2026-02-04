@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import { TypeScope } from './scope';
 
@@ -32,8 +31,6 @@ export function createCtx(type: TsType, scope: TypeScope | undefined): Ctx {
     type,
     scope,
     scopeName: scope?.name,
-    parameterInScope: scope
-      ? TypeScope.paramName(scope)
-      : undefined
+    parameterInScope: scope ? TypeScope.paramName(scope) : undefined,
   };
 }

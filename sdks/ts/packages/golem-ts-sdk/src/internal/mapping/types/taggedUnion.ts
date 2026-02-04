@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Type } from '@golemcloud/golem-ts-types-core';
-import * as Either from "../../../newTypes/either";
+import * as Either from '../../../newTypes/either';
 import { isNumberString, trimQuotes } from './stringFormat';
 import { TagKeyWords } from './keywords';
 import { Try } from '../../try';
@@ -36,9 +36,7 @@ export type TaggedUnion =
 
 export const TaggedUnion = {
   getTagNames(tu: TaggedUnion): string[] {
-    return tu.tag === 'custom'
-      ? tu.val.map(t => t.tagLiteralName)
-      : ['ok', 'err'];
+    return tu.tag === 'custom' ? tu.val.map((t) => t.tagLiteralName) : ['ok', 'err'];
   },
 
   getTaggedTypes(tu: TaggedUnion): TaggedTypeMetadata[] {
@@ -59,23 +57,26 @@ export function tryTaggedUnion(unionTypes: TsType[]): Try<TaggedUnion> {
   const taggedTypeMetadata: TaggedTypeMetadata[] = [];
 
   for (const ut of unionTypes) {
-    if (ut.kind !== "object" || ut.properties.length > 2) {
+    if (ut.kind !== 'object' || ut.properties.length > 2) {
       return Either.right(undefined);
     }
 
-    const tag = ut.properties.find(p => p.getName() === "tag");
+    const tag = ut.properties.find((p) => p.getName() === 'tag');
     if (!tag) return Either.right(undefined);
 
     const tagType = tag.getTypeAtLocation(tag.getValueDeclarationOrThrow());
-    if (tagType.kind !== "literal" || !tagType.literalValue) {
+    if (tagType.kind !== 'literal' || !tagType.literalValue) {
       return Either.right(undefined);
     }
 
     const tagValueTrimmed = trimQuotes(tagType.literalValue);
 
-    const nextSymbol = ut.properties.find(p => p.getName() !== "tag");
+    const nextSymbol = ut.properties.find((p) => p.getName() !== 'tag');
     if (!nextSymbol) {
-      taggedTypeMetadata.push({ tagLiteralName: tagValueTrimmed, valueType: undefined });
+      taggedTypeMetadata.push({
+        tagLiteralName: tagValueTrimmed,
+        valueType: undefined,
+      });
     } else {
       const node = nextSymbol.getDeclarations()[0];
       const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
@@ -93,14 +94,14 @@ export function tryTaggedUnion(unionTypes: TsType[]): Try<TaggedUnion> {
   if (eitherResultType.val) return Either.right({ tag: 'result', val: eitherResultType.val });
 
   const reservedKeys = taggedTypeMetadata
-    .map(t => t.tagLiteralName)
-    .filter(t => TagKeyWords.includes(t));
+    .map((t) => t.tagLiteralName)
+    .filter((t) => TagKeyWords.includes(t));
 
   if (reservedKeys.length > 0) {
     return Either.left(
-      `Invalid tag value(s): \`${reservedKeys.join(", ")}\`. ` +
-      `These are reserved keywords and cannot be used. ` +
-      `Reserved keywords: ${TagKeyWords.join(", ")}.`
+      `Invalid tag value(s): \`${reservedKeys.join(', ')}\`. ` +
+        `These are reserved keywords and cannot be used. ` +
+        `Reserved keywords: ${TagKeyWords.join(', ')}.`,
     );
   }
 
@@ -110,8 +111,8 @@ export function tryTaggedUnion(unionTypes: TsType[]): Try<TaggedUnion> {
 function tryResultType(taggedTypes: TaggedTypeMetadata[]): Try<UserDefinedResultType> {
   if (taggedTypes.length !== 2) return Either.right(undefined);
 
-  const okTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'ok');
-  const errTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'err');
+  const okTypeMetadata = taggedTypes.find((t) => t.tagLiteralName === 'ok');
+  const errTypeMetadata = taggedTypes.find((t) => t.tagLiteralName === 'err');
   if (!okTypeMetadata || !errTypeMetadata) return Either.right(undefined);
 
   const okType = okTypeMetadata.valueType;
@@ -121,14 +122,14 @@ function tryResultType(taggedTypes: TaggedTypeMetadata[]): Try<UserDefinedResult
   if (okType[1].optional) {
     return Either.left(
       "The value corresponding to the tag 'ok' cannot be optional. " +
-      "Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional"
+        'Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional',
     );
   }
 
   if (errType[1].optional) {
     return Either.left(
       "The value corresponding to the tag 'err' cannot be optional. " +
-      "Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional"
+        'Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional',
     );
   }
 
@@ -141,7 +142,7 @@ export function tryUnionOfOnlyLiteral(unionTypes: TsType[]): Try<UnionOfLiteral>
   const literals: string[] = [];
 
   for (const ut of unionTypes) {
-    if (ut.kind !== "literal" || !ut.literalValue) return Either.right(undefined);
+    if (ut.kind !== 'literal' || !ut.literalValue) return Either.right(undefined);
 
     const valueTrimmed = trimQuotes(ut.literalValue);
     if (isNumberString(valueTrimmed) || valueTrimmed === 'true' || valueTrimmed === 'false') {
@@ -150,7 +151,7 @@ export function tryUnionOfOnlyLiteral(unionTypes: TsType[]): Try<UnionOfLiteral>
 
     if (TagKeyWords.includes(valueTrimmed)) {
       return Either.left(
-        `\`${valueTrimmed}\` is a reserved keyword. The following keywords cannot be used as literals: ${TagKeyWords.join(', ')}`
+        `\`${valueTrimmed}\` is a reserved keyword. The following keywords cannot be used as literals: ${TagKeyWords.join(', ')}`,
       );
     }
 

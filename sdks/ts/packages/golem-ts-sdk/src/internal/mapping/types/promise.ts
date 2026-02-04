@@ -13,16 +13,19 @@
 // limitations under the License.
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from "../../../newTypes/either";
+import * as Either from '../../../newTypes/either';
 import { Ctx } from './ctx';
 import { AnalysedType } from './analysedType';
 import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-type PromiseCtx = Ctx & { type: Extract<TsType, { kind: "promise" }> };
+type PromiseCtx = Ctx & { type: Extract<TsType, { kind: 'promise' }> };
 
-export function handlePromise({ type, scope }: PromiseCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
+export function handlePromise(
+  { type, scope }: PromiseCtx,
+  mapper: TypeMapper,
+): Either.Either<AnalysedType, string> {
   const inner = type.element;
 
   // We reuse the same scope when it comes to promises
