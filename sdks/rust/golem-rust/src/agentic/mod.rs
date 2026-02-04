@@ -26,7 +26,7 @@ pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
 pub use wit_utils::*;
-
+pub use crate::golem_agentic::golem::agent::common::Principal as Principal;
 mod agent;
 mod agent_definition_options;
 mod agent_impl;
