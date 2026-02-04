@@ -30,48 +30,43 @@ export function getAgentMethodSchema(
   const baseError = `Schema generation failed for agent class ${agentClassName}`;
 
   if (!classMetadata) {
-    throw new Error(
-      `${baseError}. No metadata found for agent class ${agentClassName}`,
-    );
+    throw new Error(`${baseError}. No metadata found for agent class ${agentClassName}`);
   }
 
-  return Array.from(classMetadata.methods.entries()).map(
-    ([methodName, signature]) => {
-      const { methodParams, returnType } = signature;
+  return Array.from(classMetadata.methods.entries()).map(([methodName, signature]) => {
+    const { methodParams, returnType } = signature;
 
-      validateMethodNameOrThrow(methodName, baseError);
+    validateMethodNameOrThrow(methodName, baseError);
 
-      const baseMeta =
-        AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
+    const baseMeta = AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
 
-      const inputSchema: DataSchema = resolveInputSchemaOrThrow(
-        agentClassName,
-        methodName,
-        methodParams,
-        baseError,
-      );
+    const inputSchema: DataSchema = resolveInputSchemaOrThrow(
+      agentClassName,
+      methodName,
+      methodParams,
+      baseError,
+    );
 
-      const outputSchema = resolveReturnSchemaOrThrow(
-        agentClassName,
-        methodName,
-        returnType,
-        baseError,
-      );
+    const outputSchema = resolveReturnSchemaOrThrow(
+      agentClassName,
+      methodName,
+      returnType,
+      baseError,
+    );
 
-      const agentMethod: AgentMethod = {
-        name: methodName,
-        description: baseMeta.description ?? '',
-        promptHint: baseMeta.prompt ?? '',
-        inputSchema,
-        outputSchema,
-        httpEndpoint: baseMeta.httpEndpoint ?? [],
-      };
+    const agentMethod: AgentMethod = {
+      name: methodName,
+      description: baseMeta.description ?? '',
+      promptHint: baseMeta.prompt ?? '',
+      inputSchema,
+      outputSchema,
+      httpEndpoint: baseMeta.httpEndpoint ?? [],
+    };
 
-      validateHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
+    validateHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
 
-      return agentMethod;
-    },
-  );
+    return agentMethod;
+  });
 }
 
 function validateMethodNameOrThrow(methodName: string, baseError: string) {
@@ -88,11 +83,7 @@ function resolveInputSchemaOrThrow(
   parameters: MethodParams,
   baseError: string,
 ): DataSchema {
-  const inputSchemaEither = resolveMethodInputSchema(
-    agentClassName,
-    methodName,
-    parameters,
-  );
+  const inputSchemaEither = resolveMethodInputSchema(agentClassName, methodName, parameters);
 
   if (Either.isLeft(inputSchemaEither)) {
     throw new Error(`${baseError}. ${inputSchemaEither.val}`);
@@ -107,11 +98,7 @@ function resolveReturnSchemaOrThrow(
   returnType: Type.Type,
   baseError: string,
 ): DataSchema {
-  const returnSchemaEither = resolveMethodReturnDataSchema(
-    agentClassName,
-    methodName,
-    returnType,
-  );
+  const returnSchemaEither = resolveMethodReturnDataSchema(agentClassName, methodName, returnType);
 
   if (Either.isLeft(returnSchemaEither)) {
     throw new Error(

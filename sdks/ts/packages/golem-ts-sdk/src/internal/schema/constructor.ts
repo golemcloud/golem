@@ -24,10 +24,7 @@ import {
   getTextDescriptor,
   isMultimodalType,
 } from './helpers';
-import {
-  getMultimodalDataSchemaFromTypeInternal,
-  TypeInfoInternal,
-} from '../typeInfoInternal';
+import { getMultimodalDataSchemaFromTypeInternal, TypeInfoInternal } from '../typeInfoInternal';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 import { TypeScope } from '../mapping/types/scope';
 import { ParameterSchemaCollection } from './paramSchema';
@@ -39,8 +36,7 @@ export function getAgentConstructorSchema(
   const constructorParams = classType.constructorArgs;
   const baseError = buildBaseError(agentClassName);
 
-  const multimodal: Type.Type | undefined =
-    getMultimodalTypeInfo(constructorParams);
+  const multimodal: Type.Type | undefined = getMultimodalTypeInfo(constructorParams);
 
   if (multimodal) {
     return resolveMultimodalConstructorSchema(
@@ -51,11 +47,7 @@ export function getAgentConstructorSchema(
     );
   }
 
-  return resolveStandardConstructorSchema(
-    agentClassName,
-    constructorParams,
-    baseError,
-  );
+  return resolveStandardConstructorSchema(agentClassName, constructorParams, baseError);
 }
 
 interface ConstructorParamHandler {
@@ -187,9 +179,7 @@ function buildBaseError(agentClassName: string): string {
   return `Schema generation failed for agent class ${agentClassName} due to unsupported types in constructor.`;
 }
 
-function getMultimodalTypeInfo(
-  params: readonly ConstructorArg[],
-): Type.Type | undefined {
+function getMultimodalTypeInfo(params: readonly ConstructorArg[]): Type.Type | undefined {
   if (params.length === 1 && isMultimodalType(params[0].type)) {
     return params[0].type;
   }
@@ -264,12 +254,7 @@ function resolveStandardConstructorSchema(
   const parameterSchemaCollection = new ParameterSchemaCollection();
 
   params.forEach((param) => {
-    handleConstructorParam(
-      agentClassName,
-      param,
-      baseError,
-      parameterSchemaCollection,
-    );
+    handleConstructorParam(agentClassName, param, baseError, parameterSchemaCollection);
   });
 
   return parameterSchemaCollection.getDataSchema();

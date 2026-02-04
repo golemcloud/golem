@@ -22,9 +22,7 @@ export function parsePath(path: string): PathSegment[] {
 
   const segments = path.split('/').slice(1);
 
-  return segments.map((segment, index) =>
-    parseSegment(segment, index === segments.length - 1),
-  );
+  return segments.map((segment, index) => parseSegment(segment, index === segments.length - 1));
 }
 
 function parseSegment(segment: string, isLast: boolean): PathSegment {

@@ -17,10 +17,7 @@ import { Value } from './Value';
 import { NameOptionTypePair } from '../types/analysedType';
 
 // type mismatch in tsValue when converting from TS to WIT
-export function typeMismatchInSerialize(
-  tsValue: any,
-  expectedType: string,
-): string {
+export function typeMismatchInSerialize(tsValue: any, expectedType: string): string {
   return `Type mismatch. Expected type \`${safeDisplay(expectedType)}\`, got \`${safeDisplay(tsValue)}\``;
 }
 
@@ -39,18 +36,12 @@ export function missingObjectKey(key: string, tsValue: any): string {
 }
 
 // tsValue does not match any of the union types when converting from TS to WIT
-export function unionTypeMatchError(
-  unionTypes: NameOptionTypePair[],
-  tsValue: any,
-): string {
+export function unionTypeMatchError(unionTypes: NameOptionTypePair[], tsValue: any): string {
   const types = unionTypes.map((t) => t.name);
   return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${types.join(', ')}`;
 }
 
-export function enumMismatchInSerialize(
-  enumValues: string[],
-  tsValue: any,
-): string {
+export function enumMismatchInSerialize(enumValues: string[], tsValue: any): string {
   return `Value '${safeDisplay(tsValue)}' does not match any of the enum values: ${enumValues.join(', ')}`;
 }
 

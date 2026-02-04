@@ -67,21 +67,21 @@ export type EitherX = {
 
 export type EitherY =
   | {
-      tag: "ok";
+      tag: 'ok';
       val: string;
     }
   | {
-      tag: "err";
+      tag: 'err';
       val: string;
     };
 
 export type EitherZ =
   | {
-      tag: "ok";
+      tag: 'ok';
       val: string;
     }
   | {
-      tag: "err";
+      tag: 'err';
       val?: string;
     };
 
@@ -121,9 +121,7 @@ export type RecordType = Record<string, number>;
 export type MyCode = string;
 
 export type ObjectWithTypeParameter<C extends MyCode[] = []> = { a: C };
-export type UnionWithTypeParameter<C extends MyCode[] = []> =
-  | { a: C }
-  | { b: C };
+export type UnionWithTypeParameter<C extends MyCode[] = []> = { a: C } | { b: C };
 
 type RecursiveType = {
   more: RecursiveType | undefined;
@@ -146,8 +144,8 @@ class MyAgent {
     tupleType: TupleType,
     listComplexType: ListComplexType,
     objectType: ObjectType,
-    unionWithLiteral: "foo" | "bar" | 1 | true | false,
-    objectWithLiteral: { tag: "inline"; val: string },
+    unionWithLiteral: 'foo' | 'bar' | 1 | true | false,
+    objectWithLiteral: { tag: 'inline'; val: string },
     classType: FooBar,
     recordType: Record<string, number>,
     recordTypeAliased: RecordType,
@@ -159,25 +157,19 @@ class MyAgent {
     eitherZType: EitherZ,
     literallyObject: Object,
     recursiveType: RecursiveType,
-    objectWithTypeParameter: ObjectWithTypeParameter<["en", "de"]>,
-    unionWithTypeParameter: UnionWithTypeParameter<["en", "de"]>,
+    objectWithTypeParameter: ObjectWithTypeParameter<['en', 'de']>,
+    unionWithTypeParameter: UnionWithTypeParameter<['en', 'de']>,
     multimodal: MultimodalType<string | boolean>,
   ): PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
 
-  async methodWithOptionalQMark(
-    required: string,
-    optional?: number,
-  ): Promise<string> {
-    return Promise.resolve("test");
+  async methodWithOptionalQMark(required: string, optional?: number): Promise<string> {
+    return Promise.resolve('test');
   }
 
-  async methodWithOptionalUnion(
-    required: string,
-    optional: number | undefined,
-  ): Promise<string> {
-    return Promise.resolve("test");
+  async methodWithOptionalUnion(required: string, optional: number | undefined): Promise<string> {
+    return Promise.resolve('test');
   }
 
   // type-gen does not track private functions. This can be made configurable though

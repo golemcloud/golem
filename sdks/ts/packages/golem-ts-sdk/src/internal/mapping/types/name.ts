@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 import { convertVariantTypeNameToKebab } from './stringFormat';
 
 let GlobalVariantTermIdx = 0;
@@ -29,17 +28,19 @@ let GlobalVariantTermIdx = 0;
 // If the union has a name (Ex: type MyUnion = string | number), then we simply suffix the actual name of the union
 // with the actual index (termIdx argument below) of the variant
 // That is, `MyUnion` is converted to `variant { my-union-0(string), my-union-1(number)`
-export function generateVariantTermName(originalUnionName: string | undefined, termIdx: number): string {
-
+export function generateVariantTermName(
+  originalUnionName: string | undefined,
+  termIdx: number,
+): string {
   // if the union by itself does not have a name, generate a generic one using `case` prefix
   if (!originalUnionName) {
     GlobalVariantTermIdx += 1;
-    return `case${GlobalVariantTermIdx}`
+    return `case${GlobalVariantTermIdx}`;
   }
 
   // otherwise, convert the original union name to kebab-case and append the term index
   // Example: type MyUnion = A | B | C
   // generates: my-union0, my-union1, my-union2
   const kebabCasedVariantName = convertVariantTypeNameToKebab(originalUnionName);
-  return `${kebabCasedVariantName}${termIdx}`
+  return `${kebabCasedVariantName}${termIdx}`;
 }

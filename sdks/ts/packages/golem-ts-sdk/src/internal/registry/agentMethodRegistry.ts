@@ -46,10 +46,7 @@ class AgentMethodRegistryImpl {
     return this.registry.get(agentClassName);
   }
 
-  getReturnType(
-    agentClassName: string,
-    agentMethodName: string,
-  ): TypeInfoInternal | undefined {
+  getReturnType(agentClassName: string, agentMethodName: string): TypeInfoInternal | undefined {
     const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(agentMethodName)?.returnType;
   }
@@ -60,35 +57,22 @@ class AgentMethodRegistryImpl {
     classMeta.get(method)!.prompt = prompt;
   }
 
-  setDescription(
-    agentClassName: string,
-    method: string,
-    description: string,
-  ): void {
+  setDescription(agentClassName: string, method: string, description: string): void {
     this.ensureMeta(agentClassName, method);
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.description = description;
   }
 
-  setReturnType(
-    agentClassName: string,
-    method: string,
-    returnType: TypeInfoInternal,
-  ): void {
+  setReturnType(agentClassName: string, method: string, returnType: TypeInfoInternal): void {
     this.ensureMeta(agentClassName, method);
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.returnType = returnType;
   }
 
-  setHttpEndpoint(
-    agentClassName: string,
-    method: string,
-    endpoint: HttpEndpointDetails,
-  ): void {
+  setHttpEndpoint(agentClassName: string, method: string, endpoint: HttpEndpointDetails): void {
     this.ensureMeta(agentClassName, method);
     const classMeta = this.registry.get(agentClassName)!;
-    classMeta.get(method)!.httpEndpoint =
-      classMeta.get(method)!.httpEndpoint || [];
+    classMeta.get(method)!.httpEndpoint = classMeta.get(method)!.httpEndpoint || [];
     classMeta.get(method)!.httpEndpoint!.push(endpoint);
   }
 
@@ -97,5 +81,4 @@ class AgentMethodRegistryImpl {
   }
 }
 
-export const AgentMethodRegistry: AgentMethodRegistryImpl =
-  new AgentMethodRegistryImpl();
+export const AgentMethodRegistry: AgentMethodRegistryImpl = new AgentMethodRegistryImpl();

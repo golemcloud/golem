@@ -29,9 +29,7 @@ export function getHttpMountDetails(
 
   return {
     pathPrefix,
-    authDetails: agentDecoratorOptions.auth
-      ? { required: true }
-      : { required: false },
+    authDetails: agentDecoratorOptions.auth ? { required: true } : { required: false },
     phantomAgent: false,
     corsOptions: {
       allowedPatterns: agentDecoratorOptions.cors ?? [],

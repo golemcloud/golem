@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  isEmptyType,
-  isOptionalWithQuestionMark,
-  TypeInfoInternal,
-} from '../../typeInfoInternal';
+import { isEmptyType, isOptionalWithQuestionMark, TypeInfoInternal } from '../../typeInfoInternal';
 
 import * as Either from '../../../newTypes/either';
 import * as WitValue from '../../mapping/values/WitValue';
@@ -113,8 +109,9 @@ export function deserializeDataValue(
                 );
               }
 
-              const languageCodes: Either.Either<string[], string> =
-                getLanguageCodes(parameterType.tsType);
+              const languageCodes: Either.Either<string[], string> = getLanguageCodes(
+                parameterType.tsType,
+              );
 
               if (Either.isLeft(languageCodes)) {
                 throw new Error(
@@ -166,9 +163,7 @@ export function deserializeDataValue(
 
               dataValueElementIdx += 1;
 
-              return Either.right(
-                WitValue.toTsValue(elementValue.val, parameterType.val),
-              );
+              return Either.right(WitValue.toTsValue(elementValue.val, parameterType.val));
           }
         }),
       );
@@ -204,8 +199,7 @@ export function deserializeDataValue(
               const type = parameterDetail.type;
               const textRef = elem.val;
 
-              const languageCodes: Either.Either<string[], string> =
-                getLanguageCodes(type.tsType);
+              const languageCodes: Either.Either<string[], string> = getLanguageCodes(type.tsType);
 
               if (Either.isLeft(languageCodes)) {
                 throw new Error(
@@ -240,9 +234,7 @@ export function deserializeDataValue(
               const mimeTypes = getMimeTypes(binaryType.tsType);
 
               if (Either.isLeft(mimeTypes)) {
-                throw new Error(
-                  `Failed to get mime types for parameter ${name}: ${mimeTypes.val}`,
-                );
+                throw new Error(`Failed to get mime types for parameter ${name}: ${mimeTypes.val}`);
               }
 
               const unstructuredBinary = UnstructuredBinary.fromDataValue(
@@ -304,20 +296,17 @@ export function serializeToDataValue(
         });
       }
 
-      return Either.map(
-        WitValue.fromTsValueDefault(tsValue, typeInfoInternal.val),
-        (witValue) => {
-          let elementValue: ElementValue = {
-            tag: 'component-model',
-            val: witValue,
-          };
+      return Either.map(WitValue.fromTsValueDefault(tsValue, typeInfoInternal.val), (witValue) => {
+        let elementValue: ElementValue = {
+          tag: 'component-model',
+          val: witValue,
+        };
 
-          return {
-            tag: 'tuple',
-            val: [elementValue],
-          };
-        },
-      );
+        return {
+          tag: 'tuple',
+          val: [elementValue],
+        };
+      });
 
     case 'principal':
       return Either.left(
@@ -333,10 +322,7 @@ export function serializeToDataValue(
     case 'multimodal':
       const multiModalTypeInfo = typeInfoInternal.types;
 
-      const nameAndElementValues = serializeMultimodalToDataValue(
-        tsValue,
-        multiModalTypeInfo,
-      );
+      const nameAndElementValues = serializeMultimodalToDataValue(tsValue, multiModalTypeInfo);
 
       return Either.right({
         tag: 'multimodal',
@@ -346,8 +332,7 @@ export function serializeToDataValue(
 }
 
 function serializeBinaryReferenceToDataValue(tsValue: any): DataValue {
-  const binaryReference: BinaryReference =
-    serializeTsValueToBinaryReference(tsValue);
+  const binaryReference: BinaryReference = serializeTsValueToBinaryReference(tsValue);
 
   const elementValue: ElementValue = {
     tag: 'unstructured-binary',
@@ -410,8 +395,7 @@ function serializeMultimodalToDataValue(
           break;
 
         case 'unstructured-binary': {
-          const isObjectBinary =
-            typeof elemVal === 'object' && elemVal !== null;
+          const isObjectBinary = typeof elemVal === 'object' && elemVal !== null;
           isMatch =
             isObjectBinary &&
             'tag' in elemVal &&
@@ -422,9 +406,7 @@ function serializeMultimodalToDataValue(
         case 'unstructured-text': {
           const isObjectText = typeof elemVal === 'object' && elemVal !== null;
           isMatch =
-            isObjectText &&
-            'tag' in elemVal &&
-            (elemVal.tag === 'url' || elemVal.tag === 'inline');
+            isObjectText && 'tag' in elemVal && (elemVal.tag === 'url' || elemVal.tag === 'inline');
           break;
         }
 
@@ -475,9 +457,7 @@ function serializeMultimodalToDataValue(
   return namesAndElements;
 }
 
-export function createSingleElementTupleDataValue(
-  elementValue: ElementValue,
-): DataValue {
+export function createSingleElementTupleDataValue(elementValue: ElementValue): DataValue {
   return {
     tag: 'tuple',
     val: [elementValue],

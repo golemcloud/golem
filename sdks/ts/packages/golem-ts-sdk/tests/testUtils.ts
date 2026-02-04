@@ -13,10 +13,7 @@
 // limitations under the License.
 
 import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import {
-  AnalysedType,
-  NameTypePair,
-} from '../src/internal/mapping/types/analysedType';
+import { AnalysedType, NameTypePair } from '../src/internal/mapping/types/analysedType';
 import { AgentClassName } from '../src';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
@@ -111,9 +108,7 @@ export function getRecordFieldsFromAnalysedType(
   return analysedType.kind === 'record' ? analysedType.value.fields : undefined;
 }
 
-export function fetchTypeFromBarAgent(
-  typeNameInTestData: string,
-): [AnalysedType, Type.Type] {
+export function fetchTypeFromBarAgent(typeNameInTestData: string): [AnalysedType, Type.Type] {
   const complexAgentMetadata = TypeMetadata.get(BarAgentClassName.value);
 
   if (!complexAgentMetadata) {
@@ -126,10 +121,7 @@ export function fetchTypeFromBarAgent(
   });
 
   if (constructorArg) {
-    const typeInfo = AgentConstructorParamRegistry.getParamType(
-      'BarAgent',
-      constructorArg.name,
-    );
+    const typeInfo = AgentConstructorParamRegistry.getParamType('BarAgent', constructorArg.name);
 
     if (!typeInfo || typeInfo.tag !== 'analysed') {
       throw new Error(
@@ -143,16 +135,11 @@ export function fetchTypeFromBarAgent(
   const methods = Array.from(complexAgentMetadata.methods);
 
   for (const [name, method] of methods) {
-    if (
-      method.returnType &&
-      Type.getTypeName(method.returnType) === typeNameInTestData
-    ) {
+    if (method.returnType && Type.getTypeName(method.returnType) === typeNameInTestData) {
       const returnType = AgentMethodRegistry.getReturnType('BarAgent', name);
 
       if (!returnType || returnType.tag !== 'analysed') {
-        throw new Error(
-          `Return type ${returnType?.tag} not supported in test data`,
-        );
+        throw new Error(`Return type ${returnType?.tag} not supported in test data`);
       }
 
       return [returnType.val, method.returnType];
@@ -164,11 +151,7 @@ export function fetchTypeFromBarAgent(
     });
 
     if (param) {
-      const typeInfo = AgentMethodParamRegistry.getParamType(
-        'BarAgent',
-        name,
-        param[0],
-      );
+      const typeInfo = AgentMethodParamRegistry.getParamType('BarAgent', name, param[0]);
 
       if (!typeInfo || typeInfo.tag !== 'analysed') {
         throw new Error(

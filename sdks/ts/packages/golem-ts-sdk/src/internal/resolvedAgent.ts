@@ -13,12 +13,7 @@
 // limitations under the License.
 
 import { Result } from 'golem:rpc/types@0.2.2';
-import {
-  AgentError,
-  AgentType,
-  DataValue,
-  Principal,
-} from 'golem:agent/common';
+import { AgentError, AgentType, DataValue, Principal } from 'golem:agent/common';
 import { AgentId } from '../agentId';
 import { AgentClassName } from '../agentClassName';
 import { BaseAgent } from '../baseAgent';
@@ -32,16 +27,8 @@ import {
   serializeToDataValue,
 } from './mapping/values/dataValue';
 import * as Either from '../newTypes/either';
-import {
-  AgentMethodMetadata,
-  AgentMethodRegistry,
-} from './registry/agentMethodRegistry';
-import {
-  createCustomError,
-  invalidInput,
-  invalidMethod,
-  invalidType,
-} from './agentError';
+import { AgentMethodMetadata, AgentMethodRegistry } from './registry/agentMethodRegistry';
+import { createCustomError, invalidInput, invalidMethod, invalidType } from './agentError';
 import { TypeInfoInternal } from './typeInfoInternal';
 import { Uuid } from 'golem:agent/host';
 
@@ -55,11 +42,9 @@ export class ResolvedAgent {
   private readonly uniqueAgentId: AgentId;
   private readonly constructorInput: DataValue;
 
-  private parameterMetadata:
-    | Map<string, Map<string, AgentMethodParamMetadata>>
-    | undefined = undefined;
-  private methodMetadata: Map<string, AgentMethodMetadata> | undefined =
+  private parameterMetadata: Map<string, Map<string, AgentMethodParamMetadata>> | undefined =
     undefined;
+  private methodMetadata: Map<string, AgentMethodMetadata> | undefined = undefined;
   private readonly cachedMethodInfo: Map<string, CachedMethodInfo> = new Map();
 
   constructor(
@@ -125,16 +110,10 @@ export class ResolvedAgent {
       };
     }
 
-    const methodResult = await methodInfo.method.apply(
-      this.agentInstance,
-      deserializedArgs.val,
-    );
+    const methodResult = await methodInfo.method.apply(this.agentInstance, deserializedArgs.val);
 
     // Converting the result from the method back to data-value
-    const dataValueEither = serializeToDataValue(
-      methodResult,
-      methodInfo.returnType,
-    );
+    const dataValueEither = serializeToDataValue(methodResult, methodInfo.returnType);
 
     if (Either.isLeft(dataValueEither)) {
       return {
@@ -155,13 +134,10 @@ export class ResolvedAgent {
     methodName: string,
   ): Result<Map<string, AgentMethodParamMetadata>, AgentError> {
     if (!this.parameterMetadata) {
-      this.parameterMetadata = AgentMethodParamRegistry.get(
-        this.agentClassName.value,
-      );
+      this.parameterMetadata = AgentMethodParamRegistry.get(this.agentClassName.value);
     }
 
-    const methodParameterMetadata =
-      this.parameterMetadata!.get(methodName) ?? new Map();
+    const methodParameterMetadata = this.parameterMetadata!.get(methodName) ?? new Map();
 
     return {
       tag: 'ok',
@@ -169,10 +145,7 @@ export class ResolvedAgent {
     };
   }
 
-  private getMethodMetadata(): Result<
-    Map<string, AgentMethodMetadata>,
-    AgentError
-  > {
+  private getMethodMetadata(): Result<Map<string, AgentMethodMetadata>, AgentError> {
     if (!this.methodMetadata) {
       const methodMetadata = AgentMethodRegistry.get(this.agentClassName.value);
       if (!methodMetadata) {
@@ -192,9 +165,7 @@ export class ResolvedAgent {
     };
   }
 
-  private getCachedMethodInfo(
-    methodName: string,
-  ): Result<CachedMethodInfo, AgentError> {
+  private getCachedMethodInfo(methodName: string): Result<CachedMethodInfo, AgentError> {
     const cachedInfo = this.cachedMethodInfo.get(methodName);
     if (cachedInfo) {
       return {

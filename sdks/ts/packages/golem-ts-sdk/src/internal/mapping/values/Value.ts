@@ -181,20 +181,14 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
         return {
           kind: 'result',
           value: {
-            ok:
-              res.val !== undefined
-                ? buildTree(nodes[res.val], nodes)
-                : undefined,
+            ok: res.val !== undefined ? buildTree(nodes[res.val], nodes) : undefined,
           },
         };
       } else {
         return {
           kind: 'result',
           value: {
-            err:
-              res.val !== undefined
-                ? buildTree(nodes[res.val], nodes)
-                : undefined,
+            err: res.val !== undefined ? buildTree(nodes[res.val], nodes) : undefined,
           },
         };
       }
@@ -370,9 +364,7 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
     case 'result': {
       if ('ok' in value.value) {
         const innerIdx =
-          value.value.ok !== undefined
-            ? buildNodes(value.value.ok, nodes)
-            : undefined;
+          value.value.ok !== undefined ? buildNodes(value.value.ok, nodes) : undefined;
         nodes[idx] = {
           tag: 'result-value',
           val: {
@@ -382,9 +374,7 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
         };
       } else {
         const innerIdx =
-          value.value.err !== undefined
-            ? buildNodes(value.value.err, nodes)
-            : undefined;
+          value.value.err !== undefined ? buildNodes(value.value.err, nodes) : undefined;
         nodes[idx] = {
           tag: 'result-value',
           val: {

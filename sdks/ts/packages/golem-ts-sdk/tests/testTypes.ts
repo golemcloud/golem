@@ -33,36 +33,22 @@ export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
 export type UnionWithLiterals = 'a' | 'b' | 'c' | { n: number };
 
 // user defined result type, with exact shape of wit result
-export type ResultTypeExactBoth =
-  | { tag: 'ok'; val: number }
-  | { tag: 'err'; val: string };
+export type ResultTypeExactBoth = { tag: 'ok'; val: number } | { tag: 'err'; val: string };
 
 // user defined result type, with `value` as field names
-export type ResultTypeNonExact =
-  | { tag: 'ok'; value: number }
-  | { tag: 'err'; value: string };
+export type ResultTypeNonExact = { tag: 'ok'; value: number } | { tag: 'err'; value: string };
 
 // user defined result type, with custom field names
-export type ResultTypeNonExact2 =
-  | { tag: 'ok'; okValue: number }
-  | { tag: 'err'; errValue: string };
+export type ResultTypeNonExact2 = { tag: 'ok'; okValue: number } | { tag: 'err'; errValue: string };
 
 // User defined result type, with void types in ok and err channels
-export type ResultTypeNonExact3 =
-  | { tag: 'ok'; okValue: void }
-  | { tag: 'err'; errValue: void };
+export type ResultTypeNonExact3 = { tag: 'ok'; okValue: void } | { tag: 'err'; errValue: void };
 
-export type ResultTypeInvalid1 =
-  | { tag: 'ok'; okValOpt?: number }
-  | { tag: 'err'; errVal: string };
+export type ResultTypeInvalid1 = { tag: 'ok'; okValOpt?: number } | { tag: 'err'; errVal: string };
 
-export type ResultTypeInvalid2 =
-  | { tag: 'ok'; okVal: number }
-  | { tag: 'err'; errVal?: string };
+export type ResultTypeInvalid2 = { tag: 'ok'; okVal: number } | { tag: 'err'; errVal?: string };
 
-export type ResultTypeInvalid3 =
-  | { tag: 'ok'; okVal?: number }
-  | { tag: 'err'; errVal?: string };
+export type ResultTypeInvalid3 = { tag: 'ok'; okVal?: number } | { tag: 'err'; errVal?: string };
 
 export type PromiseType = Promise<string>;
 

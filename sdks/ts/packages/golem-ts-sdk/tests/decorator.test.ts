@@ -14,11 +14,7 @@
 
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { describe, expect } from 'vitest';
-import {
-  BarAgentClassName,
-  FooAgentClassName,
-  EphemeralAgentClassName,
-} from './testUtils';
+import { BarAgentClassName, FooAgentClassName, EphemeralAgentClassName } from './testUtils';
 import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 import { FooAgent } from './validAgents';
@@ -43,9 +39,7 @@ describe('Agent decorator should register the agent class and its methods into A
     throw new Error('BarAgent constructor not found');
   }
 
-  const barAgentMethod = barAgent.methods.find(
-    (method) => method.name === 'fun0',
-  );
+  const barAgentMethod = barAgent.methods.find((method) => method.name === 'fun0');
 
   if (!barAgentMethod) {
     throw new Error('fun0 method not found in BarAgent');
@@ -76,10 +70,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(elementSchema1).toEqual(expected);
 
-    const elementSchema2 = getElementSchema(
-      barAgentMethod.inputSchema,
-      'unstructuredText',
-    );
+    const elementSchema2 = getElementSchema(barAgentMethod.inputSchema, 'unstructuredText');
 
     const expected2 = { tag: 'unstructured-text', val: {} };
 
@@ -99,10 +90,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(elementSchema1).toEqual(expected);
 
-    const elementSchema2 = getElementSchema(
-      barAgentConstructor.inputSchema,
-      'unstructuredText',
-    );
+    const elementSchema2 = getElementSchema(barAgentConstructor.inputSchema, 'unstructuredText');
 
     const expected2 = { tag: 'unstructured-text', val: {} };
 
@@ -110,10 +98,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle UnstructuredBinary in method params', () => {
-    const elementSchema1 = getElementSchema(
-      barAgentMethod.inputSchema,
-      'unstructuredBinary',
-    );
+    const elementSchema1 = getElementSchema(barAgentMethod.inputSchema, 'unstructuredBinary');
 
     const expected = {
       tag: 'unstructured-binary',
@@ -124,9 +109,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle Multimodal in method params', () => {
-    const multimodalAgentMethod = barAgent.methods.find(
-      (method) => method.name === 'fun23',
-    );
+    const multimodalAgentMethod = barAgent.methods.find((method) => method.name === 'fun23');
 
     if (!multimodalAgentMethod) {
       throw new Error('fun23 method not found in BarAgent');
@@ -147,10 +130,7 @@ describe('Agent decorator should register the agent class and its methods into A
         {
           tag: 'component-model',
           val: {
-            nodes: [
-              { type: { tag: 'list-type', val: 1 } },
-              { type: { tag: 'prim-u8-type' } },
-            ],
+            nodes: [{ type: { tag: 'list-type', val: 1 } }, { type: { tag: 'prim-u8-type' } }],
           },
         },
       ],
@@ -168,9 +148,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle MultimodalBasic in method params', () => {
-    const multimodalAgentMethod = barAgent.methods.find(
-      (method) => method.name === 'fun24',
-    );
+    const multimodalAgentMethod = barAgent.methods.find((method) => method.name === 'fun24');
 
     if (!multimodalAgentMethod) {
       throw new Error('fun24 method not found in BarAgent');
@@ -193,10 +171,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle UnstructuredBinary in constructor params', () => {
-    const elementSchema1 = getElementSchema(
-      barAgentConstructor.inputSchema,
-      'unstructuredBinary',
-    );
+    const elementSchema1 = getElementSchema(barAgentConstructor.inputSchema, 'unstructuredBinary');
 
     const expected = {
       tag: 'unstructured-binary',
@@ -207,10 +182,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle `a: string | undefined` in method params', () => {
-    const optionalStringInGetWeather = getWitType(
-      barAgentMethod.inputSchema,
-      'optionalStringType',
-    );
+    const optionalStringInGetWeather = getWitType(barAgentMethod.inputSchema, 'optionalStringType');
 
     expect(optionalStringInGetWeather).toEqual({
       nodes: [
@@ -230,10 +202,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle optional string in method', () => {
-    const optionalStringInGetWeather = getWitType(
-      barAgentMethod.inputSchema,
-      'optionalStringType',
-    );
+    const optionalStringInGetWeather = getWitType(barAgentMethod.inputSchema, 'optionalStringType');
 
     expect(optionalStringInGetWeather).toEqual({
       nodes: [
@@ -406,10 +375,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle union with null in constructor', () => {
-    const wit = getWitType(
-      barAgentConstructor.inputSchema,
-      'optionalUnionType',
-    );
+    const wit = getWitType(barAgentConstructor.inputSchema, 'optionalUnionType');
 
     const expectedWit = {
       nodes: [
@@ -483,10 +449,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('union with null works', () => {
-    const unionWithNullType = getWitType(
-      barAgentMethod.inputSchema,
-      'unionWithNull',
-    );
+    const unionWithNullType = getWitType(barAgentMethod.inputSchema, 'unionWithNull');
 
     const expected = {
       nodes: [
@@ -529,10 +492,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with a: string | undefined works', () => {
-    const witType = getWitType(
-      barAgentMethod.inputSchema,
-      'interfaceWithUnionWithUndefined1',
-    );
+    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined1');
 
     const expected = {
       nodes: [
@@ -579,10 +539,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with a: string | number | undefined works', () => {
-    const witType = getWitType(
-      barAgentMethod.inputSchema,
-      'interfaceWithUnionWithUndefined2',
-    );
+    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined2');
 
     const expected = {
       nodes: [
@@ -639,10 +596,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with a?: string | number | undefined works', () => {
-    const witType = getWitType(
-      barAgentMethod.inputSchema,
-      'interfaceWithUnionWithUndefined3',
-    );
+    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined3');
 
     const expected = {
       nodes: [
@@ -689,10 +643,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with `a?: string | undefined` works', () => {
-    const witType = getWitType(
-      barAgentMethod.inputSchema,
-      'interfaceWithUnionWithUndefined4',
-    );
+    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined4');
 
     const expected = {
       nodes: [
@@ -709,10 +660,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('object with optional prop works', () => {
-    const objectWithUnionWithNull2 = getWitType(
-      barAgentMethod.inputSchema,
-      'objectWithOption',
-    );
+    const objectWithUnionWithNull2 = getWitType(barAgentMethod.inputSchema, 'objectWithOption');
 
     const expected = {
       nodes: [
@@ -729,10 +677,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with optional prop works', () => {
-    const witType = getWitType(
-      barAgentMethod.inputSchema,
-      'interfaceWithOption',
-    );
+    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithOption');
 
     const expected = {
       nodes: [
@@ -770,12 +715,7 @@ describe('Agent decorator should register the agent class and its methods into A
       throw new Error('FooAgent not found in AgentTypeRegistry');
     }
 
-    const forbidden = [
-      'get-id',
-      'get-agent-type',
-      'load-snapshot',
-      'save-snapshot',
-    ];
+    const forbidden = ['get-id', 'get-agent-type', 'load-snapshot', 'save-snapshot'];
 
     [barAgent, simpleAgent].forEach((agent) => {
       forbidden.forEach((name) => {
@@ -820,8 +760,7 @@ describe('Annotated FooAgent class', () => {
       lowBits: BigInt(5678),
     };
 
-    (globalThis as any).currentAgentId =
-      `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+    (globalThis as any).currentAgentId = `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
 
     const fooResult = initiator.initiate(
       {
@@ -857,19 +796,13 @@ describe('Agent with principal auto injected', async () => {
   await import('./agentsWithPrincipalAutoInjection');
 
   it("should never include anything about principal in the agent's constructor or method schemas", () => {
-    const agentType = AgentTypeRegistry.get(
-      new AgentClassName('AgentWithPrincipalAutoInjection1'),
-    );
+    const agentType = AgentTypeRegistry.get(new AgentClassName('AgentWithPrincipalAutoInjection1'));
 
     if (!agentType) {
-      throw new Error(
-        'AgentWithPrincipalAutoInjection not found in AgentTypeRegistry',
-      );
+      throw new Error('AgentWithPrincipalAutoInjection not found in AgentTypeRegistry');
     }
 
-    const constructorParamNames = agentType.constructor.inputSchema.val.map(
-      ([name]) => name,
-    );
+    const constructorParamNames = agentType.constructor.inputSchema.val.map(([name]) => name);
 
     expect(constructorParamNames).not.toContain('principal');
 
@@ -893,8 +826,7 @@ describe('Annotated SingletonAgent class', () => {
       val: [],
     };
 
-    (globalThis as any).currentAgentId =
-      `singleton-agent(${JSON.stringify(params)})`;
+    (globalThis as any).currentAgentId = `singleton-agent(${JSON.stringify(params)})`;
 
     const singleton = initiator.initiate(params, { tag: 'anonymous' });
     expect(singleton.tag).toEqual('ok');
@@ -933,8 +865,7 @@ describe('Annotated SingletonAgent class', () => {
 function getWitType(dataSchema: DataSchema, parameterName: string) {
   const elementSchema = getElementSchema(dataSchema, parameterName);
 
-  const witType =
-    elementSchema.tag === 'component-model' ? elementSchema.val : undefined;
+  const witType = elementSchema.tag === 'component-model' ? elementSchema.val : undefined;
 
   if (!witType) {
     throw new Error(
@@ -951,9 +882,7 @@ function getElementSchema(inputSchema: DataSchema, parameterName: string) {
   );
 
   if (!schema) {
-    throw new Error(
-      `${parameterName} not found in scheme ${util.format(inputSchema)}`,
-    );
+    throw new Error(`${parameterName} not found in scheme ${util.format(inputSchema)}`);
   }
 
   return schema[1];

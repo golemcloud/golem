@@ -82,21 +82,27 @@ export const stringOrNumberOrUndefined = fc.oneof(
   fc.constant(undefined),
 );
 
-export const objectWithUnionWithUndefined1Arb: Arbitrary<ObjectWithUnionWithUndefined1> =
-  fc.record({
+export const objectWithUnionWithUndefined1Arb: Arbitrary<ObjectWithUnionWithUndefined1> = fc.record(
+  {
     a: stringOrUndefined,
-  });
+  },
+);
 
-export const objectWithUnionWithUndefined2Arb: Arbitrary<ObjectWithUnionWithUndefined2> =
-  fc.record({
+export const objectWithUnionWithUndefined2Arb: Arbitrary<ObjectWithUnionWithUndefined2> = fc.record(
+  {
     a: stringOrNumberOrUndefined,
-  });
+  },
+);
 
-export const objectWithUnionWithUndefined3Arb: Arbitrary<ObjectWithUnionWithUndefined3> =
-  fc.oneof(fc.record({}), fc.record({ a: stringOrNumberOrUndefined }));
+export const objectWithUnionWithUndefined3Arb: Arbitrary<ObjectWithUnionWithUndefined3> = fc.oneof(
+  fc.record({}),
+  fc.record({ a: stringOrNumberOrUndefined }),
+);
 
-export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUndefined4> =
-  fc.oneof(fc.record({}), fc.record({ a: stringOrUndefined }));
+export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUndefined4> = fc.oneof(
+  fc.record({}),
+  fc.record({ a: stringOrUndefined }),
+);
 
 export const unionWithLiteralArb: Arbitrary<UnionWithLiterals> = fc.oneof(
   fc.constantFrom<UnionWithLiterals>('a', 'b', 'c'),
@@ -123,9 +129,7 @@ export const unstructuredTextArb: Arbitrary<UnstructuredText> = fc.oneof(
   fc.record({ tag: fc.constant('inline'), val: fc.string() }),
 );
 
-export const unstructuredTextWithLCArb: Arbitrary<
-  UnstructuredText<['en', 'de']>
-> = fc.oneof(
+export const unstructuredTextWithLCArb: Arbitrary<UnstructuredText<['en', 'de']>> = fc.oneof(
   fc.record({ tag: fc.constant('url'), val: fc.string() }),
   fc.record({
     tag: fc.constant('inline'),
@@ -191,20 +195,7 @@ export const unionWithOnlyLiteralsArb: Arbitrary<UnionWithOnlyLiterals> =
 
 const base = 'AssistantAgent';
 
-const specialChars = [
-  '$',
-  '_',
-  '0',
-  '1',
-  '2',
-  '3',
-  '4',
-  '5',
-  '6',
-  '7',
-  '8',
-  '9',
-];
+const specialChars = ['$', '_', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
 //Ts class names can have $ and _ and digits
 export const agentClassNameArb: fc.Arbitrary<AgentClassName> = fc
@@ -272,12 +263,7 @@ export const objectComplexArb: fc.Arbitrary<ObjectComplexType> = fc.record({
   b: fc.oneof(fc.integer(), fc.float()),
   c: fc.boolean(),
   d: objectArb,
-  e: fc.oneof(
-    fc.oneof(fc.integer(), fc.float()),
-    fc.string(),
-    fc.boolean(),
-    objectArb,
-  ),
+  e: fc.oneof(fc.oneof(fc.integer(), fc.float()), fc.string(), fc.boolean(), objectArb),
   f: listArb,
   g: listComplexArb,
   h: tupleArb,
@@ -373,16 +359,12 @@ export const baseArb = fc.record({
 
 const optionalPropArb = fc
   .option(fc.oneof(fc.integer(), fc.float()))
-  .map((opt) =>
-    opt === undefined || opt === null ? {} : { optionalProp: opt },
-  );
+  .map((opt) => (opt === undefined || opt === null ? {} : { optionalProp: opt }));
 
-export const interfaceArb: fc.Arbitrary<TestInterfaceType> = fc
-  .tuple(baseArb, optionalPropArb)
-  .map(
-    ([base, optional]) =>
-      ({
-        ...base,
-        ...optional,
-      }) as TestInterfaceType,
-  );
+export const interfaceArb: fc.Arbitrary<TestInterfaceType> = fc.tuple(baseArb, optionalPropArb).map(
+  ([base, optional]) =>
+    ({
+      ...base,
+      ...optional,
+    }) as TestInterfaceType,
+);

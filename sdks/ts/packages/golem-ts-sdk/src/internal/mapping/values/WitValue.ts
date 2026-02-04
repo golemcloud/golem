@@ -47,10 +47,7 @@ export const fromTsValueBinaryReference = (tsValue: any): WitValue => {
   return Value.toWitValue(value);
 };
 
-export const toTsValue = (
-  witValue: WitValue,
-  expectedType: AnalysedType,
-): any => {
+export const toTsValue = (witValue: WitValue, expectedType: AnalysedType): any => {
   const value: Value.Value = Value.fromWitValue(witValue);
   return deserialize(value, expectedType);
 };

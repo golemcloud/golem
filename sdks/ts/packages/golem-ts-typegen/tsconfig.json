@@ -15,13 +15,6 @@
     "emitDeclarationOnly": false,
     "types": ["vitest/globals"]
   },
-  "include": [
-    "src/**/*",
-    "tests/**/*",
-    "types",
-    "tests/support"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["src/**/*", "tests/**/*", "types", "tests/support"],
+  "exclude": ["node_modules"]
 }

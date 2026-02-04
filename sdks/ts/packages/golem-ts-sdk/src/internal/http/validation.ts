@@ -31,8 +31,7 @@ export function validateHttpMount(
   const parametersForPrincipal =
     AgentConstructorParamRegistry.getParametersForPrincipal(agentClassName);
 
-  const constructorInputParams =
-    collectConstructorInputParameterNames(agentConstructor);
+  const constructorInputParams = collectConstructorInputParameterNames(agentConstructor);
 
   validateNoCatchAllInHttpMount(agentClassName, agentMount);
   validateConstructorParamsAreHttpSafe(agentClassName, agentConstructor);
@@ -50,27 +49,17 @@ export function validateHttpEndpoint(
     return;
   }
 
-  validateMountIsDefinedForHttpEndpoint(
-    agentClassName,
-    agentMethod,
-    httpMountDetails,
-  );
+  validateMountIsDefinedForHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
 
   const parameterTypes = AgentMethodParamRegistry.getParametersAndType(
     agentClassName,
     agentMethod.name,
   );
 
-  const methodVarsWithoutAutoInjectedVariables = collectMethodInputVars(
-    agentMethod.inputSchema,
-  );
+  const methodVarsWithoutAutoInjectedVariables = collectMethodInputVars(agentMethod.inputSchema);
 
   for (const endpoint of agentMethod.httpEndpoint) {
-    validateEndpointVariables(
-      endpoint,
-      methodVarsWithoutAutoInjectedVariables,
-      parameterTypes,
-    );
+    validateEndpointVariables(endpoint, methodVarsWithoutAutoInjectedVariables, parameterTypes);
   }
 }
 
@@ -103,10 +92,7 @@ function validateMountIsDefinedForHttpEndpoint(
   }
 }
 
-function validateNoCatchAllInHttpMount(
-  agentClassName: string,
-  agentMount: HttpMountDetails,
-) {
+function validateNoCatchAllInHttpMount(agentClassName: string, agentMount: HttpMountDetails) {
   const catchAllSegment = agentMount.pathPrefix.find(
     (segment) => segment.tag === 'remaining-path-variable',
   );
@@ -165,10 +151,7 @@ function validateEndpointVariables(
   }
 
   for (const segment of endpoint.pathSuffix) {
-    if (
-      segment.tag === 'remaining-path-variable' ||
-      segment.tag === 'path-variable'
-    ) {
+    if (segment.tag === 'remaining-path-variable' || segment.tag === 'path-variable') {
       const name = segment.val.variableName;
 
       validateVariable(
@@ -180,9 +163,7 @@ function validateEndpointVariables(
   }
 }
 
-function getPrincipalParams(
-  parameterTypes: Map<string, TypeInfoInternal>,
-): Set<string> {
+function getPrincipalParams(parameterTypes: Map<string, TypeInfoInternal>): Set<string> {
   const methodVarsOfPrincipal = new Set<string>();
 
   for (const [varName, typeInfo] of parameterTypes.entries()) {
@@ -194,9 +175,7 @@ function getPrincipalParams(
   return methodVarsOfPrincipal;
 }
 
-function getUnstructuredBinaryParams(
-  parameterTypes: Map<string, TypeInfoInternal>,
-): Set<string> {
+function getUnstructuredBinaryParams(parameterTypes: Map<string, TypeInfoInternal>): Set<string> {
   const methodVarsOfPrincipal = new Set<string>();
 
   for (const [varName, typeInfo] of parameterTypes.entries()) {
@@ -208,9 +187,7 @@ function getUnstructuredBinaryParams(
   return methodVarsOfPrincipal;
 }
 
-function collectConstructorInputParameterNames(
-  agentConstructor: AgentConstructor,
-): Set<string> {
+function collectConstructorInputParameterNames(agentConstructor: AgentConstructor): Set<string> {
   return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
 }
 

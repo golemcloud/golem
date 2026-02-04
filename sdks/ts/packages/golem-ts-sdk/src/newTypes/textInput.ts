@@ -63,9 +63,7 @@ export const UnstructuredText = {
 
     if (allowedCodes.length > 0) {
       if (!dataValue.val.textType) {
-        return Either.left(
-          `Language code is required. Allowed codes: ${allowedCodes.join(', ')}`,
-        );
+        return Either.left(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
       }
 
       if (!allowedCodes.includes(dataValue.val.textType.languageCode)) {

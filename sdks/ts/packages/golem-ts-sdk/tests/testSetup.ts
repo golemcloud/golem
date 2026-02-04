@@ -39,11 +39,7 @@ vi.mock('golem:agent/host', () => ({
       return undefined;
     }
   },
-  makeAgentId: (
-    agentTypeName: string,
-    input: DataValue,
-    phantomId: Uuid | undefined,
-  ): string => {
+  makeAgentId: (agentTypeName: string, input: DataValue, phantomId: Uuid | undefined): string => {
     // Not a correct implementation, but good enough for some tests
     let phantomPostfix;
     if (phantomId) {
@@ -78,9 +74,7 @@ vi.mock('golem:rpc/types@0.2.2', () => ({
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
 vi.mock('wasi:cli/environment@0.2.3', () => ({
-  getEnvironment: () => [
-    ['GOLEM_AGENT_ID', (globalThis as any).currentAgentId],
-  ],
+  getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
 }));
 
 await import('./agentsInit');

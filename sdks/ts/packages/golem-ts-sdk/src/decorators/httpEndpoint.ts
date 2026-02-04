@@ -129,11 +129,7 @@ export type EndpointDecoratorOptions = {
  * - See `EndpointDecoratorOptions` for all available configuration options.
  */
 export function endpoint(opts: EndpointDecoratorOptions) {
-  return function (
-    target: Object,
-    propertyKey: string | symbol,
-    descriptor: PropertyDescriptor,
-  ) {
+  return function (target: Object, propertyKey: string | symbol, descriptor: PropertyDescriptor) {
     const className = target.constructor.name;
     const methodName = String(propertyKey);
 
@@ -146,9 +142,7 @@ export function endpoint(opts: EndpointDecoratorOptions) {
 
     const methods = ['get', 'post', 'put', 'delete', 'custom'] as const;
 
-    const providedMethods = methods.filter((m) =>
-      m === 'custom' ? !!opts.custom : !!opts[m],
-    );
+    const providedMethods = methods.filter((m) => (m === 'custom' ? !!opts.custom : !!opts[m]));
 
     if (providedMethods.length === 0) {
       throw new Error(

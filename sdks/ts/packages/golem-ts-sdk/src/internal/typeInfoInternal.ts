@@ -40,9 +40,7 @@ export type TypeInfoInternal =
       tsType: Type.Type;
     };
 
-export function isOptionalWithQuestionMark(
-  typeInfoInternal: TypeInfoInternal,
-): boolean {
+export function isOptionalWithQuestionMark(typeInfoInternal: TypeInfoInternal): boolean {
   if (typeInfoInternal.tsType.kind === 'union') {
     return typeInfoInternal.tsType.unionTypes.some(
       (t) => t.kind === 'undefined' || t.kind === 'null',
@@ -84,13 +82,9 @@ export function convertTypeInfoToElementSchema(
         val: typeInfoInternal.val,
       });
     case 'principal':
-      return Either.left(
-        'Cannot convert `Principal` type information to ElementSchema',
-      );
+      return Either.left('Cannot convert `Principal` type information to ElementSchema');
     case 'multimodal':
-      return Either.left(
-        'Cannot convert multimodal type information to ElementSchema',
-      );
+      return Either.left('Cannot convert multimodal type information to ElementSchema');
   }
 }
 
@@ -107,25 +101,17 @@ export function getMultimodalDataSchemaFromTypeInternal(
         val: 'cannot get multimodal DataSchema from unstructured-text type info',
       };
     case 'analysed':
-      return Either.left(
-        'cannot get multimodal DataSchema from analysed type info',
-      );
+      return Either.left('cannot get multimodal DataSchema from analysed type info');
     case 'unstructured-binary':
-      return Either.left(
-        'cannot get multimodal DataSchema from unstructured-binary type info',
-      );
+      return Either.left('cannot get multimodal DataSchema from unstructured-binary type info');
     case 'principal':
-      return Either.left(
-        'cannot get multimodal DataSchema from principal type info',
-      );
+      return Either.left('cannot get multimodal DataSchema from principal type info');
     case 'multimodal':
       const parameterDetails = typeInfoInternal.types;
 
       const schemaDetails = Either.all(
         parameterDetails.map((parameterDetail) => {
-          const elementSchema = convertTypeInfoToElementSchema(
-            parameterDetail.type,
-          );
+          const elementSchema = convertTypeInfoToElementSchema(parameterDetail.type);
 
           if (Either.isLeft(elementSchema)) {
             return Either.left(
@@ -133,10 +119,7 @@ export function getMultimodalDataSchemaFromTypeInternal(
             );
           }
 
-          return Either.right([parameterDetail.name, elementSchema.val] as [
-            string,
-            ElementSchema,
-          ]);
+          return Either.right([parameterDetail.name, elementSchema.val] as [string, ElementSchema]);
         }),
       );
 

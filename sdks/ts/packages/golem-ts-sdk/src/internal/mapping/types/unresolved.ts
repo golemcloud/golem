@@ -13,15 +13,20 @@
 // limitations under the License.
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from "../../../newTypes/either";
+import * as Either from '../../../newTypes/either';
 import { AnalysedType } from './analysedType';
 import { Ctx } from './ctx';
 import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-type UnresolvedCtx = Ctx & { type: Extract<TsType, { kind: "unresolved-type" }> };
+type UnresolvedCtx = Ctx & {
+  type: Extract<TsType, { kind: 'unresolved-type' }>;
+};
 
-export function handleUnresolved({ type }: UnresolvedCtx, _mapper: TypeMapper): Either.Either<AnalysedType, string> {
+export function handleUnresolved(
+  { type }: UnresolvedCtx,
+  _mapper: TypeMapper,
+): Either.Either<AnalysedType, string> {
   return Either.left(`Failed to resolve type for \`${type.text}\`: ${type.error}`);
 }

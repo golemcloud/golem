@@ -24,11 +24,7 @@ import {
 import { ParameterDetail } from '../mapping/values/dataValue';
 import { tryTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
 
-const MULTIMODAL_TYPE_NAMES = [
-  'Multimodal',
-  'MultimodalAdvanced',
-  'MultimodalCustom',
-];
+const MULTIMODAL_TYPE_NAMES = ['Multimodal', 'MultimodalAdvanced', 'MultimodalCustom'];
 
 export function isMultimodalType(type: Type.Type): boolean {
   if (type.name) {
@@ -41,14 +37,10 @@ export function getMultimodalParamDetails(
   type: Type.Type,
 ): Either.Either<ParameterDetail[], string> {
   const multimodalTypes =
-    type.kind === 'union'
-      ? tryTaggedUnion(type.unionTypes)
-      : tryTaggedUnion([type]);
+    type.kind === 'union' ? tryTaggedUnion(type.unionTypes) : tryTaggedUnion([type]);
 
   if (Either.isLeft(multimodalTypes)) {
-    return Either.left(
-      `failed to generate the multimodal schema: ${multimodalTypes.val}`,
-    );
+    return Either.left(`failed to generate the multimodal schema: ${multimodalTypes.val}`);
   }
 
   const taggedUnion = multimodalTypes.val;
@@ -148,9 +140,7 @@ export function getMultimodalParamDetails(
   );
 }
 
-export function getTextDescriptor(
-  paramType: Type.Type,
-): Either.Either<TextDescriptor, string> {
+export function getTextDescriptor(paramType: Type.Type): Either.Either<TextDescriptor, string> {
   const languageCodes = getLanguageCodes(paramType);
 
   if (Either.isLeft(languageCodes)) {
@@ -169,9 +159,7 @@ export function getTextDescriptor(
   return Either.right(textDescriptor);
 }
 
-export function getBinaryDescriptor(
-  paramType: Type.Type,
-): Either.Either<BinaryDescriptor, string> {
+export function getBinaryDescriptor(paramType: Type.Type): Either.Either<BinaryDescriptor, string> {
   const mimeTypes = getMimeTypes(paramType);
 
   if (Either.isLeft(mimeTypes)) {
@@ -193,19 +181,14 @@ export function getBinaryDescriptor(
 export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
   const promiseUnwrappedType = type.kind === 'promise' ? type.element : type;
 
-  if (
-    promiseUnwrappedType.name === 'UnstructuredBinary' &&
-    promiseUnwrappedType.kind === 'union'
-  ) {
-    const unstructuredBinaryTypeParameters: Type.Type[] =
-      promiseUnwrappedType.typeParams ?? [];
+  if (promiseUnwrappedType.name === 'UnstructuredBinary' && promiseUnwrappedType.kind === 'union') {
+    const unstructuredBinaryTypeParameters: Type.Type[] = promiseUnwrappedType.typeParams ?? [];
 
     if (unstructuredBinaryTypeParameters.length === 0) {
       return Either.right([]);
     }
 
-    const unstructuredBinaryTypeParameter: Type.Type =
-      unstructuredBinaryTypeParameters[0];
+    const unstructuredBinaryTypeParameter: Type.Type = unstructuredBinaryTypeParameters[0];
 
     if (unstructuredBinaryTypeParameter.kind === 'tuple') {
       const elem = unstructuredBinaryTypeParameter.elements;
@@ -228,26 +211,18 @@ export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
       return Either.right([]);
     } else {
       return Either.left(
-        'unknown parameter type for UnstructuredBinary' +
-          unstructuredBinaryTypeParameter.kind,
+        'unknown parameter type for UnstructuredBinary' + unstructuredBinaryTypeParameter.kind,
       );
     }
   }
 
-  return Either.left(
-    `Type mismisatch. Expected UnstructuredBinary, Found ${type.name}`,
-  );
+  return Either.left(`Type mismisatch. Expected UnstructuredBinary, Found ${type.name}`);
 }
 
-export function getLanguageCodes(
-  type: Type.Type,
-): Either.Either<string[], string> {
+export function getLanguageCodes(type: Type.Type): Either.Either<string[], string> {
   const promiseUnwrappedType = type.kind === 'promise' ? type.element : type;
 
-  if (
-    promiseUnwrappedType.name === 'UnstructuredText' &&
-    promiseUnwrappedType.kind === 'union'
-  ) {
+  if (promiseUnwrappedType.name === 'UnstructuredText' && promiseUnwrappedType.kind === 'union') {
     const parameterTypes: Type.Type[] = promiseUnwrappedType.typeParams ?? [];
 
     if (parameterTypes.length !== 1) {
@@ -276,28 +251,17 @@ export function getLanguageCodes(
     }
   }
 
-  return Either.left(
-    `Type mismatch. Expected UnstructuredText, Found ${type.name}`,
-  );
+  return Either.left(`Type mismatch. Expected UnstructuredText, Found ${type.name}`);
 }
 
-export function validateMethodName(
-  methodName: string,
-): Either.Either<void, string> {
+export function validateMethodName(methodName: string): Either.Either<void, string> {
   if (methodName.includes('$')) {
-    return Either.left(
-      `Invalid method name \`${methodName}\`: cannot contain '\$'`,
-    );
+    return Either.left(`Invalid method name \`${methodName}\`: cannot contain '\$'`);
   }
 
   const kebabMethodName = convertAgentMethodNameToKebab(methodName);
-  if (
-    kebabMethodName === 'initialize' ||
-    kebabMethodName === 'get-definition'
-  ) {
-    return Either.left(
-      `Invalid method name \`${methodName}\`: reserved method name`,
-    );
+  if (kebabMethodName === 'initialize' || kebabMethodName === 'get-definition') {
+    return Either.left(`Invalid method name \`${methodName}\`: reserved method name`);
   }
 
   return Either.right(undefined);

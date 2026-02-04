@@ -12,10 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { convertOptionalTypeNameToKebab} from './stringFormat';
-import {
-  TaggedTypeMetadata,
-} from './taggedUnion';
+import { convertOptionalTypeNameToKebab } from './stringFormat';
+import { TaggedTypeMetadata } from './taggedUnion';
 
 export interface NameTypePair {
   name: string;
@@ -27,67 +25,92 @@ export interface NameOptionTypePair {
   typ?: AnalysedType;
 }
 
-export type TypedArray = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
+export type TypedArray =
+  | 'u8'
+  | 'u16'
+  | 'u32'
+  | 'big-u64'
+  | 'i8'
+  | 'i16'
+  | 'i32'
+  | 'big-i64'
+  | 'f32'
+  | 'f64';
 
 export type EmptyType = 'null' | 'void' | 'undefined' | 'question-mark';
 
-export type CustomOrInbuilt = {tag: 'custom', okValueName: string | undefined, errValueName: string | undefined} | {tag: 'inbuilt', okEmptyType: EmptyType | undefined, errEmptyType: EmptyType | undefined};
+export type CustomOrInbuilt =
+  | {
+      tag: 'custom';
+      okValueName: string | undefined;
+      errValueName: string | undefined;
+    }
+  | {
+      tag: 'inbuilt';
+      okEmptyType: EmptyType | undefined;
+      errEmptyType: EmptyType | undefined;
+    };
 
 // This is similar to internal analyzed-type in wasm-rpc (golem)
 // while having extra information useful for WIT -> WIT type and value mapping
 export type AnalysedType =
-    | { kind: 'variant'; value: TypeVariant, taggedTypes: TaggedTypeMetadata[] }
-    | { kind: 'result'; value: TypeResult, resultType: CustomOrInbuilt }
-    | { kind: 'option'; value: TypeOption, emptyType: EmptyType }
-    | { kind: 'enum'; value: TypeEnum }
-    | { kind: 'flags'; value: TypeFlags }
-    | { kind: 'record'; value: TypeRecord }
-    | { kind: 'tuple'; value: TypeTuple, emptyType: EmptyType | undefined }
-    | { kind: 'list'; value: TypeList, typedArray: TypedArray | undefined, mapType: { keyType: AnalysedType, valueType: AnalysedType } | undefined }
-    | { kind: 'string' }
-    | { kind: 'chr' }
-    | { kind: 'f64'  }
-    | { kind: 'f32'}
-    | { kind: 'u64', isBigInt: boolean  }
-    | { kind: 's64', isBigInt: boolean }
-    | { kind: 'u32' }
-    | { kind: 's32' }
-    | { kind: 'u16' }
-    | { kind: 's16' }
-    | { kind: 'u8' }
-    | { kind: 's8' }
-    | { kind: 'bool' }
-    | { kind: 'handle'; value: TypeHandle };
+  | { kind: 'variant'; value: TypeVariant; taggedTypes: TaggedTypeMetadata[] }
+  | { kind: 'result'; value: TypeResult; resultType: CustomOrInbuilt }
+  | { kind: 'option'; value: TypeOption; emptyType: EmptyType }
+  | { kind: 'enum'; value: TypeEnum }
+  | { kind: 'flags'; value: TypeFlags }
+  | { kind: 'record'; value: TypeRecord }
+  | { kind: 'tuple'; value: TypeTuple; emptyType: EmptyType | undefined }
+  | {
+      kind: 'list';
+      value: TypeList;
+      typedArray: TypedArray | undefined;
+      mapType: { keyType: AnalysedType; valueType: AnalysedType } | undefined;
+    }
+  | { kind: 'string' }
+  | { kind: 'chr' }
+  | { kind: 'f64' }
+  | { kind: 'f32' }
+  | { kind: 'u64'; isBigInt: boolean }
+  | { kind: 's64'; isBigInt: boolean }
+  | { kind: 'u32' }
+  | { kind: 's32' }
+  | { kind: 'u16' }
+  | { kind: 's16' }
+  | { kind: 'u8' }
+  | { kind: 's8' }
+  | { kind: 'bool' }
+  | { kind: 'handle'; value: TypeHandle };
 
 export function getNameFromAnalysedType(typ: AnalysedType): string | undefined {
   switch (typ.kind) {
-    case "string":
-      return undefined
-    case "chr":
-      return undefined
-    case "f64":
-      return undefined
-    case "f32":
-      return undefined
-    case "u64":
-      return undefined
-    case "s64":
-      return undefined
-    case "u32":
-      return undefined
-    case "s32":
-      return undefined
-    case "u16":
-      return undefined
-    case "s16":
-      return undefined
-    case "u8":
-      return undefined
-    case "s8":
-      return undefined
-    case "bool":
-      return undefined
-    case "handle":
+    case 'string':
+      return undefined;
+    case 'chr':
+      return undefined;
+    case 'f64':
+      return undefined;
+    case 'f32':
+      return undefined;
+    case 'u64':
+      return undefined;
+    case 's64':
+      return undefined;
+    case 'u32':
+      return undefined;
+    case 's32':
+      return undefined;
+    case 'u16':
+      return undefined;
+    case 's16':
+      return undefined;
+    case 'u8':
+      return undefined;
+    case 's8':
+      return undefined;
+    case 'bool':
+      return undefined;
+    case 'handle':
       return typ.value.name;
     case 'variant':
       return typ.value.name;
@@ -105,7 +128,6 @@ export function getNameFromAnalysedType(typ: AnalysedType): string | undefined {
       return typ.value.name;
     case 'list':
       return typ.value.name;
-
   }
 }
 
@@ -312,10 +334,7 @@ export function tuple(
   };
 }
 
-export function record(
-  name: string | undefined,
-  fields: NameTypePair[],
-): AnalysedType {
+export function record(name: string | undefined, fields: NameTypePair[]): AnalysedType {
   return {
     kind: 'record',
     value: {
@@ -326,10 +345,7 @@ export function record(
   };
 }
 
-export function flags(
-  name: string | undefined,
-  names: string[],
-): AnalysedType {
+export function flags(name: string | undefined, names: string[]): AnalysedType {
   return {
     kind: 'flags',
     value: {
@@ -340,10 +356,7 @@ export function flags(
   };
 }
 
-export function enum_(
-  name: string | undefined,
-  cases: string[],
-): AnalysedType {
+export function enum_(name: string | undefined, cases: string[]): AnalysedType {
   return {
     kind: 'enum',
     value: {

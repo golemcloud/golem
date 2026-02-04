@@ -18,14 +18,14 @@
  * and load it to .metadata directory.
  * Every testing is performed on top of the metadata directory.
  */
-import { Project } from "ts-morph";
-import { generateClassMetadata } from "../src/index";
+import { Project } from 'ts-morph';
+import { generateClassMetadata } from '../src/index';
 
 const project = new Project({
-  tsConfigFilePath: "tsconfig.json",
+  tsConfigFilePath: 'tsconfig.json',
 });
 
-const sourceFiles = project.getSourceFiles("tests/testData.ts");
+const sourceFiles = project.getSourceFiles('tests/testData.ts');
 
 generateClassMetadata({
   sourceFiles: sourceFiles,

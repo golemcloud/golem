@@ -13,19 +13,23 @@
 // limitations under the License.
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from "../../../newTypes/either";
+import * as Either from '../../../newTypes/either';
 import { Ctx } from './ctx';
-import { AnalysedType,  list, tuple } from './analysedType';
+import { AnalysedType, list, tuple } from './analysedType';
 import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-type MapCtx = Ctx & { type: Extract<TsType, { kind: "map" }> };
+type MapCtx = Ctx & { type: Extract<TsType, { kind: 'map' }> };
 
-export function handleMap({ type }: MapCtx, mapper: TypeMapper): Either.Either<AnalysedType, string> {
+export function handleMap(
+  { type }: MapCtx,
+  mapper: TypeMapper,
+): Either.Either<AnalysedType, string> {
   const key = mapper(type.key, undefined);
   const value = mapper(type.value, undefined);
 
   return Either.zipWith(key, value, (k, v) =>
-    list(type.name, undefined, {keyType: k, valueType: v}, tuple(undefined, undefined, [k, v])));
+    list(type.name, undefined, { keyType: k, valueType: v }, tuple(undefined, undefined, [k, v])),
+  );
 }

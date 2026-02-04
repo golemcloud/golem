@@ -34,8 +34,5 @@ export type AgentInitiator = {
    * @param constructorParams - Constructor arguments for the agent, encoded as `WitValue`s.
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
-  initiate(
-    constructorParams: DataValue,
-    principal: Principal,
-  ): Result<ResolvedAgent, AgentError>;
+  initiate(constructorParams: DataValue, principal: Principal): Result<ResolvedAgent, AgentError>;
 };

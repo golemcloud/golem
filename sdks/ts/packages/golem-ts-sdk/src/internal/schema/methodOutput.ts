@@ -16,22 +16,14 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
 import { DataSchema } from 'golem:agent/common';
 import * as WitType from '../mapping/types/WitType';
-import {
-  AnalysedType,
-  EmptyType,
-  result,
-  tuple,
-} from '../mapping/types/analysedType';
+import { AnalysedType, EmptyType, result, tuple } from '../mapping/types/analysedType';
 import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
   getTextDescriptor,
   isMultimodalType,
 } from './helpers';
-import {
-  getReturnTypeDataSchemaFromTypeInternal,
-  TypeInfoInternal,
-} from '../typeInfoInternal';
+import { getReturnTypeDataSchemaFromTypeInternal, TypeInfoInternal } from '../typeInfoInternal';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { Try } from '../try';
 
@@ -46,11 +38,7 @@ export function resolveMethodReturnDataSchema(
     return outputTypeInfoInternal;
   }
 
-  AgentMethodRegistry.setReturnType(
-    agentClassName,
-    methodName,
-    outputTypeInfoInternal.val,
-  );
+  AgentMethodRegistry.setReturnType(agentClassName, methodName, outputTypeInfoInternal.val);
 
   return getReturnTypeDataSchemaFromTypeInternal(outputTypeInfoInternal.val);
 }
@@ -77,9 +65,7 @@ export function resolveMethodReturnTypeInfo(
   return mapStandardTsType(returnType);
 }
 
-function tryMultimodal(
-  returnType: Type.Type,
-): Either.Either<TypeInfoInternal, string> | undefined {
+function tryMultimodal(returnType: Type.Type): Either.Either<TypeInfoInternal, string> | undefined {
   const multimodalOrUndefined =
     returnType.kind === 'promise' && isMultimodalType(returnType.element)
       ? returnType.element
@@ -87,8 +73,7 @@ function tryMultimodal(
         ? returnType
         : null;
 
-  if (!multimodalOrUndefined || multimodalOrUndefined.kind !== 'array')
-    return undefined;
+  if (!multimodalOrUndefined || multimodalOrUndefined.kind !== 'array') return undefined;
 
   const details = getMultimodalParamDetails(multimodalOrUndefined.element);
 
@@ -143,10 +128,8 @@ function tryResultWithVoid(
 
   const analysedErrEither = errEmpty
     ? Either.right<AnalysedType | undefined, string>(undefined)
-    : Either.flatMap(
-        WitType.fromTsType(errType, undefined),
-        ([_, analysedErr]) =>
-          Either.right<AnalysedType | undefined, string>(analysedErr),
+    : Either.flatMap(WitType.fromTsType(errType, undefined), ([_, analysedErr]) =>
+        Either.right<AnalysedType | undefined, string>(analysedErr),
       );
 
   return Either.flatMap(analysedOkEither, (analysedOk) =>
@@ -197,9 +180,7 @@ function getTypeDetailsFromVoidLike(
   }
 }
 
-function tryUnstructured(
-  type: Type.Type,
-): Either.Either<TypeInfoInternal, string> | undefined {
+function tryUnstructured(type: Type.Type): Either.Either<TypeInfoInternal, string> | undefined {
   const target =
     type.kind === 'promise' && isUnstructuredType(type.element)
       ? type.element
@@ -231,16 +212,11 @@ function isUnstructuredType(type: Type.Type): boolean {
   return type.name === 'UnstructuredText' || type.name === 'UnstructuredBinary';
 }
 
-function mapStandardTsType(
-  type: Type.Type,
-): Either.Either<TypeInfoInternal, string> {
-  return Either.map(
-    WitType.fromTsType(type, undefined),
-    ([witType, analysed]) => ({
-      tag: 'analysed',
-      val: analysed,
-      witType,
-      tsType: type,
-    }),
-  );
+function mapStandardTsType(type: Type.Type): Either.Either<TypeInfoInternal, string> {
+  return Either.map(WitType.fromTsType(type, undefined), ([witType, analysed]) => ({
+    tag: 'analysed',
+    val: analysed,
+    witType,
+    tsType: type,
+  }));
 }

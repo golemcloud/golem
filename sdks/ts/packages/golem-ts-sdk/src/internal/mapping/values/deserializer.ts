@@ -65,8 +65,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
       return undefined;
     }
 
-    const innerType =
-      analysedType.kind === 'option' ? analysedType.value.inner : analysedType;
+    const innerType = analysedType.kind === 'option' ? analysedType.value.inner : analysedType;
 
     return deserialize(caseValue, innerType);
   }
@@ -127,30 +126,22 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
             }
           case 'u16':
             if (value.kind === 'list') {
-              return new Uint16Array(
-                value.value.map((v) => convertToNumber(v)),
-              );
+              return new Uint16Array(value.value.map((v) => convertToNumber(v)));
             } else {
               throw new Error(typeMismatchInDeserialize(value, 'Uint16Array'));
             }
 
           case 'u32':
             if (value.kind === 'list') {
-              return new Uint32Array(
-                value.value.map((v) => convertToNumber(v)),
-              );
+              return new Uint32Array(value.value.map((v) => convertToNumber(v)));
             } else {
               throw new Error(typeMismatchInDeserialize(value, 'Uint32Array'));
             }
           case 'big-u64':
             if (value.kind === 'list') {
-              return new BigUint64Array(
-                value.value.map((v) => convertToBigInt(v)),
-              );
+              return new BigUint64Array(value.value.map((v) => convertToBigInt(v)));
             } else {
-              throw new Error(
-                typeMismatchInDeserialize(value, 'BigUint64Array'),
-              );
+              throw new Error(typeMismatchInDeserialize(value, 'BigUint64Array'));
             }
 
           case 'i8':
@@ -174,27 +165,19 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
             }
           case 'big-i64':
             if (value.kind === 'list') {
-              return new BigInt64Array(
-                value.value.map((v) => convertToBigInt(v)),
-              );
+              return new BigInt64Array(value.value.map((v) => convertToBigInt(v)));
             } else {
-              throw new Error(
-                typeMismatchInDeserialize(value, 'BigInt64Array'),
-              );
+              throw new Error(typeMismatchInDeserialize(value, 'BigInt64Array'));
             }
           case 'f32':
             if (value.kind === 'list') {
-              return new Float32Array(
-                value.value.map((v) => convertToNumber(v)),
-              );
+              return new Float32Array(value.value.map((v) => convertToNumber(v)));
             } else {
               throw new Error(typeMismatchInDeserialize(value, 'Float32Array'));
             }
           case 'f64':
             if (value.kind === 'list') {
-              return new Float64Array(
-                value.value.map((v) => convertToNumber(v)),
-              );
+              return new Float64Array(value.value.map((v) => convertToNumber(v)));
             } else {
               throw new Error(typeMismatchInDeserialize(value, 'Float64Array'));
             }
@@ -206,11 +189,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
         if (value.kind === 'list') {
           const elemType = analysedType.value.inner;
 
-          if (
-            !elemType ||
-            elemType.kind !== 'tuple' ||
-            elemType.value.items.length !== 2
-          ) {
+          if (!elemType || elemType.kind !== 'tuple' || elemType.value.items.length !== 2) {
             throw new Error(`Unable to infer the type of Map`);
           }
 

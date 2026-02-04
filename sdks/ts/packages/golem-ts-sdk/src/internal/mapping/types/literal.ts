@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from "../../../newTypes/either";
+import * as Either from '../../../newTypes/either';
 import { isNumberString, trimQuotes } from './stringFormat';
 import { AnalysedType, bool, enum_ } from './analysedType';
 import { Ctx } from './ctx';
@@ -21,9 +21,12 @@ import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-type LiteralCtx = Ctx & { type: Extract<TsType, { kind: "literal" }> };
+type LiteralCtx = Ctx & { type: Extract<TsType, { kind: 'literal' }> };
 
-export function handleLiteral({ type }: LiteralCtx, _mapper: TypeMapper): Either.Either<AnalysedType, string> {
+export function handleLiteral(
+  { type }: LiteralCtx,
+  _mapper: TypeMapper,
+): Either.Either<AnalysedType, string> {
   const literalName = type.literalValue;
 
   if (literalName) {
@@ -35,6 +38,8 @@ export function handleLiteral({ type }: LiteralCtx, _mapper: TypeMapper): Either
     }
     return Either.right(enum_(type.name, [trimQuotes(literalName)]));
   } else {
-    return Either.left(`internal error: failed to retrieve the literal value from type of kind ${type.kind}`);
+    return Either.left(
+      `internal error: failed to retrieve the literal value from type of kind ${type.kind}`,
+    );
   }
 }

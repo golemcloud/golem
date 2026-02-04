@@ -176,9 +176,7 @@ export type TransactionFailure<Err> =
  * @param f - The function that defines the transaction.
  * @returns The result of the transaction.
  */
-export function infallibleTransaction<Out>(
-  f: (tx: InfallibleTransaction) => Out,
-): Out {
+export function infallibleTransaction<Out>(f: (tx: InfallibleTransaction) => Out): Out {
   const guard = markAtomicOperation();
   const beginOplogIndex = getOplogIndex();
   const tx = new InfallibleTransaction(beginOplogIndex);

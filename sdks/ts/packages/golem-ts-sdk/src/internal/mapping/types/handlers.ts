@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from "../../../newTypes/either";
+import * as Either from '../../../newTypes/either';
 import { AnalysedType, bool, f64, str, u64 } from './analysedType';
 import { Ctx } from './ctx';
 import { handleUnion } from './union';
@@ -31,7 +31,7 @@ import { TypeMapper } from './typeMapper';
 
 type TsType = CoreType.Type;
 
-export function callHandler<K extends TsType["kind"]>(
+export function callHandler<K extends TsType['kind']>(
   kind: K,
   ctx: Ctx,
   typeMapper: TypeMapper,
@@ -40,47 +40,49 @@ export function callHandler<K extends TsType["kind"]>(
   return handler(ctx as Ctx & { type: Extract<TsType, { kind: K }> }, typeMapper);
 }
 
-export type Handler<K extends TsType["kind"]> =
-  (ctx: Ctx & { type: Extract<TsType, { kind: K }> }, mapper: TypeMapper) => Either.Either<AnalysedType, string>;
+export type Handler<K extends TsType['kind']> = (
+  ctx: Ctx & { type: Extract<TsType, { kind: K }> },
+  mapper: TypeMapper,
+) => Either.Either<AnalysedType, string>;
 
-const handlers: { [K in TsType["kind"]]: Handler<K> } = {
-  "boolean": () => Either.right(bool()),
-  "number":  () => Either.right(f64()),
-  "string":  () => Either.right(str()),
-  "bigint":  () => Either.right(u64(true)),
+const handlers: { [K in TsType['kind']]: Handler<K> } = {
+  boolean: () => Either.right(bool()),
+  number: () => Either.right(f64()),
+  string: () => Either.right(str()),
+  bigint: () => Either.right(u64(true)),
 
-  "null": unsupported("null"),
-  "undefined": unsupported("undefined"),
-  "void": unsupported("void"),
+  null: unsupported('null'),
+  undefined: unsupported('undefined'),
+  void: unsupported('void'),
 
-  "tuple": handleTuple,
-  "union": handleUnion,
-  "object": handleObject,
-  "interface": handleInterface,
-  "class": unsupportedWithHint("class", "Use object instead."),
-  "promise": handlePromise,
-  "map": handleMap,
-  "literal": handleLiteral,
-  "alias": handleAlias,
-  "others": handleOthers,
-  "unresolved-type": handleUnresolved,
-  "array": handleArray,
-}
+  tuple: handleTuple,
+  union: handleUnion,
+  object: handleObject,
+  interface: handleInterface,
+  class: unsupportedWithHint('class', 'Use object instead.'),
+  promise: handlePromise,
+  map: handleMap,
+  literal: handleLiteral,
+  alias: handleAlias,
+  others: handleOthers,
+  'unresolved-type': handleUnresolved,
+  array: handleArray,
+};
 
 function unsupported(kind: string): Handler<any> {
   return ({ scopeName, parameterInScope }) =>
     Either.left(
-      `Unsupported type \`${kind}\``
-      + (scopeName ? ` in ${scopeName}` : "")
-      + (parameterInScope ? ` for parameter \`${parameterInScope}\`` : "")
+      `Unsupported type \`${kind}\`` +
+        (scopeName ? ` in ${scopeName}` : '') +
+        (parameterInScope ? ` for parameter \`${parameterInScope}\`` : ''),
     );
 }
 
 function unsupportedWithHint(kind: string, hint: string): Handler<any> {
   return ({ scopeName, parameterInScope }) =>
     Either.left(
-      `Unsupported type \`${kind}\`${scopeName ? ` in ${scopeName}` : ""}` +
-      (parameterInScope ? ` for parameter \`${parameterInScope}\`` : "") +
-      `. Hint: ${hint}`
+      `Unsupported type \`${kind}\`${scopeName ? ` in ${scopeName}` : ''}` +
+        (parameterInScope ? ` for parameter \`${parameterInScope}\`` : '') +
+        `. Hint: ${hint}`,
     );
 }

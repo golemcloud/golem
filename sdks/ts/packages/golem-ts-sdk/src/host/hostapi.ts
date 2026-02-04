@@ -39,9 +39,7 @@ export function randomUuid(): Uuid {
  */
 export function getRawSelfAgentId(): AgentId {
   const env = wasiEnv.getEnvironment();
-  const agentId: [string, string] | undefined = env.find(
-    ([key, _]) => key === 'GOLEM_AGENT_ID',
-  );
+  const agentId: [string, string] | undefined = env.find(([key, _]) => key === 'GOLEM_AGENT_ID');
   if (!agentId) {
     throw new Error('GOLEM_AGENT_ID is not set');
   }

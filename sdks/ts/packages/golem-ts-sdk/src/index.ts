@@ -57,8 +57,7 @@ async function initialize(
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
-  const initiator: AgentInitiator | undefined =
-    AgentInitiatorRegistry.lookup(agentTypeName);
+  const initiator: AgentInitiator | undefined = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
     throw createCustomError(
@@ -81,9 +80,7 @@ async function invoke(
   principal: Principal,
 ): Promise<DataValue> {
   if (!resolvedAgent) {
-    throw createCustomError(
-      `Failed to invoke method ${methodName}: agent is not initialized`,
-    );
+    throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
 
   const result = await resolvedAgent.invoke(methodName, input, principal);
@@ -145,8 +142,7 @@ async function load(bytes: Uint8Array): Promise<void> {
 
   const agentSnapshot = bytes.slice(1);
 
-  const [agentTypeName, agentParameters, _phantomId] =
-    getRawSelfAgentId().parsed();
+  const [agentTypeName, agentParameters, _phantomId] = getRawSelfAgentId().parsed();
 
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
