@@ -41,36 +41,36 @@ export type EnvironmentName = string;
 
 export type ConfigureClient = (config: ClientConfiguration) => void;
 
-export function client_configuration_from_env(): ClientConfiguration {
+export function clientConfigurationFromEnv(): ClientConfiguration {
   return {
-    server: client_server_configuration_from_env(),
-    application: required_env_var('GOLEM_REPL_APPLICATION'),
-    environment: required_env_var('GOLEM_REPL_ENVIRONMENT'),
+    server: clientServerConfigurationFromEnv(),
+    application: requiredEnvVar('GOLEM_REPL_APPLICATION'),
+    environment: requiredEnvVar('GOLEM_REPL_ENVIRONMENT'),
   };
 }
 
-function client_server_configuration_from_env(): GolemServer {
-  const server_kind = required_env_var('GOLEM_REPL_SERVER_KIND');
+function clientServerConfigurationFromEnv(): GolemServer {
+  const server_kind = requiredEnvVar('GOLEM_REPL_SERVER_KIND');
   switch (server_kind) {
     case 'local':
       return { type: 'local' };
     case 'cloud':
       return {
         type: 'cloud',
-        token: required_env_var('GOLEM_REPL_SERVER_TOKEN'),
+        token: requiredEnvVar('GOLEM_REPL_SERVER_TOKEN'),
       };
     case 'custom':
       return {
         type: 'custom',
-        url: required_env_var('GOLEM_REPL_SERVER_CUSTOM_URL'),
-        token: required_env_var('GOLEM_REPL_SERVER_TOKEN'),
+        url: requiredEnvVar('GOLEM_REPL_SERVER_CUSTOM_URL'),
+        token: requiredEnvVar('GOLEM_REPL_SERVER_TOKEN'),
       };
     default:
       throw new Error(`Invalid GOLEM_REPL_SERVER_KIND: ${server_kind}`);
   }
 }
 
-function required_env_var(name: string): string {
+function requiredEnvVar(name: string): string {
   const value = env[name];
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);

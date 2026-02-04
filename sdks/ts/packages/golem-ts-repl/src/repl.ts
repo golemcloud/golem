@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { client_configuration_from_env, Config, ConfigureClient } from './config';
+import { ClientConfiguration, clientConfigurationFromEnv, Config, ConfigureClient } from './config';
 import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
@@ -23,29 +23,51 @@ import util from 'node:util';
 
 export class Repl {
   private readonly config: Config;
+  private readonly clientConfig: ClientConfiguration;
+  private languageService: LanguageService | undefined;
+  private replServer: repl.REPLServer | undefined;
 
   constructor(config: Config) {
     this.config = config;
+    this.clientConfig = clientConfigurationFromEnv();
   }
 
-  async run() {
-    const clientConfig = client_configuration_from_env();
-    let languageService = new LanguageService(this.config);
+  private getLanguageService(): LanguageService {
+    if (!this.languageService) {
+      this.languageService = new LanguageService(this.config);
+    }
+    return this.languageService;
+  }
 
-    const r = repl.start({
-      useColors: pc.isColorSupported,
-      useGlobal: true,
-      preview: false,
-      ignoreUndefined: true,
-      prompt:
-        `${pc.cyan('golem-ts-repl')}` +
-        `[${pc.green(clientConfig.application)}]` +
-        `[${pc.yellow(clientConfig.environment)}]` +
-        `${pc.red('>')} `,
-    });
+  private async getReplServer(): Promise<repl.REPLServer> {
+    if (!this.replServer) {
+      const replServer = repl.start({
+        useColors: pc.isColorSupported,
+        useGlobal: true,
+        preview: false,
+        ignoreUndefined: true,
+        prompt:
+          `${pc.cyan('golem-ts-repl')}` +
+          `[${pc.green(this.clientConfig.application)}]` +
+          `[${pc.yellow(this.clientConfig.environment)}]` +
+          `${pc.red('>')} `,
+      });
+      await this.setupRepl(replServer);
+      this.replServer = replServer;
+    }
+    return this.replServer!;
+  }
 
+  private async setupRepl(replServer: repl.REPLServer) {
+    await this.setupReplHistory(replServer);
+    this.setupReplEval(replServer);
+    this.setupReplContext(replServer);
+    this.setupReplCommands(replServer);
+  }
+
+  private async setupReplHistory(replServer: repl.REPLServer) {
     await new Promise<void>((resolve, reject) => {
-      r.setupHistory(this.config.historyFile, (err) => {
+      replServer.setupHistory(this.config.historyFile, (err) => {
         if (err) {
           reject(err);
         } else {
@@ -53,71 +75,79 @@ export class Repl {
         }
       });
     });
+  }
 
-    {
-      const tsxEval = r.eval;
-      const customEval: REPLEval = function (code, context, filename, callback) {
-        const evalCode = (code: string) => {
-          tsxEval.call(this, code, context, filename, (err, result) => {
-            if (!err) {
-              languageService.addSnippetToHistory(code);
-            }
-            callback(err, result);
-          });
-        };
+  private setupReplEval(replServer: repl.REPLServer) {
+    const tsxEval = replServer.eval;
+    const languageService = this.getLanguageService();
 
-        languageService.setSnippet(code);
-        const typeCheckResult = languageService.typeCheckSnippet();
-        if (typeCheckResult.ok) {
-          const quickInfo = languageService.getSnippetQuickInfo();
-          const typeInfo = languageService.getSnippetTypeInfo();
-
-          if (typeInfo && typeInfo.isPromise) {
-            logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
-            evalCode('await ' + code);
-          } else {
-            if (quickInfo) {
-              logSnippetInfo(pc.bold(quickInfo.formattedInfo));
-            } else if (typeInfo) {
-              logSnippetInfo(pc.bold(typeInfo.formattedType));
-            }
-            evalCode(code);
+    const customEval: REPLEval = function (code, context, filename, callback) {
+      const evalCode = (code: string) => {
+        tsxEval.call(this, code, context, filename, (err, result) => {
+          if (!err) {
+            languageService.addSnippetToHistory(code);
           }
-        } else {
-          const completions = languageService.getSnippetCompletions();
-          if (completions && completions.entries.length) {
-            let entries = completions.entries;
-            if (completions.entries.length > MAX_COMPLETION_ENTRIES) {
-              entries = completions.entries.slice(0, MAX_COMPLETION_ENTRIES - 1);
-              entries.push('...');
-            }
-
-            logSnippetInfo(
-              pc.bold('Completions:') +
-                `\n` +
-                formatAsTable(entries, {
-                  maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
-                }),
-            );
-          }
-
-          console.log(typeCheckResult.formattedErrors);
-
-          callback(null, undefined);
-        }
+          callback(err, result);
+        });
       };
-      (r.eval as any) = customEval;
-    }
 
+      languageService.setSnippet(code);
+      const typeCheckResult = languageService.typeCheckSnippet();
+      if (typeCheckResult.ok) {
+        const quickInfo = languageService.getSnippetQuickInfo();
+        const typeInfo = languageService.getSnippetTypeInfo();
+
+        if (typeInfo && typeInfo.isPromise) {
+          logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
+          evalCode('await ' + code);
+        } else {
+          if (quickInfo) {
+            logSnippetInfo(pc.bold(quickInfo.formattedInfo));
+          } else if (typeInfo) {
+            logSnippetInfo(pc.bold(typeInfo.formattedType));
+          }
+          evalCode(code);
+        }
+      } else {
+        const completions = languageService.getSnippetCompletions();
+        if (completions && completions.entries.length) {
+          let entries = completions.entries;
+          if (completions.entries.length > MAX_COMPLETION_ENTRIES) {
+            entries = completions.entries.slice(0, MAX_COMPLETION_ENTRIES - 1);
+            entries.push('...');
+          }
+
+          logSnippetInfo(
+            pc.bold('Completions:') +
+              `\n` +
+              formatAsTable(entries, {
+                maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
+              }),
+          );
+        }
+
+        console.log(typeCheckResult.formattedErrors);
+
+        callback(null, undefined);
+      }
+    };
+    (replServer.eval as any) = customEval;
+  }
+
+  private setupReplContext(replServer: repl.REPLServer) {
+    const context = replServer.context;
     for (let agentTypeName in this.config.agents) {
       const agentConfig = this.config.agents[agentTypeName];
       let configure = agentConfig.package.configure as ConfigureClient;
-      configure(clientConfig);
-      r.context[agentTypeName] = agentConfig.package[agentTypeName];
-      r.context[agentConfig.clientPackageImportedName] = agentConfig.package;
+      configure(this.clientConfig);
+      context[agentTypeName] = agentConfig.package[agentTypeName];
+      context[agentConfig.clientPackageImportedName] = agentConfig.package;
     }
+  }
 
-    r.defineCommand('deploy', {
+  private setupReplCommands(replServer: repl.REPLServer) {
+    const clientConfig = this.clientConfig;
+    replServer.defineCommand('deploy', {
       help: 'Deploy the current Golem Application',
       async action(raw_args: string) {
         this.pause();
@@ -154,12 +184,16 @@ export class Repl {
       },
     });
 
-    r.defineCommand('reload', {
+    replServer.defineCommand('reload', {
       help: 'Reload the REPL',
       action() {
         reload();
       },
     });
+  }
+
+  async run() {
+    await this.getReplServer();
   }
 }
 
