@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::enriched_agent_type::ExtendedAgentType;
+use crate::agentic::extended_agent_type::ExtendedAgentType;
 use crate::agentic::{EnrichedElementSchema, ExtendedDataSchema};
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
