@@ -84,9 +84,24 @@ export class Repl {
             evalCode(code);
           }
         } else {
-          // languageService.getCompletionsForSnippet(code);
+          const completions = languageService.getSnippetCompletions();
+          if (completions && completions.entries.length) {
+            let entries = completions.entries;
+            if (completions.entries.length > MAX_COMPLETION_ENTRIES) {
+              entries = completions.entries.slice(0, MAX_COMPLETION_ENTRIES - 1);
+              entries.push('...');
+            }
+
+            logSnippetInfo(
+              pc.bold('Completions:') +
+                `\n` +
+                formatAsTable(entries, {
+                  maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
+                }),
+            );
+          }
+
           console.log(typeCheckResult.formattedErrors);
-          languageService.getSnippetCompletions();
 
           callback(null, undefined);
         }
@@ -167,6 +182,59 @@ function logSnippetInfo(message: string) {
   });
 
   if (maxLineLength > 0) {
-    console.log(pc.dim('~'.repeat(maxLineLength + INFO_PREFIX_LENGTH)));
+    console.log(pc.dim('~'.repeat(Math.min(maxLineLength + INFO_PREFIX_LENGTH, terminalWidth))));
   }
+}
+
+type FormatAsTableOptions = {
+  maxLineLength: number;
+  separator?: string;
+};
+
+export function formatAsTable(
+  items: string[],
+  { maxLineLength, separator = '  ' }: FormatAsTableOptions,
+): string {
+  if (items.length === 0) return '';
+
+  const colWidth = Math.max(...items.map((s) => s.length));
+  const sepLen = separator.length;
+
+  const cols = Math.max(1, Math.floor((maxLineLength + sepLen) / (colWidth + sepLen)));
+
+  const lines: string[] = [];
+  let line: string[] = [];
+
+  for (const item of items) {
+    if (item.length > maxLineLength) {
+      if (line.length) {
+        lines.push(line.join(separator).trimEnd());
+        line = [];
+      }
+      lines.push(item);
+      continue;
+    }
+
+    line.push(item.padEnd(colWidth, ' '));
+    if (line.length === cols) {
+      lines.push(line.join(separator).trimEnd());
+      line = [];
+    }
+  }
+
+  if (line.length) {
+    lines.push(line.join(separator).trimEnd());
+  }
+
+  return lines.join('\n');
+}
+
+const MAX_COMPLETION_ENTRIES = 20;
+
+let terminalWidth = process.stdout.isTTY ? process.stdout.columns : 80;
+
+if (process.stdout.isTTY) {
+  process.stdout.on('resize', () => {
+    terminalWidth = process.stdout.columns;
+  });
 }

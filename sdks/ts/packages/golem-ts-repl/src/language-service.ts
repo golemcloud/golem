@@ -35,6 +35,10 @@ export type SnippetTypeInfo = {
   isPromise: boolean;
 };
 
+export type SnippetCompletion = {
+  entries: string[];
+};
+
 const SNIPPET_FILE_NAME = '__snippet__.ts';
 
 export class LanguageService {
@@ -42,7 +46,6 @@ export class LanguageService {
   private project: tsm.Project;
   private snippetHistory: string;
   private rawSnippet: string;
-  private fullSnippetStartPos: number;
   private fullSnippetEndPos: number;
 
   constructor(config: Config) {
@@ -64,13 +67,11 @@ export class LanguageService {
     this.snippetHistory = this.snippetImports;
     this.rawSnippet = '';
     this.fullSnippetEndPos = 0;
-    this.fullSnippetStartPos = this.snippetImports.length;
   }
 
   private updateProjectSnippet() {
     const fullSnippet = this.snippetHistory + this.rawSnippet;
-    this.fullSnippetEndPos = fullSnippet.trimEnd().length - 1;
-    this.fullSnippetStartPos = this.snippetImports.length + this.rawSnippet.search(/\S/);
+    this.fullSnippetEndPos = lastNonWhitespaceIndex(fullSnippet);
     this.project.createSourceFile(SNIPPET_FILE_NAME, fullSnippet, { overwrite: true });
   }
 
@@ -140,9 +141,7 @@ export class LanguageService {
       return;
     }
 
-    const node =
-      snippet.getDescendantAtPos(this.fullSnippetEndPos) ||
-      snippet.getDescendantAtPos(this.fullSnippetStartPos);
+    const node = snippet.getDescendantAtPos(this.fullSnippetEndPos);
     if (!node) {
       return;
     }
@@ -164,10 +163,11 @@ export class LanguageService {
     const typeIsPromise = isPromise(nodeType);
     const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(nodeType);
 
-    // TODO: format the type in the same style as "formattedType" works
-    const formattedType = typeAsLiteralType
-      ? formatDisplayParts([{ text: typeAsLiteralType, kind: 'keyword' }])
+    const typeText = typeAsLiteralType
+      ? typeAsLiteralType
       : this.project.getTypeChecker().getTypeText(nodeType, fullExpressionNode);
+
+    const formattedType = formatTypeText(typeText);
 
     return {
       formattedType,
@@ -175,10 +175,10 @@ export class LanguageService {
     };
   }
 
-  getSnippetCompletions() {
+  getSnippetCompletions(): SnippetCompletion | undefined {
     const snippet = this.getSnippet();
     if (!snippet) {
-      return {};
+      return;
     }
 
     let pos = this.fullSnippetEndPos;
@@ -190,7 +190,7 @@ export class LanguageService {
 
     const tsLs = this.project.getLanguageService().compilerObject;
 
-    const completions = tsLs.getCompletionsAtPosition(snippet.getFilePath(), pos, {
+    const completions = tsLs.getCompletionsAtPosition(snippet.getFilePath(), pos + 1, {
       triggerKind,
       triggerCharacter,
       includeCompletionsForModuleExports: false,
@@ -200,14 +200,38 @@ export class LanguageService {
     });
 
     if (!completions) {
-      return {};
+      return;
     }
 
-    let snippetTrimmed = this.rawSnippet.trim();
-    for (let entry of completions.entries) {
-      if (entry.name.startsWith(snippetTrimmed)) {
-        console.log(entry.name);
+    if (triggerCharacter === '.') {
+      return {
+        entries: completions.entries
+          .filter((entry) => {
+            const kind = entry.kind;
+            return (
+              kind === ts.ScriptElementKind.memberVariableElement ||
+              kind === ts.ScriptElementKind.memberFunctionElement ||
+              kind === ts.ScriptElementKind.memberGetAccessorElement ||
+              kind === ts.ScriptElementKind.memberSetAccessorElement ||
+              kind === ts.ScriptElementKind.memberAccessorVariableElement
+            );
+          })
+          .map((entry) => entry.name),
+      };
+    } else {
+      const node = snippet.getDescendantAtPos(this.fullSnippetEndPos);
+      if (!node) {
+        return {
+          entries: completions.entries.map((entry) => entry.name),
+        };
       }
+
+      const nodeText = node.getText();
+      return {
+        entries: completions.entries
+          .filter((entry) => entry.name.startsWith(nodeText))
+          .map((entry) => entry.name),
+      };
     }
   }
 }
@@ -216,7 +240,7 @@ function matchTriggerCharacter(
   text: string,
   pos: number,
 ): ts.CompletionsTriggerCharacter | undefined {
-  const i = Math.max(0, pos - 1);
+  const i = Math.max(0, pos);
   const ch = text[i];
 
   if (
@@ -236,6 +260,69 @@ function matchTriggerCharacter(
 
 function formatDisplayParts(parts: Array<{ text: string; kind: string }>): string {
   return parts.map((p) => colorizePart(p.kind, p.text)).join('');
+}
+
+function formatTypeText(typeText: string): string {
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    false,
+    ts.LanguageVariant.Standard,
+    typeText,
+  );
+
+  const parts: Array<{ text: string; kind: string }> = [];
+  let lastPos = 0;
+
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    const tokenStart = scanner.getTokenStart();
+    if (tokenStart > lastPos) {
+      const gap = typeText.slice(lastPos, tokenStart);
+      parts.push({ text: gap, kind: 'space' });
+    }
+
+    const text = scanner.getTokenText();
+    parts.push({ text, kind: tokenKindToDisplayPartKind(token) });
+
+    lastPos = scanner.getTokenEnd();
+  }
+
+  if (lastPos < typeText.length) {
+    parts.push({ text: typeText.slice(lastPos), kind: 'space' });
+  }
+
+  return formatDisplayParts(parts);
+}
+
+function tokenKindToDisplayPartKind(kind: ts.SyntaxKind): string {
+  if (kind === ts.SyntaxKind.Identifier) return 'interfaceName';
+  if (kind === ts.SyntaxKind.StringLiteral) return 'stringLiteral';
+  if (kind === ts.SyntaxKind.NumericLiteral) return 'numericLiteral';
+  if (kind >= ts.SyntaxKind.FirstKeyword && kind <= ts.SyntaxKind.LastKeyword) return 'keyword';
+
+  switch (kind) {
+    case ts.SyntaxKind.BarToken:
+    case ts.SyntaxKind.AmpersandToken:
+    case ts.SyntaxKind.EqualsGreaterThanToken:
+      return 'operator';
+
+    case ts.SyntaxKind.DotToken:
+    case ts.SyntaxKind.CommaToken:
+    case ts.SyntaxKind.ColonToken:
+    case ts.SyntaxKind.SemicolonToken:
+    case ts.SyntaxKind.QuestionToken:
+    case ts.SyntaxKind.OpenParenToken:
+    case ts.SyntaxKind.CloseParenToken:
+    case ts.SyntaxKind.OpenBracketToken:
+    case ts.SyntaxKind.CloseBracketToken:
+    case ts.SyntaxKind.OpenBraceToken:
+    case ts.SyntaxKind.CloseBraceToken:
+    case ts.SyntaxKind.LessThanToken:
+    case ts.SyntaxKind.GreaterThanToken:
+      return 'punctuation';
+
+    default:
+      return 'text';
+  }
 }
 
 //  enum SymbolDisplayPartKind {
@@ -352,4 +439,11 @@ function asLiteralType(type: tsm.Type): string | undefined {
   if (flags & tsm.TypeFlags.NumberLiteral) return 'number';
   if (flags & tsm.TypeFlags.StringLiteral) return 'string';
   return undefined;
+}
+
+function lastNonWhitespaceIndex(text: string): number {
+  for (let i = text.length - 1; i >= 0; i--) {
+    if (!/\s/.test(text[i])) return i;
+  }
+  return -1;
 }
