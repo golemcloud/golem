@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::enriched_agent_type::EnrichedAgentType;
-use crate::agentic::{EnrichedDataSchema, EnrichedSchema};
+use crate::agentic::{EnrichedDataSchema, EnrichedElementSchema};
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::exports::golem::agent::guest::AgentType,
@@ -169,7 +169,7 @@ pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {
 pub fn get_constructor_parameter_type(
     agent_type_name: &AgentTypeName,
     parameter_index: usize,
-) -> Option<EnrichedSchema> {
+) -> Option<EnrichedElementSchema> {
     let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     let constructor = &agent_type.constructor;
@@ -186,7 +186,7 @@ pub fn get_constructor_parameter_type(
         EnrichedDataSchema::Multimodal(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
-                Some(EnrichedSchema::ElementSchema(element_schema.clone()))
+                Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))
             } else {
                 None
             }
@@ -198,7 +198,7 @@ pub fn get_method_parameter_type(
     agent_type_name: &AgentTypeName,
     method_name: &str,
     parameter_index: usize,
-) -> Option<EnrichedSchema> {
+) -> Option<EnrichedElementSchema> {
     let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
@@ -215,7 +215,7 @@ pub fn get_method_parameter_type(
         EnrichedDataSchema::Multimodal(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
-                Some(EnrichedSchema::ElementSchema(element_schema.clone()))
+                Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))
             } else {
                 None
             }

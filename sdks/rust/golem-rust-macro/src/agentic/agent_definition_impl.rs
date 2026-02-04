@@ -250,13 +250,13 @@ fn get_agent_type_with_remote_client(
                         let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
                         match schema {
                             golem_rust::agentic::StructuredSchema::Default(element_schema) => {
-                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedSchema::ElementSchema(element_schema)));
+                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
                             },
                             golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                 multi_modal_inputs.extend(name_and_types);
                             },
                             golem_rust::agentic::StructuredSchema::AutoInjected(auto_inject_schema) => {
-                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedSchema::AutoInjected(auto_inject_schema)));
+                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_inject_schema)));
                             }
                         }
                     });
@@ -285,13 +285,13 @@ fn get_agent_type_with_remote_client(
                             let schema = <#ty as golem_rust::agentic::Schema>::get_type();
                             match schema {
                                 golem_rust::agentic::StructuredSchema::Default(element_schema) => {
-                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedSchema::ElementSchema(element_schema)));
+                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
                                 },
                                 golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                     multi_modal_outputs.extend(name_and_types)
                                 },
                                 golem_rust::agentic::StructuredSchema::AutoInjected(auto_injected_schema) => {
-                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedSchema::AutoInjected(auto_injected_schema)));
+                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_injected_schema)));
                                 }
                             }
                         });
@@ -419,13 +419,13 @@ fn get_agent_type_with_remote_client(
                     let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
                     match schema {
                         golem_rust::agentic::StructuredSchema::Default(element_schema) => {
-                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedSchema::ElementSchema(element_schema)));
+                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
                         },
                         golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                             constructor_multi_modal_inputs.extend(name_and_types);
                         },
                         golem_rust::agentic::StructuredSchema::AutoInjected(auto_inject_schema) => {
-                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedSchema::AutoInjected(auto_inject_schema)));
+                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_inject_schema)));
                         }
                     }
                 });

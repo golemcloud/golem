@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{AutoInjectedSchema, EnrichedAgentMethod, EnrichedDataSchema, EnrichedSchema};
+use crate::agentic::{
+    AutoInjectedSchema, EnrichedAgentMethod, EnrichedDataSchema, EnrichedElementSchema,
+};
 use crate::golem_agentic::golem::agent::common::{
     AgentConstructor, DataSchema, ElementSchema, HttpEndpointDetails, HttpMountDetails, PathSegment,
 };
@@ -77,7 +79,7 @@ fn collect_principal_parameter_names(input_schema: &EnrichedDataSchema) -> HashS
     match input_schema {
         EnrichedDataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
-                if let EnrichedSchema::AutoInjected(auto_injected_schema) = param_schema {
+                if let EnrichedElementSchema::AutoInjected(auto_injected_schema) = param_schema {
                     match auto_injected_schema {
                         AutoInjectedSchema::Principal => {
                             principal_params.insert(param_name.clone());
@@ -98,7 +100,7 @@ fn collect_unstructured_binary_params(input_schema: &EnrichedDataSchema) -> Hash
     match input_schema {
         EnrichedDataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
-                if let EnrichedSchema::ElementSchema(ElementSchema::UnstructuredBinary(_)) =
+                if let EnrichedElementSchema::ElementSchema(ElementSchema::UnstructuredBinary(_)) =
                     param_schema
                 {
                     unstructured_binary_params.insert(param_name.clone());
@@ -118,7 +120,7 @@ fn collect_method_input_vars(input_schema: &EnrichedDataSchema) -> HashSet<Strin
     match input_schema {
         EnrichedDataSchema::Tuple(name_and_schemas) => {
             for (param_name, param_schema) in name_and_schemas {
-                if let EnrichedSchema::AutoInjected(_) = param_schema {
+                if let EnrichedElementSchema::AutoInjected(_) = param_schema {
                     continue;
                 }
                 param_names.insert(param_name.clone());
@@ -576,21 +578,23 @@ mod tests {
         for name in normal_vars {
             fields.push((
                 name.to_string(),
-                EnrichedSchema::ElementSchema(String::get_type().get_element_schema().unwrap()),
+                EnrichedElementSchema::ElementSchema(
+                    String::get_type().get_element_schema().unwrap(),
+                ),
             ));
         }
 
         for name in principal_vars {
             fields.push((
                 name.to_string(),
-                EnrichedSchema::AutoInjected(AutoInjectedSchema::Principal),
+                EnrichedElementSchema::AutoInjected(AutoInjectedSchema::Principal),
             ));
         }
 
         for name in unstructured_vars {
             fields.push((
                 name.to_string(),
-                EnrichedSchema::ElementSchema(ElementSchema::UnstructuredBinary(
+                EnrichedElementSchema::ElementSchema(ElementSchema::UnstructuredBinary(
                     BinaryDescriptor { restrictions: None },
                 )),
             ));

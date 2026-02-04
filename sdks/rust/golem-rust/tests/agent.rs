@@ -21,9 +21,7 @@ mod tests {
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, AuthDetails, CorsOptions, PathSegment, Principal,
-    };
+    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
@@ -673,7 +671,7 @@ mod tests {
 
     #[agent_implementation]
     impl ComplexHttpAgent for AgentWithHttpMountImpl {
-        fn new(foo: String, bar: String) -> Self {
+        fn new(_foo: String, _bar: String) -> Self {
             AgentWithHttpMountImpl {}
         }
 

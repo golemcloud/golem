@@ -40,7 +40,7 @@ impl EnrichedAgentType {
 
         if let EnrichedDataSchema::Tuple(fields) = &self.constructor.input_schema {
             for (name, schema) in fields {
-                if let EnrichedSchema::AutoInjected(AutoInjectedSchema::Principal) = schema {
+                if let EnrichedElementSchema::AutoInjected(AutoInjectedSchema::Principal) = schema {
                     principal_params.insert(name.clone());
                 }
             }
@@ -106,7 +106,7 @@ impl EnrichedAgentConstructor {
 
 #[derive(Clone)]
 pub enum EnrichedDataSchema {
-    Tuple(Vec<(String, EnrichedSchema)>),
+    Tuple(Vec<(String, EnrichedElementSchema)>),
     // Disallow any auto-injected schemas within multimodal
     Multimodal(Vec<(String, ElementSchema)>),
 }
@@ -118,10 +118,10 @@ impl EnrichedDataSchema {
                 let fields_without_auto_injected = fields
                     .iter()
                     .filter_map(|(name, schema)| match schema {
-                        EnrichedSchema::ElementSchema(element_schema) => {
+                        EnrichedElementSchema::ElementSchema(element_schema) => {
                             Some((name.clone(), element_schema.clone()))
                         }
-                        EnrichedSchema::AutoInjected(_) => None,
+                        EnrichedElementSchema::AutoInjected(_) => None,
                     })
                     .collect::<Vec<(String, ElementSchema)>>();
 
@@ -133,7 +133,7 @@ impl EnrichedDataSchema {
 }
 
 #[derive(Clone)]
-pub enum EnrichedSchema {
+pub enum EnrichedElementSchema {
     ElementSchema(ElementSchema),
     AutoInjected(AutoInjectedSchema),
 }

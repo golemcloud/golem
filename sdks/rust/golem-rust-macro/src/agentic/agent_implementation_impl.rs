@@ -297,7 +297,7 @@ fn generate_method_param_extraction(
                     })?;
 
                     match enriched_schema {
-                        golem_rust::agentic::EnrichedSchema::AutoInjected(auto_injected_schema) => {
+                        golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_injected_schema) => {
                             match auto_injected_schema {
                                 golem_rust::agentic::AutoInjectedSchema::Principal => {
                                     golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
@@ -307,7 +307,7 @@ fn generate_method_param_extraction(
                             }
                         }
 
-                        golem_rust::agentic::EnrichedSchema::ElementSchema(element_schema) => {
+                        golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema) => {
                             let value = values.get(input_param_index);
 
                             let element_value_result = match value {
@@ -415,7 +415,7 @@ fn generate_constructor_extraction(
                     })?;
 
                     match enriched_schema {
-                        golem_rust::agentic::EnrichedSchema::AutoInjected(auto_injected_schema) => {
+                        golem_rust::agentic::EnrichedElementSchema::AutoInjected(auto_injected_schema) => {
                             match auto_injected_schema {
                                 golem_rust::agentic::AutoInjectedSchema::Principal => {
                                     golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::AutoInjected(golem_rust::agentic::AutoInjectedValue::Principal(principal.clone())), golem_rust::agentic::StructuredSchema::AutoInjected(golem_rust::agentic::AutoInjectedSchema::Principal)).map_err(|e| {
@@ -425,7 +425,7 @@ fn generate_constructor_extraction(
                             }
                         }
 
-                        golem_rust::agentic::EnrichedSchema::ElementSchema(element_schema) => {
+                        golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema) => {
                             let element_value_result = match values.get(input_param_index) {
                                 Some(v) => Ok(v.clone()),
                                 None => Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", #agent_type_name))),
