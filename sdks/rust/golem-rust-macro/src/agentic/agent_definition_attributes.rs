@@ -150,7 +150,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                             ))
                         }
                     }
-                    "webhook-suffix" => {
+                    "webhook_suffix" => {
                         return if let Expr::Lit(ExprLit {
                             lit: Lit::Str(lit), ..
                         }) = &*assign.right
@@ -223,6 +223,6 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter",
+        "Unknown agent_definition parameter. Valid parameters are: mode, mount, auth, phantom-agent, cors, webhook-suffix",
     ))
 }

@@ -226,7 +226,7 @@ fn validate_mount_is_defined_for_http_endpoint(
     if http_mount_details.is_none() && !agent_method.http_endpoint.is_empty() {
         return Err(format!(
             "Agent method '{}' of '{}' defines HTTP endpoints but the agent is not mounted over HTTP. \
-            Please specify mount details in 'agent' decorator.",
+            Please specify mount details in 'agent_definition'",
             agent_method.name, agent_class_name
         ));
     }

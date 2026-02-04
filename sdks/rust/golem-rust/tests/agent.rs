@@ -22,7 +22,7 @@ mod tests {
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, AuthDetails, CorsOptions, PathSegment,
+        AgentMode, AgentType, AuthDetails, CorsOptions, PathSegment, Principal,
     };
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
@@ -650,29 +650,43 @@ mod tests {
     }
 
     #[agent_definition(
-        mount = "/abc/{init}",
+        mount = "/chats/{agent-type}/{foo}/{bar}",
+        webhook_suffix = "/{agent-type}/events/{foo}/{bar}",
         auth = true,
-        cors = ["https://example.com", "https://another.com"]
+        cors = ["https://app.acme.com", "https://staging.acme.com"],
     )]
-    trait AgentWithHttpMount {
-        fn new(init: UserId) -> Self;
+    trait ComplexHttpAgent {
+        fn new(foo: String, bar: String) -> Self;
 
-        #[prompt("Echoes the message back")]
-        #[description("Echoes the message back")]
-        #[endpoint(get="/echo/{message}", cors=["https://example.com"], auth=true, headers("X-Custom"="message"))]
-        #[endpoint(post="/echo/{message}", cors=["https://example.com"], auth=true, headers("X-Custom"="message"))]
-        fn echo(&self, message: String) -> String;
+        #[endpoint(get = "/greet?l={location}&n={name}")]
+        fn greet1(&self, location: String, name: String) -> String;
+
+        #[endpoint(get = "/greet?l={location}&n={name}")]
+        #[endpoint(get = "/greet?lx={location}&nm={name}", cors = ["*"], auth = true, headers("X-Foo" = "location", "X-Bar" = "name"))]
+        fn greet2(&self, location: String, name: String) -> String;
+
+        #[endpoint(get = "/greet/{name}/{*file_path}")]
+        fn greet3(&self, name: String, file_path: String) -> String;
     }
 
     struct AgentWithHttpMountImpl {}
+
     #[agent_implementation]
-    impl AgentWithHttpMount for AgentWithHttpMountImpl {
-        fn new(_init: UserId) -> Self {
+    impl ComplexHttpAgent for AgentWithHttpMountImpl {
+        fn new(foo: String, bar: String) -> Self {
             AgentWithHttpMountImpl {}
         }
 
-        fn echo(&self, message: String) -> String {
-            message
+        fn greet1(&self, _location: String, _name: String) -> String {
+            "foo".to_string()
+        }
+
+        fn greet2(&self, _location: String, _name: String) -> String {
+            "bar".to_string()
+        }
+
+        fn greet3(&self, _name: String, _file_path: String) -> String {
+            "baz".to_string()
         }
     }
 
@@ -684,26 +698,35 @@ mod tests {
 
         let agent = agent_types
             .iter()
-            .find(|a| a.type_name == "AgentWithHttpMount")
-            .expect("AgentWithHttpMount not found");
-
-        let _expected_http_mount_details =
-            golem_rust::golem_agentic::golem::agent::common::HttpMountDetails {
-                path_prefix: vec![PathSegment::Literal("abc".to_string())],
-                auth_details: Some(AuthDetails { required: true }),
-                phantom_agent: false,
-                cors_options: CorsOptions {
-                    allowed_patterns: vec![
-                        "https://example.com".to_string(),
-                        "https://another.com".to_string(),
-                    ],
-                },
-                webhook_suffix: vec![],
-            };
+            .find(|a| a.type_name == "ComplexHttpAgent")
+            .expect("ComplexHttpAgent not found");
 
         assert!(
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
         );
+
+        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)
+    }
+
+    #[agent_definition(mount = "/chats/{agent-type}")]
+    trait SimpleHttpAgent {
+        fn new() -> Self;
+
+        #[endpoint(get = "/green/{name}")]
+        fn greet(&self, name: String) -> String;
+    }
+
+    struct SimpleHttpAgentImpl;
+
+    #[agent_implementation]
+    impl SimpleHttpAgent for SimpleHttpAgentImpl {
+        fn new() -> Self {
+            SimpleHttpAgentImpl
+        }
+
+        fn greet(&self, name: String) -> String {
+            format!("Hello, {}!", name)
+        }
     }
 }
