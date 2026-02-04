@@ -26,8 +26,6 @@ use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
-use reqwest::{Body, Method, Request, Url};
-use serde_json::json;
 use std::collections::HashMap;
 use tracing::{info, Level};
 
@@ -77,13 +75,13 @@ impl Benchmark for ThroughputEcho {
             "benchmark:agent-ts/benchmark-agent.{echo}",
             "benchmark:agent-ts/rpc-benchmark-agent.{echo}",
             Box::new(|_| vec!["benchmark".into_value_and_type()]),
-            Box::new(|port, idx, _length| {
-                let url = Url::parse(&format!(
-                    "http://localhost:{port}/test-{idx}-rib/echo/test-message"
-                ))
-                .unwrap();
-                Request::new(Method::POST, url)
-            }),
+            // Box::new(|port, idx, _length| {
+            //     let url = Url::parse(&format!(
+            //         "http://localhost:{port}/test-{idx}-rib/echo/test-message"
+            //     ))
+            //     .unwrap();
+            //     Request::new(Method::POST, url)
+            // }),
             mode,
             verbosity,
             cluster_size,
@@ -174,13 +172,13 @@ impl Benchmark for ThroughputLargeInput {
                 let bytes = vec![0u8; length];
                 vec![bytes.into_value_and_type()]
             }),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/large-input")).unwrap();
-                let json_body = json!({"input": vec![0u8; length]}).to_string();
-                let mut request = Request::new(Method::POST, url);
-                *request.body_mut() = Some(Body::wrap(json_body));
-                request
-            }),
+            // Box::new(|port, idx, length| {
+            //     let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/large-input")).unwrap();
+            //     let json_body = json!({"input": vec![0u8; length]}).to_string();
+            //     let mut request = Request::new(Method::POST, url);
+            //     *request.body_mut() = Some(Body::wrap(json_body));
+            //     request
+            // }),
             mode,
             verbosity,
             cluster_size,
@@ -268,13 +266,13 @@ impl Benchmark for ThroughputCpuIntensive {
             "benchmark:agent-ts/benchmark-agent.{cpu-intensive}",
             "benchmark:agent-ts/rpc-benchmark-agent.{cpu-intensive}",
             Box::new(|length| vec![(length as f64).into_value_and_type()]),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/cpu-intensive")).unwrap();
-                let json_body = json!({"length": length}).to_string();
-                let mut request = Request::new(Method::POST, url);
-                *request.body_mut() = Some(Body::wrap(json_body));
-                request
-            }),
+            // Box::new(|port, idx, length| {
+            //     let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/cpu-intensive")).unwrap();
+            //     let json_body = json!({"length": length}).to_string();
+            //     let mut request = Request::new(Method::POST, url);
+            //     *request.body_mut() = Some(Body::wrap(json_body));
+            //     request
+            // }),
             mode,
             verbosity,
             cluster_size,
@@ -405,7 +403,7 @@ pub struct ThroughputBenchmark {
     ts_function_name: String,
     ts_rpc_function_name: String,
     function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
-    http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+    // http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
     deps: BenchmarkTestDependencies,
     call_count: usize,
 }
@@ -419,7 +417,7 @@ impl ThroughputBenchmark {
         ts_function_name: &str,
         ts_rpc_function_name: &str,
         function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
-        http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+        // http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
@@ -435,7 +433,7 @@ impl ThroughputBenchmark {
             ts_function_name: ts_function_name.to_string(),
             ts_rpc_function_name: ts_rpc_function_name.to_string(),
             function_params,
-            http_request,
+            // http_request,
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
