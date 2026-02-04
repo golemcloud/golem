@@ -99,6 +99,7 @@ export class Repl {
       let configure = agentConfig.package.configure as ConfigureClient;
       configure(clientConfig);
       r.context[agentTypeName] = agentConfig.package[agentTypeName];
+      r.context[agentConfig.clientPackageImportedName] = agentConfig.package;
     }
 
     r.defineCommand('deploy', {

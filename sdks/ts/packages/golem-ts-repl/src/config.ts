@@ -21,6 +21,7 @@ export type Config = {
 
 export type AgentConfig = {
   clientPackageName: string;
+  clientPackageImportedName: string;
   package: any;
 };
 

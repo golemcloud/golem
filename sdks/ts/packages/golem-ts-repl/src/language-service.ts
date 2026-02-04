@@ -49,7 +49,10 @@ export class LanguageService {
     this.snippetImports =
       Object.entries(config.agents)
         .map(([agentTypeName, agentConfig]) => {
-          return `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`;
+          return [
+            `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`,
+            `import * as ${agentConfig.clientPackageImportedName} from '${agentConfig.clientPackageName}';`,
+          ].join('\n');
         })
         .join('\n') + '\n';
 
@@ -161,10 +164,13 @@ export class LanguageService {
     const typeIsPromise = isPromise(nodeType);
     const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(nodeType);
 
+    // TODO: format the type in the same style as "formattedType" works
+    const formattedType = typeAsLiteralType
+      ? formatDisplayParts([{ text: typeAsLiteralType, kind: 'keyword' }])
+      : this.project.getTypeChecker().getTypeText(nodeType, fullExpressionNode);
+
     return {
-      formattedType:
-        typeAsLiteralType ||
-        this.project.getTypeChecker().getTypeText(nodeType, fullExpressionNode),
+      formattedType,
       isPromise: typeIsPromise,
     };
   }

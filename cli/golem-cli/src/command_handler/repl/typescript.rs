@@ -25,6 +25,7 @@ use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata};
 use crate::process::{CommandExt, ExitStatusExt};
 use golem_templates::model::GuestLanguage;
+use heck::ToLowerCamelCase;
 use indoc::formatdoc;
 use itertools::Itertools;
 use serde_json::json;
@@ -220,12 +221,16 @@ impl TypeScriptRepl {
             .agents
             .keys()
             .map(|agent_type_name| {
+                let client_package_name = bridge_client_directory_name(agent_type_name);
+                let client_package_imported_name = client_package_name.to_lower_camel_case();
                 Ok::<String, anyhow::Error>(formatdoc! {"
                     '{agent_type_name}': {{
                       clientPackageName: {client_package_name},
+                      clientPackageImportedName: {client_package_imported_name},
                       package: await import({client_package_name}),
                     }}",
-                    client_package_name = js_string_literal(bridge_client_directory_name(agent_type_name))?
+                    client_package_name = js_string_literal(client_package_name)?,
+                    client_package_imported_name = js_string_literal(client_package_imported_name)?
                 })
             })
             .collect::<Result<Vec<_>, _>>()?
