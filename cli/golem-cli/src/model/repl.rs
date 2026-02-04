@@ -52,6 +52,14 @@ impl ReplLanguage {
             ReplLanguage::TypeScript => Some(GuestLanguage::TypeScript),
         }
     }
+
+    pub fn id(&self) -> &'static str {
+        match self {
+            ReplLanguage::Rib => "rib",
+            ReplLanguage::Rust => "rust",
+            ReplLanguage::TypeScript => "ts",
+        }
+    }
 }
 
 impl Display for ReplLanguage {

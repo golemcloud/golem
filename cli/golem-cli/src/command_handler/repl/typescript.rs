@@ -249,7 +249,7 @@ impl TypeScriptRepl {
                   agents: {{
                   {agents_config}
                   }},
-                  replHistoryFile: {repl_history_file_path},
+                  historyFile: {repl_history_file_path},
                 }});
 
                 await repl.run();

@@ -48,7 +48,8 @@
   "description": "",
   "dependencies": {
     "shell-quote": "^1.8.3",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "ts-morph": "^26.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",

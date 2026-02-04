@@ -13,11 +13,13 @@
 // limitations under the License.
 
 import { client_configuration_from_env, Config, ConfigureClient } from './config';
-import * as repl from 'node:repl';
-import * as process from 'node:process';
-import * as shellQuote from 'shell-quote';
-import * as childProcess from 'node:child_process';
+import { LanguageService } from './language-service';
 import pc from 'picocolors';
+import repl, { type REPLEval } from 'node:repl';
+import process from 'node:process';
+import shellQuote from 'shell-quote';
+import childProcess from 'node:child_process';
+import util from 'node:util';
 
 export class Repl {
   private readonly config: Config;
@@ -27,23 +29,75 @@ export class Repl {
   }
 
   async run() {
-    const client_config = client_configuration_from_env();
+    const clientConfig = client_configuration_from_env();
+    let languageService = new LanguageService(this.config);
 
     const r = repl.start({
       useColors: pc.isColorSupported,
       useGlobal: true,
       preview: false,
+      ignoreUndefined: true,
       prompt:
         `${pc.cyan('golem-ts-repl')}` +
-        `[${pc.green(client_config.application)}]` +
-        `[${pc.yellow(client_config.environment)}]` +
+        `[${pc.green(clientConfig.application)}]` +
+        `[${pc.yellow(clientConfig.environment)}]` +
         `${pc.red('>')} `,
     });
+
+    await new Promise<void>((resolve, reject) => {
+      r.setupHistory(this.config.historyFile, (err) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    {
+      const tsxEval = r.eval;
+      const customEval: REPLEval = function (code, context, filename, callback) {
+        const evalCode = (code: string) => {
+          tsxEval.call(this, code, context, filename, (err, result) => {
+            if (!err) {
+              languageService.addSnippetToHistory(code);
+            }
+            callback(err, result);
+          });
+        };
+
+        languageService.setSnippet(code);
+        const typeCheckResult = languageService.typeCheckSnippet();
+        if (typeCheckResult.ok) {
+          const quickInfo = languageService.getSnippetQuickInfo();
+          const typeInfo = languageService.getSnippetTypeInfo();
+
+          if (typeInfo && typeInfo.isPromise) {
+            logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
+            evalCode('await ' + code);
+          } else {
+            if (quickInfo) {
+              logSnippetInfo(pc.bold(quickInfo.formattedInfo));
+            } else if (typeInfo) {
+              logSnippetInfo(pc.bold(typeInfo.formattedType));
+            }
+            evalCode(code);
+          }
+        } else {
+          // languageService.getCompletionsForSnippet(code);
+          console.log(typeCheckResult.formattedErrors);
+          languageService.getSnippetCompletions();
+
+          callback(null, undefined);
+        }
+      };
+      (r.eval as any) = customEval;
+    }
 
     for (let agentTypeName in this.config.agents) {
       const agentConfig = this.config.agents[agentTypeName];
       let configure = agentConfig.package.configure as ConfigureClient;
-      configure(client_config);
+      configure(clientConfig);
       r.context[agentTypeName] = agentConfig.package[agentTypeName];
     }
 
@@ -58,7 +112,7 @@ export class Repl {
         args = [
           'deploy',
           '--environment',
-          client_config.environment,
+          clientConfig.environment,
           '--repl-bridge-sdk-target',
           'ts',
           ...args,
@@ -95,4 +149,23 @@ export class Repl {
 
 function reload() {
   process.exit(75);
+}
+
+const INFO_PREFIX = pc.red('>');
+const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
+
+function logSnippetInfo(message: string) {
+  if (!message) {
+    return;
+  }
+
+  let maxLineLength = 0;
+  message.split('\n').forEach((line) => {
+    maxLineLength = Math.max(maxLineLength, util.stripVTControlCharacters(line).length);
+    console.log(INFO_PREFIX, line);
+  });
+
+  if (maxLineLength > 0) {
+    console.log(pc.dim('~'.repeat(maxLineLength + INFO_PREFIX_LENGTH)));
+  }
 }

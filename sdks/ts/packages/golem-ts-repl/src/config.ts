@@ -16,6 +16,7 @@ import { env } from 'node:process';
 
 export type Config = {
   agents: Record<string, AgentConfig>;
+  historyFile: string;
 };
 
 export type AgentConfig = {

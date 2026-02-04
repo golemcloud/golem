@@ -709,7 +709,7 @@ impl Application {
     pub fn repl_history_file(&self, language: ReplLanguage) -> PathBuf {
         self.temp_dir()
             .join("repl-history")
-            .join(language.to_string())
+            .join(language.id())
             .join(".repl_history")
     }
 

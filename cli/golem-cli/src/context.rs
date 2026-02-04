@@ -372,8 +372,7 @@ impl Context {
                 .to_path_buf(),
             None => self
                 .config_dir
-                .join(language.to_string())
-                .join(".repl_history"),
+                .join(format!(".{}_repl_history", language.id())),
         };
         debug!(
             history_file = %history_file.display(),
