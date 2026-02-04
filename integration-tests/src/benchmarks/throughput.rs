@@ -12,23 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await, invoke_and_await_http};
+use crate::benchmarks::{delete_workers, invoke_and_await};
 use async_trait::async_trait;
-use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
-use golem_client::api::RegistryServiceClient;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-};
-use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
-use golem_common::model::http_api_definition::{
-    GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
-    HttpApiRoute, RouteMethod, WorkerGatewayBinding,
-};
-use golem_common::model::http_api_deployment::{
-    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
@@ -40,7 +28,7 @@ use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use tracing::{info, Level};
 
 pub struct ThroughputEcho {
@@ -397,7 +385,7 @@ impl From<WorkerIdPair> for WorkerIdOrPair {
 
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    domain: Domain,
+    // domain: Domain,
     direct_rust_worker_ids: Vec<WorkerId>,
     rust_agent_worker_ids: Vec<WorkerId>,
     ts_agent_worker_ids: Vec<WorkerId>,
@@ -691,7 +679,7 @@ impl ThroughputBenchmark {
 
         IterationContext {
             user,
-            domain,
+            // domain,
             direct_rust_worker_ids,
             rust_agent_worker_ids,
             ts_agent_worker_ids,
