@@ -751,7 +751,6 @@ mod tests {
     }
 
     // Auto Injected Principal Compilation Tests
-    // Principal in the middle
     #[agent_definition]
     pub trait AgentWithPrincipalAutoInjection2 {
         fn new(name: String, text1: u64, principal: Principal, text: String) -> Self;
