@@ -41,21 +41,25 @@ export class Repl {
 
   private async getReplServer(): Promise<repl.REPLServer> {
     if (!this.replServer) {
-      const replServer = repl.start({
-        useColors: pc.isColorSupported,
-        useGlobal: true,
-        preview: false,
-        ignoreUndefined: true,
-        prompt:
-          `${pc.cyan('golem-ts-repl')}` +
-          `[${pc.green(this.clientConfig.application)}]` +
-          `[${pc.yellow(this.clientConfig.environment)}]` +
-          `${pc.red('>')} `,
-      });
+      const replServer = this.newBaseReplServer();
       await this.setupRepl(replServer);
       this.replServer = replServer;
     }
     return this.replServer!;
+  }
+
+  private newBaseReplServer(): repl.REPLServer {
+    return repl.start({
+      useColors: pc.isColorSupported,
+      useGlobal: true,
+      preview: false,
+      ignoreUndefined: true,
+      prompt:
+        `${pc.cyan('golem-ts-repl')}` +
+        `[${pc.green(this.clientConfig.application)}]` +
+        `[${pc.yellow(this.clientConfig.environment)}]` +
+        `${pc.red('>')} `,
+    });
   }
 
   private async setupRepl(replServer: repl.REPLServer) {
@@ -205,9 +209,7 @@ const INFO_PREFIX = pc.red('>');
 const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
 
 function logSnippetInfo(message: string) {
-  if (!message) {
-    return;
-  }
+  if (!message) return;
 
   let maxLineLength = 0;
   message.split('\n').forEach((line) => {

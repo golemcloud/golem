@@ -72,6 +72,9 @@ export class LanguageService {
   private updateProjectSnippet() {
     const fullSnippet = this.snippetHistory + this.rawSnippet;
     this.fullSnippetEndPos = lastNonWhitespaceIndex(fullSnippet);
+    if (this.fullSnippetEndPos < this.snippetHistory.length) {
+      this.fullSnippetEndPos = -1;
+    }
     this.project.createSourceFile(SNIPPET_FILE_NAME, fullSnippet, { overwrite: true });
   }
 
@@ -113,18 +116,14 @@ export class LanguageService {
 
   getSnippetQuickInfo(): SnippetQuickInfo | undefined {
     const snippet = this.getSnippet();
-    if (!snippet) {
-      return;
-    }
+    if (!snippet) return;
 
     const languageService = this.project.getLanguageService();
     const tsLs = languageService.compilerObject;
 
     const info = tsLs.getQuickInfoAtPosition(snippet.getFilePath(), this.fullSnippetEndPos);
 
-    if (!info) {
-      return;
-    }
+    if (!info) return;
 
     let formattedInfo = '';
 
@@ -136,29 +135,23 @@ export class LanguageService {
   }
 
   getSnippetTypeInfo(): SnippetTypeInfo | undefined {
+    if (this.fullSnippetEndPos === -1) return;
+
     const snippet = this.getSnippet();
-    if (!snippet) {
-      return;
-    }
+    if (!snippet) return;
 
     const node = snippet.getDescendantAtPos(this.fullSnippetEndPos);
-    if (!node) {
-      return;
-    }
+    if (!node) return;
 
     const fullExpressionNode = getFullExpression(node);
 
-    // TODO:
-    // console.log({
-    //   fullExpressionNodePos: fullExpressionNode.getPos(),
-    //   fullSnippetStartPos: this.fullSnippetStartPos,
-    //   fullSnippetEndPos: this.fullSnippetEndPos,
-    // });
-
-    let nodeType = fullExpressionNode.getType();
-    if (!nodeType) {
-      return;
+    let nodeType;
+    try {
+      nodeType = fullExpressionNode.getType();
+    } catch (e) {
+      console.error(e);
     }
+    if (!nodeType) return;
 
     const typeIsPromise = isPromise(nodeType);
     const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(nodeType);
@@ -177,9 +170,7 @@ export class LanguageService {
 
   getSnippetCompletions(): SnippetCompletion | undefined {
     const snippet = this.getSnippet();
-    if (!snippet) {
-      return;
-    }
+    if (!snippet) return;
 
     let pos = this.fullSnippetEndPos;
 
@@ -199,9 +190,7 @@ export class LanguageService {
       includeCompletionsWithSnippetText: false,
     });
 
-    if (!completions) {
-      return;
-    }
+    if (!completions) return;
 
     if (triggerCharacter === '.') {
       return {
