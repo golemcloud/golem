@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use crate::golem_agentic::golem::agent::common::Principal;
 pub use agent::*;
 pub use agent_definition_options::*;
 pub use agent_initiator::*;
@@ -26,7 +27,6 @@ pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
 pub use wit_utils::*;
-pub use crate::golem_agentic::golem::agent::common::Principal as Principal;
 mod agent;
 mod agent_definition_options;
 mod agent_impl;

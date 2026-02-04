@@ -17,6 +17,7 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
+    use golem_rust::agentic::Principal;
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
@@ -26,7 +27,6 @@ mod tests {
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
-    use golem_rust::agentic::Principal;
     use golem_rust_macro::{description, endpoint, prompt};
     use std::fmt::Debug;
 
