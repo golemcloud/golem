@@ -1,6 +1,4 @@
-import { localDataDir } from "@tauri-apps/api/path";
 import { CLIService } from "./cli-service";
-import { invoke } from "@tauri-apps/api/core";
 
 export class AppService {
   private cliService: CLIService;
@@ -8,21 +6,6 @@ export class AppService {
   constructor(cliService: CLIService) {
     this.cliService = cliService;
   }
-
-  /**
-   * checkHealth: Check if the CLI connection is healthy
-   * @returns {Promise<void>} - Resolves if the connection is healthy, rejects if not
-   */
-  public checkHealth = async (): Promise<void> => {
-    const appCacheDirPath = await localDataDir();
-    // Use 'plugin list' as it works from any directory and actually connects to the server
-    // This is more reliable than 'api deployment list' which requires app context
-    await invoke("call_golem_command", {
-      command: "plugin",
-      subcommands: ["list"],
-      folderPath: appCacheDirPath,
-    });
-  };
 
   public buildApp = async (appId: string, componentNames?: string[]) => {
     const subcommands: string[] = [];
