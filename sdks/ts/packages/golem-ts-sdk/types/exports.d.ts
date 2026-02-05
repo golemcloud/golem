@@ -48,6 +48,7 @@ declare module 'agent-guest' {
     export type AgentType = golemAgentCommon.AgentType;
     export type DataValue = golemAgentCommon.DataValue;
     export type Principal = golemAgentCommon.Principal;
+    export type RegisteredAgentType = golemAgentCommon.RegisteredAgentType;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
 }

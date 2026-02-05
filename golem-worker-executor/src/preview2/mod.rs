@@ -29,6 +29,8 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/bucket": super::durable_host::keyvalue::types::BucketEntry,
         "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
+        "golem:agent/common": golem_common::model::agent::bindings::golem::agent::common,
+        "golem:agent/host/agent-webhook": super::durable_host::golem::agent::AgentWebhookEntry,
         "golem:api/context/span": super::durable_host::golem::invocation_context_api::SpanEntry,
         "golem:api/context/invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
         "golem:api/host/get-agents": super::durable_host::golem::v1x::GetAgentsEntry,
@@ -38,7 +40,7 @@ wasmtime::component::bindgen!({
         "golem:durability/durability/lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
         "golem:rpc": golem_wasm::golem_rpc_0_2_x,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
-        "wasi:io/poll/pollable": golem_wasm::wasi::io::poll::Pollable,
+        "wasi:io/poll": golem_wasm::wasi::io::poll,
         "golem:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
         "golem:rdbms/mysql/db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
         "golem:rdbms/mysql/db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,

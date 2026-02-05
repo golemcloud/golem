@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::preview2::golem::agent::host::Host;
+use crate::preview2::golem::agent::host::HostAgentWebhook;
+use crate::preview2::Pollable;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use golem_common::model::agent::bindings::golem::agent::common::AgentError;
-use golem_common::model::agent::bindings::golem::agent::host;
-use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
+use golem_common::model::agent::bindings::golem::agent::common::{
+    AgentError, DataValue, RegisteredAgentType,
+};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentId, AgentTypeName};
 use golem_common::model::oplog::host_functions::{
@@ -27,9 +30,10 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestNoInput,
     HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
 };
+use wasmtime::component::Resource;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<host::RegisteredAgentType>> {
+    async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
         let durability =
             Durability::<GolemAgentGetAllAgentTypes>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -64,7 +68,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_agent_type(
         &mut self,
         agent_type_name: String,
-    ) -> anyhow::Result<Option<host::RegisteredAgentType>> {
+    ) -> anyhow::Result<Option<RegisteredAgentType>> {
         let agent_type_name = AgentTypeName(agent_type_name);
         let durability =
             Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
@@ -151,5 +155,34 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             ))),
             Err(error) => Ok(Err(AgentError::InvalidAgentId(error))),
         }
+    }
+
+    async fn create_webhook(&mut self) -> anyhow::Result<Resource<AgentWebhookEntry>> {
+        unimplemented!()
+    }
+}
+
+pub struct AgentWebhookEntry;
+
+impl<Ctx: WorkerCtx> HostAgentWebhook for DurableWorkerCtx<Ctx> {
+    async fn get_callback_url(
+        &mut self,
+        _: wasmtime::component::Resource<AgentWebhookEntry>,
+    ) -> anyhow::Result<String> {
+        unimplemented!()
+    }
+
+    async fn subscribe(
+        &mut self,
+        _: wasmtime::component::Resource<AgentWebhookEntry>,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        unimplemented!()
+    }
+
+    async fn drop(
+        &mut self,
+        _: wasmtime::component::Resource<AgentWebhookEntry>,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
     }
 }

@@ -1,6 +1,6 @@
 package golem:common;
 
 world golem-common {
+  import golem:agent/common;
   import golem:agent/guest;
-  import golem:agent/host;
 }

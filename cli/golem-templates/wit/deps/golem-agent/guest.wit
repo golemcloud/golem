@@ -1,7 +1,7 @@
 package golem:agent;
 
 interface guest {
-  use common.{agent-error, agent-type, data-value, principal};
+  use common.{agent-error, agent-type, data-value, principal, registered-agent-type};
 
   /// Initializes the agent of a given type with the given constructor parameters.
   /// If called a second time, it fails.
