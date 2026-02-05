@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue};
+use crate::golem_agentic::exports::golem::agent::guest::{
+    AgentError, AgentType, DataValue, Principal,
+};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 
 #[async_trait::async_trait(?Send)]
@@ -28,6 +30,7 @@ pub trait BaseAgent {
         &mut self,
         method_name: String,
         input: DataValue,
+        principal: Principal,
     ) -> Result<DataValue, AgentError>;
 
     /// Gets the agent type metadata of this agent

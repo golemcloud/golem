@@ -54,12 +54,16 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 
 #[proc_macro_derive(AllowedLanguages, attributes(code))]
 pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
-    agentic::derive_allowed_languages(input)
+    let golem_rust_crate_ident = get_golem_rust_crate_ident();
+
+    agentic::derive_allowed_languages(input, &golem_rust_crate_ident)
 }
 
 #[proc_macro_derive(AllowedMimeTypes, attributes(mime_type))]
 pub fn derive_allowed_mimetypes(input: TokenStream) -> TokenStream {
-    agentic::derive_allowed_mime_types(input)
+    let golem_rust_crate_ident = get_golem_rust_crate_ident();
+
+    agentic::derive_allowed_mime_types(input, &golem_rust_crate_ident)
 }
 
 #[proc_macro_attribute]
@@ -69,6 +73,11 @@ pub fn description(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn prompt(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+#[proc_macro_attribute]
+pub fn endpoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
