@@ -279,7 +279,7 @@ fn get_remote_agent_methods_info(
                     Some(ident)
                 })
                 .collect();
-            
+
             let fn_output_info = FunctionOutputInfo::from_signature(&method.sig);
 
             let return_type = match &method.sig.output {
