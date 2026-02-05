@@ -57,9 +57,9 @@ export class Repl {
       ignoreUndefined: true,
       prompt:
         `${pc.cyan('golem-ts-repl')}` +
-        `[${pc.green(this.clientConfig.application)}]` +
-        `[${pc.yellow(this.clientConfig.environment)}]` +
-        `${pc.red('>')} `,
+        `[${pc.bold(pc.green(this.clientConfig.application))}]` +
+        `[${pc.bold(pc.yellow(this.clientConfig.environment))}]` +
+        `${pc.bold(pc.green('>'))} `,
     });
   }
 
@@ -227,7 +227,7 @@ function reload() {
   process.exit(75);
 }
 
-const INFO_PREFIX = pc.red('>');
+const INFO_PREFIX = pc.bold(pc.red('>'));
 const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
 
 function logSnippetInfo(message: string) {
