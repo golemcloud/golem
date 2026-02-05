@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::webhook_handler::WebhookHandler;
-use crate::{await_promise, await_promise_json, create_promise};
+use crate::{create_promise};
 use crate::golem_agentic::exports::golem::agent::guest::{
     AgentError, AgentType, DataValue, Principal,
 };
