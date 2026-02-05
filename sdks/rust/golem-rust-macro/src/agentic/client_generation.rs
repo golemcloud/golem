@@ -255,31 +255,31 @@ fn get_remote_agent_methods_info(
                 .inputs
                 .iter()
                 .filter_map(|arg| {
-                    if let syn::FnArg::Typed(pat_type) = arg {
-                        let ident = match &*pat_type.pat {
-                            syn::Pat::Ident(pat_ident) => pat_ident.ident.clone(),
-                            _ => return None,
-                        };
+                    let syn::FnArg::Typed(pat_type) = arg else {
+                        return None;
+                    };
 
-                        let type_name = match &*pat_type.ty {
-                            syn::Type::Path(type_path) => {
-                                type_path.path.segments.last()?.ident.to_string()
-                            }
-                            _ => return None,
-                        };
+                    let ident = match &*pat_type.pat {
+                        syn::Pat::Ident(pat_ident) => pat_ident.ident.clone(),
+                        _ => return None,
+                    };
 
-                        // ensuring that principal values are not passed as parameters in RPC calls
-                        if type_name == "Principal" {
+                    // Only exclude if the type is exactly `Principal`
+                    if let syn::Type::Path(type_path) = &*pat_type.ty {
+                        if type_path
+                            .path
+                            .segments
+                            .last()
+                            .is_some_and(|seg| seg.ident == "Principal")
+                        {
                             return None;
                         }
-
-                        Some(ident)
-                    } else {
-                        None
                     }
+
+                    Some(ident)
                 })
                 .collect();
-
+            
             let fn_output_info = FunctionOutputInfo::from_signature(&method.sig);
 
             let return_type = match &method.sig.output {
