@@ -26,7 +26,7 @@ use golem_service_base::repo::RepoError;
 use sqlx::Row;
 use std::time::Duration;
 use tokio::task;
-use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error};
 
 #[derive(Debug, thiserror::Error)]
@@ -203,6 +203,13 @@ impl SessionStore for RedisSessionStore {
 pub struct SqliteSessionStore {
     pool: SqlitePool,
     pending_login_expiration: i64,
+    cleanup_cancel: CancellationToken,
+}
+
+impl Drop for SqliteSessionStore {
+    fn drop(&mut self) {
+        self.cleanup_cancel.cancel();
+    }
 }
 
 impl SqliteSessionStore {
@@ -212,10 +219,12 @@ impl SqliteSessionStore {
         cleanup_interval: Duration,
     ) -> anyhow::Result<Self> {
         Self::init(&pool).await?;
-        Self::spawn_expiration_task(pool.clone(), cleanup_interval);
+        let cleanup_cancel = CancellationToken::new();
+        Self::spawn_expiration_task(pool.clone(), cleanup_interval, cleanup_cancel.clone());
         Ok(Self {
             pool,
             pending_login_expiration,
+            cleanup_cancel,
         })
     }
 
@@ -241,28 +250,37 @@ impl SqliteSessionStore {
         Ok(())
     }
 
-    fn spawn_expiration_task(db_pool: SqlitePool, cleanup_interval: Duration) {
+    fn spawn_expiration_task(
+        db_pool: SqlitePool,
+        cleanup_interval: Duration,
+        cancel: CancellationToken,
+    ) {
         task::spawn(
             async move {
-                let mut cleanup_interval = interval(cleanup_interval);
+                let mut interval = tokio::time::interval(cleanup_interval);
 
                 loop {
-                    cleanup_interval.tick().await;
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            tracing::debug!("OIDC cleanup task cancelled");
+                            break;
+                        }
 
-                    if let Err(e) = Self::cleanup_expired_oidc_pending_login(
-                        db_pool.clone(),
-                        Self::current_time(),
-                    )
-                    .await
-                    {
-                        error!("Failed to expire oidc pending logins: {}", e);
-                    }
+                        _ = interval.tick() => {
+                            let now = Self::current_time();
 
-                    if let Err(e) =
-                        Self::cleanup_expired_oidc_session(db_pool.clone(), Self::current_time())
-                            .await
-                    {
-                        error!("Failed to expire oidc sessions: {}", e);
+                            if let Err(e) =
+                                Self::cleanup_expired_oidc_pending_login(db_pool.clone(), now).await
+                            {
+                                error!("Failed to expire oidc pending logins: {}", e);
+                            }
+
+                            if let Err(e) =
+                                Self::cleanup_expired_oidc_session(db_pool.clone(), now).await
+                            {
+                                error!("Failed to expire oidc sessions: {}", e);
+                            }
+                        }
                     }
                 }
             }

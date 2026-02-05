@@ -185,6 +185,7 @@ fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
 }
 
 #[test]
+#[allow(clippy::borrowed_box)]
 async fn pending_login_store_and_take(#[dimension(session_store)] store: &Box<dyn SessionStore>) {
     let login = sample_pending_login();
 
@@ -207,6 +208,7 @@ async fn pending_login_store_and_take(#[dimension(session_store)] store: &Box<dy
 }
 
 #[test]
+#[allow(clippy::borrowed_box)]
 async fn pending_login_expires(
     #[dimension(session_store_fast_expiry)] store: &Box<dyn SessionStore>,
 ) {
@@ -228,6 +230,7 @@ async fn pending_login_expires(
 }
 
 #[test]
+#[allow(clippy::borrowed_box)]
 async fn authenticated_session_roundtrip(
     #[dimension(session_store)] store: &Box<dyn SessionStore>,
 ) {
