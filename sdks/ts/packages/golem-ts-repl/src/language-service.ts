@@ -37,6 +37,7 @@ export type SnippetTypeInfo = {
 
 export type SnippetCompletion = {
   entries: string[];
+  memberCompletion: boolean;
 };
 
 const SNIPPET_FILE_NAME = '__snippet__.ts';
@@ -149,7 +150,9 @@ export class LanguageService {
     try {
       nodeType = fullExpressionNode.getType();
     } catch (e) {
+      console.log();
       console.error(e);
+      console.log();
     }
     if (!nodeType) return;
 
@@ -206,20 +209,28 @@ export class LanguageService {
             );
           })
           .map((entry) => entry.name),
+        memberCompletion: true,
       };
     } else {
       const node = snippet.getDescendantAtPos(this.fullSnippetEndPos);
       if (!node) {
         return {
           entries: completions.entries.map((entry) => entry.name),
+          memberCompletion: false,
         };
       }
+
+      const parent = node.getParent();
+      const dotCompletion = parent
+        ? parent.getKind() === ts.SyntaxKind.PropertyAccessExpression
+        : false;
 
       const nodeText = node.getText();
       return {
         entries: completions.entries
           .filter((entry) => entry.name.startsWith(nodeText))
           .map((entry) => entry.name),
+        memberCompletion: dotCompletion,
       };
     }
   }

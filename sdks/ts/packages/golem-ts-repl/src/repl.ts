@@ -20,6 +20,7 @@ import process from 'node:process';
 import shellQuote from 'shell-quote';
 import childProcess from 'node:child_process';
 import util from 'node:util';
+import { AsyncCompleter } from 'readline';
 
 export class Repl {
   private readonly config: Config;
@@ -65,6 +66,7 @@ export class Repl {
   private async setupRepl(replServer: repl.REPLServer) {
     await this.setupReplHistory(replServer);
     this.setupReplEval(replServer);
+    this.setupReplCompleter(replServer);
     this.setupReplContext(replServer);
     this.setupReplCommands(replServer);
   }
@@ -122,11 +124,9 @@ export class Repl {
           }
 
           logSnippetInfo(
-            pc.bold('Completions:') +
-              `\n` +
-              formatAsTable(entries, {
-                maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
-              }),
+            formatAsTable(entries, {
+              maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
+            }),
           );
         }
 
@@ -136,6 +136,31 @@ export class Repl {
       }
     };
     (replServer.eval as any) = customEval;
+  }
+
+  private setupReplCompleter(replServer: repl.REPLServer) {
+    const nodeCompleter = replServer.completer;
+    const languageService = this.getLanguageService();
+    const customCompleter: AsyncCompleter = function (line, callback) {
+      if (line.trimStart().startsWith('.')) {
+        nodeCompleter(line, callback);
+      } else {
+        languageService.setSnippet(line);
+        const completions = languageService.getSnippetCompletions();
+        if (completions && completions.entries.length) {
+          if (completions.memberCompletion) {
+            const lastDot = line.lastIndexOf('.');
+            const completeOn = lastDot >= 0 ? line.slice(lastDot + 1) : line;
+            callback(null, [completions.entries, completeOn]);
+          } else {
+            callback(null, [completions.entries, line]);
+          }
+        } else {
+          callback(null, [[], '']);
+        }
+      }
+    };
+    (replServer.completer as any) = customCompleter;
   }
 
   private setupReplContext(replServer: repl.REPLServer) {
