@@ -88,6 +88,7 @@ serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+schemars = "1.1.0"
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
@@ -125,6 +126,7 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
+rmcp = { version = "0.14.0", features = ["transport-io", "server"] }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
 openssl = { workspace = true }

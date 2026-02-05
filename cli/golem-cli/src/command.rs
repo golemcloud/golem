@@ -740,11 +740,62 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
+    /// Run Golem MCP server
+    Mcp(mcp::Mcp),
     /// Generate shell completion
     Completion {
         /// Selects shell
         shell: clap_complete::Shell,
     },
+}
+
+pub mod mcp {
+    use clap::{Parser, Subcommand};
+
+    pub mod serve {
+        use clap::Parser;
+
+        /// Start the MCP server for AI assistant integration
+        ///
+        /// The MCP server exposes Golem operations as tools that can be
+        /// called by AI assistants like Claude.
+        ///
+        /// Required environment variables:
+        /// - GOLEM_API_KEY: Your Golem API token
+        /// - GOLEM_API_URL: Golem API URL (default: https://api.golem.cloud)
+        #[derive(Parser, Debug)]
+        #[command()]
+        pub struct McpServe;
+
+        impl McpServe {
+            pub async fn handle(&self) -> anyhow::Result<()> {
+                crate::mcp::run_mcp_server().await
+            }
+        }
+    }
+
+    /// MCP (Model Context Protocol) server for AI assistant integration
+    #[derive(Parser, Debug)]
+    pub struct Mcp {
+        #[command(subcommand)]
+        pub subcommand: McpSubcommand,
+    }
+
+    #[derive(Subcommand, Debug)]
+    pub enum McpSubcommand {
+        /// Start the MCP server (uses stdio transport)
+        Serve(serve::McpServe),
+    }
+
+    impl Mcp {
+        pub async fn handle(&self) -> anyhow::Result<()> {
+            match &self.subcommand {
+                McpSubcommand::Serve(mcp_serve) => {
+                    mcp_serve.handle().await
+                }
+            }
+        }
+    }
 }
 
 pub mod shared_args {
