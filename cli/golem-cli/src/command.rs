@@ -667,7 +667,7 @@ pub enum GolemCliSubcommand {
         force_build: ForceBuildArg,
         #[command(flatten)]
         deploy_args: DeployArgs,
-        // Internal flag for REPL reload
+        /// Internal flag for REPL reload
         #[arg(long, hide = true)]
         repl_bridge_sdk_target: Option<GuestLanguage>,
     },
@@ -803,7 +803,7 @@ pub mod shared_args {
         pub step: Vec<AppBuildStep>,
         #[command(flatten)]
         pub force_build: ForceBuildArg,
-        // Internal flag for REPL reload
+        /// Internal flag for REPL reload
         #[arg(long, hide = true)]
         pub repl_bridge_sdk_target: Option<GuestLanguage>,
     }
