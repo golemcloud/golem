@@ -120,7 +120,9 @@ impl ReplHandler {
                 if languages.len() == 1 {
                     *languages.iter().next().unwrap()
                 } else {
-                    todo!("interactive language selection for REPL is not implemented")
+                    self.ctx
+                        .interactive_handler()
+                        .select_repl_language(&languages)?
                 }
             }
         };

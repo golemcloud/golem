@@ -300,6 +300,26 @@ impl InteractiveHandler {
         Ok((profile_name.into(), profile, set_as_active))
     }
 
+    pub fn select_repl_language(
+        &self,
+        used_languages: &HashSet<GuestLanguage>,
+    ) -> anyhow::Result<GuestLanguage> {
+        Ok(Select::new(
+            "Select REPL language:",
+            used_languages
+                .iter()
+                .cloned()
+                .sorted()
+                .chain(
+                    GuestLanguage::iter()
+                        .filter(|lang| !used_languages.contains(lang))
+                        .sorted(),
+                )
+                .collect::<Vec<_>>(),
+        )
+        .prompt()?)
+    }
+
     pub fn select_component_for_repl(
         &self,
         component_names: Vec<ComponentName>,
