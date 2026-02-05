@@ -127,7 +127,7 @@ pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
             wit_dependencies.insert(
                 format_package_name_without_version(&dep_package.name),
                 WitDependency {
-                    path: fs::file_name_to_str(
+                    path: fs::path_to_str(
                         &naming::wit::package_wit_dep_dir_from_package_dir_name(
                             fs::file_name_to_str(&dep_package_sources.dir)?,
                         ),
