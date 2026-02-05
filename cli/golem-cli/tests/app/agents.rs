@@ -1173,7 +1173,7 @@ async fn test_http_api_merging() {
 #[test]
 async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     let mut ctx = TestContext::new();
-    let app_name = "agent_id_casing_and_normalizing";
+    let app_name = "agent-id-casing-and-normalizing";
 
     let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success_or_dump());
