@@ -12,23 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await, invoke_and_await_http};
+use crate::benchmarks::{delete_workers, invoke_and_await};
 use async_trait::async_trait;
-use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
-use golem_client::api::RegistryServiceClient;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-};
-use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
-use golem_common::model::http_api_definition::{
-    GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
-    HttpApiRoute, RouteMethod, WorkerGatewayBinding,
-};
-use golem_common::model::http_api_deployment::{
-    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
@@ -38,9 +26,7 @@ use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
-use reqwest::{Body, Method, Request, Url};
-use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use tracing::{info, Level};
 
 pub struct ThroughputEcho {
@@ -89,13 +75,13 @@ impl Benchmark for ThroughputEcho {
             "benchmark:agent-ts/benchmark-agent.{echo}",
             "benchmark:agent-ts/rpc-benchmark-agent.{echo}",
             Box::new(|_| vec!["benchmark".into_value_and_type()]),
-            Box::new(|port, idx, _length| {
-                let url = Url::parse(&format!(
-                    "http://localhost:{port}/test-{idx}-rib/echo/test-message"
-                ))
-                .unwrap();
-                Request::new(Method::POST, url)
-            }),
+            // Box::new(|port, idx, _length| {
+            //     let url = Url::parse(&format!(
+            //         "http://localhost:{port}/test-{idx}-rib/echo/test-message"
+            //     ))
+            //     .unwrap();
+            //     Request::new(Method::POST, url)
+            // }),
             mode,
             verbosity,
             cluster_size,
@@ -186,13 +172,13 @@ impl Benchmark for ThroughputLargeInput {
                 let bytes = vec![0u8; length];
                 vec![bytes.into_value_and_type()]
             }),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/large-input")).unwrap();
-                let json_body = json!({"input": vec![0u8; length]}).to_string();
-                let mut request = Request::new(Method::POST, url);
-                *request.body_mut() = Some(Body::wrap(json_body));
-                request
-            }),
+            // Box::new(|port, idx, length| {
+            //     let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/large-input")).unwrap();
+            //     let json_body = json!({"input": vec![0u8; length]}).to_string();
+            //     let mut request = Request::new(Method::POST, url);
+            //     *request.body_mut() = Some(Body::wrap(json_body));
+            //     request
+            // }),
             mode,
             verbosity,
             cluster_size,
@@ -280,13 +266,13 @@ impl Benchmark for ThroughputCpuIntensive {
             "benchmark:agent-ts/benchmark-agent.{cpu-intensive}",
             "benchmark:agent-ts/rpc-benchmark-agent.{cpu-intensive}",
             Box::new(|length| vec![(length as f64).into_value_and_type()]),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/cpu-intensive")).unwrap();
-                let json_body = json!({"length": length}).to_string();
-                let mut request = Request::new(Method::POST, url);
-                *request.body_mut() = Some(Body::wrap(json_body));
-                request
-            }),
+            // Box::new(|port, idx, length| {
+            //     let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/cpu-intensive")).unwrap();
+            //     let json_body = json!({"length": length}).to_string();
+            //     let mut request = Request::new(Method::POST, url);
+            //     *request.body_mut() = Some(Body::wrap(json_body));
+            //     request
+            // }),
             mode,
             verbosity,
             cluster_size,
@@ -397,11 +383,11 @@ impl From<WorkerIdPair> for WorkerIdOrPair {
 
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    domain: Domain,
+    // domain: Domain,
     direct_rust_worker_ids: Vec<WorkerId>,
     rust_agent_worker_ids: Vec<WorkerId>,
     ts_agent_worker_ids: Vec<WorkerId>,
-    ts_agent_worker_ids_for_rib: Vec<WorkerId>,
+    // ts_agent_worker_ids_for_rib: Vec<WorkerId>,
     length: usize,
     direct_rust_rpc_worker_id_pairs: Vec<WorkerIdPair>,
     routing_table: RoutingTable,
@@ -417,7 +403,7 @@ pub struct ThroughputBenchmark {
     ts_function_name: String,
     ts_rpc_function_name: String,
     function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
-    http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+    // http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
     deps: BenchmarkTestDependencies,
     call_count: usize,
 }
@@ -431,7 +417,7 @@ impl ThroughputBenchmark {
         ts_function_name: &str,
         ts_rpc_function_name: &str,
         function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
-        http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+        // http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
@@ -447,7 +433,7 @@ impl ThroughputBenchmark {
             ts_function_name: ts_function_name.to_string(),
             ts_rpc_function_name: ts_rpc_function_name.to_string(),
             function_params,
-            http_request,
+            // http_request,
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -468,7 +454,7 @@ impl ThroughputBenchmark {
         let mut direct_rust_worker_ids = vec![];
         let mut rust_agent_worker_ids = vec![];
         let mut ts_agent_worker_ids = vec![];
-        let mut ts_agent_worker_ids_for_rib = vec![];
+        // let mut ts_agent_worker_ids_for_rib = vec![];
         let mut direct_rust_rpc_worker_id_pairs = vec![];
         let mut ts_rpc_agent_worker_id_pairs = vec![];
         let mut rust_rpc_agent_worker_id_pairs = vec![];
@@ -547,10 +533,10 @@ impl ThroughputBenchmark {
                 component_id: ts_agent_component.id,
                 worker_name: format!("benchmark-agent(\"test-{n}\")"),
             });
-            ts_agent_worker_ids_for_rib.push(WorkerId {
-                component_id: ts_agent_component.id,
-                worker_name: format!("benchmark-agent(\"test-{n}-rib\")"),
-            });
+            // ts_agent_worker_ids_for_rib.push(WorkerId {
+            //     component_id: ts_agent_component.id,
+            //     worker_name: format!("benchmark-agent(\"test-{n}-rib\")"),
+            // });
             let direct_rust_rpc_parent = WorkerId {
                 component_id: rust_rpc_parent_component.id,
                 worker_name: format!("rpc-benchmark-agent(\"test-{n}\")"),
@@ -589,113 +575,113 @@ impl ThroughputBenchmark {
             });
         }
 
-        let client = user.registry_service_client().await;
+        // let client = user.registry_service_client().await;
 
-        info!("Registering domain");
-
-        let domain = Domain(format!("{}.golem.cloud", env.id));
-
-        client
-            .create_domain_registration(
-                &env.id.0,
-                &DomainRegistrationCreation {
-                    domain: domain.clone(),
-                },
-            )
-            .await
-            .expect("Failed to register to register domain");
-
-        info!("Creating http api");
-
-        let http_api_definition_creation = HttpApiDefinitionCreation {
-            name: HttpApiDefinitionName("test-api".to_string()),
-            version: HttpApiDefinitionVersion("1".to_string()),
-            routes: vec![
-                HttpApiRoute {
-                    method: RouteMethod::Post,
-                    path: "/{name}/echo/{param}".to_string(),
-                    binding: GatewayBinding::Worker(WorkerGatewayBinding {
-                        component_name: ComponentName("benchmark:agent-ts".to_string()),
-                        idempotency_key: None,
-                        invocation_context: None,
-                        response: r#"
-                            let agent = benchmark-agent(request.path.name);
-                            let result = agent.echo(request.path.param);
-                            { status: 200, body: { result: "${result}" } }
-                        "#
-                        .to_string(),
-                    }),
-                    security: None,
-                },
-                HttpApiRoute {
-                    method: RouteMethod::Post,
-                    path: "/{name}/large-input".to_string(),
-                    binding: GatewayBinding::Worker(WorkerGatewayBinding {
-                        component_name: ComponentName("benchmark:agent-ts".to_string()),
-                        idempotency_key: None,
-                        invocation_context: None,
-                        response: r#"
-                            let agent = benchmark-agent(request.path.name);
-                            let result: f64 = agent.large-input(request.body.input);
-                            { status: 200, body: { result: "${result}" } }
-                        "#
-                        .to_string(),
-                    }),
-                    security: None,
-                },
-                HttpApiRoute {
-                    method: RouteMethod::Post,
-                    path: "/{name}/cpu-intensive".to_string(),
-                    binding: GatewayBinding::Worker(WorkerGatewayBinding {
-                        component_name: ComponentName("benchmark:agent-ts".to_string()),
-                        idempotency_key: None,
-                        invocation_context: None,
-                        response: r#"
-                            let agent = benchmark-agent(request.path.name);
-                            let length: f64 = request.body.length;
-                            let result: f64 = agent.cpu-intensive(length);
-                            { status: 200, body: { result: "${result}" } }
-                        "#
-                        .to_string(),
-                    }),
-                    security: None,
-                },
-            ],
-        };
-
-        client
-            .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
-            .await
-            .expect("Failed to create http api definition");
-
-        info!("Creating http api deployment");
-
-        let http_api_deployment_creation = HttpApiDeploymentCreation {
-            domain: domain.clone(),
-            agents: BTreeMap::from_iter([(
-                AgentTypeName("benchmark-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            )]),
-        };
-
-        client
-            .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
-            .await
-            .expect("Failed to create http api deployment");
-
-        info!("Deploying environment");
-
-        user.deploy_environment(&env.id)
-            .await
-            .expect("Failed to deploy environment");
+        // info!("Registering domain");
+        //
+        // let domain = Domain(format!("{}.golem.cloud", env.id));
+        //
+        // client
+        //     .create_domain_registration(
+        //         &env.id.0,
+        //         &DomainRegistrationCreation {
+        //             domain: domain.clone(),
+        //         },
+        //     )
+        //     .await
+        //     .expect("Failed to register to register domain");
+        //
+        // info!("Creating http api");
+        //
+        // let http_api_definition_creation = HttpApiDefinitionCreation {
+        //     name: HttpApiDefinitionName("test-api".to_string()),
+        //     version: HttpApiDefinitionVersion("1".to_string()),
+        //     routes: vec![
+        //         HttpApiRoute {
+        //             method: RouteMethod::Post,
+        //             path: "/{name}/echo/{param}".to_string(),
+        //             binding: GatewayBinding::Worker(WorkerGatewayBinding {
+        //                 component_name: ComponentName("benchmark:agent-ts".to_string()),
+        //                 idempotency_key: None,
+        //                 invocation_context: None,
+        //                 response: r#"
+        //                     let agent = benchmark-agent(request.path.name);
+        //                     let result = agent.echo(request.path.param);
+        //                     { status: 200, body: { result: "${result}" } }
+        //                 "#
+        //                 .to_string(),
+        //             }),
+        //             security: None,
+        //         },
+        //         HttpApiRoute {
+        //             method: RouteMethod::Post,
+        //             path: "/{name}/large-input".to_string(),
+        //             binding: GatewayBinding::Worker(WorkerGatewayBinding {
+        //                 component_name: ComponentName("benchmark:agent-ts".to_string()),
+        //                 idempotency_key: None,
+        //                 invocation_context: None,
+        //                 response: r#"
+        //                     let agent = benchmark-agent(request.path.name);
+        //                     let result: f64 = agent.large-input(request.body.input);
+        //                     { status: 200, body: { result: "${result}" } }
+        //                 "#
+        //                 .to_string(),
+        //             }),
+        //             security: None,
+        //         },
+        //         HttpApiRoute {
+        //             method: RouteMethod::Post,
+        //             path: "/{name}/cpu-intensive".to_string(),
+        //             binding: GatewayBinding::Worker(WorkerGatewayBinding {
+        //                 component_name: ComponentName("benchmark:agent-ts".to_string()),
+        //                 idempotency_key: None,
+        //                 invocation_context: None,
+        //                 response: r#"
+        //                     let agent = benchmark-agent(request.path.name);
+        //                     let length: f64 = request.body.length;
+        //                     let result: f64 = agent.cpu-intensive(length);
+        //                     { status: 200, body: { result: "${result}" } }
+        //                 "#
+        //                 .to_string(),
+        //             }),
+        //             security: None,
+        //         },
+        //     ],
+        // };
+        //
+        // client
+        //     .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
+        //     .await
+        //     .expect("Failed to create http api definition");
+        //
+        // info!("Creating http api deployment");
+        //
+        // let http_api_deployment_creation = HttpApiDeploymentCreation {
+        //     domain: domain.clone(),
+        //     agents: BTreeMap::from_iter([(
+        //         AgentTypeName("benchmark-agent".to_string()),
+        //         HttpApiDeploymentAgentOptions::default(),
+        //     )]),
+        // };
+        //
+        // client
+        //     .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        //     .await
+        //     .expect("Failed to create http api deployment");
+        //
+        // info!("Deploying environment");
+        //
+        // user.deploy_environment(&env.id)
+        //     .await
+        //     .expect("Failed to deploy environment");
 
         IterationContext {
             user,
-            domain,
+            // domain,
             direct_rust_worker_ids,
             rust_agent_worker_ids,
             ts_agent_worker_ids,
-            ts_agent_worker_ids_for_rib,
+            // ts_agent_worker_ids_for_rib,
             length: config.length,
             direct_rust_rpc_worker_id_pairs,
             routing_table,
@@ -753,15 +739,15 @@ impl ThroughputBenchmark {
         )
         .await;
 
-        info!("Warming up TS agents for Rib mapping...");
-        warmup_workers(
-            &iteration.user,
-            iteration.length,
-            &iteration.ts_agent_worker_ids_for_rib,
-            &self.ts_function_name,
-            &self.function_params,
-        )
-        .await;
+        // info!("Warming up TS agents for Rib mapping...");
+        // warmup_workers(
+        //     &iteration.user,
+        //     iteration.length,
+        //     &iteration.ts_agent_worker_ids_for_rib,
+        //     &self.ts_function_name,
+        //     &self.function_params,
+        // )
+        // .await;
 
         info!("Warming up direct rust RPC parent workers...");
         warmup_workers(
@@ -911,45 +897,45 @@ impl ThroughputBenchmark {
         )
         .await;
 
-        info!("Measuring TS agent throughput through HTTP mapping...");
-        let port = self.deps.worker_service().custom_request_port();
-
-        let client = {
-            let mut headers = HeaderMap::new();
-            headers.insert("Host", HeaderValue::from_str(&iteration.domain.0).unwrap());
-            reqwest::Client::builder()
-                .default_headers(headers)
-                .build()
-                .expect("Failed to create HTTP client")
-        };
-
-        let result_futures = iteration
-            .ts_agent_worker_ids_for_rib
-            .iter()
-            .enumerate()
-            .map(move |(idx, _worker_id)| {
-                let client = client.clone();
-                async move {
-                    let mut results = vec![];
-                    for _ in 0..self.call_count {
-                        results.push(
-                            invoke_and_await_http(client.clone(), || {
-                                (self.http_request)(port, idx, iteration.length)
-                            })
-                            .await,
-                        )
-                    }
-                    results
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let results = result_futures.join().await;
-        for (idx, results) in results.iter().enumerate() {
-            for result in results {
-                result.record(&recorder, "ts-agent-rib-", idx.to_string().as_str());
-            }
-        }
+        // info!("Measuring TS agent throughput through HTTP mapping...");
+        // let port = self.deps.worker_service().custom_request_port();
+        //
+        // let client = {
+        //     let mut headers = HeaderMap::new();
+        //     headers.insert("Host", HeaderValue::from_str(&iteration.domain.0).unwrap());
+        //     reqwest::Client::builder()
+        //         .default_headers(headers)
+        //         .build()
+        //         .expect("Failed to create HTTP client")
+        // };
+        //
+        // let result_futures = iteration
+        //     .ts_agent_worker_ids_for_rib
+        //     .iter()
+        //     .enumerate()
+        //     .map(move |(idx, _worker_id)| {
+        //         let client = client.clone();
+        //         async move {
+        //             let mut results = vec![];
+        //             for _ in 0..self.call_count {
+        //                 results.push(
+        //                     invoke_and_await_http(client.clone(), || {
+        //                         (self.http_request)(port, idx, iteration.length)
+        //                     })
+        //                     .await,
+        //                 )
+        //             }
+        //             results
+        //         }
+        //     })
+        //     .collect::<Vec<_>>();
+        //
+        // let results = result_futures.join().await;
+        // for (idx, results) in results.iter().enumerate() {
+        //     for result in results {
+        //         result.record(&recorder, "ts-agent-rib-", idx.to_string().as_str());
+        //     }
+        // }
 
         info!("Measuring direct rust throughput via RPC");
         measure_workers(
@@ -1014,7 +1000,7 @@ impl ThroughputBenchmark {
         delete_workers(&iteration.user, &iteration.direct_rust_worker_ids).await;
         delete_workers(&iteration.user, &iteration.rust_agent_worker_ids).await;
         delete_workers(&iteration.user, &iteration.ts_agent_worker_ids).await;
-        delete_workers(&iteration.user, &iteration.ts_agent_worker_ids_for_rib).await;
+        // delete_workers(&iteration.user, &iteration.ts_agent_worker_ids_for_rib).await;
         delete_workers(
             &iteration.user,
             &iteration
