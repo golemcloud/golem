@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::webhook_handler::WebhookHandler;
+use crate::{await_promise, await_promise_json, create_promise};
 use crate::golem_agentic::exports::golem::agent::guest::{
     AgentError, AgentType, DataValue, Principal,
 };
@@ -45,4 +47,21 @@ pub trait BaseAgent {
     async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String>;
 
     async fn save_snapshot_base(&self) -> Result<Vec<u8>, String>;
+
+    fn create_webhook() -> WebhookHandler where Self: Sized {
+        let promise_id = create_promise();
+        // only available data for the agent is webhook suffix (and not prefix which in CLI and available for runtime)
+        // but let's assume the agent can figure the full URL including the promise_id
+        // A possible host function would be given the agent ID and promise ID, return the full URL for the webhook
+        // get_webhook_url(agent_type: String, webhook_suffix: String, promise_id: String) -> String
+        // This is because an a can have only 1 webhook base URL (it is known to the worker service, if the agent
+        // is mounted at a particular domain, and then the promise_id
+        // TODO; get_webhook_url(agent_type: String, webhook_suffix: String, promise_id: String) -> String
+        // this host function can be be implemented in the worker executor using proxy.
+        // We should consider the possibility of top down propagation of domain and webhook prefix as part of Principal.
+        // But may be this is not ideal
+        let url = format!("https://todo/{}", promise_id);
+
+        WebhookHandler::new(promise_id)
+    }
 }

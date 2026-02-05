@@ -151,7 +151,7 @@ mod tests {
             Self::bar("foo".to_string())
         }
         fn bar(param: String) -> String {
-            param
+            let webhook = Self::create_webhook();
         }
     }
 

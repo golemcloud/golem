@@ -41,6 +41,7 @@ wasi = { version = "=0.14.1+wasi-0.2.3" }
 wstd = { version = "=0.5.4" }
 wasi-logger = { version = "0.1.2", features = ["kv"] }
 wit-bindgen = { version = "=0.40.0" }
+futures = "0.3.31"
 
 [features]
 default = ["durability", "json", "macro"]

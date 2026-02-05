@@ -632,6 +632,7 @@ dependencies = [
  "bytes",
  "chrono",
  "ctor",
+ "futures",
  "golem-rust-macro",
  "golem-wasm",
  "http",
