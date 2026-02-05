@@ -17,6 +17,7 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
+    use golem_rust::agentic::Principal;
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
@@ -26,8 +27,9 @@ mod tests {
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
-    use golem_rust_macro::{description, prompt};
+    use golem_rust_macro::{description, endpoint, prompt};
     use std::fmt::Debug;
+
     use test_r::test;
 
     #[agent_definition]
@@ -644,6 +646,245 @@ mod tests {
                 &AgentMode::Ephemeral,
                 "EchoEphemeralExplicit should be Ephemeral"
             );
+        }
+    }
+
+    #[agent_definition(
+        mount = "/chats/{agent-type}/{foo}/{bar}",
+        webhook_suffix = "/{agent-type}/events/{foo}/{bar}",
+        auth = true,
+        cors = ["https://app.acme.com", "https://staging.acme.com"],
+    )]
+    trait ComplexHttpAgent {
+        fn new(foo: String, bar: String) -> Self;
+
+        #[endpoint(get = "/greet?l={location}&n={name}")]
+        fn greet1(&self, location: String, name: String) -> String;
+
+        #[endpoint(get = "/greet?l={location}&n={name}")]
+        #[endpoint(get = "/greet?lx={location}&nm={name}", cors = ["*"], auth = true, headers("X-Foo" = "location", "X-Bar" = "name"))]
+        fn greet2(&self, location: String, name: String) -> String;
+
+        #[endpoint(get = "/greet/{name}/{*file_path}")]
+        fn greet3(&self, name: String, file_path: String) -> String;
+    }
+
+    struct AgentWithHttpMountImpl {}
+
+    #[agent_implementation]
+    impl ComplexHttpAgent for AgentWithHttpMountImpl {
+        fn new(_foo: String, _bar: String) -> Self {
+            AgentWithHttpMountImpl {}
+        }
+
+        fn greet1(&self, _location: String, _name: String) -> String {
+            "foo".to_string()
+        }
+
+        fn greet2(&self, _location: String, _name: String) -> String {
+            "bar".to_string()
+        }
+
+        fn greet3(&self, _name: String, _file_path: String) -> String {
+            "baz".to_string()
+        }
+    }
+
+    #[test]
+    fn test_agent_with_http() {
+        use golem_rust::agentic::get_all_agent_types;
+
+        let agent_types = get_all_agent_types();
+
+        let agent = agent_types
+            .iter()
+            .find(|a| a.type_name == "ComplexHttpAgent")
+            .expect("ComplexHttpAgent not found");
+
+        assert!(
+            agent.http_mount.is_some(),
+            "HTTP mount details should be set"
+        );
+
+        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)
+    }
+
+    #[agent_definition(mount = "/chats/{agent-type}")]
+    trait SimpleHttpAgent {
+        fn new() -> Self;
+
+        #[endpoint(get = "/green/{name}")]
+        fn greet(&self, name: String) -> String;
+    }
+
+    struct SimpleHttpAgentImpl;
+
+    #[agent_implementation]
+    impl SimpleHttpAgent for SimpleHttpAgentImpl {
+        fn new() -> Self {
+            SimpleHttpAgentImpl
+        }
+
+        fn greet(&self, name: String) -> String {
+            format!("Hello, {}!", name)
+        }
+    }
+
+    // Auto Injected Principal Compilation Tests
+    // Principal last parameter
+    #[agent_definition]
+    pub trait AgentWithPrincipalAutoInjection1 {
+        fn new(name: String, principal: Principal) -> Self;
+
+        fn foo(&self, name: String, principal: Principal) -> String;
+    }
+
+    pub struct AgentWithPrincipalAutoInjection1Impl;
+
+    #[agent_implementation]
+    impl AgentWithPrincipalAutoInjection1 for AgentWithPrincipalAutoInjection1Impl {
+        fn new(_name: String, _principal: Principal) -> Self {
+            Self
+        }
+
+        fn foo(&self, name: String, _principal: Principal) -> String {
+            name
+        }
+    }
+
+    // Auto Injected Principal Compilation Tests
+    #[agent_definition]
+    pub trait AgentWithPrincipalAutoInjection2 {
+        fn new(name: String, text1: u64, principal: Principal, text: String) -> Self;
+
+        fn foo(&self, name: String, num: u64, principal: Principal, text: String) -> String;
+    }
+
+    pub struct AgentWithPrincipalAutoInjection2Impl;
+
+    #[agent_implementation]
+    impl AgentWithPrincipalAutoInjection2 for AgentWithPrincipalAutoInjection2Impl {
+        fn new(_name: String, _text1: u64, _principal: Principal, _text: String) -> Self {
+            Self
+        }
+
+        fn foo(&self, name: String, _num: u64, _principal: Principal, _text: String) -> String {
+            name
+        }
+    }
+
+    #[agent_definition]
+    pub trait AgentWithPrincipalAutoInjection3 {
+        fn new(name: String, text1: u64, principal: Principal, text: Option<String>) -> Self;
+
+        fn foo(
+            &self,
+            name: String,
+            text1: u64,
+            principal: Principal,
+            text: Option<String>,
+        ) -> String;
+
+        fn foo_without_principal_1(&self, name: String, num: u64) -> String;
+        fn foo_without_principal_2(&self, name: String, num: u64, text: String) -> String;
+        fn foo_without_principal_3(&self, name: String, num: u64, text: Option<String>) -> String;
+        fn foo_without_principal_4(
+            &self,
+            name: String,
+            num: u64,
+            text1: Option<String>,
+            text2: Option<String>,
+        ) -> String;
+        fn foo_without_principal_5(&self, name: String, num: u64, text: Option<String>) -> String;
+    }
+
+    pub struct AgentWithPrincipalAutoInjection5Impl;
+
+    #[agent_implementation]
+    impl AgentWithPrincipalAutoInjection3 for AgentWithPrincipalAutoInjection5Impl {
+        fn new(_name: String, _text1: u64, _principal: Principal, _text: Option<String>) -> Self {
+            Self
+        }
+
+        fn foo(
+            &self,
+            name: String,
+            _text1: u64,
+            _principal: Principal,
+            _text: Option<String>,
+        ) -> String {
+            name
+        }
+
+        fn foo_without_principal_1(&self, name: String, _num: u64) -> String {
+            name
+        }
+
+        fn foo_without_principal_2(&self, name: String, _num: u64, _text: String) -> String {
+            name
+        }
+
+        fn foo_without_principal_3(
+            &self,
+            name: String,
+            _num: u64,
+            _text: Option<String>,
+        ) -> String {
+            name
+        }
+
+        fn foo_without_principal_4(
+            &self,
+            name: String,
+            _num: u64,
+            _text1: Option<String>,
+            _text2: Option<String>,
+        ) -> String {
+            name
+        }
+
+        fn foo_without_principal_5(
+            &self,
+            name: String,
+            _num: u64,
+            _text: Option<String>,
+        ) -> String {
+            name
+        }
+    }
+
+    #[agent_definition]
+    pub trait RemoteAgentWithPrincipal {
+        fn new(name: String, principal: Principal) -> Self;
+        async fn foo(&self, name: String) -> String;
+    }
+
+    pub struct RemoteAgentWithPrincipalImpl;
+
+    #[agent_implementation]
+    impl RemoteAgentWithPrincipal for RemoteAgentWithPrincipalImpl {
+        fn new(_name: String, _principal: Principal) -> Self {
+            Self
+        }
+
+        async fn foo(&self, name: String) -> String {
+            AgentWithPrincipalAutoInjection1Client::get(name.clone())
+                .foo(name.clone())
+                .await;
+
+            AgentWithPrincipalAutoInjection2Client::get(name.clone(), 1, "required".into())
+                .foo(name.clone(), 1, "required".into())
+                .await;
+
+            AgentWithPrincipalAutoInjection3Client::get(
+                name.clone(),
+                1,
+                Some("not-undefined".into()),
+            )
+            .foo_without_principal_1("name".into(), 1)
+            .await;
+
+            "finished".into()
         }
     }
 }

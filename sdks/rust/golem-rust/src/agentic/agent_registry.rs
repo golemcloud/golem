@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::extended_agent_type::ExtendedAgentType;
+use crate::agentic::{EnrichedElementSchema, ExtendedDataSchema};
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
-    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
+    golem_agentic::exports::golem::agent::guest::AgentType,
 };
 use golem_wasm::golem_rpc_0_2_x::types::parse_uuid;
 use golem_wasm::{AgentId, ComponentId};
@@ -32,7 +34,7 @@ pub struct State {
 
 #[derive(Default)]
 pub struct AgentTypes {
-    pub agent_types: HashMap<AgentTypeName, AgentType>,
+    pub agent_types: HashMap<AgentTypeName, ExtendedAgentType>,
 }
 
 static mut STATE: Option<State> = None;
@@ -65,11 +67,13 @@ pub fn get_all_agent_types() -> Vec<AgentType> {
         .borrow()
         .agent_types
         .values()
-        .cloned()
+        .map(|e| e.to_agent_type())
         .collect()
 }
 
-pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
+pub fn get_enriched_agent_type_by_name(
+    agent_type_name: &AgentTypeName,
+) -> Option<ExtendedAgentType> {
     let state = get_state();
 
     state
@@ -80,7 +84,13 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
         .cloned()
 }
 
-pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: AgentType) {
+pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
+    let enriched = get_enriched_agent_type_by_name(agent_type_name);
+
+    enriched.map(|e| e.to_agent_type())
+}
+
+pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedAgentType) {
     get_state()
         .agent_types
         .borrow_mut()
@@ -159,13 +169,13 @@ pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {
 pub fn get_constructor_parameter_type(
     agent_type_name: &AgentTypeName,
     parameter_index: usize,
-) -> Option<ElementSchema> {
-    let agent_type = get_agent_type_by_name(agent_type_name)?;
+) -> Option<EnrichedElementSchema> {
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     let constructor = &agent_type.constructor;
 
     match &constructor.input_schema {
-        crate::golem_agentic::golem::agent::common::DataSchema::Tuple(items) => {
+        ExtendedDataSchema::Tuple(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
                 Some(element_schema.clone())
@@ -173,10 +183,10 @@ pub fn get_constructor_parameter_type(
                 None
             }
         }
-        crate::golem_agentic::golem::agent::common::DataSchema::Multimodal(items) => {
+        ExtendedDataSchema::Multimodal(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
-                Some(element_schema.clone())
+                Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))
             } else {
                 None
             }
@@ -188,13 +198,13 @@ pub fn get_method_parameter_type(
     agent_type_name: &AgentTypeName,
     method_name: &str,
     parameter_index: usize,
-) -> Option<ElementSchema> {
-    let agent_type = get_agent_type_by_name(agent_type_name)?;
+) -> Option<EnrichedElementSchema> {
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
 
     match &method.input_schema {
-        crate::golem_agentic::golem::agent::common::DataSchema::Tuple(items) => {
+        ExtendedDataSchema::Tuple(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
                 Some(element_schema.clone())
@@ -202,10 +212,10 @@ pub fn get_method_parameter_type(
                 None
             }
         }
-        crate::golem_agentic::golem::agent::common::DataSchema::Multimodal(items) => {
+        ExtendedDataSchema::Multimodal(items) => {
             if parameter_index < items.len() {
                 let element_schema = &items[parameter_index].1;
-                Some(element_schema.clone())
+                Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))
             } else {
                 None
             }

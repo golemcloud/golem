@@ -75,6 +75,9 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             StructuredValue::Multimodal(_) => {
                 Err("input mismatch. expected default value, found multimodal".to_string())
             }
+            StructuredValue::AutoInjected(_) => {
+                Err("input mismatch. expected default value, found auto-injected".to_string())
+            }
         }?;
 
         match element_value {
@@ -130,6 +133,9 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             StructuredValue::Default(element_value) => Ok(element_value),
             StructuredValue::Multimodal(_) => {
                 Err("Expected element value but found multimodal".to_string())
+            }
+            StructuredValue::AutoInjected(_) => {
+                Err("Expected element value but found auto-injected".to_string())
             }
         };
 
