@@ -341,7 +341,11 @@ impl SessionStore for SqliteSessionStore {
             .pool
             .with_ro("session_store", "take_pending_oidc_login_read")
             .fetch_optional(
-                sqlx::query("SELECT value FROM oidc_pending_login WHERE state = ?").bind(state),
+                sqlx::query(
+                    "SELECT value FROM oidc_pending_login WHERE state = ? AND expires_at > ?",
+                )
+                .bind(state)
+                .bind(Self::current_time()),
             )
             .await?;
 
@@ -397,8 +401,9 @@ impl SessionStore for SqliteSessionStore {
             .pool
             .with_ro("session_store", "get_authenticated_session_read")
             .fetch_optional(
-                sqlx::query("SELECT value, expires_at FROM oidc_session WHERE session_id = ?")
-                    .bind(session_id.0),
+                sqlx::query("SELECT value, expires_at FROM oidc_session WHERE session_id = ? AND expires_at > ?")
+                    .bind(session_id.0)
+                    .bind(Self::current_time()),
             )
             .await?;
 
@@ -521,5 +526,86 @@ mod records {
                 expires_at: value.expires_at,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::records;
+    use crate::custom_api::OidcSession;
+    use crate::custom_api::security::model::PendingOidcLogin;
+    use chrono::{TimeDelta, Utc};
+    use golem_common::model::security_scheme::SecuritySchemeId;
+    use openidconnect::core::CoreIdTokenClaims;
+    use openidconnect::{
+        Audience, EmptyAdditionalClaims, IssuerUrl, Nonce, Scope, StandardClaims, SubjectIdentifier,
+    };
+    use std::collections::HashSet;
+    use test_r::test;
+
+    fn sample_pending_login() -> PendingOidcLogin {
+        PendingOidcLogin {
+            scheme_id: SecuritySchemeId::new(),
+            original_uri: "https://example.com".to_string(),
+            nonce: Nonce::new("nonce123".to_string()),
+        }
+    }
+
+    fn sample_claims(expires_at: chrono::DateTime<Utc>) -> CoreIdTokenClaims {
+        let issuer = IssuerUrl::new("https://issuer.example".to_string()).unwrap();
+        let audience = Audience::new("client_id".to_string());
+
+        let standard_claims = StandardClaims::new(SubjectIdentifier::new("sub".to_string()));
+
+        CoreIdTokenClaims::new(
+            issuer,
+            vec![audience],
+            expires_at,
+            Utc::now(),
+            standard_claims,
+            EmptyAdditionalClaims {},
+        )
+    }
+
+    fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
+        OidcSession {
+            subject: "sub".into(),
+            issuer: "issuer".into(),
+            email: Some("a@b.com".into()),
+            name: Some("Alice".into()),
+            email_verified: Some(true),
+            given_name: None,
+            family_name: None,
+            picture: None,
+            preferred_username: None,
+            claims: sample_claims(expires_at),
+            scopes: HashSet::from([Scope::new("openid".into())]),
+            expires_at,
+        }
+    }
+
+    #[test]
+    fn pending_login_record_roundtrip() {
+        let login = sample_pending_login();
+        let record = records::PendingOidcLoginRecord::from(login.clone());
+        let login2 = PendingOidcLogin::from(record);
+
+        assert_eq!(login.scheme_id, login2.scheme_id);
+        assert_eq!(login.original_uri, login2.original_uri);
+        assert_eq!(login.nonce.secret(), login2.nonce.secret());
+    }
+
+    #[test]
+    fn oidc_session_record_roundtrip() {
+        let expires = Utc::now() + TimeDelta::seconds(60);
+        let session = sample_session(expires);
+
+        let record = records::OidcSessionRecord::try_from(session.clone()).unwrap();
+        let session2 = OidcSession::try_from(record).unwrap();
+
+        assert_eq!(session.subject, session2.subject);
+        assert_eq!(session.issuer, session2.issuer);
+        assert_eq!(session.expires_at, session2.expires_at);
+        assert_eq!(session.scopes.len(), session2.scopes.len());
     }
 }
