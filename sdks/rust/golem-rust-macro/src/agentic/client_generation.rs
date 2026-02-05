@@ -174,24 +174,23 @@ fn get_remote_agent_methods_info(
     let method_impls = tr
         .items
         .iter()
-        .filter_map(|item| {
-            let method = extract_method(item)?;
+        .filter_map(|trait_item| {
+            let method = extract_method(trait_item)?;
+
             if is_static_method(&method.sig) {
                 return None;
             }
 
-            // Validate return type; returns Some(token_stream) on error
-            if let Some(ts) = validate_return_type(&method.sig, type_parameter_names) {
+            if let Err(ts) = validate_return_type(&method.sig, type_parameter_names) {
                 return Some(ts);
             }
 
-            // Validate input types; returns Some(token_stream) on error
-            if let Some(ts) = validate_input_types(&method.sig, type_parameter_names) {
+            if let Err(ts) = validate_input_types(&method.sig, type_parameter_names) {
                 return Some(ts);
             }
 
-            let input_defs = collect_input_defs(&method.sig);
-            let input_idents = collect_input_idents(&method.sig);
+            let input_defs = collect_input_defs_without_principal(&method.sig);
+            let input_idents = collect_input_idents_without_principal(&method.sig);
 
             let method_name = &method.sig.ident;
             let trigger_name = format_ident!("trigger_{}", method_name);
@@ -219,7 +218,6 @@ fn get_remote_agent_methods_info(
     RemoteAgentMethodsInfo::new(code, agent_method_names)
 }
 
-/// Extract TraitItem::Fn
 fn extract_method(item: &syn::TraitItem) -> Option<&syn::TraitItemFn> {
     if let syn::TraitItem::Fn(m) = item {
         Some(m)
@@ -228,41 +226,39 @@ fn extract_method(item: &syn::TraitItem) -> Option<&syn::TraitItemFn> {
     }
 }
 
-/// Returns Some(token_stream) if return type is invalid, else None
 fn validate_return_type(
     sig: &syn::Signature,
     type_params: &[String],
-) -> Option<proc_macro2::TokenStream> {
+) -> Result<(), proc_macro2::TokenStream> {
     if let syn::ReturnType::Type(_, ty) = &sig.output {
         if let syn::Type::Path(path) = &**ty {
             let ident = &path.path.segments.last().unwrap().ident;
 
             if ident == "Self" {
-                return None;
+                return Ok(()); // skip Self, still valid
             }
 
             if type_params.contains(&ident.to_string()) {
-                return Some(generic_type_in_agent_return_type_error(
+                return Err(generic_type_in_agent_return_type_error(
                     sig.ident.span(),
-                    ident.to_string().as_str(),
+                    &ident.to_string(),
                 ));
             }
         }
     }
-    None
+    Ok(())
 }
 
-/// Returns Some(token_stream) if input types are invalid, else None
 fn validate_input_types(
     sig: &syn::Signature,
     type_params: &[String],
-) -> Option<proc_macro2::TokenStream> {
+) -> Result<(), proc_macro2::TokenStream> {
     for fn_arg in &sig.inputs {
         if let FnArg::Typed(pat_type) = fn_arg {
             if let Type::Path(type_path) = &*pat_type.ty {
                 let type_name = type_path.path.segments.last().unwrap().ident.to_string();
                 if type_params.contains(&type_name) {
-                    return Some(generic_type_in_agent_method_error(
+                    return Err(generic_type_in_agent_method_error(
                         pat_type.ty.span(),
                         &type_name,
                     ));
@@ -270,11 +266,10 @@ fn validate_input_types(
             }
         }
     }
-    None
+    Ok(())
 }
 
-/// Collect input definitions, skipping Principal
-fn collect_input_defs(sig: &syn::Signature) -> Vec<&syn::FnArg> {
+fn collect_input_defs_without_principal(sig: &syn::Signature) -> Vec<&syn::FnArg> {
     sig.inputs.iter().filter(|arg| match arg {
         FnArg::Receiver(_) => true,
         FnArg::Typed(pat_type) => !matches!(
@@ -284,8 +279,7 @@ fn collect_input_defs(sig: &syn::Signature) -> Vec<&syn::FnArg> {
     }).collect()
 }
 
-/// Collect input identifiers, skipping Principal
-fn collect_input_idents(sig: &syn::Signature) -> Vec<syn::Ident> {
+fn collect_input_idents_without_principal(sig: &syn::Signature) -> Vec<syn::Ident> {
     sig.inputs
         .iter()
         .filter_map(|arg| {
@@ -309,7 +303,6 @@ fn collect_input_idents(sig: &syn::Signature) -> Vec<syn::Ident> {
         .collect()
 }
 
-/// Generates async / trigger / schedule code
 fn generate_method_code(
     method_name: &syn::Ident,
     trigger_name: &syn::Ident,
