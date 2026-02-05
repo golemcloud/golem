@@ -221,7 +221,7 @@ export class LanguageService {
       }
 
       const parent = node.getParent();
-      const dotCompletion = parent
+      const memberCompletion = parent
         ? parent.getKind() === ts.SyntaxKind.PropertyAccessExpression
         : false;
 
@@ -230,7 +230,7 @@ export class LanguageService {
         entries: completions.entries
           .filter((entry) => entry.name.startsWith(nodeText))
           .map((entry) => entry.name),
-        memberCompletion: dotCompletion,
+        memberCompletion,
       };
     }
   }
