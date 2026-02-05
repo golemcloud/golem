@@ -150,12 +150,17 @@ export class LanguageService {
     if (!node) return;
 
     const fullExpressionNode = getFullExpression(node);
+    if (fullExpressionNode.getKind() === ts.SyntaxKind.SourceFile) {
+      return;
+    }
 
     let nodeType;
     try {
       nodeType = fullExpressionNode.getType();
     } catch (e) {
       console.log();
+      console.log('If you see this, please report!');
+      console.log(fullExpressionNode);
       console.error(e);
       console.log();
     }
