@@ -16,7 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+    AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::worker::stream::WorkerConnection;
@@ -25,7 +25,9 @@ use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
-use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
+use crate::log::{
+    log_action, log_error_action, log_failed_to, log_warn_action, logln, LogColorize, LogIndent,
+};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
     agent_interface_name, function_params_types, show_exported_agent_constructors,
@@ -105,7 +107,7 @@ impl WorkerCommandHandler {
                 idempotency_key,
                 no_stream,
                 stream_args,
-                deploy_args,
+                post_deploy_args: deploy_args,
             } => {
                 self.cmd_invoke(
                     worker_name,
@@ -252,7 +254,7 @@ impl WorkerCommandHandler {
         idempotency_key: Option<IdempotencyKey>,
         no_stream: bool,
         stream_args: StreamArgs,
-        deploy_args: Option<DeployArgs>,
+        post_deploy_args: Option<PostDeployArgs>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -293,7 +295,7 @@ impl WorkerCommandHandler {
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
-                deploy_args.as_ref(),
+                post_deploy_args.as_ref(),
             )
             .await?;
 
@@ -1367,9 +1369,9 @@ impl WorkerCommandHandler {
                 Ok(())
             }
             Err(error) => {
-                log_error_action("Failed", "to trigger update for agent, error:");
+                log_failed_to("trigger update for agent");
                 let _indent = LogIndent::new();
-                logln(format!("{error}"));
+                log_error(error.to_string());
                 Err(anyhow!(error))
             }
         }
@@ -1444,7 +1446,7 @@ impl WorkerCommandHandler {
                     log_error_action(
                         "Agent update",
                         format!(
-                            "to revision {} succeeded at {}: {}",
+                            "to revision {} failed at {}: {}",
                             failure.target_revision.to_string().log_color_highlight(),
                             failure.timestamp.to_string().log_color_highlight(),
                             error
@@ -1456,9 +1458,7 @@ impl WorkerCommandHandler {
                         "Agent update",
                         "is not pending anymore, but no outcome has been found",
                     );
-                    return Err(anyhow!(
-                "Unexpected agent state: update is not pending anymore, but no outcome has been found"
-                ));
+                    return Err(anyhow!("Unexpected agent state: update is not pending anymore, but no outcome has been found"));
                 }
             }
         }

@@ -22,7 +22,7 @@ use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, DeployArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames,
+    BuildArgs, PostDeployArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
@@ -635,7 +635,7 @@ pub enum GolemCliSubcommand {
         /// Optional component revision to use, defaults to latest deployed component revision
         revision: Option<ComponentRevision>,
         #[command(flatten)]
-        deploy_args: Option<DeployArgs>,
+        post_deploy_args: Option<PostDeployArgs>,
         /// Optional script to run, when defined the repl will execute the script and exit
         #[clap(long, short, conflicts_with_all = ["script_file"])]
         script: Option<String>,
@@ -666,7 +666,7 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         force_build: ForceBuildArg,
         #[command(flatten)]
-        deploy_args: DeployArgs,
+        post_deploy_args: PostDeployArgs,
         /// Internal flag for REPL reload
         #[arg(long, hide = true)]
         repl_bridge_sdk_target: Option<GuestLanguage>,
@@ -834,7 +834,7 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args, Clone)]
-    pub struct DeployArgs {
+    pub struct PostDeployArgs {
         /// Update existing agents with auto or manual update mode
         #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents"])]
         pub update_agents: Option<AgentUpdateMode>,
@@ -846,8 +846,8 @@ pub mod shared_args {
         pub reset: bool,
     }
 
-    impl DeployArgs {
-        pub fn is_any_set(&self, env_args: &DeployArgs) -> bool {
+    impl PostDeployArgs {
+        pub fn is_any_set(&self, env_args: &PostDeployArgs) -> bool {
             env_args.update_agents.is_some()
                 || env_args.redeploy_agents
                 || env_args.reset
@@ -857,18 +857,18 @@ pub mod shared_args {
         }
 
         pub fn none() -> Self {
-            DeployArgs {
+            PostDeployArgs {
                 update_agents: None,
                 redeploy_agents: false,
                 reset: false,
             }
         }
 
-        pub fn delete_agents(&self, env_args: &DeployArgs) -> bool {
+        pub fn delete_agents(&self, env_args: &PostDeployArgs) -> bool {
             (env_args.reset || self.reset) && !self.redeploy_agents && self.update_agents.is_none()
         }
 
-        pub fn redeploy_agents(&self, env_args: &DeployArgs) -> bool {
+        pub fn redeploy_agents(&self, env_args: &PostDeployArgs) -> bool {
             (env_args.redeploy_agents || self.redeploy_agents)
                 && !self.reset
                 && self.update_agents.is_none()
@@ -1028,7 +1028,7 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+        AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
@@ -1067,7 +1067,7 @@ pub mod worker {
             #[command(flatten)]
             stream_args: StreamArgs,
             #[command(flatten)]
-            deploy_args: Option<DeployArgs>,
+            post_deploy_args: Option<PostDeployArgs>,
         },
         /// Get agent metadata
         Get {

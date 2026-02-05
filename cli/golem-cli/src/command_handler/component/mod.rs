@@ -16,7 +16,7 @@ use crate::app::context::{to_anyhow, ApplicationContext, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
-use crate::command::shared_args::{ComponentTemplateName, DeployArgs, OptionalComponentNames};
+use crate::command::shared_args::{ComponentTemplateName, OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
@@ -490,7 +490,12 @@ impl ComponentCommandHandler {
         }
 
         self.ctx.log_handler().log_view(&update_results);
-        Ok(())
+
+        if !update_results.failed.is_empty() {
+            bail!(NonSuccessfulExit)
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn redeploy_workers_by_components(
@@ -725,9 +730,9 @@ impl ComponentCommandHandler {
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
         component_revision_selection: Option<ComponentRevisionSelection<'_>>,
-        deploy_args: Option<&DeployArgs>,
+        post_deploy_args: Option<&PostDeployArgs>,
     ) -> anyhow::Result<ComponentDto> {
-        if deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
+        if post_deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
             self.ctx
                 .app_handler()
                 .deploy(DeployConfig {
@@ -735,7 +740,9 @@ impl ComponentCommandHandler {
                     stage: false,
                     approve_staging_steps: false,
                     force_build: None,
-                    deploy_args: deploy_args.cloned().unwrap_or_else(DeployArgs::none),
+                    post_deploy_args: post_deploy_args
+                        .cloned()
+                        .unwrap_or_else(PostDeployArgs::none),
                     repl_bridge_sdk_target: None,
                 })
                 .await?;
@@ -789,7 +796,7 @@ impl ComponentCommandHandler {
                             stage: false,
                             approve_staging_steps: false,
                             force_build: None,
-                            deploy_args: DeployArgs::none(),
+                            post_deploy_args: PostDeployArgs::none(),
                             repl_bridge_sdk_target: None,
                         })
                         .await?;

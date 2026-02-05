@@ -173,7 +173,7 @@ pub fn set_log_output(output: Output) {
     LOG_STATE.write().unwrap().set_output(output);
 }
 
-pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
+pub fn log_action(action: &str, subject: impl AsRef<str>) {
     logln_internal(&format!(
         "{} {}",
         action.log_color_action(),
@@ -181,11 +181,36 @@ pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
     ));
 }
 
-pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
+pub fn log_finished_ok(subject: impl AsRef<str>) {
+    logln_internal(&format!(
+        "{} {} [{}]",
+        "Finished".log_color_action(),
+        subject.as_ref(),
+        "OK".log_color_ok_highlight(),
+    ));
+}
+
+pub fn log_finished_up_to_date(subject: impl AsRef<str>) {
+    logln_internal(&format!(
+        "{} {} [{}]",
+        "Finished".log_color_action(),
+        subject.as_ref(),
+        "UP-TO-DATE".log_color_ok_highlight(),
+    ));
+}
+
+pub fn log_failed_to(subject: impl AsRef<str>) {
+    log_error_action(
+        "Failed",
+        &format!("to {} [{}]", subject.as_ref(), "ERROR".log_color_error(),),
+    );
+}
+
+pub fn log_warn_action(action: &str, subject: impl AsRef<str>) {
     logln_internal(&format!("{} {}", action.log_color_warn(), subject.as_ref(),));
 }
 
-pub fn log_error_action<T: AsRef<str>>(action: &str, subject: T) {
+pub fn log_error_action(action: &str, subject: impl AsRef<str>) {
     logln_internal(&format!(
         "{} {}",
         action.log_color_error(),
@@ -193,7 +218,7 @@ pub fn log_error_action<T: AsRef<str>>(action: &str, subject: T) {
     ));
 }
 
-pub fn logln<T: AsRef<str>>(message: T) {
+pub fn logln(message: impl AsRef<str>) {
     logln_internal(message.as_ref());
 }
 
@@ -235,11 +260,11 @@ pub fn logln_internal(message: &str) {
     }
 }
 
-pub fn log_skipping_up_to_date<T: AsRef<str>>(subject: T) {
+pub fn log_skipping_up_to_date(subject: impl AsRef<str>) {
     log_warn_action(
         "Skipping",
         format!(
-            "{}, {}",
+            "{} [{}]",
             subject.as_ref(),
             "UP-TO-DATE".log_color_ok_highlight()
         ),

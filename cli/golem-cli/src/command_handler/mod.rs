@@ -293,7 +293,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 language,
                 component_name,
                 revision,
-                deploy_args,
+                post_deploy_args: deploy_args,
                 script,
                 script_file,
                 disable_stream,
@@ -318,7 +318,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 version,
                 revision,
                 force_build,
-                deploy_args,
+                post_deploy_args: deploy_args,
                 repl_bridge_sdk_target,
             } => {
                 self.ctx
