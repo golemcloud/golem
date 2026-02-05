@@ -148,13 +148,10 @@ export class Repl {
         languageService.setSnippet(line);
         const completions = languageService.getSnippetCompletions();
         if (completions && completions.entries.length) {
-          if (completions.memberCompletion) {
-            const lastDot = line.lastIndexOf('.');
-            const completeOn = lastDot >= 0 ? line.slice(lastDot + 1) : line;
-            callback(null, [completions.entries, completeOn]);
-          } else {
-            callback(null, [completions.entries, line]);
-          }
+          const replaceStart = completions.replaceStart ?? 0;
+          const replaceEnd = completions.replaceEnd ?? line.length;
+          const completeOn = line.slice(replaceStart, replaceEnd);
+          callback(null, [completions.entries, completeOn]);
         } else {
           callback(null, [[], '']);
         }

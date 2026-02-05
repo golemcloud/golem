@@ -38,6 +38,8 @@ export type SnippetTypeInfo = {
 export type SnippetCompletion = {
   entries: string[];
   memberCompletion: boolean;
+  replaceStart: number;
+  replaceEnd: number;
 };
 
 const SNIPPET_FILE_NAME = '__snippet__.ts';
@@ -47,7 +49,8 @@ export class LanguageService {
   private project: tsm.Project;
   private snippetHistory: string;
   private rawSnippet: string;
-  private fullSnippetEndPos: number;
+  private snippetEndPos: number;
+  private snippetStartPos: number;
 
   constructor(config: Config) {
     this.snippetImports =
@@ -67,14 +70,16 @@ export class LanguageService {
 
     this.snippetHistory = this.snippetImports;
     this.rawSnippet = '';
-    this.fullSnippetEndPos = 0;
+    this.snippetEndPos = 0;
+    this.snippetStartPos = 0;
   }
 
   private updateProjectSnippet() {
     const fullSnippet = this.snippetHistory + this.rawSnippet;
-    this.fullSnippetEndPos = lastNonWhitespaceIndex(fullSnippet);
-    if (this.fullSnippetEndPos < this.snippetHistory.length) {
-      this.fullSnippetEndPos = -1;
+    this.snippetStartPos = fullSnippet.length - this.rawSnippet.length;
+    this.snippetEndPos = lastNonWhitespaceIndex(fullSnippet);
+    if (this.snippetEndPos < this.snippetHistory.length) {
+      this.snippetEndPos = -1;
     }
     this.project.createSourceFile(SNIPPET_FILE_NAME, fullSnippet, { overwrite: true });
   }
@@ -122,7 +127,7 @@ export class LanguageService {
     const languageService = this.project.getLanguageService();
     const tsLs = languageService.compilerObject;
 
-    const info = tsLs.getQuickInfoAtPosition(snippet.getFilePath(), this.fullSnippetEndPos);
+    const info = tsLs.getQuickInfoAtPosition(snippet.getFilePath(), this.snippetEndPos);
 
     if (!info) return;
 
@@ -136,12 +141,12 @@ export class LanguageService {
   }
 
   getSnippetTypeInfo(): SnippetTypeInfo | undefined {
-    if (this.fullSnippetEndPos === -1) return;
+    if (this.snippetEndPos === -1) return;
 
     const snippet = this.getSnippet();
     if (!snippet) return;
 
-    const node = snippet.getDescendantAtPos(this.fullSnippetEndPos);
+    const node = snippet.getDescendantAtPos(this.snippetEndPos);
     if (!node) return;
 
     const fullExpressionNode = getFullExpression(node);
@@ -175,7 +180,7 @@ export class LanguageService {
     const snippet = this.getSnippet();
     if (!snippet) return;
 
-    let pos = this.fullSnippetEndPos;
+    let pos = this.snippetEndPos;
 
     const triggerCharacter = matchTriggerCharacter(snippet.getText(), pos);
     const triggerKind = triggerCharacter
@@ -195,6 +200,9 @@ export class LanguageService {
 
     if (!completions) return;
 
+    const rawStart = this.snippetStartPos;
+    const rawEnd = rawStart + this.rawSnippet.length;
+
     if (triggerCharacter === '.') {
       return {
         entries: completions.entries
@@ -210,13 +218,17 @@ export class LanguageService {
           })
           .map((entry) => entry.name),
         memberCompletion: true,
+        replaceStart: Math.max(0, pos + 1 - rawStart),
+        replaceEnd: Math.max(0, rawEnd - rawStart),
       };
     } else {
-      const node = snippet.getDescendantAtPos(this.fullSnippetEndPos);
+      const node = snippet.getDescendantAtPos(this.snippetEndPos);
       if (!node) {
         return {
           entries: completions.entries.map((entry) => entry.name),
           memberCompletion: false,
+          replaceStart: 0,
+          replaceEnd: this.rawSnippet.length,
         };
       }
 
@@ -226,11 +238,16 @@ export class LanguageService {
         : false;
 
       const nodeText = node.getText();
+      const nodeStart = node.getStart();
+      const nodeEnd = node.getEnd();
+
       return {
         entries: completions.entries
           .filter((entry) => entry.name.startsWith(nodeText))
           .map((entry) => entry.name),
         memberCompletion,
+        replaceStart: Math.max(0, nodeStart - rawStart),
+        replaceEnd: Math.max(0, nodeEnd - rawStart),
       };
     }
   }
