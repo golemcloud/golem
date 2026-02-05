@@ -152,4 +152,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(error) => Ok(Err(AgentError::InvalidAgentId(error))),
         }
     }
+
+    async fn create_webhook(
+        &mut self,
+    ) -> anyhow::Result<crate::preview2::golem_agent::host::AgentWebhook> {
+        unimplemented!()
+    }
 }
