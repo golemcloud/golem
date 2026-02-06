@@ -409,7 +409,9 @@ impl AppCommandHandler {
                     Ok(())
                 }
                 DeploySummary::PlanUpToDate => {
-                    log_finished_up_to_date("planning");
+                    log_finished_up_to_date(
+                        "deployment planning, no changes are required for the environment",
+                    );
                     Ok(())
                 }
                 DeploySummary::StagingOk => {
@@ -421,7 +423,9 @@ impl AppCommandHandler {
                     logged_post_deploy_result(post_deploy)
                 }
                 DeploySummary::DeployUpToDate(post_deploy_result) => {
-                    log_finished_up_to_date("deploying");
+                    log_finished_up_to_date(
+                        "deployment planning, no changes are required for the environment",
+                    );
                     logged_post_deploy_result(post_deploy_result)
                 }
                 DeploySummary::RollbackOk(post_deploy_result) => {
@@ -429,7 +433,9 @@ impl AppCommandHandler {
                     logged_post_deploy_result(post_deploy_result)
                 }
                 DeploySummary::RollbackUpToDate(post_deploy_result) => {
-                    log_finished_up_to_date("rollback");
+                    log_finished_up_to_date(
+                        "rollback planning, no changes are required for the environment",
+                    );
                     logged_post_deploy_result(post_deploy_result)
                 }
             },
