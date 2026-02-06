@@ -103,7 +103,7 @@ impl WorkerCommandHandler {
                 arguments,
                 trigger,
                 idempotency_key,
-                stream,
+                no_stream,
                 stream_args,
                 deploy_args,
             } => {
@@ -113,7 +113,7 @@ impl WorkerCommandHandler {
                     arguments,
                     trigger,
                     idempotency_key,
-                    stream,
+                    no_stream,
                     stream_args,
                     deploy_args,
                 )
@@ -250,7 +250,7 @@ impl WorkerCommandHandler {
         arguments: Vec<WorkerFunctionArgument>,
         trigger: bool,
         idempotency_key: Option<IdempotencyKey>,
-        stream: bool,
+        no_stream: bool,
         stream_args: StreamArgs,
         deploy_args: Option<DeployArgs>,
     ) -> anyhow::Result<()> {
@@ -407,7 +407,7 @@ impl WorkerCommandHandler {
                 arguments,
                 idempotency_key.clone(),
                 trigger,
-                stream.then_some(stream_args),
+                (!no_stream).then_some(stream_args),
             )
             .await?;
 
