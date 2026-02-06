@@ -17,7 +17,7 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::agentic::Principal;
+    use golem_rust::agentic::{create_webhook, Principal};
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
@@ -885,6 +885,36 @@ mod tests {
             .await;
 
             "finished".into()
+        }
+    }
+
+    #[agent_definition]
+    pub trait WebhookAgent {
+        fn new(name: String) -> Self;
+
+        async fn create_webhook_and_trigger(&self) -> String;
+    }
+
+    fn webhook_placeholder(_url: &str) -> String {
+        "webhook triggered".to_string()
+    }
+
+    pub struct WebhookAgentImpl;
+
+    #[agent_implementation]
+    impl WebhookAgent for WebhookAgentImpl {
+        fn new(_name: String) -> Self {
+            Self
+        }
+
+        async fn create_webhook_and_trigger(&self) -> String {
+            let webhook = create_webhook();
+
+            webhook_placeholder(webhook.url());
+
+            let request = webhook.await;
+
+            request.json().unwrap()
         }
     }
 }

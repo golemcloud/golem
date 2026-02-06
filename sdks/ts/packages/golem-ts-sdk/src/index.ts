@@ -38,6 +38,8 @@ export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 
+export * from './webhook';
+
 export * from './host/hostapi';
 export * from './host/guard';
 export * from './host/result';
