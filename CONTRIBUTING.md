@@ -104,6 +104,21 @@ To run all CLI tests use
 cargo make cli-tests
 ```
 
+#### Running API tests
+The **API tests** test the REST and gRPC APIs separately:
+
+```shell
+cargo make api-tests-http   # HTTP API tests
+cargo make api-tests-grpc   # gRPC API tests
+```
+
+#### Running sharding tests
+For sharding-related tests with file logging:
+
+```shell
+cargo make sharding-tests-debug
+```
+
 #### Using a debugger
 When using a debugger with the tests, make sure to pass the `--nocapture` option to the test runner, otherwise the debugger will not be usable (when capturing is on, the test framework spawns child processes to run the actual tests).
 
