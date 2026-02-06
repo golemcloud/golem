@@ -864,11 +864,10 @@ fn confirm<M: AsRef<str>>(
         Ok(result) => Ok(result),
         Err(error) => {
             if is_interactive_not_available_inquire_error(&error) {
-                logln("");
+                logln("\n\n");
                 log_warn(
                     "The current input device is not an interactive one, defaulting to \"false\"",
                 );
-                logln("");
                 Ok(false)
             } else {
                 Err(error.into())
