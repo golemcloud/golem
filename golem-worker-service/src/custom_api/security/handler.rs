@@ -108,7 +108,7 @@ impl OidcHandler {
             expires_at: id_token_claims.expiration(),
         };
 
-        let session_id = SessionId(Uuid::new_v4());
+        let session_id = SessionId(Uuid::now_v7());
 
         self.session_store
             .store_authenticated_session(&session_id, session)

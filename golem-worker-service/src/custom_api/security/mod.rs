@@ -15,7 +15,7 @@
 pub mod handler;
 mod identity_provider;
 mod identity_provider_metadata;
-mod model;
+pub mod model;
 mod open_id_client;
 pub mod session_store;
 
