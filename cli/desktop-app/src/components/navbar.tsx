@@ -17,7 +17,7 @@ const Navbar = ({ showNav = true }: NavbarProps) => {
       <div className="flex items-center justify-between px-4 py-2">
         <div className="flex items-center space-x-8">
           <div className="flex items-center space-x-2">
-            <a href="/">
+            <a href="/" aria-label="Home">
               <Logo />
             </a>
           </div>
@@ -36,7 +36,7 @@ const Navbar = ({ showNav = true }: NavbarProps) => {
           <div className="flex items-center space-x-2">
             <ModeToggle />
             <NavLink to="/settings">
-              <Button variant="outline" size="icon">
+              <Button variant="outline" size="icon" aria-label="Settings">
                 <Settings className="h-4 w-4" />
               </Button>
             </NavLink>
