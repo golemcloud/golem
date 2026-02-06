@@ -1062,8 +1062,8 @@ pub mod worker {
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
-            /// Connect to the agent before the invocation and live stream its standard output, error and log channels
-            stream: bool,
+            /// Disable live streaming the agent's standard output, error, and log channels
+            no_stream: bool,
             #[command(flatten)]
             stream_args: StreamArgs,
             #[command(flatten)]
