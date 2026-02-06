@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { InvokeLayout } from "./InvokeLayout";
-import { fn } from "storybook/test";
+import { fn, userEvent, within, expect } from "storybook/test";
 import type { Export, ComponentExportFunction } from "@/types/component";
 
 const addItemFn: ComponentExportFunction = {
@@ -107,6 +107,29 @@ export const FormMode: Story = {
     value: "",
     resultValue: "",
   },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Verify sidebar lists all functions
+    await expect(canvas.getByText("add-item")).toBeInTheDocument();
+    await expect(canvas.getByText("get-cart")).toBeInTheDocument();
+    await expect(canvas.getByText("checkout")).toBeInTheDocument();
+
+    // Click "get-cart" -> assert onNavigateToFunction
+    await userEvent.click(canvas.getByText("get-cart"));
+    await expect(args.onNavigateToFunction).toHaveBeenCalledWith(
+      "golem:shopping/api",
+      "get-cart",
+    );
+
+    // Click "Json Layout" -> assert setViewMode("preview")
+    await userEvent.click(canvas.getByText("Json Layout"));
+    await expect(args.setViewMode).toHaveBeenCalledWith("preview");
+
+    // Click "Types" -> assert setViewMode("types")
+    await userEvent.click(canvas.getByText("Types"));
+    await expect(args.setViewMode).toHaveBeenCalledWith("types");
+  },
 };
 
 export const PreviewMode: Story = {
@@ -128,6 +151,18 @@ export const PreviewMode: Story = {
       2
     ),
     resultValue: "",
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Verify header text
+    await expect(
+      canvas.getByText("golem:shopping/api - add-item"),
+    ).toBeInTheDocument();
+
+    // Click "Form Layout" -> assert setViewMode("form")
+    await userEvent.click(canvas.getByText("Form Layout"));
+    await expect(args.setViewMode).toHaveBeenCalledWith("form");
   },
 };
 

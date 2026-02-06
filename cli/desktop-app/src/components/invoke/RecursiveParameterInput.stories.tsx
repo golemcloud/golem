@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { RecursiveParameterInput } from "./RecursiveParameterInput";
-import { fn } from "storybook/test";
+import { fn, userEvent, within, expect, screen } from "storybook/test";
 import type { Typ } from "@/types/component";
 
 const meta = {
@@ -22,6 +22,14 @@ export const StringInput: Story = {
     typeDef: { type: "str" },
     value: "hello world",
   },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    const input = canvas.getByPlaceholderText("Enter greeting...");
+    await userEvent.clear(input);
+    await userEvent.type(input, "goodbye world");
+    await expect(args.onChange).toHaveBeenCalled();
+  },
 };
 
 export const NumberU32: Story = {
@@ -29,6 +37,14 @@ export const NumberU32: Story = {
     name: "quantity",
     typeDef: { type: "u32" },
     value: 42,
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    const input = canvas.getByPlaceholderText("Enter quantity...");
+    await userEvent.clear(input);
+    await userEvent.type(input, "100");
+    await expect(args.onChange).toHaveBeenCalled();
   },
 };
 
@@ -45,6 +61,16 @@ export const BooleanInput: Story = {
     name: "is-active",
     typeDef: { type: "bool" },
     value: true,
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    const falseRadio = canvas.getByLabelText("False");
+    await userEvent.click(falseRadio);
+    await expect(args.onChange).toHaveBeenCalled();
+
+    const trueRadio = canvas.getByLabelText("True");
+    await userEvent.click(trueRadio);
   },
 };
 
@@ -90,6 +116,13 @@ export const ListOfStrings: Story = {
     name: "fruits",
     typeDef: { type: "list", inner: { type: "str" } },
     value: ["apple", "banana", "cherry"],
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    const addButton = canvas.getByRole("button", { name: /add item/i });
+    await userEvent.click(addButton);
+    await expect(args.onChange).toHaveBeenCalled();
   },
 };
 
@@ -170,6 +203,17 @@ export const OptionNone: Story = {
     typeDef: { type: "option", inner: { type: "str" } },
     value: null,
   },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Click checkbox to enable optional value
+    const checkbox = canvas.getByRole("checkbox");
+    await userEvent.click(checkbox);
+
+    // Controlled component - onChange is called but parent doesn't update value,
+    // so we verify the callback was fired
+    await expect(args.onChange).toHaveBeenCalled();
+  },
 };
 
 export const OptionRecord: Story = {
@@ -193,6 +237,18 @@ export const ResultOk: Story = {
     name: "response",
     typeDef: { type: "result", ok: { type: "str" }, err: { type: "str" } },
     value: { ok: "success!" },
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Click "Error" radio to switch
+    const errorRadio = canvas.getByLabelText("Error");
+    await userEvent.click(errorRadio);
+    await expect(args.onChange).toHaveBeenCalled();
+
+    // Click "Ok" to switch back
+    const okRadio = canvas.getByLabelText("Ok");
+    await userEvent.click(okRadio);
   },
 };
 
@@ -244,6 +300,18 @@ export const ColorEnum: Story = {
     },
     value: "green",
   },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Click the combobox trigger to open the select dropdown
+    const combobox = canvas.getByRole("combobox");
+    await userEvent.click(combobox);
+
+    // Select renders in portal, use screen
+    const blueOption = await screen.findByText("blue");
+    await userEvent.click(blueOption);
+    await expect(args.onChange).toHaveBeenCalled();
+  },
 };
 
 // --- Flags ---
@@ -256,6 +324,19 @@ export const PermissionsFlags: Story = {
       names: ["read", "write", "execute", "admin", "delete"],
     },
     value: ["read", "write"],
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Toggle "execute" flag on
+    const executeCheckbox = canvas.getByLabelText("execute");
+    await userEvent.click(executeCheckbox);
+    await expect(args.onChange).toHaveBeenCalled();
+
+    // Toggle "read" flag off
+    const readCheckbox = canvas.getByLabelText("read");
+    await userEvent.click(readCheckbox);
+    await expect(args.onChange).toHaveBeenCalledTimes(2);
   },
 };
 

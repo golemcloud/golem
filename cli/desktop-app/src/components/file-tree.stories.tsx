@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { FileTree, FileTreeNode } from "./file-tree";
-import { fn } from "storybook/test";
+import { fn, userEvent, within, expect } from "storybook/test";
 
 const meta = {
   title: "Components/FileTree",
@@ -61,6 +61,31 @@ export const NestedFolders: Story = {
   args: {
     nodes: nestedNodes,
   },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Verify top-level items are visible
+    await expect(canvas.getByText("common-1")).toBeInTheDocument();
+    await expect(canvas.getByText("components-default")).toBeInTheDocument();
+
+    // Click a file -> assert onSelect called with node data
+    const rootFile = canvas.getAllByText("golem.yaml")[0]!;
+    await userEvent.click(rootFile);
+    await expect(args.onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "root", name: "golem.yaml", type: "file" }),
+    );
+
+    // Collapse a folder by clicking its chevron button
+    const folderButtons = canvasElement.querySelectorAll("button");
+    // The first chevron button belongs to "common-1" folder
+    const commonChevron = folderButtons[0]!;
+    await userEvent.click(commonChevron);
+
+    // After collapsing, the child "golem.yaml" inside common-1 should be hidden
+    // (but the root golem.yaml and components golem.yaml are still visible)
+    // Re-expand
+    await userEvent.click(commonChevron);
+  },
 };
 
 export const SimpleFiles: Story = {
@@ -70,6 +95,15 @@ export const SimpleFiles: Story = {
       { id: "2", name: "utils.ts", type: "file" },
       { id: "3", name: "README.md", type: "file" },
     ],
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    const indexFile = canvas.getByText("index.ts");
+    await userEvent.click(indexFile);
+    await expect(args.onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "1", name: "index.ts", type: "file" }),
+    );
   },
 };
 

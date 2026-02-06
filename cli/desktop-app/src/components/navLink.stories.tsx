@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import NavLink from "./navLink";
+import { within, expect, userEvent } from "storybook/test";
 
 const meta = {
   title: "Components/NavLink",
@@ -17,6 +18,12 @@ export const Active: Story = {
   parameters: {
     router: { route: "/" },
   },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const link = canvas.getByText("Dashboard");
+    await expect(link).toBeInTheDocument();
+    await expect(link.className).toContain("border-primary-soft");
+  },
 };
 
 export const Inactive: Story = {
@@ -26,5 +33,12 @@ export const Inactive: Story = {
   },
   parameters: {
     router: { route: "/dashboard" },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const link = canvas.getByText("Settings");
+    await expect(link).toBeInTheDocument();
+    await expect(link.className).toContain("text-gray-500");
+    await userEvent.click(link);
   },
 };

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { SidebarMenu } from "./sidebar";
-import { fn } from "storybook/test";
+import { fn, userEvent, within, expect } from "storybook/test";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import {
   LayoutDashboard,
@@ -57,12 +57,29 @@ export const Default: Story = {
   args: {
     menus: fullMenus,
   },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Verify menu items are visible
+    await expect(canvas.getByText("Dashboard")).toBeInTheDocument();
+
+    // Click "Dashboard" -> assert setActiveItem("Dashboard")
+    await userEvent.click(canvas.getByText("Dashboard"));
+    await expect(args.setActiveItem).toHaveBeenCalledWith("Dashboard");
+  },
 };
 
 export const WithActiveItem: Story = {
   args: {
     menus: fullMenus,
     activeItem: "Components",
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Click "APIs" -> assert callback
+    await userEvent.click(canvas.getByText("APIs"));
+    await expect(args.setActiveItem).toHaveBeenCalledWith("APIs");
   },
 };
 

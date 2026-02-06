@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { SectionCard } from "./SectionCard";
-import { fn } from "storybook/test";
+import { fn, userEvent, within, expect } from "storybook/test";
 import type { ComponentExportFunction } from "@/types/component";
 
 const sampleFunctionDetails: ComponentExportFunction = {
@@ -55,6 +55,20 @@ export const Editable: Story = {
     functionDetails: sampleFunctionDetails,
     exportName: "golem:shopping/api",
     functionName: "add-item",
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Clear and type in the textarea
+    const textarea = canvas.getByPlaceholderText("Enter JSON data...");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, '{{"test": true}}');
+    await expect(args.onValueChange).toHaveBeenCalled();
+
+    // Click Invoke button
+    const invokeButton = canvas.getByRole("button", { name: /invoke/i });
+    await userEvent.click(invokeButton);
+    await expect(args.onInvoke).toHaveBeenCalled();
   },
 };
 
@@ -123,6 +137,14 @@ export const HttpHandlerWarning: Story = {
     exportName: "wasi:http/incoming-handler",
     functionName: "handle",
   },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // Verify warning text is visible
+    await expect(
+      canvas.getByText("Cannot invoke HTTP handler directly"),
+    ).toBeInTheDocument();
+  },
 };
 
 export const WithCopyButton: Story = {
@@ -134,5 +156,18 @@ export const WithCopyButton: Story = {
     functionDetails: sampleFunctionDetails,
     exportName: "golem:shopping/api",
     functionName: "add-item",
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+
+    // Click Copy button
+    const copyButton = canvas.getByRole("button", { name: /copy/i });
+    await userEvent.click(copyButton);
+    await expect(args.copyToClipboard).toHaveBeenCalled();
+
+    // Click Reset button
+    const resetButton = canvas.getByRole("button", { name: /reset/i });
+    await userEvent.click(resetButton);
+    await expect(args.onReset).toHaveBeenCalled();
   },
 };
