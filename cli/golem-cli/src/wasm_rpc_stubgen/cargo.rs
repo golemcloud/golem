@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::fs;
-use crate::fs::PathExtra;
 use crate::log::{log_action, log_warn_action, LogColorize};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::StubDefinition;
@@ -128,10 +127,11 @@ pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
             wit_dependencies.insert(
                 format_package_name_without_version(&dep_package.name),
                 WitDependency {
-                    path: naming::wit::package_wit_dep_dir_from_package_dir_name(
-                        &PathExtra::new(&dep_package_sources.dir).file_name_to_string()?,
-                    )
-                    .to_string_lossy()
+                    path: fs::path_to_str(
+                        &naming::wit::package_wit_dep_dir_from_package_dir_name(
+                            fs::file_name_to_str(&dep_package_sources.dir)?,
+                        ),
+                    )?
                     .to_string(),
                 },
             );
@@ -317,8 +317,6 @@ pub fn regenerate_cargo_package_component(
     wit_path: &Path,
     world: Option<String>,
 ) -> anyhow::Result<()> {
-    let cargo_toml_path = PathExtra::new(cargo_toml_path);
-
     log_warn_action(
         "Regenerating",
         format!(
@@ -327,7 +325,7 @@ pub fn regenerate_cargo_package_component(
         ),
     );
 
-    let project_root = cargo_toml_path.parent()?;
+    let project_root = fs::parent_or_err(cargo_toml_path)?;
     let relative_wit_path = wit_path.strip_prefix(project_root).with_context(|| {
         anyhow!(
             "Failed to create relative path for wit dir: {}, project root: {}",
@@ -336,7 +334,7 @@ pub fn regenerate_cargo_package_component(
         )
     })?;
 
-    let raw_manifest = fs::read_to_string(&cargo_toml_path).with_context(|| {
+    let raw_manifest = fs::read_to_string(cargo_toml_path).with_context(|| {
         anyhow!(
             "Failed to read Cargo.toml at {}",
             cargo_toml_path.log_color_highlight()
@@ -503,9 +501,7 @@ pub fn regenerate_cargo_package_component(
         let mut dep = InlineTable::new();
         dep.insert(
             "path",
-            PathExtra::new(PathExtra::new(&package_sources.dir).strip_prefix(project_root)?)
-                .to_string()?
-                .into(),
+            fs::path_to_str(fs::strip_prefix_or_err(&package_sources.dir, project_root)?)?.into(),
         );
 
         dependencies[&dep_name] = toml_edit::value(dep);

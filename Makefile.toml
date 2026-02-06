@@ -521,6 +521,7 @@ dependencies = [
 [tasks.cli-integration-tests-group1]
 dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (1/3)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}

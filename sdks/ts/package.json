@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm --filter @golemcloud/golem-ts-types-core run build && pnpm --filter @golemcloud/golem-ts-typegen run build && pnpm --filter @golemcloud/golem-ts-sdk run build",
+    "build": "pnpm --filter @golemcloud/golem-ts-types-core run build && pnpm --filter @golemcloud/golem-ts-typegen run build && pnpm --filter @golemcloud/golem-ts-sdk run build && pnpm --filter @golemcloud/golem-ts-repl run build",
     "build-agent-template": "pnpm --filter @golemcloud/golem-ts-sdk run build-agent-template",
     "lint": "pnpm -r run lint",
     "test": "pnpm -r run test",

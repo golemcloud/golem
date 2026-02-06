@@ -436,43 +436,25 @@ fn transform(
         |str: &str| -> String { str.replace("app-name", parameters.application_name.as_str()) };
 
     let transform_rust_sdk = |str: &str| -> String {
-        let path_or_version = {
-            if let Some(rust_path) = &parameters.sdk_overrides.rust_path {
-                format!(r#"path = "{}""#, rust_path)
-            } else {
-                format!(
-                    r#"version = "{}""#,
-                    parameters
-                        .sdk_overrides
-                        .rust_version
-                        .as_deref()
-                        .unwrap_or(GOLEM_RUST_VERSION)
-                )
-            }
-        };
-
-        str.replace("GOLEM_RUST_VERSION_OR_PATH", &path_or_version)
+        str.replace(
+            "GOLEM_RUST_VERSION_OR_PATH",
+            &parameters.sdk_overrides.golem_rust_version_or_path(),
+        )
     };
 
     let transform_ts_sdk = |str: &str| -> String {
-        let (sdk_version_or_path, typegen_version_or_path) = {
-            if let Some(ts_packages_path) = parameters.sdk_overrides.ts_packages_path.as_ref() {
-                (
-                    format!("{}/golem-ts-sdk", ts_packages_path),
-                    format!("{}/golem-ts-typegen", ts_packages_path),
-                )
-            } else {
-                let version = parameters
-                    .sdk_overrides
-                    .ts_version
-                    .as_deref()
-                    .unwrap_or(GOLEM_TS_VERSION);
-                (version.to_string(), version.to_string())
-            }
-        };
-
-        str.replace("GOLEM_TS_SDK_VERSION_OR_PATH", &sdk_version_or_path)
-            .replace("GOLEM_TS_TYPEGEN_VERSION_OR_PATH", &typegen_version_or_path)
+        str.replace(
+            "GOLEM_TS_SDK_VERSION_OR_PATH",
+            &parameters
+                .sdk_overrides
+                .ts_package_version_or_path("golem-ts-sdk"),
+        )
+        .replace(
+            "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
+            &parameters
+                .sdk_overrides
+                .ts_package_version_or_path("golem-ts-typegen"),
+        )
     };
 
     let mut transformed = str.as_ref().to_string();

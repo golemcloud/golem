@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::LogColorize;
+use crate::log::{log_warn_action, LogColorize};
 use anyhow::{anyhow, bail, Context, Error};
 use std::cmp::PartialEq;
 use std::fs::{Metadata, OpenOptions};
@@ -20,6 +20,39 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 use wax::{Glob, LinkBehavior, WalkBehavior};
+
+pub fn parent_or_err(path: &Path) -> anyhow::Result<&Path> {
+    path.parent()
+        .ok_or_else(|| anyhow::anyhow!("Path {} has no parent", path.display()))
+}
+
+pub fn strip_prefix_or_err(path: &Path, prefix: impl AsRef<Path>) -> anyhow::Result<&Path> {
+    let prefix = prefix.as_ref();
+    path.strip_prefix(prefix).map_err(|_| {
+        anyhow!(
+            "Path {} does not start with prefix {}",
+            path.display(),
+            prefix.display()
+        )
+    })
+}
+
+pub fn path_to_str(path: &Path) -> anyhow::Result<&str> {
+    path.to_str()
+        .ok_or_else(|| anyhow!("Path {} cannot be converted to string", path.display()))
+}
+
+pub fn file_name_to_str(path: &Path) -> anyhow::Result<&str> {
+    path.file_name()
+        .ok_or_else(|| anyhow!("Path {} has no filename", path.display()))?
+        .to_str()
+        .ok_or_else(|| anyhow!("Filename {} cannot be converted to string", path.display()))
+}
+
+pub fn canonicalize_path(path: &Path) -> anyhow::Result<PathBuf> {
+    path.canonicalize()
+        .map_err(|err| anyhow!("Failed to canonicalize path ({}): {}", path.display(), err))
+}
 
 pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let path = path.as_ref();
@@ -37,20 +70,20 @@ pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
 //    modtime based up-to-date checks (see https://github.com/rust-lang/rust/issues/115982 for more info)
 //  - uses anyhow error with added context
 pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<u64> {
-    let from = PathExtra(from);
-    let to = PathExtra(to);
+    let from = from.as_ref();
+    let to = to.as_ref();
 
     let context = || format!("Failed to copy from {} to {}", from.display(), to.display());
 
-    create_dir_all(to.parent()?)
+    create_dir_all(parent_or_err(to)?)
         .context("Failed to create target dir")
         .with_context(context)?;
 
-    let bytes = std::fs::copy(&from, &to).with_context(context)?;
+    let bytes = std::fs::copy(from, to).with_context(context)?;
 
     OpenOptions::new()
         .write(true)
-        .open(&to)
+        .open(to)
         .and_then(|file| file.set_modified(SystemTime::now()))
         .context("Failed to update target modification time")
         .with_context(context)?;
@@ -64,8 +97,8 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
     to: Q,
     transform: T,
 ) -> anyhow::Result<u64> {
-    let from = PathExtra(from);
-    let to = PathExtra(to);
+    let from = from.as_ref();
+    let to = to.as_ref();
 
     let context = || {
         format!(
@@ -75,11 +108,11 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
         )
     };
 
-    create_dir_all(from.parent()?)
+    create_dir_all(parent_or_err(from)?)
         .context("Failed to create target dir")
         .with_context(context)?;
 
-    let content = read_to_string(&from).with_context(context)?;
+    let content = read_to_string(from).with_context(context)?;
 
     let transformed_content = transform(content)
         .context("Failed to transform source content")
@@ -87,7 +120,7 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
 
     let bytes_count = transformed_content.len();
 
-    write(&to, transformed_content.as_bytes())
+    write(to, transformed_content.as_bytes())
         .context("Failed to write transformed content")
         .with_context(context)?;
 
@@ -112,36 +145,36 @@ pub fn read<P: AsRef<Path>>(path: P) -> anyhow::Result<Vec<u8>> {
 
 // Creates all missing parent directories if necessary and writes str to path.
 pub fn write_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Result<()> {
-    let path = PathExtra(path);
+    let path = path.as_ref();
     let str = str.as_ref();
 
     let context = || anyhow!("Failed to write string to {}", path.log_color_highlight());
 
     let target_parent = path.parent().with_context(context)?;
     create_dir_all(target_parent).with_context(context)?;
-    std::fs::write(&path, str.as_bytes()).with_context(context)
+    std::fs::write(path, str.as_bytes()).with_context(context)
 }
 
 pub fn append_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Result<()> {
-    let path = PathExtra(path);
+    let path = path.as_ref();
     let str = str.as_ref();
 
     let context = || anyhow!("Failed to write string to {}", path.log_color_highlight());
     let mut file = OpenOptions::new()
         .append(true)
-        .open(&path)
+        .open(path)
         .with_context(context)?;
     file.write(str.as_bytes()).with_context(context).map(|_| ())
 }
 
 pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> anyhow::Result<()> {
-    let path = PathExtra(path);
+    let path = path.as_ref();
 
     let context = || anyhow!("Failed to write to {}", path.log_color_highlight());
 
     let target_parent = path.parent().with_context(context)?;
     create_dir_all(target_parent).with_context(context)?;
-    std::fs::write(&path, contents).with_context(context)
+    std::fs::write(path, contents).with_context(context)
 }
 
 pub fn remove<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
@@ -199,92 +232,6 @@ pub fn metadata<P: AsRef<Path>>(path: P) -> anyhow::Result<Metadata> {
     let path = path.as_ref();
     std::fs::metadata(path)
         .with_context(|| anyhow!("Failed to get metadata for {}", path.log_color_highlight()))
-}
-
-// TODO: change it to "extension methods" on path and path buf?
-pub struct PathExtra<P: AsRef<Path>>(P);
-
-impl<P: AsRef<Path>> PathExtra<P> {
-    pub fn new(path: P) -> Self {
-        Self(path)
-    }
-
-    pub fn parent(&self) -> anyhow::Result<&Path> {
-        let path = self.0.as_ref();
-        path.parent().ok_or_else(|| {
-            anyhow!(
-                "Failed to get parent dir for path: {}",
-                path.log_color_highlight()
-            )
-        })
-    }
-
-    pub fn file_name_to_string(&self) -> anyhow::Result<String> {
-        let path = self.0.as_ref();
-        path.file_name()
-            .ok_or_else(|| {
-                anyhow!(
-                    "Failed to get file name for path: {}",
-                    path.log_color_highlight(),
-                )
-            })?
-            .to_os_string()
-            .into_string()
-            .map_err(|_| {
-                anyhow!(
-                    "Failed to convert filename for path: {}",
-                    path.log_color_highlight()
-                )
-            })
-    }
-
-    pub fn to_str(&self) -> anyhow::Result<&str> {
-        let path = self.0.as_ref();
-        path.to_str().ok_or_else(|| {
-            anyhow!(
-                "Failed to convert path to string: {}",
-                path.log_color_highlight()
-            )
-        })
-    }
-
-    pub fn to_string(&self) -> anyhow::Result<String> {
-        Ok(self.to_str()?.to_string())
-    }
-
-    pub fn strip_prefix<Q: AsRef<Path>>(&self, prefix: Q) -> anyhow::Result<PathBuf> {
-        let path = self.0.as_ref();
-        let prefix = prefix.as_ref();
-
-        Ok(path
-            .strip_prefix(prefix)
-            .with_context(|| {
-                anyhow!(
-                    "Failed to strip prefix from path, prefix: {}, path: {}",
-                    prefix.log_color_highlight(),
-                    path.log_color_highlight()
-                )
-            })?
-            .to_path_buf())
-    }
-
-    pub fn as_path(&self) -> &Path {
-        self.0.as_ref()
-    }
-
-    pub fn to_path_buf(&self) -> PathBuf {
-        self.0.as_ref().into()
-    }
-
-    pub fn display(&self) -> std::path::Display<'_> {
-        self.as_path().display()
-    }
-}
-
-impl<P: AsRef<Path>> AsRef<Path> for PathExtra<P> {
-    fn as_ref(&self) -> &Path {
-        self.as_path()
-    }
 }
 
 // TODO: we most probably do not need this anymore
@@ -520,7 +467,7 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
 
     Ok((
         base_dir.as_ref().join(prefix_path),
-        PathExtra::new(resolved_path).to_string()?,
+        path_to_str(&resolved_path)?.to_string(),
     ))
 }
 
@@ -563,9 +510,26 @@ fn normalize_pattern(pattern: &str) -> String {
     pattern.replace('\\', "/")
 }
 
+pub fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        log_warn_action(
+            "Deleting",
+            format!("{} {}", context, path.log_color_highlight()),
+        );
+        remove(path).with_context(|| {
+            anyhow!(
+                "Failed to delete {}, path: {}",
+                context.log_color_highlight(),
+                path.log_color_highlight()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
-    use crate::fs::resolve_relative_glob;
+    use crate::fs;
     use assert2::check;
     use std::path::PathBuf;
     use test_r::test;
@@ -574,17 +538,20 @@ mod test {
     fn resolve_relative_globs() {
         let base_dir = PathBuf::from("somedir/somewhere");
 
-        check!(resolve_relative_glob(&base_dir, "").unwrap() == (base_dir.clone(), "".to_string()));
         check!(
-            resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap()
+            fs::resolve_relative_glob(&base_dir, "").unwrap() == (base_dir.clone(), "".to_string())
+        );
+        check!(
+            fs::resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap()
                 == (base_dir.clone(), "somepath/a/b/c".to_string())
         );
         check!(
-            resolve_relative_glob(&base_dir, "../../target").unwrap()
+            fs::resolve_relative_glob(&base_dir, "../../target").unwrap()
                 == (base_dir.join("../.."), "target".to_string())
         );
         check!(
-            resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap()
+            fs::resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..")
+                .unwrap()
                 == (base_dir.join("../../../"), "target/a".to_string())
         );
     }

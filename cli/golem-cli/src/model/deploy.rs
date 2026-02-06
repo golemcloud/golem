@@ -15,6 +15,7 @@
 use crate::command::shared_args::{DeployArgs, ForceBuildArg};
 use crate::model::worker::WorkerName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_templates::model::GuestLanguage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
@@ -48,4 +49,5 @@ pub struct DeployConfig {
     pub approve_staging_steps: bool,
     pub force_build: Option<ForceBuildArg>,
     pub deploy_args: DeployArgs,
+    pub repl_bridge_sdk_target: Option<GuestLanguage>,
 }
