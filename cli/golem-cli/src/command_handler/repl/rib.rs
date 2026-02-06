@@ -22,7 +22,7 @@ use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::text::component::ComponentReplStartedView;
-use crate::model::text::fmt::log_error;
+use crate::log::log_error;
 use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;

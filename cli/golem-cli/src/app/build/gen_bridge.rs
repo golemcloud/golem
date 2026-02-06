@@ -10,7 +10,7 @@ use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent};
 use crate::model::app::{BridgeSdkTarget, CustomBridgeSdkTarget};
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
-use crate::model::text::fmt::log_error;
+use crate::log::log_error;
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::agent::wit_naming::ToWitNaming;

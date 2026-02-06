@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::error::AppValidationError;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::{
@@ -41,8 +40,7 @@ use crate::command_handler::repl::ReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
-use crate::log::{logln, set_log_output, Output};
-use crate::model::text::fmt::log_error;
+use crate::log::{log_anyhow_error, logln, set_log_output, Output};
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;
@@ -237,22 +235,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         };
 
         result.unwrap_or_else(|error| {
-            if error.downcast_ref::<NonSuccessfulExit>().is_some() {
-                // NOP
-            } else if error
-                .downcast_ref::<Arc<anyhow::Error>>()
-                .and_then(|err| err.downcast_ref::<AppValidationError>())
-                .is_some()
-                || error.downcast_ref::<AppValidationError>().is_some()
-            {
-                // App validation errors are already formatted and usually contain multiple
-                // errors (and warns)
-                logln("");
-                logln(format!("{error:#}"));
-            } else {
-                logln("");
-                log_error(format!("{error:#}"));
-            }
+            log_anyhow_error(&error);
             ExitCode::FAILURE
         })
     }

@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::error::AppValidationError;
+use crate::error::NonSuccessfulExit;
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
+use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use terminal_size::terminal_size;
 use textwrap::WordSplitter;
 use tracing::debug;
@@ -173,6 +176,36 @@ pub fn set_log_output(output: Output) {
     LOG_STATE.write().unwrap().set_output(output);
 }
 
+pub fn log_anyhow_error(error: &anyhow::Error) {
+    if error.downcast_ref::<NonSuccessfulExit>().is_some() {
+        // NOP
+    } else if error
+        .downcast_ref::<Arc<anyhow::Error>>()
+        .and_then(|err| err.downcast_ref::<AppValidationError>())
+        .is_some()
+        || error.downcast_ref::<AppValidationError>().is_some()
+    {
+        // App validation errors are already formatted and usually contain multiple
+        // errors (and warns)
+        logln("");
+        logln(format!("{error:#}"));
+    } else {
+        log_error(format!("{error:#}"));
+    }
+}
+
+pub fn log_error<S: AsRef<str>>(message: S) {
+    logln(format!(
+        "{} {}",
+        "error:".log_color_error(),
+        message.as_ref()
+    ));
+}
+
+pub fn log_warn<S: AsRef<str>>(message: S) {
+    logln(format!("{} {}", "warn:".log_color_warn(), message.as_ref()));
+}
+
 pub fn log_action(action: &str, subject: impl AsRef<str>) {
     logln_internal(&format!(
         "{} {}",
@@ -204,6 +237,27 @@ pub fn log_failed_to(subject: impl AsRef<str>) {
         "Failed",
         &format!("to {} [{}]", subject.as_ref(), "ERROR".log_color_error(),),
     );
+}
+
+pub fn logged_failed_to(error: anyhow::Error, subject: impl AsRef<str>) -> anyhow::Result<()> {
+    log_failed_to(subject);
+    let _indent = LogIndent::new();
+    log_anyhow_error(&error);
+    Err(anyhow!(NonSuccessfulExit))
+}
+
+pub fn logged_finished_or_failed_to(
+    result: anyhow::Result<()>,
+    finished_subject: impl AsRef<str>,
+    failed_to_subject: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    match result {
+        Ok(()) => {
+            log_finished_ok(finished_subject);
+            Ok(())
+        }
+        Err(err) => logged_failed_to(err, failed_to_subject),
+    }
 }
 
 pub fn log_warn_action(action: &str, subject: impl AsRef<str>) {

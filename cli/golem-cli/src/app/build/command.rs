@@ -31,7 +31,7 @@ use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
-use crate::model::text::fmt::log_error;
+use crate::log::log_error;
 use crate::process::{with_hidden_output_unless_error, CommandExt};
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;

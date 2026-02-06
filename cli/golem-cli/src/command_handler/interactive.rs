@@ -15,11 +15,10 @@
 use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_action, log_warn_action, logln, LogColorize};
+use crate::log::{log_action, log_error, log_warn, log_warn_action, logln, LogColorize};
 use crate::model::app::{BinaryComponentSource, DependencyType};
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
-use crate::model::text::fmt::{log_error, log_warn};
 use crate::model::worker::WorkerName;
 use crate::model::NewInteractiveApp;
 use anyhow::bail;
@@ -865,9 +864,11 @@ fn confirm<M: AsRef<str>>(
         Ok(result) => Ok(result),
         Err(error) => {
             if is_interactive_not_available_inquire_error(&error) {
+                logln("");
                 log_warn(
-                    "The current input device is not an interactive one,\ndefaulting to \"false\"",
+                    "The current input device is not an interactive one, defaulting to \"false\"",
                 );
+                logln("");
                 Ok(false)
             } else {
                 Err(error.into())

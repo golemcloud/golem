@@ -30,8 +30,9 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_failed_to, log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date,
-    log_warn_action, logln, LogColorize, LogIndent, LogOutput, Output,
+    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
+    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
+    logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{
     ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
@@ -43,7 +44,7 @@ use crate::model::deploy::{
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
 use crate::model::text::diff::log_unified_diff;
-use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
+use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
@@ -293,16 +294,8 @@ impl AppCommandHandler {
             )
             .await;
 
-        match &result {
-            Ok(_) => {
-                log_finished_ok("building");
-            }
-            Err(_) => {
-                log_failed_to("build application");
-            }
-        }
-
-        result
+        logln("");
+        logged_finished_or_failed_to(result, "building", "build application")
     }
 
     pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
@@ -313,16 +306,8 @@ impl AppCommandHandler {
             )
             .await;
 
-        match &result {
-            Ok(_) => {
-                log_finished_ok("cleaning");
-            }
-            Err(_) => {
-                log_failed_to("clean application");
-            }
-        }
-
-        result
+        logln("");
+        logged_finished_or_failed_to(result, "cleaning", "clean application")
     }
 
     pub async fn cmd_deploy(
@@ -356,6 +341,10 @@ impl AppCommandHandler {
             }
         };
 
+        logln("");
+        log_action("Summary", "");
+        let _indent = LogIndent::new();
+
         fn logged_post_deploy_result(post_deploy_result: PostDeployResult) -> anyhow::Result<()> {
             match post_deploy_result {
                 Ok(ok) => {
@@ -383,20 +372,16 @@ impl AppCommandHandler {
                 }
                 Err(err) => match err {
                     PostDeployError::PrepareError(err) => {
-                        log_failed_to("prepare deployment steps");
-                        Err(err)
+                        logged_failed_to(err, "prepare deployment steps")
                     }
                     PostDeployError::AgentUpdateError(err) => {
-                        log_failed_to("update agents");
-                        Err(err)
+                        logged_failed_to(err, "update agents")
                     }
                     PostDeployError::AgentRedeployError(err) => {
-                        log_failed_to("redeploy agents");
-                        Err(err)
+                        logged_failed_to(err, "redeploy agents")
                     }
                     PostDeployError::AgentDeleteError(err) => {
-                        log_failed_to("delete agents");
-                        Err(err)
+                        logged_failed_to(err, "delete agents")
                     }
                 },
             }
@@ -445,29 +430,15 @@ impl AppCommandHandler {
                     Err(anyhow!(NonSuccessfulExit))
                 }
                 DeployError::BuildError(err) => {
-                    log_failed_to("build application for deployment");
-                    Err(err)
+                    logged_failed_to(err, "build application for deployment")
                 }
-                DeployError::PrepareError(err) => {
-                    log_failed_to("prepare deployment");
-                    Err(err)
-                }
-                DeployError::PlanError(err) => {
-                    log_failed_to("plan");
-                    Err(err)
-                }
+                DeployError::PrepareError(err) => logged_failed_to(err, "prepare deployment"),
+                DeployError::PlanError(err) => logged_failed_to(err, "plan"),
                 DeployError::EnvironmentCheckError(err) => {
-                    log_failed_to("check environment");
-                    Err(err)
+                    logged_failed_to(err, "check environment")
                 }
-                DeployError::StagingError(err) => {
-                    log_failed_to("stage");
-                    Err(err)
-                }
-                DeployError::DeployError(err) => {
-                    log_failed_to("deploy");
-                    Err(err)
-                }
+                DeployError::StagingError(err) => logged_failed_to(err, "stage"),
+                DeployError::DeployError(err) => logged_failed_to(err, "deploy"),
                 DeployError::RollbackError(err) => {
                     log_failed_to("rollback");
                     Err(err)

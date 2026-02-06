@@ -16,7 +16,7 @@ use crate::error::HintError;
 use crate::log::{logln, LogColorize};
 use crate::model::app_raw::Environment;
 use crate::model::text::environment::format_resolved_environment_identity;
-use crate::model::text::fmt::log_warn;
+use crate::log::log_warn;
 use anyhow::bail;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};

@@ -25,9 +25,7 @@ use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
-use crate::log::{
-    log_action, log_error_action, log_failed_to, log_warn_action, logln, LogColorize, LogIndent,
-};
+use crate::log::{log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
     agent_interface_name, function_params_types, show_exported_agent_constructors,
@@ -35,7 +33,7 @@ use crate::model::component::{
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{format_export, log_error, log_fuzzy_match, log_text_view, log_warn};
+use crate::model::text::fmt::{format_export, log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
     AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,

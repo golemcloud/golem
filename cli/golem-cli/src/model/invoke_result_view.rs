@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::component::function_result_types;
-use crate::model::text::fmt::log_error;
+use crate::log::log_error;
 use crate::model::wave::type_wave_compatible;
 use anyhow::{anyhow, bail};
 use golem_client::model::ComponentDto;
