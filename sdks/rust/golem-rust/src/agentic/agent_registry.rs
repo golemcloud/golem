@@ -91,10 +91,10 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
     enriched.map(|e| e.to_agent_type())
 }
 
-pub fn register_principal(principal: Principal) {
+pub fn register_principal(principal: &Principal) {
     let state = get_state();
 
-    *state.initialized_principal.borrow_mut() = Some(principal);
+    *state.initialized_principal.borrow_mut() = Some(principal.clone());
 }
 
 pub fn get_principal() -> Option<Principal> {
