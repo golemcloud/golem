@@ -1234,7 +1234,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     )
     .unwrap();
 
-    //ctx.start_server().await;
+    ctx.start_server().await;
 
     let outputs = ctx
         .cli([
