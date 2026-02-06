@@ -935,6 +935,7 @@ script = '''
 exec --fail-on-error cargo install --profile dev-release --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
 '''
 
+# Requires lld to be installed, e.g., on macOS `brew install lld` can be used
 [tasks.install-golem-dev-release]
 description = "Install golem (dev-release)"
 env = { GOLEM_BUILD_SKIP_SHADOW = 1, RUSTFLAGS = "-C link-arg=-fuse-ld=lld" }
