@@ -188,8 +188,9 @@ components:
       # LLM providers
       # ------------------------------------------------------------------------------------------------------------
       ## Anthropic
-       - type: wasm
-         url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0-dev.1/golem_llm_anthropic-dev.wasm
+      # FIXME: reenable
+      # - type: wasm
+      #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0-dev.1/golem_llm_anthropic-dev.wasm
 
       ## OpenAI
       # - type: wasm
@@ -214,8 +215,9 @@ components:
       # Code execution providers
       # ------------------------------------------------------------------------------------------------------------
       ## Python and JavaScript
-       - type: wasm
-         url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0-dev.1/golem_exec-dev.wasm
+      # FIXME: reenable
+      # - type: wasm
+      #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0-dev.1/golem_exec-dev.wasm
 
       ## Python only
       # - type: wasm
@@ -264,8 +266,9 @@ components:
       # Speech-to-text providers
       # ------------------------------------------------------------------------------------------------------------
       ## AWS
-       - type: wasm
-         url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0-dev.1/golem_stt_aws-dev.wasm
+      # FIXME: reenable
+      # - type: wasm
+      #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0-dev.1/golem_stt_aws-dev.wasm
 
       ## Azure
       # - type: wasm

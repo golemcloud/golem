@@ -72,7 +72,7 @@ use golem_worker_executor::model::{
     ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::preview2::golem::durability;
-use golem_worker_executor::preview2::{golem_agent, golem_api_1_x};
+use golem_worker_executor::preview2::golem_api_1_x;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -1148,7 +1148,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_worker_executor::preview2::golem::agent::host::add_to_linker_get_host(
+            &mut linker,
+            get_durable_ctx,
+        )?;
         golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

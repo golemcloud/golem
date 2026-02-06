@@ -1,6 +1,7 @@
 package golem:api;
 
 world golem {
+  import golem:agent/host;
   import golem:api/host@1.3.0;
   import golem:api/context@1.3.0;
   import golem:api/oplog@1.3.0;

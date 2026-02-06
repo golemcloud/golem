@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-
 #[cfg(test)]
 test_r::enable!();
 
@@ -251,36 +247,6 @@ pub use transaction::*;
 
 #[cfg(feature = "macro")]
 pub use golem_rust_macro::*;
-
-impl Display for PromiseId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
-    }
-}
-
-impl FromStr for PromiseId {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() == 2 {
-            let agent_id = AgentId::from_str(parts[0]).map_err(|_| {
-                format!("invalid agent id: {s} - expected format: <component_id>/<agent_id>")
-            })?;
-            let oplog_idx = parts[1]
-                .parse()
-                .map_err(|_| format!("invalid oplog index: {s} - expected integer"))?;
-            Ok(Self {
-                agent_id,
-                oplog_idx,
-            })
-        } else {
-            Err(format!(
-                "invalid promise id: {s} - expected format: <agent_id>/<oplog_idx>"
-            ))
-        }
-    }
-}
 
 /// Awaits a promise blocking the execution of the agent. The agent is going to be
 /// suspended until the promise is completed.
