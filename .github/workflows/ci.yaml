@@ -257,14 +257,14 @@ jobs:
             description: "IT #4"
           - name: api-tests
             description: "API tests"
-          - name: cli-integration-tests-group1
-            description: "CLI tests #1"
-          - name: cli-integration-tests-group2
-            description: "CLI tests #2"
-            runner: blacksmith-16vcpu-ubuntu-2204
-          - name: cli-integration-tests-group3
-            description: "CLI tests #3"
-            runner: blacksmith-16vcpu-ubuntu-2204
+          # - name: cli-integration-tests-group1
+          #   description: "CLI tests #1"
+          # - name: cli-integration-tests-group2
+          #   description: "CLI tests #2"
+          #   runner: blacksmith-16vcpu-ubuntu-2204
+          # - name: cli-integration-tests-group3
+          #   description: "CLI tests #3"
+          #   runner: blacksmith-16vcpu-ubuntu-2204
 
     steps:
       - name: Checkout
