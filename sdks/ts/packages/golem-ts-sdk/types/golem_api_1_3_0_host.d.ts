@@ -157,19 +157,9 @@ declare module 'golem:api/host@1.3.0' {
   export type Uuid = golemRpc022Types.Uuid;
   export type ValueAndType = golemRpc022Types.ValueAndType;
   export type AgentId = golemRpc022Types.AgentId;
+  export type PromiseId = golemRpc022Types.PromiseId;
+  export type OplogIndex = golemRpc022Types.OplogIndex;
   export type Pollable = wasiIo023Poll.Pollable;
-  /**
-   * An index into the persistent log storing all performed operations of an agent
-   */
-  export type OplogIndex = bigint;
-  /**
-   * A promise ID is a value that can be passed to an external Golem API to complete that promise
-   * from an arbitrary external source, while Golem agents can await for this completion.
-   */
-  export type PromiseId = {
-    agentId: AgentId;
-    oplogIdx: OplogIndex;
-  };
   /**
    * Represents a Golem component's version
    */
