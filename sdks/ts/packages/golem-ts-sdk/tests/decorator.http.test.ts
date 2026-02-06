@@ -187,7 +187,7 @@ describe('Http Agent class', () => {
 
   it('should register complex HTTP endpoint details with endpoint details', () => {
     const complexHttpAgentMetadata = AgentMethodRegistry.get(ComplexHttpAgentClassName.value)?.get(
-      'greetCustom2',
+      'greetCustom',
     );
 
     if (!complexHttpAgentMetadata) {
