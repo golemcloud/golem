@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-
 #[cfg(test)]
 test_r::enable!();
 
