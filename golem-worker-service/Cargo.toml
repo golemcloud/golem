@@ -21,10 +21,10 @@ test = false
 path = "src/lib.rs"
 harness = false
 
-# [[test]]
-# name = "session-store"
-# path = "tests/session_store.rs"
-# harness = false
+[[test]]
+name = "session-store"
+path = "tests/session_store.rs"
+harness = false
 
 # [[bench]]
 # name = "tree"
