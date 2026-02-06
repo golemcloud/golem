@@ -224,12 +224,17 @@ export class AgentService {
     functionName: string,
     payload: { params?: unknown[] } | unknown[] | undefined,
   ): Promise<InvokeResponse> => {
-    // Get component name for ephemeral agent identification
+    // Get component name for proper identification
     const component = await this.componentService.getComponentById(
       appId,
       componentId,
     );
-    const ephemeralAgentName = `${component?.componentName}/-`;
+
+    // Extract agent type from function name (e.g. "pack:ts/human-agent.{fn}" -> "human-agent")
+    const interfacePart = functionName.split(".{")[0] || "";
+    const agentType = interfacePart.split("/").pop() || "";
+    const ephemeralId = `desktop-app-${crypto.randomUUID()}`;
+    const ephemeralAgentName = `${component?.componentName}/${agentType}("${ephemeralId}")`;
 
     // Convert payload to individual WAVE-formatted arguments using enhanced converter
     let waveArgs: string[];

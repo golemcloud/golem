@@ -93,13 +93,15 @@ export default function AgentLive() {
         appId!,
         componentId,
         agentName,
-        `${
-          debouncedActiveTab === "log" ? "" : "ExportedFunctionInvoked"
+        `${debouncedActiveTab === "log" ? "" : "ExportedFunctionInvoked"
         } ${search}`,
       )
       .then(response => {
         const terminalData = [] as Terminal[];
         const invocationList = [] as Invocation[];
+        if (!Array.isArray(response)) {
+          return;
+        }
         (response as OplogWithIndex[]).forEach((_item: OplogWithIndex) => {
           const item = _item[1];
           if (item.type === "ExportedFunctionInvoked") {
