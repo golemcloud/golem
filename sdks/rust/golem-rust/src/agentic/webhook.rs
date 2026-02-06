@@ -12,57 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::await_pollable;
-use crate::bindings::golem::api::host::GetPromiseResult;
-use crate::golem_agentic::golem::agent::host::AgentWebhook;
-use crate::{get_promise, PromiseId};
+use crate::{await_promise, create_promise, PromiseId};
 use std::future::Future;
 use std::future::IntoFuture;
 use std::pin::Pin;
-use std::str::FromStr;
 
 pub fn create_webhook() -> WebhookHandler {
-    let agent_webhook = crate::golem_agentic::golem::agent::host::create_webhook();
+    let promise_id = create_promise();
 
-    let url = agent_webhook.get_callback_url();
+    let webhook_url = crate::golem_agentic::golem::agent::host::create_webhook(&promise_id);
 
-    WebhookHandler::new(url, agent_webhook)
+    WebhookHandler::new(webhook_url, promise_id)
 }
 
 pub struct WebhookHandler {
     url: String,
-    inner: AgentWebhook,
+    promise_id: PromiseId,
 }
 
 impl WebhookHandler {
-    fn new(url: String, inner: AgentWebhook) -> WebhookHandler {
-        WebhookHandler { url, inner }
+    fn new(url: String, promise_id: PromiseId) -> WebhookHandler {
+        WebhookHandler { url, promise_id }
     }
+
     async fn wait(self) -> WebhookRequestPayload {
-        let promise_id = self.url.trim_end_matches('/').rsplit('/').next();
+        let result = await_promise(&self.promise_id).await;
 
-        match promise_id {
-            Some(promise_id) => {
-                let promise_id = PromiseId::from_str(promise_id).expect(&format!(
-                    "Internal Error: Invalid webhook URL: {}",
-                    self.url
-                ));
-
-                let promise_result: GetPromiseResult = get_promise(&promise_id);
-
-                let pollable = self.inner.subscribe();
-
-                await_pollable(pollable).await;
-
-                let bytes = promise_result.get().unwrap();
-
-                WebhookRequestPayload { payload: bytes }
-            }
-
-            None => {
-                panic!("Internal Error: Invalid webhook URL: {}", self.url);
-            }
-        }
+        WebhookRequestPayload { payload: result }
     }
 
     pub fn url(&self) -> &str {
