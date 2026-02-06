@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { LogViewer } from "./log-viewer";
-import { fn } from "storybook/test";
+import { fn, userEvent, expect, screen } from "storybook/test";
 
 const meta = {
   title: "Components/LogViewer",
@@ -28,6 +28,23 @@ export const SuccessLog: Story = {
 [2024-01-15T10:30:10Z] Worker ready: shopping-cart-worker-001
 [2024-01-15T10:30:10Z] Deployment completed successfully`,
   },
+  play: async () => {
+    // Dialog renders in a portal, use screen
+    const title = await screen.findByText("Component deployed successfully");
+    await expect(title).toBeInTheDocument();
+
+    // Verify status badge
+    await expect(screen.getByText("Deploy")).toBeInTheDocument();
+
+    // Verify log content
+    await expect(
+      screen.getByText(/Deployment completed successfully/),
+    ).toBeInTheDocument();
+
+    // Click Copy button
+    const copyButton = screen.getByRole("button", { name: /copy/i });
+    await userEvent.click(copyButton);
+  },
 };
 
 export const ErrorLog: Story = {
@@ -45,6 +62,21 @@ export const ErrorLog: Story = {
        at add_item (component.wasm:0x1a2b3)
        at handle_request (component.wasm:0x4d5e6)
 [2024-01-15T10:45:01Z] Worker state rolled back to last checkpoint`,
+  },
+  play: async () => {
+    // Dialog renders in a portal, use screen
+    const title = await screen.findByText(
+      "Failed to invoke function add-item",
+    );
+    await expect(title).toBeInTheDocument();
+
+    // Verify error status elements
+    await expect(screen.getByText("Invoke")).toBeInTheDocument();
+    await expect(
+      screen.getByText(
+        "Operation failed. Review the logs above for details.",
+      ),
+    ).toBeInTheDocument();
   },
 };
 
