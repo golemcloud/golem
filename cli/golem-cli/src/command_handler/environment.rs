@@ -18,7 +18,9 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_action, log_error, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent};
+use crate::log::{
+    log_action, log_error, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
+};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };

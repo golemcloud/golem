@@ -235,7 +235,7 @@ pub fn log_finished_up_to_date(subject: impl AsRef<str>) {
 pub fn log_failed_to(subject: impl AsRef<str>) {
     log_error_action(
         "Failed",
-        &format!("to {} [{}]", subject.as_ref(), "ERROR".log_color_error(),),
+        format!("to {} [{}]", subject.as_ref(), "ERROR".log_color_error(),),
     );
 }
 

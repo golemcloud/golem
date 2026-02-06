@@ -22,7 +22,7 @@ use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, PostDeployArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames,
+    BuildArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames, PostDeployArgs,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;

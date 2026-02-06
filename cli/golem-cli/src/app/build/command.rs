@@ -23,6 +23,7 @@ use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
 use crate::error::NonSuccessfulExit;
 use crate::fs;
+use crate::log::log_error;
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
 };
@@ -31,7 +32,6 @@ use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
-use crate::log::log_error;
 use crate::process::{with_hidden_output_unless_error, CommandExt};
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;

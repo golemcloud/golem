@@ -25,7 +25,10 @@ use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
-use crate::log::{log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln, LogColorize, LogIndent};
+use crate::log::{
+    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    LogColorize, LogIndent,
+};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
     agent_interface_name, function_params_types, show_exported_agent_constructors,
