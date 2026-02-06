@@ -892,10 +892,10 @@ mod tests {
     pub trait WebhookAgent {
         fn new(name: String) -> Self;
 
-        async fn create_webhook_and_trigger(&self, name: String) -> String;
+        async fn create_webhook_and_trigger(&self) -> String;
     }
 
-    fn webhook_placeholder(url: String) -> String {
+    fn webhook_placeholder(_url: &str) -> String {
         "webhook triggered".to_string()
     }
 
@@ -907,14 +907,14 @@ mod tests {
             Self
         }
 
-        async fn create_webhook_and_trigger(&self, name: String) -> String {
+        async fn create_webhook_and_trigger(&self) -> String {
             let webhook = create_webhook();
 
-            webhook_placeholder(webhook.url);
+            webhook_placeholder(webhook.url());
 
             let request = webhook.await;
 
-            request.json().unwrap();
+            request.json().unwrap()
         }
     }
 }

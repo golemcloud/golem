@@ -30,7 +30,7 @@ pub fn create_webhook() -> WebhookHandler {
 }
 
 pub struct WebhookHandler {
-    pub url: String,
+    url: String,
     inner: AgentWebhook,
 }
 
@@ -63,6 +63,10 @@ impl WebhookHandler {
                 panic!("Internal Error: Invalid webhook URL: {}", self.url);
             }
         }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
