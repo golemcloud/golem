@@ -1232,24 +1232,6 @@ impl From<golem_api_1_x::host::RevertAgentTarget>
     }
 }
 
-impl From<PromiseId> for golem_api_1_x::host::PromiseId {
-    fn from(promise_id: PromiseId) -> Self {
-        golem_api_1_x::host::PromiseId {
-            agent_id: promise_id.worker_id.into(),
-            oplog_idx: promise_id.oplog_idx.into(),
-        }
-    }
-}
-
-impl From<golem_api_1_x::host::PromiseId> for PromiseId {
-    fn from(host: golem_api_1_x::host::PromiseId) -> Self {
-        Self {
-            worker_id: host.agent_id.into(),
-            oplog_idx: OplogIndex::from_u64(host.oplog_idx),
-        }
-    }
-}
-
 impl From<&RetryConfig> for golem_api_1_x::host::RetryPolicy {
     fn from(value: &RetryConfig) -> Self {
         Self {

@@ -1,16 +1,8 @@
 package golem:agent;
 
 interface host {
-    use golem:rpc/types@0.2.2.{component-id, uuid};
+    use golem:rpc/types@0.2.2.{component-id, uuid, promise-id};
     use common.{agent-error, agent-type, data-value, registered-agent-type};
-    use wasi:io/poll@0.2.3.{pollable};
-
-    /// A completable webhook owned by the current agent and an associated url that can be called
-    /// via a get request to complete the webhook.
-    resource agent-webhook {
-      get-callback-url: func() -> string;
-      subscribe: func() -> pollable;
-    }
 
     /// Gets all the registered agent types
     get-all-agent-types: func() -> list<registered-agent-type>;
@@ -26,10 +18,10 @@ interface host {
     /// and an optional phantom ID
     parse-agent-id: func(agent-id: string) -> result<tuple<string, data-value, option<uuid>>, agent-error>;
 
-    /// Creates a webhook structure that can be used to call webhook driven apis.
-    /// Blocking on the returned pollable will block until the returned url is called with a get request.
+    /// Creates a webhook that can be used to integrate with webhook driven apis.
+    /// When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
     /// Note the following behaviours:
     /// * Only agents whoose agent types are _currently_ deployed via an http api are allowed to create a webhook. Calling this function while the agent
     ///    is not deployed via an http api will trap.
-    create-webhook: func() -> agent-webhook;
+    create-webhook: func(promise-id: promise-id) -> string;
 }

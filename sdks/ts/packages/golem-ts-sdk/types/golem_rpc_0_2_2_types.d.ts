@@ -59,6 +59,11 @@ declare module 'golem:rpc/types@0.2.2' {
   export type Datetime = wasiClocks023WallClock.Datetime;
   export type Pollable = wasiIo023Poll.Pollable;
   /**
+   * An index into the persistent log storing all performed operations of an agent
+   * FIXME: move into golem:api/host
+   */
+  export type OplogIndex = bigint;
+  /**
    * UUID
    */
   export type Uuid = {
@@ -82,9 +87,19 @@ declare module 'golem:rpc/types@0.2.2' {
   };
   /**
    * Represents a Golem account
+   * FIXME: move into golem:api/host
    */
   export type AccountId = {
     uuid: Uuid;
+  };
+  /**
+   * A promise ID is a value that can be passed to an external Golem API to complete that promise
+   * from an arbitrary external source, while Golem agents can await for this completion.
+   * FIXME: move into golem:api/host
+   */
+  export type PromiseId = {
+    agentId: AgentId;
+    oplogIdx: OplogIndex;
   };
   /**
    * The index type used in `wit-value` and `wit-type` to identify nodes
