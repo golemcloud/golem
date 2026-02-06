@@ -24,3 +24,4 @@ dist-ssr
 *.sw?
 # Test coverage
 coverage
+storybook-static
