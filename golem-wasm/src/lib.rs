@@ -94,8 +94,8 @@ pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use golem_rpc_0_2_x::types::{
-    AccountId, AgentId, ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri,
-    Uuid, WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
+    AccountId, AgentId, ComponentId, FutureInvokeResult, NodeIndex, PromiseId, ResourceMode,
+    RpcError, Uri, Uuid, WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(not(feature = "host"))]
@@ -132,8 +132,8 @@ pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host")]
 pub use golem_rpc_0_2_x::types::{
-    AccountId, AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri,
-    Uuid, WitNode, WitType, WitTypeNode, WitValue,
+    AccountId, AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, PromiseId, ResourceMode,
+    RpcError, Uri, Uuid, WitNode, WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(any(feature = "host", feature = "stub"))]
@@ -607,6 +607,38 @@ impl TryFrom<Uri> for AgentId {
                     "Invalid URN: expected format 'urn:worker:<component_id>/<worker_name>', got '{urn}'",
                 )),
             }
+        }
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::fmt::Display for PromiseId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::str::FromStr for PromiseId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 2 {
+            let agent_id = AgentId::from_str(parts[0]).map_err(|_| {
+                format!("invalid agent id: {s} - expected format: <component_id>/<agent_id>")
+            })?;
+            let oplog_idx = parts[1]
+                .parse()
+                .map_err(|_| format!("invalid oplog index: {s} - expected integer"))?;
+            Ok(Self {
+                agent_id,
+                oplog_idx,
+            })
+        } else {
+            Err(format!(
+                "invalid promise id: {s} - expected format: <agent_id>/<oplog_idx>"
+            ))
         }
     }
 }

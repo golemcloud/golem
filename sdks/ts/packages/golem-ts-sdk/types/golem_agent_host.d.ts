@@ -21,17 +21,20 @@ declare module 'golem:agent/host' {
    * @throws AgentError
    */
   export function parseAgentId(agentId: string): [string, DataValue, Uuid | undefined];
+  /**
+   * Creates a webhook that can be used to integrate with webhook driven apis.
+   * When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
+   * Note the following behaviours:
+   * * Only agents whoose agent types are _currently_ deployed via an http api are allowed to create a webhook. Calling this function while the agent
+   *    is not deployed via an http api will trap.
+   */
+  export function createWebhook(promiseId: PromiseId): string;
   export type ComponentId = golemRpc022Types.ComponentId;
   export type Uuid = golemRpc022Types.Uuid;
+  export type PromiseId = golemRpc022Types.PromiseId;
   export type AgentError = golemAgentCommon.AgentError;
   export type AgentType = golemAgentCommon.AgentType;
   export type DataValue = golemAgentCommon.DataValue;
-  /**
-   * Associates an agent type with a component that implements it
-   */
-  export type RegisteredAgentType = {
-    agentType: AgentType;
-    implementedBy: ComponentId;
-  };
+  export type RegisteredAgentType = golemAgentCommon.RegisteredAgentType;
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

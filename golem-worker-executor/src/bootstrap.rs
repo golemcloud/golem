@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::preview2::{golem_agent, golem_api_1_x, golem_durability};
+use crate::preview2::{golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
@@ -208,7 +208,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        crate::preview2::golem::agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

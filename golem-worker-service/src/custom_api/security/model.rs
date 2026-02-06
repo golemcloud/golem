@@ -17,9 +17,10 @@ use openidconnect::{CsrfToken, Nonce};
 use url::Url;
 use uuid::Uuid;
 
+#[derive(Debug, Clone)]
 pub struct SessionId(pub Uuid);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PendingOidcLogin {
     pub scheme_id: SecuritySchemeId,
     pub original_uri: String,

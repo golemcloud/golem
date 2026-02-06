@@ -25,7 +25,9 @@ pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use webhook::*;
 pub use wit_utils::*;
+
 mod agent;
 mod agent_impl;
 mod agent_initiator;
@@ -39,4 +41,5 @@ mod resolved_agent;
 mod schema;
 mod unstructured_binary;
 mod unstructured_text;
+mod webhook;
 mod wit_utils;
