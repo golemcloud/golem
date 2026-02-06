@@ -55,9 +55,7 @@ impl Guest for Component {
 
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
 
-        register_principal(
-            &principal
-        );
+        register_principal(&principal);
 
         with_agent_initiator(
             |initiator| async move { initiator.initiate(input, principal).await.map(|_| ()) },
@@ -124,16 +122,10 @@ impl LoadSnapshotGuest for Component {
         let (agent_type_name, agent_parameters, _) =
             parse_agent_id(&id).map_err(|e| e.to_string())?;
 
-        let principal = get_principal().expect(
-            "Failed to get initialized principal",
-        );
+        let principal = get_principal().expect("Failed to get initialized principal");
 
         with_agent_initiator(
-            |initiator| async move {
-                initiator
-                    .initiate(agent_parameters, principal)
-                    .await
-            },
+            |initiator| async move { initiator.initiate(agent_parameters, principal).await },
             &AgentTypeName(agent_type_name),
         )
         .map_err(|e| e.to_string())?;
