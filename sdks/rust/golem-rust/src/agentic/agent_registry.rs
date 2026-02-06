@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::extended_agent_type::ExtendedAgentType;
-use crate::agentic::{EnrichedElementSchema, ExtendedDataSchema};
+use crate::agentic::{EnrichedElementSchema, ExtendedDataSchema, Principal};
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::exports::golem::agent::guest::AgentType,
@@ -30,6 +30,7 @@ pub struct State {
     pub agent_types: RefCell<AgentTypes>,
     pub agent_instance: RefCell<AgentInstance>,
     pub agent_initiators: RefCell<AgentInitiators>,
+    pub initialized_principal: RefCell<Option<Principal>>,
 }
 
 #[derive(Default)]
@@ -88,6 +89,18 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
     let enriched = get_enriched_agent_type_by_name(agent_type_name);
 
     enriched.map(|e| e.to_agent_type())
+}
+
+pub fn register_principal(principal: Principal) {
+    let state = get_state();
+
+    *state.initialized_principal.borrow_mut() = Some(principal);
+}
+
+pub fn get_principal() -> Option<Principal> {
+    let state = get_state();
+
+    state.initialized_principal.borrow().clone()
 }
 
 pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedAgentType) {

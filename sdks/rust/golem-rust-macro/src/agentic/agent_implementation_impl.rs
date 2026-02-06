@@ -470,6 +470,7 @@ fn generate_initiator_impl(
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
             async fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
                 -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {
+                golem_rust::agentic::register_principal(principal.clone());
                 #constructor_param_extraction
             }
         }
