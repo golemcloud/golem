@@ -22,6 +22,7 @@ import {
   Multimodal,
   endpoint,
   Principal,
+  createWebhook,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -522,11 +523,6 @@ class ComplexHttpAgent extends BaseAgent {
     return Promise.resolve(`Hello, ${name}!`);
   }
 
-  @endpoint({ get: '/greet?l={location}&n={name}' })
-  async greetCustom(location: string, name: string): Promise<string> {
-    return Promise.resolve(`Hello, ${name}!`);
-  }
-
   // Multiple endpoint decorators
   @endpoint({ get: '/greet?l={location}&n={name}' })
   @endpoint({
@@ -540,7 +536,7 @@ class ComplexHttpAgent extends BaseAgent {
   @endpoint({
     custom: { method: 'patch', path: '/greet?l={location}&n={name}' },
   })
-  async greetCustom2(location: string, name: string): Promise<string> {
+  async greetCustom(location: string, name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
 
@@ -555,6 +551,23 @@ class ComplexHttpAgent extends BaseAgent {
   @endpoint({ get: '/greet/{name}/{*filePath}' })
   async catchAllFun(name: string, filePath: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent()
+class WebhookAgent extends BaseAgent {
+  constructor(
+    readonly foo: string,
+    readonly bar: string,
+  ) {
+    super();
+  }
+
+  async greet(name: string): Promise<string> {
+    const webhook = createWebhook();
+    console.log(webhook.getUrl());
+    const result = await webhook;
+    return Promise.resolve(result.json<string>());
   }
 }
 
