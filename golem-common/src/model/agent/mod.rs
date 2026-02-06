@@ -31,7 +31,6 @@ pub mod bindings {
           trappable_imports: true,
           with: {
             "golem:rpc/types": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll": golem_wasm::wasi::io::poll,
           },
           wasmtime_crate: ::wasmtime
     });

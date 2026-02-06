@@ -14,8 +14,6 @@
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::agent::host::Host;
-use crate::preview2::golem::agent::host::HostAgentWebhook;
-use crate::preview2::Pollable;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::agent::bindings::golem::agent::common::{
@@ -30,7 +28,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestNoInput,
     HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
 };
-use wasmtime::component::Resource;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -157,32 +154,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn create_webhook(&mut self) -> anyhow::Result<Resource<AgentWebhookEntry>> {
-        unimplemented!()
-    }
-}
-
-pub struct AgentWebhookEntry;
-
-impl<Ctx: WorkerCtx> HostAgentWebhook for DurableWorkerCtx<Ctx> {
-    async fn get_callback_url(
+    async fn create_webhook(
         &mut self,
-        _: wasmtime::component::Resource<AgentWebhookEntry>,
+        _promise_id: crate::preview2::golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<String> {
-        unimplemented!()
-    }
-
-    async fn subscribe(
-        &mut self,
-        _: wasmtime::component::Resource<AgentWebhookEntry>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        unimplemented!()
-    }
-
-    async fn drop(
-        &mut self,
-        _: wasmtime::component::Resource<AgentWebhookEntry>,
-    ) -> anyhow::Result<()> {
         unimplemented!()
     }
 }

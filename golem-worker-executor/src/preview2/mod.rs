@@ -30,7 +30,6 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
         "golem:agent/common": golem_common::model::agent::bindings::golem::agent::common,
-        "golem:agent/host/agent-webhook": super::durable_host::golem::agent::AgentWebhookEntry,
         "golem:api/context/span": super::durable_host::golem::invocation_context_api::SpanEntry,
         "golem:api/context/invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
         "golem:api/host/get-agents": super::durable_host::golem::v1x::GetAgentsEntry,
