@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentWebhook, createWebhook as createWebhookHost } from 'golem:agent/host';
-import { getPromise, GetPromiseResult } from 'golem:api/host@1.3.0';
+import { createWebhook as createWebhookHost, PromiseId } from 'golem:agent/host';
+import { createPromise, getPromise, GetPromiseResult } from 'golem:api/host@1.3.0';
+import { awaitPromise } from './host/hostapi';
 
 export function createWebhook(): WebhookHandler {
-  const agentWebhook = createWebhookHost();
-  const url = agentWebhook.getCallbackUrl();
-  return new WebhookHandler(url, agentWebhook);
+  const promiseId: PromiseId = createPromise();
+
+  const webhookUrl = createWebhookHost(promiseId);
+
+  return new WebhookHandler(webhookUrl, promiseId);
 }
 
 export class WebhookHandler implements PromiseLike<WebhookRequestPayload> {
   private readonly url: string;
-  private readonly inner: AgentWebhook;
+  private readonly promiseId: PromiseId;
 
-  constructor(url: string, inner: AgentWebhook) {
+  constructor(url: string, promiseId: PromiseId) {
     this.url = url;
-    this.inner = inner;
+    this.promiseId = promiseId;
   }
 
   public getUrl(): string {
@@ -35,27 +38,7 @@ export class WebhookHandler implements PromiseLike<WebhookRequestPayload> {
   }
 
   private async wait(): Promise<WebhookRequestPayload> {
-    const trimmed = this.url.replace(/\/+$/, '');
-    const parts = trimmed.split('/');
-    const promiseIdStr = parts.pop();
-
-    if (!promiseIdStr) {
-      throw new Error(`Internal Error: Invalid webhook URL: ${this.url}`);
-    }
-
-    // TODO; no easier way to get promise-id from string
-
-    const promiseResult: GetPromiseResult = getPromise(promiseId);
-
-    const pollable = this.inner.subscribe();
-
-    await pollable.promise();
-
-    const bytes = promiseResult.get();
-
-    if (!bytes) {
-      throw new Error('Failed to get webhook request payload');
-    }
+    const bytes = await awaitPromise(this.promiseId);
 
     return new WebhookRequestPayload(bytes);
   }
