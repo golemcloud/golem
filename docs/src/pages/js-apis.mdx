@@ -1,5 +1,15 @@
 # Supported JS APIs
 
+## Language features
+Golem uses the QuickJS-ng runtime that provides the following features:
+
+- Almost complete ES2020 support including modules, asynchronous generators and full Annex B support (legacy web compatibility).
+- Passes nearly 100% of the ECMAScript Test Suite tests when selecting the ES2020 features. A summary is available at Test262 Report.
+- Garbage collection using reference counting (to reduce memory usage and have deterministic behavior) with cycle removal.
+- Mathematical extensions: BigDecimal, BigFloat, operator overloading, bigint mode, math mode.
+
+## Available JavaScript APIs
+
 ### APIs
 
 #### Console
@@ -69,6 +79,11 @@ Implemented by https://github.com/MattiasBuelens/web-streams-polyfill
 - `clearInterval`
 - `setImmediate`
 
+#### Abort Controller
+
+- `AbortController`
+- `AbortSignal`
+- `DOMException`
 
 #### Encoding
 
@@ -76,6 +91,12 @@ Implemented by https://github.com/MattiasBuelens/web-streams-polyfill
 - `TextDecoder`
 - `TextDecoderStream`
 - `TextEncoderStream`
+
+#### Structured Clone
+
+Implemented by https://github.com/ungap/structured-clone
+
+- `structuredClone`
 
 ### `node:util`
 - `format`
@@ -164,11 +185,11 @@ Implemented by https://github.com/MattiasBuelens/web-streams-polyfill
 - `read`
 - `write`
 
-### `Crypto`
+### Crypto
 - `crypto.randomUUID`
 - `crypto.getRandomValues`
 
-### Provided by QuickJS
+### Coming from QuickJS
 
 - Global:
     - `parseInt`

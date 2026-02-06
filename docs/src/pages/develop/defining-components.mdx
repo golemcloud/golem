@@ -215,6 +215,18 @@ The SDK supports a large variety of data types to be used in agent constructors 
 
 Check the [page about data type mapping](/type-mapping) to learn how each type is mapped to **Rib** (when calling the agent methods from the API gateway or the REPL) and **JSON** (when using the invocation API).
 
+### Library support
+
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
+    <Tabs.Tab>
+    See the [JS APIs](/js-apis) page for a detailed overview of all the supported Browser and Node.js APIs. Any 3rd party library can be installed using `npm` and used in the agent code, if it only uses the supported APIs.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Any Rust crate can be added as a dependency if it supports to be compiled to the `wasm32-wasip1` target.
+    </Tabs.Tab>
+</Tabs>
+
 ### Agent mode - durable or ephemeral
 By default every agent is **durable**. To define an **ephemeral agent**, override the agent mode in the agent definition:
 
