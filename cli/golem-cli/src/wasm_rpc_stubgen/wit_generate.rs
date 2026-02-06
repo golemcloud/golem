@@ -13,11 +13,8 @@
 // limitations under the License.
 
 use crate::fs;
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActions, PathExtra};
+use crate::fs::{OverwriteSafeAction, OverwriteSafeActions};
 use crate::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
-use crate::wasm_rpc_stubgen::naming::wit::{
-    package_dep_dir_name_from_encoder, package_dep_dir_name_from_parser,
-};
 use crate::wasm_rpc_stubgen::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, StubDefinition,
 };
@@ -478,7 +475,7 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
                         .dest_wit_root
                         .join(naming::wit::DEPS_DIR)
                         .join(naming::wit::package_dep_dir_name_from_parser(package_name))
-                        .join(PathExtra::new(&source).file_name_to_string()?),
+                        .join(fs::file_name_to_str(source)?),
                 });
             }
         } else if !can_skip(
@@ -488,9 +485,9 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
         ) {
             package_names_to_package_path.insert(
                 package_name.clone(),
-                naming::wit::package_wit_dep_dir_from_package_dir_name(
-                    &PathExtra::new(&package_sources.dir).file_name_to_string()?,
-                ),
+                naming::wit::package_wit_dep_dir_from_package_dir_name(fs::file_name_to_str(
+                    &package_sources.dir,
+                )?),
             );
 
             for source in &package_sources.files {
@@ -498,7 +495,7 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
                     source: source.clone(),
                     target: config
                         .dest_wit_root
-                        .join(PathExtra::new(&source).strip_prefix(&config.client_wit_root)?),
+                        .join(fs::strip_prefix_or_err(source, &config.client_wit_root)?),
                 });
             }
         } else {
@@ -805,7 +802,9 @@ pub fn extract_exports_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
 
     let exports_package_path = wit_dir
         .join(naming::wit::DEPS_DIR)
-        .join(package_dep_dir_name_from_encoder(exports_package.name()))
+        .join(naming::wit::package_dep_dir_name_from_encoder(
+            exports_package.name(),
+        ))
         .join(naming::wit::EXPORTS_WIT_FILE_NAME);
     log_action(
         "Writing",
@@ -1125,7 +1124,7 @@ pub fn extract_wasm_interface_as_wit_dep(
 
                 let target_dir = wit_dir
                     .join(naming::wit::DEPS_DIR)
-                    .join(package_dep_dir_name_from_parser(&package.name));
+                    .join(naming::wit::package_dep_dir_name_from_parser(&package.name));
                 fs::create_dir_all(&target_dir)?;
                 let file_name = format!("{}.wit", package.name.name);
 

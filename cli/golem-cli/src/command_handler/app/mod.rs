@@ -31,7 +31,9 @@ use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent, LogOutput,
     Output,
 };
-use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
+use crate::model::app::{
+    ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+};
 use crate::model::deploy::DeployConfig;
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
@@ -55,6 +57,7 @@ use golem_common::model::deployment::{
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
@@ -261,9 +264,25 @@ impl AppCommandHandler {
         component_name: OptionalComponentNames,
         build_args: BuildArgs,
     ) -> anyhow::Result<()> {
+        let build_config = {
+            let mut build_config = BuildConfig::new()
+                .with_steps_filter(build_args.step.into_iter().collect())
+                .with_skip_up_to_date_checks(build_args.force_build.force_build);
+
+            if let Some(repl_bridge_sdk_target) = build_args.repl_bridge_sdk_target {
+                let app_ctx = self.ctx.app_context_lock().await;
+                let app_ctx = app_ctx.some_or_err()?;
+                build_config = build_config.with_repl_bridge_sdk_target(
+                    app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
+                );
+            }
+
+            build_config
+        };
+
         self.build(
+            &build_config,
             component_name.component_name,
-            Some(build_args),
             &ApplicationComponentSelectMode::CurrentDir,
         )
         .await
@@ -286,6 +305,7 @@ impl AppCommandHandler {
         revision: Option<DeploymentRevision>,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
+        repl_bridge_sdk_target: Option<GuestLanguage>,
     ) -> anyhow::Result<()> {
         if let Some(version) = version {
             self.deploy_by_version(version, plan, deploy_args).await
@@ -298,6 +318,7 @@ impl AppCommandHandler {
                 approve_staging_steps,
                 force_build: Some(force_build),
                 deploy_args,
+                repl_bridge_sdk_target,
             })
             .await
         }
@@ -315,7 +336,7 @@ impl AppCommandHandler {
 
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-        if let Err(error) = app_ctx.custom_command(command).await {
+        if let Err(error) = app_ctx.custom_command(&BuildConfig::new(), command).await {
             match error {
                 CustomCommandError::CommandNotFound => {
                     logln("");
@@ -500,6 +521,17 @@ impl AppCommandHandler {
                 log_skipping_up_to_date("planning, no changes detected");
             } else {
                 log_skipping_up_to_date("deployment, no changes detected");
+
+                if let Some(current_deployment) =
+                    environment.server_environment.current_deployment.as_ref()
+                {
+                    self.apply_deploy_args(
+                        &environment.environment_id,
+                        current_deployment.deployment_revision,
+                        &deploy_args,
+                    )
+                    .await?;
+                }
             }
 
             return Ok(());
@@ -528,34 +560,62 @@ impl AppCommandHandler {
 
         let current_deployment = self.rollback_environment(&rollback_diff).await?;
 
-        self.apply_deploy_args(&deploy_args, &current_deployment)
-            .await?;
+        self.apply_deploy_args(
+            &current_deployment.environment_id,
+            current_deployment.revision,
+            &deploy_args,
+        )
+        .await?;
 
         Ok(())
     }
 
     pub async fn deploy(&self, config: DeployConfig) -> anyhow::Result<()> {
+        let build_config = {
+            let mut build_config = BuildConfig::new().with_skip_up_to_date_checks(
+                config
+                    .force_build
+                    .as_ref()
+                    .map(|f| f.force_build)
+                    .unwrap_or(false),
+            );
+
+            if let Some(repl_bridge_sdk_target) = config.repl_bridge_sdk_target {
+                let app_ctx = self.ctx.app_context_lock().await;
+                let app_ctx = app_ctx.some_or_err()?;
+                build_config = build_config.with_repl_bridge_sdk_target(
+                    app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
+                );
+            }
+
+            build_config
+        };
+
         let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        self.build(
-            vec![],
-            config.force_build.as_ref().map(|force_build| BuildArgs {
-                step: vec![],
-                force_build: force_build.clone(),
-            }),
-            &ApplicationComponentSelectMode::All,
-        )
-        .await?;
+        self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
+            .await?;
 
         let Some(deploy_diff) = self.prepare_deployment(environment.clone()).await? else {
             if config.plan {
                 log_skipping_up_to_date("planning, no changes detected");
             } else {
                 log_skipping_up_to_date("deployment, no changes detected");
+
+                if let Some(current_deployment) =
+                    environment.server_environment.current_deployment.as_ref()
+                {
+                    self.apply_deploy_args(
+                        &environment.environment_id,
+                        current_deployment.deployment_revision,
+                        &config.deploy_args,
+                    )
+                    .await?;
+                }
             }
 
             return Ok(());
@@ -592,8 +652,12 @@ impl AppCommandHandler {
             .apply_staged_changes_to_environment(&deploy_diff)
             .await?;
 
-        self.apply_deploy_args(&config.deploy_args, &current_deployment)
-            .await?;
+        self.apply_deploy_args(
+            &current_deployment.environment_id,
+            current_deployment.revision,
+            &config.deploy_args,
+        )
+        .await?;
 
         Ok(())
     }
@@ -1469,8 +1533,9 @@ impl AppCommandHandler {
 
     async fn apply_deploy_args(
         &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
         deploy_args: &DeployArgs,
-        current_deployment: &CurrentDeployment,
     ) -> anyhow::Result<()> {
         if !deploy_args.is_any_set(self.ctx.deploy_args()) {
             return Ok(());
@@ -1483,10 +1548,7 @@ impl AppCommandHandler {
             .golem_clients()
             .await?
             .environment
-            .get_deployment_components(
-                &current_deployment.environment_id.0,
-                current_deployment.revision.into(),
-            )
+            .get_deployment_components(&environment_id.0, deployment_revision.into())
             .await?
             .values;
 
@@ -1584,22 +1646,15 @@ impl AppCommandHandler {
 
     pub async fn build(
         &self,
+        build_config: &BuildConfig,
         component_names: Vec<ComponentName>,
-        build: Option<BuildArgs>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
-        if let Some(build) = build {
-            self.ctx
-                .set_steps_filter(build.step.into_iter().collect())
-                .await;
-            self.ctx
-                .set_skip_up_to_date_checks(build.force_build.force_build)
-                .await;
-        }
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        app_ctx.some_or_err_mut()?.build().await
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        app_ctx.build(build_config).await
     }
 
     pub async fn clean(
@@ -1616,7 +1671,7 @@ impl AppCommandHandler {
         let app_ctx = app_ctx.some_or_err()?;
 
         let all_selected =
-            app_ctx.selected_component_names().len() == app_ctx.application.component_count();
+            app_ctx.selected_component_names().len() == app_ctx.application().component_count();
 
         let clean_mode = {
             if all_selected {
@@ -1634,7 +1689,7 @@ impl AppCommandHandler {
             }
         };
 
-        app_ctx.clean(clean_mode)
+        app_ctx.clean(&BuildConfig::new(), clean_mode)
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
@@ -1731,8 +1786,12 @@ impl AppCommandHandler {
             let _log_output = silent_selection.then(|| LogOutput::new(Output::TracingDebug));
             app_ctx.select_components(default)?
         } else {
-            let fuzzy_search =
-                FuzzySearch::new(app_ctx.application.component_names().map(|cn| cn.as_str()));
+            let fuzzy_search = FuzzySearch::new(
+                app_ctx
+                    .application()
+                    .component_names()
+                    .map(|cn| cn.as_str()),
+            );
 
             let (found, not_found) =
                 fuzzy_search.find_many(component_names.iter().map(|cn| cn.0.as_str()));
@@ -1769,7 +1828,7 @@ impl AppCommandHandler {
                 ));
                 logln("");
                 log_text_view(&AvailableComponentNamesHelp(
-                    app_ctx.application.component_names().cloned().collect(),
+                    app_ctx.application().component_names().cloned().collect(),
                 ));
 
                 bail!(NonSuccessfulExit);
@@ -1971,7 +2030,10 @@ impl AppCommandHandler {
             );
             let _indent = self.ctx.log_handler().nested_text_view_indent();
 
-            diagnose(app_ctx.application.component(component_name).source(), None);
+            diagnose(
+                app_ctx.application().component(component_name).source(),
+                None,
+            );
         }
 
         Ok(())

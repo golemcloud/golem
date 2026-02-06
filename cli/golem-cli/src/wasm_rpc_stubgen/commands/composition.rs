@@ -1,5 +1,4 @@
 use crate::fs;
-use crate::fs::PathExtra;
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,8 +21,6 @@ pub async fn compose(
     // with allowing missing plugs (through the also customized plug function below)
     // and using local packages only (for now)
 
-    let dest_wasm = PathExtra::new(dest_wasm);
-
     let mut graph = CompositionGraph::new();
 
     let socket = fs::read(source_wasm).context("Failed to read socket component")?;
@@ -42,7 +39,7 @@ pub async fn compose(
 
     let bytes = graph.encode(EncodeOptions::default())?;
 
-    fs::create_dir_all(dest_wasm.parent()?)?;
+    fs::create_dir_all(fs::parent_or_err(dest_wasm)?)?;
     fs::write(dest_wasm, bytes)?;
 
     Ok(unused_plugs)

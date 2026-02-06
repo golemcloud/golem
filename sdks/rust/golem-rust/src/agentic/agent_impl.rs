@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{agent_registry, get_resolved_agent};
+use crate::agentic::{agent_registry, get_principal, get_resolved_agent, register_principal};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
@@ -54,6 +54,8 @@ impl Guest for Component {
             });
 
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
+
+        register_principal(&principal);
 
         with_agent_initiator(
             |initiator| async move { initiator.initiate(input, principal).await.map(|_| ()) },
@@ -120,13 +122,10 @@ impl LoadSnapshotGuest for Component {
         let (agent_type_name, agent_parameters, _) =
             parse_agent_id(&id).map_err(|e| e.to_string())?;
 
-        // TODO; https://github.com/golemcloud/golem/issues/2612
+        let principal = get_principal().expect("Failed to get initialized principal");
+
         with_agent_initiator(
-            |initiator| async move {
-                initiator
-                    .initiate(agent_parameters, Principal::Anonymous)
-                    .await
-            },
+            |initiator| async move { initiator.initiate(agent_parameters, principal).await },
             &AgentTypeName(agent_type_name),
         )
         .map_err(|e| e.to_string())?;

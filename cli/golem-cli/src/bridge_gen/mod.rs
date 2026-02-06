@@ -17,11 +17,16 @@ pub mod type_naming;
 pub mod typescript;
 
 use camino::Utf8Path;
-use golem_common::model::agent::AgentType;
+use golem_common::model::agent::{AgentType, AgentTypeName};
+use heck::ToKebabCase;
 
 pub trait BridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self>
     where
         Self: Sized;
     fn generate(&mut self) -> anyhow::Result<()>;
+}
+
+pub fn bridge_client_directory_name(agent_type_name: &AgentTypeName) -> String {
+    format!("{}-client", agent_type_name.as_str().to_kebab_case())
 }

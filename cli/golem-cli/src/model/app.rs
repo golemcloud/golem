@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::bridge_client_directory_name;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
@@ -22,11 +23,11 @@ use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::property::Property;
 use crate::model::component::AppComponentType;
+use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
@@ -59,18 +60,45 @@ pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 pub const DEFAULT_TEMP_DIR: &str = "golem-temp";
 pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
-#[derive(Clone, Debug)]
-pub struct ApplicationConfig {
+#[derive(Clone, Debug, Default)]
+pub struct BuildConfig {
     pub skip_up_to_date_checks: bool,
-    pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
-    pub golem_rust_override: RustDependencyOverride,
-    pub dev_mode: bool,
-    pub enable_wasmtime_fs_cache: bool,
+    pub repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
 }
 
-impl ApplicationConfig {
+impl BuildConfig {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn with_skip_up_to_date_checks(mut self, skip_up_to_date_checks: bool) -> Self {
+        self.skip_up_to_date_checks = skip_up_to_date_checks;
+        self
+    }
+
+    pub fn with_steps_filter(mut self, steps_filter: HashSet<AppBuildStep>) -> Self {
+        self.steps_filter = steps_filter;
+        self
+    }
+
+    pub fn with_custom_bridge_sdk_target(
+        mut self,
+        custom_bridge_sdk_target: CustomBridgeSdkTarget,
+    ) -> Self {
+        self.custom_bridge_sdk_target = Some(custom_bridge_sdk_target);
+        self
+    }
+
+    pub fn with_repl_bridge_sdk_target(
+        mut self,
+        repl_bridge_sdk_target: CustomBridgeSdkTarget,
+    ) -> Self {
+        self.repl_bridge_sdk_target = Some(repl_bridge_sdk_target);
+        self
+    }
+
     pub fn should_run_step(&self, step: AppBuildStep) -> bool {
         if self.steps_filter.is_empty() {
             true
@@ -78,6 +106,14 @@ impl ApplicationConfig {
             self.steps_filter.contains(&step)
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ApplicationConfig {
+    pub offline: bool,
+    pub golem_rust_override: RustDependencyOverride,
+    pub dev_mode: bool,
+    pub enable_wasmtime_fs_cache: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -223,11 +259,12 @@ pub struct ComponentStubInterfaces {
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[clap(rename_all = "kebab_case")]
 pub enum AppBuildStep {
-    GenRpc,
+    GenWit,
     Componentize,
     Link,
     AddMetadata,
     GenBridge,
+    GenBridgeRepl,
 }
 
 #[derive(Debug, Clone)]
@@ -653,12 +690,27 @@ impl Application {
                 .temp_dir()
                 .join("bridge-sdk")
                 .join(language.id())
-                .join(agent_type_name.to_wit_naming().as_str()),
+                .join(bridge_client_directory_name(agent_type_name)),
         }
     }
 
-    pub fn rib_repl_history_file(&self) -> PathBuf {
-        self.temp_dir().join(".rib_repl_history")
+    pub fn repl_root_dir(&self, language: GuestLanguage) -> PathBuf {
+        self.temp_dir().join("repl").join(language.id())
+    }
+
+    pub fn repl_root_bridge_sdk_dir(&self, language: GuestLanguage) -> PathBuf {
+        self.repl_root_dir(language).join("bridge-sdk")
+    }
+
+    pub fn repl_metadata_json(&self, language: GuestLanguage) -> PathBuf {
+        self.repl_root_dir(language).join("repl-metadata.json")
+    }
+
+    pub fn repl_history_file(&self, language: ReplLanguage) -> PathBuf {
+        self.temp_dir()
+            .join("repl-history")
+            .join(language.id())
+            .join(".repl_history")
     }
 
     pub fn component<'a>(&'a self, component_name: &'a ComponentName) -> Component<'a> {
@@ -1708,8 +1760,6 @@ impl PluginInstallation {
 }
 
 mod app_builder {
-    use crate::fs::PathExtra;
-    use crate::fuzzy;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
@@ -1723,6 +1773,7 @@ mod app_builder {
     use crate::model::cascade::store::Store;
     use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
+    use crate::{fs, fuzzy};
     use colored::Colorize;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -2013,9 +2064,8 @@ mod app_builder {
             validation.with_context(
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
-                    let app_source = PathExtra::new(&app.source);
-                    let app_source_dir = app_source.parent().unwrap();
-                    self.all_sources.insert(app_source.to_path_buf());
+                    let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
+                    self.all_sources.insert(app.source.clone());
 
                     if let Some(dir) = app.application.temp_dir {
                         if self

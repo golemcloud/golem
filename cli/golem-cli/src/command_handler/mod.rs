@@ -37,7 +37,7 @@ use crate::command_handler::partial_match::ErrorHandler;
 use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
-use crate::command_handler::rib_repl::RibReplHandler;
+use crate::command_handler::repl::ReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
@@ -65,7 +65,7 @@ mod log;
 mod partial_match;
 mod plugin;
 mod profile;
-mod rib_repl;
+mod repl;
 mod worker;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
@@ -290,6 +290,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     .await
             }
             GolemCliSubcommand::Repl {
+                language,
                 component_name,
                 revision,
                 deploy_args,
@@ -298,8 +299,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 disable_stream,
             } => {
                 self.ctx
-                    .rib_repl_handler()
+                    .repl_handler()
                     .cmd_repl(
+                        language,
                         component_name.component_name,
                         revision,
                         deploy_args.as_ref(),
@@ -317,6 +319,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 revision,
                 force_build,
                 deploy_args,
+                repl_bridge_sdk_target,
             } => {
                 self.ctx
                     .app_handler()
@@ -328,6 +331,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         revision,
                         force_build,
                         deploy_args,
+                        repl_bridge_sdk_target,
                     )
                     .await
             }
@@ -430,7 +434,7 @@ pub trait Handlers {
     fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
-    fn rib_repl_handler(&self) -> RibReplHandler;
+    fn repl_handler(&self) -> ReplHandler;
     fn worker_handler(&self) -> WorkerCommandHandler;
 }
 
@@ -521,8 +525,8 @@ impl Handlers for Arc<Context> {
         ProfileCommandHandler::new(self.clone())
     }
 
-    fn rib_repl_handler(&self) -> RibReplHandler {
-        RibReplHandler::new(self.clone())
+    fn repl_handler(&self) -> ReplHandler {
+        ReplHandler::new(self.clone())
     }
 
     fn worker_handler(&self) -> WorkerCommandHandler {

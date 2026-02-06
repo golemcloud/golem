@@ -24,16 +24,16 @@ use crate::config::{
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
-use crate::model::app::{
-    AppBuildStep, ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName,
-    CustomBridgeSdkTarget, WithSource,
-};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
+use crate::model::app::{
+    ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
+};
 use crate::model::app_raw::{
     BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker, Server,
 };
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
+use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
@@ -45,17 +45,15 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_definition::{
     HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
 };
 use golem_common::model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
-use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};
@@ -97,7 +95,6 @@ pub struct Context {
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
-    rib_repl_state: tokio::sync::RwLock<RibReplState>,
     caches: Caches,
 }
 
@@ -315,11 +312,11 @@ impl Context {
         };
 
         let template_sdk_overrides = SdkOverrides {
-            rust_path: global_flags
+            golem_rust_path: global_flags
                 .golem_rust_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            rust_version: global_flags.golem_rust_version.clone(),
+            golem_rust_version: global_flags.golem_rust_version.clone(),
             ts_packages_path: global_flags.golem_ts_packages_path.clone(),
             ts_version: global_flags.golem_ts_version.clone(),
         };
@@ -358,7 +355,6 @@ impl Context {
                 yes,
                 app_source_mode,
             )),
-            rib_repl_state: tokio::sync::RwLock::default(),
             caches: Caches::new(),
         })
     }
@@ -367,15 +363,20 @@ impl Context {
         &self.config_dir
     }
 
-    pub async fn rib_repl_history_file(&self) -> anyhow::Result<PathBuf> {
+    pub async fn repl_history_file(&self, language: ReplLanguage) -> anyhow::Result<PathBuf> {
         let app_ctx = self.app_context_lock().await;
         let history_file = match app_ctx.opt()? {
-            Some(app_ctx) => app_ctx.application.rib_repl_history_file().to_path_buf(),
-            None => self.config_dir.join(".rib_repl_history"),
+            Some(app_ctx) => app_ctx
+                .application()
+                .repl_history_file(language)
+                .to_path_buf(),
+            None => self
+                .config_dir
+                .join(format!(".{}_repl_history", language.id())),
         };
         debug!(
             history_file = %history_file.display(),
-            "Selected Rib REPL history file"
+            "Selected {language} REPL history file"
         );
         Ok(history_file)
     }
@@ -486,7 +487,7 @@ impl Context {
                             ApplicationEnvironmentConfigId {
                                 application_name: env.application_name.clone(),
                                 environment_name: env.environment_name.clone(),
-                                server_url: BUILTIN_LOCAL_URL.parse().unwrap(),
+                                server_url: BUILTIN_LOCAL_URL.parse()?,
                             },
                         ),
                     })
@@ -558,79 +559,10 @@ impl Context {
         Ok(state)
     }
 
-    async fn set_app_ctx_init_config<T>(
-        &self,
-        name: &str,
-        value_mut: fn(&mut ApplicationContextState) -> &mut T,
-        was_set_mut: fn(&mut ApplicationContextState) -> &mut bool,
-        value: T,
-    ) {
-        let mut state = self.app_context_state.write().await;
-        if *was_set_mut(&mut state) {
-            panic!("{name} can be set only once, was already set");
-        }
-        if state.app_context.is_some() {
-            panic!("cannot change {name} after application context init");
-        }
-        *value_mut(&mut state) = value;
-        *was_set_mut(&mut state) = true;
-    }
-
-    pub async fn set_skip_up_to_date_checks(&self, skip: bool) {
-        self.set_app_ctx_init_config(
-            "skip_up_to_date_checks",
-            |ctx| &mut ctx.skip_up_to_date_checks,
-            |ctx| &mut ctx.skip_up_to_date_checks_was_set,
-            skip,
-        )
-        .await
-    }
-
-    pub async fn set_steps_filter(&self, steps_filter: HashSet<AppBuildStep>) {
-        self.set_app_ctx_init_config(
-            "steps_filter",
-            |ctx| &mut ctx.build_steps_filter,
-            |ctx| &mut ctx.build_steps_filter_was_set,
-            steps_filter,
-        )
-        .await;
-    }
-
-    pub async fn set_custom_bridge_generator_target(
-        &self,
-        custom_bridge_sdk_target: CustomBridgeSdkTarget,
-    ) {
-        self.set_app_ctx_init_config(
-            "custom_bridge_generator_target",
-            |ctx| &mut ctx.custom_bridge_sdk_target,
-            |ctx| &mut ctx.custom_bridge_sdk_target_was_set,
-            Some(custom_bridge_sdk_target),
-        )
-        .await;
-    }
-
     pub async fn task_result_marker_dir(&self) -> anyhow::Result<PathBuf> {
         let app_ctx = self.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-        Ok(app_ctx.application.task_result_marker_dir())
-    }
-
-    pub async fn set_rib_repl_state(&self, state: RibReplState) {
-        let mut rib_repl_state = self.rib_repl_state.write().await;
-        *rib_repl_state = state;
-    }
-
-    pub async fn get_rib_repl_dependencies(&self) -> ReplComponentDependencies {
-        let rib_repl_state = self.rib_repl_state.read().await;
-        ReplComponentDependencies {
-            component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
-            custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
-        }
-    }
-
-    pub async fn get_rib_repl_component_metadata(&self) -> ComponentMetadata {
-        let rib_repl_state = self.rib_repl_state.read().await;
-        rib_repl_state.component_metadata.clone()
+        Ok(app_ctx.application().task_result_marker_dir())
     }
 
     pub fn templates(
@@ -814,13 +746,6 @@ pub struct ApplicationContextState {
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
 
-    pub skip_up_to_date_checks: bool,
-    skip_up_to_date_checks_was_set: bool,
-    pub build_steps_filter: HashSet<AppBuildStep>,
-    build_steps_filter_was_set: bool,
-    pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
-    custom_bridge_sdk_target_was_set: bool,
-
     app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
 
@@ -830,12 +755,6 @@ impl ApplicationContextState {
             yes,
             app_source_mode: Some(source_mode),
             silent_init: false,
-            skip_up_to_date_checks: false,
-            skip_up_to_date_checks_was_set: false,
-            build_steps_filter: HashSet::new(),
-            build_steps_filter_was_set: false,
-            custom_bridge_sdk_target: None,
-            custom_bridge_sdk_target_was_set: false,
             app_context: None,
         }
     }
@@ -859,10 +778,7 @@ impl ApplicationContextState {
             .then(|| LogOutput::new(Output::TracingDebug));
 
         let app_config = ApplicationConfig {
-            skip_up_to_date_checks: self.skip_up_to_date_checks,
             offline: config.wasm_rpc_client_build_offline,
-            steps_filter: self.build_steps_filter.clone(),
-            custom_bridge_sdk_target: self.custom_bridge_sdk_target.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
             dev_mode: config.dev_mode,
             enable_wasmtime_fs_cache: config.enable_wasmtime_fs_cache,
@@ -887,7 +803,7 @@ impl ApplicationContextState {
 
         if !self.silent_init {
             if let Some(Ok(Some(app_ctx))) = &self.app_context {
-                if app_ctx.loaded_with_warnings
+                if app_ctx.loaded_with_warnings()
                     && !InteractiveHandler::confirm_manifest_app_warning(self.yes)?
                 {
                     bail!(NonSuccessfulExit)
@@ -931,23 +847,6 @@ impl ApplicationContextState {
             Some(Ok(Some(app_ctx))) => Ok(app_ctx),
             Some(Err(err)) => Err(anyhow!(err.clone())),
             None => unreachable!("Uninitialized application context"),
-        }
-    }
-}
-
-pub struct RibReplState {
-    pub dependencies: ReplComponentDependencies,
-    pub component_metadata: ComponentMetadata,
-}
-
-impl Default for RibReplState {
-    fn default() -> Self {
-        Self {
-            dependencies: ReplComponentDependencies {
-                component_dependencies: vec![],
-                custom_instance_spec: vec![],
-            },
-            component_metadata: ComponentMetadata::default(),
         }
     }
 }

@@ -46,6 +46,7 @@ export * from './host/result';
 export * from './host/transaction';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
+let initializationPrincipal: Principal | undefined = undefined;
 
 async function initialize(
   agentTypeName: string,
@@ -71,6 +72,7 @@ async function initialize(
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = initiateResult.val;
+    initializationPrincipal = principal;
   } else {
     throw initiateResult.val;
   }
@@ -152,10 +154,11 @@ async function load(bytes: Uint8Array): Promise<void> {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  // TODO; pass principal?
-  const initiateResult = initiator.initiate(agentParameters, {
-    tag: 'anonymous',
-  });
+  if (!initializationPrincipal) {
+    throw `Failed to get agent definition: initializationPrincipal is not initialized`;
+  }
+
+  const initiateResult = initiator.initiate(agentParameters, initializationPrincipal);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;
