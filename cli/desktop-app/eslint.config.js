@@ -171,6 +171,13 @@ export default [
     },
   },
   {
-    ignores: ["dist/", "node_modules/", "src-tauri/"],
+    ignores: [
+      "dist/",
+      "node_modules/",
+      "src-tauri/",
+      "storybook-static/",
+      ".storybook/",
+      "vitest.shims.d.ts",
+    ],
   },
 ];

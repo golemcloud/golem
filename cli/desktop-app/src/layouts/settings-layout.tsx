@@ -28,11 +28,7 @@ export const SettingsLayout = () => {
       <div className="container mx-auto px-4 py-8">
         <div className="flex flex-col space-y-8 max-w-7xl mx-auto">
           <div className="flex items-center gap-4">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate(-1)}
-            >
+            <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <h1 className="text-3xl font-bold">Settings</h1>
