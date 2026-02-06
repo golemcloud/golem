@@ -38,10 +38,9 @@ export class DeploymentService {
   };
 
   public deleteDeployment = async (appId: string, host: string) => {
-    // Step 1: Call CLI to delete from server FIRST
-    await this.cliService.callCLI(appId, "api", ["deployment", "delete", host]);
-
-    // Step 2: Only if CLI succeeds, remove from YAML
+    // CLI v1.4.2: api deployment delete command removed
+    // Only delete from YAML file
+    // Server-side deletion is no longer supported via CLI
     await this.deleteDeploymentFromYaml(appId, host);
   };
 
@@ -54,8 +53,8 @@ export class DeploymentService {
     // Step 1: Write to YAML first
     await this.writeDeploymentToYaml(appId, host, subdomain, definitions);
 
-    // Step 2: Call CLI to deploy (use "api deploy" to deploy both definitions and deployments)
-    return await this.cliService.callCLI(appId, "api", ["deploy"]);
+    // Step 2: Call CLI to deploy (use root "deploy" command to deploy both definitions and deployments)
+    return await this.cliService.callCLI(appId, "deploy", []);
   };
 
   private writeDeploymentToYaml = async (

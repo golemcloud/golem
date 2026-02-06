@@ -90,7 +90,7 @@ export default function ComponentInfo() {
                 onValueChange={version => handleVersionChange(+version)}
               >
                 <SelectTrigger className="w-[100px] border rounded-md">
-                  <SelectValue>v{versionChange}</SelectValue>
+                  <SelectValue>v{versionChange || 0}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {versionList.map((version: number) => (

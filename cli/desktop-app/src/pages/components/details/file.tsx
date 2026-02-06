@@ -49,11 +49,11 @@ export default function FileManager() {
         <div>
           {versionList.length > 0 && (
             <Select
-              defaultValue={versionChange.toString()}
+              defaultValue={(versionChange || 0).toString()}
               onValueChange={version => handleVersionChange(+version)}
             >
               <SelectTrigger className="w-[80px]">
-                <SelectValue> v{versionChange}</SelectValue>
+                <SelectValue> v{versionChange || 0}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {versionList.map((version: number) => (

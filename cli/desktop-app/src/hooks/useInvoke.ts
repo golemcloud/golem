@@ -61,8 +61,7 @@ export function useInvoke({ isAgentInvoke = false }: UseInvokeProps = {}) {
         let exportItem;
         let fnDetails;
 
-        if (isAgentInvoke && matchingComponent.parsedExports) {
-          // Agents version - use parsed exports
+        if (matchingComponent.parsedExports) {
           exportItem = matchingComponent.parsedExports.find(
             e => e.name === name && e.functions.some(f => f.name === urlFn),
           );
@@ -71,18 +70,6 @@ export function useInvoke({ isAgentInvoke = false }: UseInvokeProps = {}) {
           }
 
           fnDetails = exportItem.functions?.find(
-            (f: ComponentExportFunction) => f.name === urlFn,
-          );
-        } else {
-          // Components version - find export string and parse it
-          const exportItemText = matchingComponent?.exports?.find(
-            (item: string) => name === item,
-          );
-          if (!exportItemText) {
-            throw new Error("Export item not found.");
-          }
-          exportItem = parseExportString(exportItemText);
-          fnDetails = exportItem?.functions?.find(
             (f: ComponentExportFunction) => f.name === urlFn,
           );
         }
@@ -107,8 +94,8 @@ export function useInvoke({ isAgentInvoke = false }: UseInvokeProps = {}) {
 
         if (firstExport && firstFunction) {
           const path = isAgentInvoke
-            ? `/app/${appId}/components/${componentId}/agents/${agentName}/invoke?name=${firstExport.name}&&fn=${firstFunction.name}`
-            : `/app/${appId}/components/${componentId}/invoke?name=${firstExport.name}&&fn=${firstFunction.name}`;
+            ? `/app/${appId}/components/${componentId}/agents/${agentName}/invoke?name=${firstExport.name}&fn=${firstFunction.name}`
+            : `/app/${appId}/components/${componentId}/invoke?name=${firstExport.name}&fn=${firstFunction.name}`;
           navigate(path);
         }
       }

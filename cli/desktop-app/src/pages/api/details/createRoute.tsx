@@ -61,7 +61,7 @@ const BindingType = z.enum(["default", "file-server", "cors-preflight"]);
 const GatewayBindingData = z.object({
   type: BindingType,
   componentName: z.string().optional(),
-  componentVersion: z.number().optional(),
+  componentRevision: z.number().optional(),
   invocationContext: z.string().optional(),
   idempotencyKey: z.string().optional(),
   response: z.string().optional(),
@@ -212,7 +212,7 @@ const CreateRoute = () => {
       binding: {
         type: "default",
         componentName: "",
-        componentVersion: 0,
+        componentRevision: 0,
         invocationContext: "",
         response: "",
       },
@@ -244,7 +244,7 @@ const CreateRoute = () => {
             }
             form.setValue("method", route.method);
             const componentName = route.binding.componentName;
-            const versionId = route.binding.componentVersion;
+            const versionId = route.binding.componentRevision;
             if (componentName && versionId) {
               const componentId = getComponentIdByName(
                 componentName,
@@ -264,8 +264,8 @@ const CreateRoute = () => {
                   route.binding.componentName || "",
                 );
                 form.setValue(
-                  "binding.componentVersion",
-                  +(route.binding.componentVersion || 0),
+                  "binding.componentRevision",
+                  +(route.binding.componentRevision || 0),
                 );
               }
             }
@@ -289,7 +289,7 @@ const CreateRoute = () => {
           }
         }
       } catch (error) {
-        console.error("Failed to fetch data:", error);
+        console.error("Error loading route data:", error);
         setFetchError("Failed to load required data. Please try again.");
       } finally {
         setIsLoading(false);
@@ -377,7 +377,7 @@ const CreateRoute = () => {
     },
   ) => {
     const exportedFunctions = componentResponse?.[componentId]?.versions?.find(
-      (data: Component) => data.componentVersion?.toString() === version,
+      (data: Component) => data.componentRevision?.toString() === version,
     );
     const data = (exportedFunctions?.metadata?.exports || []).map(
       parseExportString,
@@ -399,7 +399,7 @@ const CreateRoute = () => {
   };
 
   const onVersionChange = async (version: string) => {
-    form.setValue("binding.componentVersion", +version);
+    form.setValue("binding.componentRevision", +version);
     const componentName = form.getValues("binding.componentName");
     const componentId = getComponentIdByName(
       componentName || "",
@@ -549,7 +549,7 @@ const CreateRoute = () => {
 
                     <FormField
                       control={form.control}
-                      name="binding.componentVersion"
+                      name="binding.componentRevision"
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel required>Version</FormLabel>

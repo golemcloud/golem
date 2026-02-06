@@ -174,7 +174,6 @@ export default function CreateAgent() {
             uniqueTypesMap.set(kebabCaseName, type);
           }
         });
-
         setAgentTypes(Array.from(uniqueTypesMap.values()));
       } catch (error) {
         console.error("Failed to fetch agent types:", error);

@@ -243,12 +243,12 @@ export const ApiRoute = () => {
                 <CodeBlock
                   code={(() => {
                     const componentName = currentRoute?.binding?.componentName;
-                    const componentVersion =
-                      currentRoute.binding?.componentVersion == null
+                    const componentRevision =
+                      currentRoute.binding?.componentRevision == null
                         ? "latest"
-                        : `v${currentRoute.binding.componentVersion}`;
+                        : `v${currentRoute.binding.componentRevision}`;
 
-                    return `${componentName} / ${componentVersion}`;
+                    return `${componentName} / ${componentRevision}`;
                   })()}
                   label="component name"
                   allowCopy={false}

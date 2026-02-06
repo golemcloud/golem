@@ -23,7 +23,7 @@ import { API } from "@/service";
 
 interface PluginStatusProps {
   activePlugins: string[];
-  componentVersion: number;
+  componentRevision: number;
   status: string;
   updates: Update[];
 }
@@ -85,7 +85,7 @@ const UpdateLog: React.FC<{ update: Update }> = ({ update }) => {
 
 export const PluginStatus: React.FC<PluginStatusProps> = ({
   activePlugins,
-  componentVersion,
+  componentRevision,
   status,
   updates,
 }) => {
@@ -96,7 +96,8 @@ export const PluginStatus: React.FC<PluginStatusProps> = ({
           <CardTitle className="text-lg">Agent Information</CardTitle>
           <CardDescription>
             Current Version:{" "}
-            <span className="font-semibold">v{componentVersion}</span> | Status:{" "}
+            <span className="font-semibold">v{componentRevision}</span> |
+            Status:{" "}
             <Badge className="bg-blue-500 text-white px-2 py-1">{status}</Badge>
           </CardDescription>
         </CardHeader>
@@ -183,7 +184,7 @@ export default function AgentInfo() {
     <div className="container mx-auto py-10 px-6">
       <PluginStatus
         activePlugins={agentDetails.activePlugins || []}
-        componentVersion={agentDetails.componentVersion || 0}
+        componentRevision={agentDetails.componentRevision || 0}
         status={agentDetails.status || "Unknown"}
         updates={(agentDetails.updates || []).reverse()}
       />

@@ -24,7 +24,7 @@ export default function AgentInvoke() {
 
   const onNavigateToFunction = (exportName: string, functionName: string) => {
     navigate(
-      `/app/${appId}/components/${componentId}/agents/${agentName}/invoke?name=${exportName}&&fn=${functionName}`,
+      `/app/${appId}/components/${componentId}/agents/${agentName}/invoke?name=${exportName}&fn=${functionName}`,
     );
   };
 

@@ -22,7 +22,7 @@ export const UnbuiltComponentCard = ({
   const handleBuild = async () => {
     setIsBuildingState(true);
     try {
-      await API.cliService.callCLI(appId, "component", ["build", name]);
+      await API.cliService.callCLI(appId, "build", [name]);
       toast({
         title: "Build Successful",
         description: `Component ${name} has been built successfully.`,
@@ -39,7 +39,7 @@ export const UnbuiltComponentCard = ({
   const handleDeploy = async () => {
     setIsDeployingState(true);
     try {
-      await API.cliService.callCLI(appId, "component", ["deploy", name]);
+      await API.cliService.callCLI(appId, "deploy", [name]);
       toast({
         title: "Deploy Successful",
         description: `Component ${name} has been deployed successfully.`,
