@@ -10,10 +10,17 @@ Environment variables:
 - `GOLEM_API_KEY`: your Golem API token (required)
 - `GOLEM_API_URL`: API base URL (optional, default `https://api.golem.cloud`)
 
-Start the server:
+Start the server (canonical path):
 ```
-golem-cli mcp serve
+golem-cli --serve --serve-port 1232
 ```
+
+Alias:
+```
+golem-cli mcp serve --serve-port 1232
+```
+
+The server listens on `http://localhost:<PORT>/mcp`.
 
 ## Tools
 
@@ -27,13 +34,16 @@ golem-cli mcp serve
 
 ## Resources
 
-Resource templates:
-- `golem://components/{environment_id}`
-- `golem://workers/{component_id}`
-- `golem://workers/{component_id}/{worker_name}/oplog{?from,count,query}`
-- `golem://deployments/{environment_id}`
-- `golem://deployments/{environment_id}/current`
-- `golem://deployments/{environment_id}/{deployment_id}`
+The server exposes manifest files discovered from:
+- current working directory
+- ancestor directories
+- direct child directories
+
+Manifest filenames:
+- `golem.yaml`
+- `golem.yml`
+
+Each manifest is exposed as a `file://` resource URI.
 
 ## Claude Desktop configuration
 
@@ -43,7 +53,7 @@ Add a server entry (example):
   "mcpServers": {
     "golem": {
       "command": "golem-cli",
-      "args": ["mcp", "serve"],
+      "args": ["--serve", "--serve-port", "1232"],
       "env": {
         "GOLEM_API_KEY": "YOUR_TOKEN",
         "GOLEM_API_URL": "https://api.golem.cloud"

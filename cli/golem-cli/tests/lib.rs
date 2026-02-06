@@ -20,9 +20,11 @@ use test_r::{tag_suite, test_dep};
 test_r::enable!();
 
 mod app;
+mod mcp;
 mod stubgen;
 
 tag_suite!(stubgen, group1);
+tag_suite!(mcp, group1);
 
 #[derive(Debug)]
 pub struct Tracing;

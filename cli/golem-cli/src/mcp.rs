@@ -28,19 +28,23 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolResult, Content, ListResourceTemplatesResult, ListResourcesResult,
-    PaginatedRequestParams, RawResourceTemplate, ReadResourceRequestParams, ReadResourceResult,
-    ResourceContents, ResourceTemplate, ServerCapabilities, ServerInfo,
+    PaginatedRequestParams, RawResource, ReadResourceRequestParams, ReadResourceResult, Resource,
+    ResourceContents, ServerCapabilities, ServerInfo,
 };
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler, ServiceExt};
+use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
+use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fs;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use url::Url;
 
 const DEFAULT_API_URL: &str = "https://api.golem.cloud";
-const DEFAULT_OPLOG_COUNT: u64 = 100;
+const MANIFEST_FILE_NAMES: [&str; 2] = ["golem.yaml", "golem.yml"];
 
 /// MCP Server for Golem
 ///
@@ -52,6 +56,7 @@ pub struct GolemMcpServer {
     component_client: Arc<ComponentClientLive>,
     environment_client: Arc<EnvironmentClientLive>,
     tool_router: ToolRouter<Self>,
+    manifest_root: PathBuf,
 }
 
 // Input types for tools - these derive JsonSchema for automatic schema generation
@@ -129,6 +134,10 @@ impl GolemMcpServer {
 
         let base_url = env::var("GOLEM_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.to_string());
         let base_url = Url::parse(&base_url).context("GOLEM_API_URL is not a valid URL")?;
+        let manifest_root = env::current_dir()
+            .context("Failed to determine current directory")?
+            .canonicalize()
+            .context("Failed to canonicalize current directory")?;
 
         let http_client = reqwest::Client::builder()
             .build()
@@ -149,27 +158,12 @@ impl GolemMcpServer {
             }),
             environment_client: Arc::new(EnvironmentClientLive { context }),
             tool_router: Self::tool_router(),
+            manifest_root,
         })
     }
 
     fn invalid_uri_error(uri: &str, message: &str) -> McpError {
         McpError::invalid_params(format!("Invalid resource URI '{}': {}", uri, message), None)
-    }
-
-    fn resource_template(
-        uri_template: &str,
-        name: &str,
-        description: Option<&str>,
-    ) -> ResourceTemplate {
-        let raw = RawResourceTemplate {
-            uri_template: uri_template.to_string(),
-            name: name.to_string(),
-            title: None,
-            description: description.map(str::to_string),
-            mime_type: Some("text".to_string()),
-            icons: None,
-        };
-        ResourceTemplate::new(raw, None)
     }
 
     fn parse_uuid(value: &str, label: &str) -> Result<uuid::Uuid, McpError> {
@@ -178,162 +172,62 @@ impl GolemMcpServer {
         })
     }
 
-    async fn read_components_resource(
-        &self,
-        uri: &str,
-        environment_id: &str,
-    ) -> Result<ReadResourceResult, McpError> {
-        let environment_id = Self::parse_uuid(environment_id, "environment_id")?;
-        let components = self
-            .component_client
-            .get_environment_components(&environment_id)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let text = serde_json::to_string_pretty(&components)
-            .unwrap_or_else(|_| "Failed to serialize components".into());
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents::text(text, uri)],
-        })
+    fn resource_from_path(path: &Path, root: &Path) -> Option<Resource> {
+        let uri = Url::from_file_path(path).ok()?;
+        let name = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        let mut raw = RawResource::new(uri.to_string(), name);
+        raw.description = Some("Golem manifest file".to_string());
+        raw.mime_type = Some("text".to_string());
+        Some(Resource::new(raw, None))
     }
 
-    async fn read_workers_resource(
-        &self,
-        uri: &str,
-        component_id: &str,
-        query: &[(String, String)],
-    ) -> Result<ReadResourceResult, McpError> {
-        let component_id = Self::parse_uuid(component_id, "component_id")?;
-        let filter = query
-            .iter()
-            .find(|(key, _)| key == "filter")
-            .map(|(_, value)| value.clone());
-        let max_count = query
-            .iter()
-            .find(|(key, _)| key == "max_count")
-            .and_then(|(_, value)| value.parse::<u64>().ok());
-
-        let workers = self
-            .worker_client
-            .get_workers_metadata(
-                &component_id,
-                filter.as_ref().map(|value| vec![value.clone()]).as_deref(),
-                None,
-                max_count,
-                Some(false),
-            )
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let text = serde_json::to_string_pretty(&workers)
-            .unwrap_or_else(|_| "Failed to serialize workers".into());
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents::text(text, uri)],
-        })
+    fn manifest_paths_in_dir(dir: &Path, paths: &mut HashSet<PathBuf>) {
+        for filename in MANIFEST_FILE_NAMES {
+            let candidate = dir.join(filename);
+            if candidate.is_file() {
+                paths.insert(candidate);
+            }
+        }
     }
 
-    async fn read_worker_oplog_resource(
-        &self,
-        uri: &str,
-        component_id: &str,
-        worker_name: &str,
-        query: &[(String, String)],
-    ) -> Result<ReadResourceResult, McpError> {
-        let component_id = Self::parse_uuid(component_id, "component_id")?;
-        let from = query
-            .iter()
-            .find(|(key, _)| key == "from")
-            .and_then(|(_, value)| value.parse::<u64>().ok());
-        let count = query
-            .iter()
-            .find(|(key, _)| key == "count")
-            .and_then(|(_, value)| value.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_OPLOG_COUNT);
-        let query_filter = query
-            .iter()
-            .find(|(key, _)| key == "query")
-            .map(|(_, value)| value.clone());
+    fn discover_manifest_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let mut paths = HashSet::new();
 
-        let response = self
-            .worker_client
-            .get_oplog(
-                &component_id,
-                worker_name,
-                from,
-                count,
-                None,
-                query_filter.as_deref(),
-            )
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let text = serde_json::to_string_pretty(&response)
-            .unwrap_or_else(|_| "Failed to serialize worker logs".into());
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents::text(text, uri)],
-        })
+        Self::manifest_paths_in_dir(&self.manifest_root, &mut paths);
+
+        let mut current = self.manifest_root.clone();
+        while let Some(parent) = current.parent() {
+            Self::manifest_paths_in_dir(parent, &mut paths);
+            current = parent.to_path_buf();
+        }
+
+        if let Ok(entries) = fs::read_dir(&self.manifest_root) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    Self::manifest_paths_in_dir(&entry.path(), &mut paths);
+                }
+            }
+        }
+
+        let mut paths: Vec<PathBuf> = paths
+            .into_iter()
+            .filter_map(|path| path.canonicalize().ok())
+            .collect();
+        paths.sort();
+        Ok(paths)
     }
 
-    async fn read_deployments_resource(
+    async fn read_manifest_resource(
         &self,
         uri: &str,
-        environment_id: &str,
-        query: &[(String, String)],
+        path: &Path,
     ) -> Result<ReadResourceResult, McpError> {
-        let environment_id = Self::parse_uuid(environment_id, "environment_id")?;
-        let version = query
-            .iter()
-            .find(|(key, _)| key == "version")
-            .map(|(_, value)| value.clone());
-
-        let deployments = self
-            .environment_client
-            .list_deployments(&environment_id, version.as_deref())
-            .await
+        let text = fs::read_to_string(path)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let text = serde_json::to_string_pretty(&deployments)
-            .unwrap_or_else(|_| "Failed to serialize deployments".into());
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents::text(text, uri)],
-        })
-    }
-
-    async fn read_deployment_summary_resource(
-        &self,
-        uri: &str,
-        environment_id: &str,
-        deployment_id: &str,
-    ) -> Result<ReadResourceResult, McpError> {
-        let environment_id = Self::parse_uuid(environment_id, "environment_id")?;
-        let deployment_id = deployment_id.parse::<u64>().map_err(|_| {
-            McpError::invalid_params(
-                format!("Invalid deployment_id: {}", deployment_id),
-                None,
-            )
-        })?;
-
-        let deployment = self
-            .environment_client
-            .get_deployment_summary(&environment_id, deployment_id)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let text = serde_json::to_string_pretty(&deployment)
-            .unwrap_or_else(|_| "Failed to serialize deployment summary".into());
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents::text(text, uri)],
-        })
-    }
-
-    async fn read_environment_resource(
-        &self,
-        uri: &str,
-        environment_id: &str,
-    ) -> Result<ReadResourceResult, McpError> {
-        let environment_id = Self::parse_uuid(environment_id, "environment_id")?;
-        let environment = self
-            .environment_client
-            .get_environment(&environment_id)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let text = serde_json::to_string_pretty(&environment)
-            .unwrap_or_else(|_| "Failed to serialize environment".into());
         Ok(ReadResourceResult {
             contents: vec![ResourceContents::text(text, uri)],
         })
@@ -580,7 +474,13 @@ impl ServerHandler for GolemMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        let resources = Vec::new();
+        let manifest_paths = self
+            .discover_manifest_paths()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let resources = manifest_paths
+            .iter()
+            .filter_map(|path| Self::resource_from_path(path, &self.manifest_root))
+            .collect();
 
         Ok(ListResourcesResult {
             resources,
@@ -594,38 +494,7 @@ impl ServerHandler for GolemMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
-        let resource_templates = vec![
-            Self::resource_template(
-                "golem://components/{environment_id}",
-                "component_list",
-                Some("List components for an environment"),
-            ),
-            Self::resource_template(
-                "golem://workers/{component_id}",
-                "worker_list",
-                Some("List workers for a component"),
-            ),
-            Self::resource_template(
-                "golem://workers/{component_id}/{worker_name}/oplog{?from,count,query}",
-                "worker_logs",
-                Some("Worker oplog entries"),
-            ),
-            Self::resource_template(
-                "golem://deployments/{environment_id}",
-                "deployment_list",
-                Some("List deployments for an environment"),
-            ),
-            Self::resource_template(
-                "golem://deployments/{environment_id}/current",
-                "deployment_current",
-                Some("Get current deployment status for an environment"),
-            ),
-            Self::resource_template(
-                "golem://deployments/{environment_id}/{deployment_id}",
-                "deployment_summary",
-                Some("Get deployment summary for an environment"),
-            ),
-        ];
+        let resource_templates = Vec::new();
 
         Ok(ListResourceTemplatesResult {
             resource_templates,
@@ -642,82 +511,57 @@ impl ServerHandler for GolemMcpServer {
         let uri = request.uri;
         let url = Url::parse(&uri).map_err(|err| Self::invalid_uri_error(&uri, &err.to_string()))?;
 
-        if url.scheme() != "golem" {
+        if url.scheme() != "file" {
             return Err(Self::invalid_uri_error(
                 &uri,
-                "unsupported scheme (expected golem://)",
+                "unsupported scheme (expected file://)",
             ));
         }
 
-        let host = url.host_str().ok_or_else(|| {
-            Self::invalid_uri_error(&uri, "missing host (expected golem://<resource>)")
-        })?;
-        let segments: Vec<&str> = url
-            .path_segments()
-            .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
-            .unwrap_or_default();
-        let query_pairs: Vec<(String, String)> =
-            url.query_pairs().map(|(k, v)| (k.into(), v.into())).collect();
+        let path = url
+            .to_file_path()
+            .map_err(|_| Self::invalid_uri_error(&uri, "invalid file path"))?;
+        let path = path
+            .canonicalize()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        match host {
-            "components" => match segments.as_slice() {
-                [environment_id] => self.read_components_resource(&uri, environment_id).await,
-                _ => Err(Self::invalid_uri_error(
-                    &uri,
-                    "expected golem://components/{environment_id}",
-                )),
-            },
-            "workers" => match segments.as_slice() {
-                [component_id] => self
-                    .read_workers_resource(&uri, component_id, &query_pairs)
-                    .await,
-                [component_id, worker_name, "oplog"] => {
-                    self.read_worker_oplog_resource(&uri, component_id, worker_name, &query_pairs)
-                        .await
-                }
-                _ => Err(Self::invalid_uri_error(
-                    &uri,
-                    "expected golem://workers/{component_id} or golem://workers/{component_id}/{worker_name}/oplog",
-                )),
-            },
-            "deployments" => match segments.as_slice() {
-                [environment_id] => self
-                    .read_deployments_resource(&uri, environment_id, &query_pairs)
-                    .await,
-                [environment_id, "current"] => {
-                    self.read_environment_resource(&uri, environment_id).await
-                }
-                [environment_id, deployment_id] => {
-                    self.read_deployment_summary_resource(&uri, environment_id, deployment_id)
-                        .await
-                }
-                _ => Err(Self::invalid_uri_error(
-                    &uri,
-                    "expected golem://deployments/{environment_id} or golem://deployments/{environment_id}/current or golem://deployments/{environment_id}/{deployment_id}",
-                )),
-            },
-            _ => Err(McpError::resource_not_found(
-                format!("Unknown resource '{}'.", host),
+        let manifest_paths = self
+            .discover_manifest_paths()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        if !manifest_paths.contains(&path) {
+            return Err(McpError::resource_not_found(
+                "Manifest resource not found".to_string(),
                 None,
-            )),
+            ));
         }
+
+        self.read_manifest_resource(&uri, &path).await
     }
 }
 
 /// Start the MCP server using stdio transport
-pub async fn run_mcp_server() -> anyhow::Result<()> {
-    eprintln!("Starting Golem MCP Server...");
-
+pub async fn run_mcp_server(port: u16) -> anyhow::Result<()> {
     let server = GolemMcpServer::from_env()?;
+    let service: StreamableHttpService<GolemMcpServer> = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        Default::default(),
+        StreamableHttpServerConfig::default(),
+    );
 
-    eprintln!("MCP Server initialized. Waiting for connections...");
-
-    let service = server
-        .serve(rmcp::transport::stdio())
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .context("Failed to start MCP server")?;
+        .context("Failed to bind MCP server port")?;
 
-    service.waiting().await?;
+    println!("golem-cli running MCP Server at port {}", port);
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await
+        .context("MCP server terminated unexpectedly")?;
 
     Ok(())
 }

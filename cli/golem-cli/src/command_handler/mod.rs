@@ -38,6 +38,7 @@ use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::rib_repl::RibReplHandler;
+use crate::mcp;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
@@ -99,6 +100,12 @@ pub struct CommandHandler<Hooks: CommandHandlerHooks> {
 }
 
 impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
+    fn serve_port_or_err(global_flags: &GolemCliGlobalFlags) -> anyhow::Result<u16> {
+        global_flags
+            .serve_port
+            .ok_or_else(|| anyhow!("--serve requires --serve-port"))
+    }
+
     // NOTE: setting log_output_for_help also means that we are loading the context for showing
     //       help or messages with help, meaning validation warns and confirms should be silenced
     //       for the manifest
@@ -159,6 +166,27 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
+                if command.global_flags.serve {
+                    let port = match Self::serve_port_or_err(&command.global_flags) {
+                        Ok(port) => port,
+                        Err(error) => {
+                            set_log_output(Output::Stderr);
+                            log_error(format!("{error:#}"));
+                            return ExitCode::FAILURE;
+                        }
+                    };
+
+                    let result = mcp::run_mcp_server(port).await;
+                    return match result {
+                        Ok(()) => ExitCode::SUCCESS,
+                        Err(error) => {
+                            set_log_output(Output::Stderr);
+                            log_error(format!("{error:#}"));
+                            ExitCode::FAILURE
+                        }
+                    };
+                }
+
                 match Self::new_with_init_hint_error_handler(
                     command.global_flags.clone(),
                     None,
@@ -197,6 +225,27 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 partial_match,
             } => {
                 init_tracing(fallback_command.global_flags.verbosity(), false);
+
+                if fallback_command.global_flags.serve {
+                    let port = match Self::serve_port_or_err(&fallback_command.global_flags) {
+                        Ok(port) => port,
+                        Err(error) => {
+                            set_log_output(Output::Stderr);
+                            log_error(format!("{error:#}"));
+                            return ExitCode::FAILURE;
+                        }
+                    };
+
+                    let result = mcp::run_mcp_server(port).await;
+                    return match result {
+                        Ok(()) => ExitCode::SUCCESS,
+                        Err(error) => {
+                            set_log_output(Output::Stderr);
+                            log_error(format!("{error:#}"));
+                            ExitCode::FAILURE
+                        }
+                    };
+                }
 
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error, &fallback_command);

@@ -126,7 +126,8 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
-rmcp = { version = "0.14.0", features = ["transport-io", "server"] }
+axum = { workspace = true }
+rmcp = { version = "0.14.0", features = ["client", "server", "transport-io", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
 openssl = { workspace = true }

@@ -160,6 +160,14 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, global = true, display_order = 113)]
     pub template_group: Option<String>,
 
+    /// Serve the MCP server over HTTP/SSE
+    #[arg(long, global = true, display_order = 114)]
+    pub serve: bool,
+
+    /// Port to serve the MCP server on
+    #[arg(long = "serve-port", global = true, display_order = 115)]
+    pub serve_port: Option<u16>,
+
     #[command(flatten)]
     verbosity: Verbosity,
 
@@ -765,11 +773,15 @@ pub mod mcp {
         /// - GOLEM_API_URL: Golem API URL (default: https://api.golem.cloud)
         #[derive(Parser, Debug)]
         #[command()]
-        pub struct McpServe;
+        pub struct McpServe {
+            /// Port to serve the MCP server on
+            #[arg(long = "serve-port")]
+            pub serve_port: u16,
+        }
 
         impl McpServe {
             pub async fn handle(&self) -> anyhow::Result<()> {
-                crate::mcp::run_mcp_server().await
+                crate::mcp::run_mcp_server(self.serve_port).await
             }
         }
     }
@@ -783,7 +795,7 @@ pub mod mcp {
 
     #[derive(Subcommand, Debug)]
     pub enum McpSubcommand {
-        /// Start the MCP server (uses stdio transport)
+        /// Start the MCP server (HTTP/SSE transport)
         Serve(serve::McpServe),
     }
 
