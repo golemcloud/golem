@@ -133,6 +133,9 @@ impl AgentsService {
                         vec![
                             request.method_name.into_value_and_type(),
                             method_parameters.into_value_and_type(),
+                            // Fixme: this needs to come from the invocation that caused this agent to be created
+                            golem_common::model::agent::Principal::anonymous()
+                                .into_value_and_type(),
                         ],
                         None,
                         auth,

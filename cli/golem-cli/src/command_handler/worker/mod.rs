@@ -103,7 +103,7 @@ impl WorkerCommandHandler {
                 arguments,
                 trigger,
                 idempotency_key,
-                stream,
+                no_stream,
                 stream_args,
                 deploy_args,
             } => {
@@ -113,7 +113,7 @@ impl WorkerCommandHandler {
                     arguments,
                     trigger,
                     idempotency_key,
-                    stream,
+                    no_stream,
                     stream_args,
                     deploy_args,
                 )
@@ -250,7 +250,7 @@ impl WorkerCommandHandler {
         arguments: Vec<WorkerFunctionArgument>,
         trigger: bool,
         idempotency_key: Option<IdempotencyKey>,
-        stream: bool,
+        no_stream: bool,
         stream_args: StreamArgs,
         deploy_args: Option<DeployArgs>,
     ) -> anyhow::Result<()> {
@@ -407,7 +407,7 @@ impl WorkerCommandHandler {
                 arguments,
                 idempotency_key.clone(),
                 trigger,
-                stream.then_some(stream_args),
+                (!no_stream).then_some(stream_args),
             )
             .await?;
 
@@ -1765,7 +1765,7 @@ impl WorkerCommandHandler {
                             log_text_view(&WorkerNameHelp);
                             logln("");
                             log_text_view(&AvailableComponentNamesHelp(
-                                app_ctx.application.component_names().cloned().collect(),
+                                app_ctx.application().component_names().cloned().collect(),
                             ));
                             bail!(NonSuccessfulExit);
                         }
@@ -1910,7 +1910,10 @@ impl WorkerCommandHandler {
                 match app_ctx {
                     Some(app_ctx) if environment.is_manifest_scoped() => {
                         let fuzzy_search = FuzzySearch::new(
-                            app_ctx.application.component_names().map(|cn| cn.as_str()),
+                            app_ctx
+                                .application()
+                                .component_names()
+                                .map(|cn| cn.as_str()),
                         );
                         match fuzzy_search.find(&component_name.0) {
                             Ok(match_) => {
@@ -1942,7 +1945,7 @@ impl WorkerCommandHandler {
                                     log_text_view(&WorkerNameHelp);
                                     logln("");
                                     log_text_view(&AvailableComponentNamesHelp(
-                                        app_ctx.application.component_names().cloned().collect(),
+                                        app_ctx.application().component_names().cloned().collect(),
                                     ));
 
                                     bail!(NonSuccessfulExit);

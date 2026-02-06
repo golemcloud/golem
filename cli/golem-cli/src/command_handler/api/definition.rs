@@ -458,7 +458,7 @@ impl ApiDefinitionCommandHandler {
         let app_ctx = app_ctx.some_or_err()?;
 
         Ok(app_ctx
-            .application
+            .application()
             .http_api_definitions()
             .iter()
             .map(|(name, source_and_value)| (name.clone(), source_and_value.value.clone()))

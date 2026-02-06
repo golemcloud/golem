@@ -17,43 +17,84 @@ use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::remote_components::RemoteComponents;
-use crate::fs::{compile_and_collect_globs, PathExtra};
+use crate::fs;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
-    includes_from_yaml_file, Application, ApplicationComponentSelectMode, ApplicationConfig,
-    ApplicationNameAndEnvironments, ApplicationSourceMode, BinaryComponentSource, CleanMode,
-    ComponentPresetSelector, ComponentStubInterfaces, DependentComponent, DynamicHelpSections,
-    WithSource, DEFAULT_CONFIG_FILE_NAME,
+    includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
+    ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode,
+    BinaryComponentSource, BuildConfig, CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget,
+    DependentComponent, DynamicHelpSections, WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentName;
+use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use tokio::sync::RwLockReadGuard;
 
-pub struct ApplicationContext {
-    pub loaded_with_warnings: bool,
-    pub config: ApplicationConfig,
-    pub application: Application,
-    pub wit: ResolvedWitApplication,
-    pub calling_working_dir: PathBuf,
-    component_stub_defs: HashMap<ComponentName, StubDefinition>,
-    common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
-    component_generated_base_wit_deps: HashMap<ComponentName, WitDepsResolver>,
-    selected_component_names: BTreeSet<ComponentName>,
-    remote_components: RemoteComponents,
-    pub tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
+pub struct BuildContext<'a> {
+    application_context: &'a ApplicationContext,
+    build_config: &'a BuildConfig,
+}
+
+impl<'a> BuildContext<'a> {
+    pub fn new(application_context: &'a ApplicationContext, build_config: &'a BuildConfig) -> Self {
+        Self {
+            application_context,
+            build_config,
+        }
+    }
+
+    pub fn application_context(&self) -> &ApplicationContext {
+        self.application_context
+    }
+
+    pub fn application(&self) -> &Application {
+        &self.application_context.application
+    }
+
+    pub fn application_config(&self) -> &ApplicationConfig {
+        &self.application_context.config
+    }
+
+    pub async fn wit(&self) -> RwLockReadGuard<'_, ResolvedWitApplication> {
+        self.application_context.wit.read().await
+    }
+
+    pub fn build_config(&self) -> &BuildConfig {
+        self.build_config
+    }
+
+    pub fn should_run_step(&self, step: AppBuildStep) -> bool {
+        self.build_config().should_run_step(step)
+    }
+
+    pub fn custom_bridge_sdk_target(&self) -> Option<&CustomBridgeSdkTarget> {
+        self.build_config.custom_bridge_sdk_target.as_ref()
+    }
+
+    pub fn repl_bridge_sdk_target(&self) -> Option<&CustomBridgeSdkTarget> {
+        self.build_config.repl_bridge_sdk_target.as_ref()
+    }
+
+    pub fn skip_up_to_date_checks(&self) -> bool {
+        self.build_config.skip_up_to_date_checks
+    }
+
+    pub fn tools_with_ensured_common_deps(&self) -> &ToolsWithEnsuredCommonDeps {
+        &self.application_context.tools_with_ensured_common_deps
+    }
 }
 
 pub struct ToolsWithEnsuredCommonDeps {
@@ -103,6 +144,20 @@ pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
     pub application_name_and_environments: Option<ApplicationNameAndEnvironments>,
+}
+
+// TODO: review pub fields?
+pub struct ApplicationContext {
+    loaded_with_warnings: bool,
+    config: ApplicationConfig,
+    application: Application,
+    wit: tokio::sync::RwLock<ResolvedWitApplication>,
+    calling_working_dir: PathBuf,
+    // component_stub_defs: HashMap<ComponentName, StubDefinition>, // TODO: WASM RPC cleanup
+    common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
+    selected_component_names: BTreeSet<ComponentName>,
+    remote_components: RemoteComponents,
+    tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
 }
 
 impl ApplicationContext {
@@ -161,73 +216,89 @@ impl ApplicationContext {
         Ok(Some(ctx))
     }
 
+    pub fn loaded_with_warnings(&self) -> bool {
+        self.loaded_with_warnings
+    }
+
+    pub fn application(&self) -> &Application {
+        &self.application
+    }
+
+    pub async fn wit(&self) -> RwLockReadGuard<'_, ResolvedWitApplication> {
+        self.wit.read().await
+    }
+
+    pub fn new_repl_bridge_sdk_target(&self, language: GuestLanguage) -> CustomBridgeSdkTarget {
+        let repl_root_bridge_sdk_dir = self.application.repl_root_bridge_sdk_dir(language);
+        CustomBridgeSdkTarget {
+            agent_type_names: Default::default(),
+            target_language: Some(language),
+            output_dir: Some(repl_root_bridge_sdk_dir.clone()),
+        }
+    }
+
     async fn create_context(
         app_and_calling_working_dir: ValidatedResult<(Application, PathBuf)>,
         config: ApplicationConfig,
         file_download_client: reqwest::Client,
     ) -> ValidatedResult<ApplicationContext> {
-        let mut result = ValidatedResult::Ok(());
-
-        let (r, v) = result.merge_and_get(app_and_calling_working_dir);
-        result = r;
-        if let Some((application, calling_working_dir)) = v {
-            let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
-            let wit_result = ResolvedWitApplication::new(
-                &application,
-                &tools_with_ensured_common_deps,
-                config.enable_wasmtime_fs_cache,
-            )
-            .await;
-
-            let (r, v) = result.merge_and_get(wit_result);
-            result = r;
-            if let Some(wit) = v {
-                let temp_dir = application.temp_dir().to_path_buf();
-                let offline = config.offline;
-                let ctx = ApplicationContext {
-                    loaded_with_warnings: false,
-                    config,
-                    application,
-                    wit,
-                    calling_working_dir,
-                    component_stub_defs: HashMap::new(),
-                    common_wit_deps: OnceLock::new(),
-                    component_generated_base_wit_deps: HashMap::new(),
-                    selected_component_names: BTreeSet::new(),
-                    remote_components: RemoteComponents::new(
-                        file_download_client,
-                        temp_dir.to_path_buf(),
-                        offline,
-                    ),
-                    tools_with_ensured_common_deps,
-                };
-                ValidatedResult::Ok(ctx)
-            } else {
-                result.expect_error()
-            }
-        } else {
-            result.expect_error()
-        }
+        let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
+        app_and_calling_working_dir
+            .and_then_async(async |(application, calling_working_dir)| {
+                ResolvedWitApplication::new(
+                    &application,
+                    &tools_with_ensured_common_deps,
+                    config.enable_wasmtime_fs_cache,
+                )
+                .await
+                .map(|wit| {
+                    let temp_dir = application.temp_dir().to_path_buf();
+                    let offline = config.offline;
+                    ApplicationContext {
+                        loaded_with_warnings: false,
+                        config,
+                        application,
+                        wit: tokio::sync::RwLock::new(wit),
+                        calling_working_dir,
+                        common_wit_deps: OnceLock::new(),
+                        selected_component_names: BTreeSet::new(),
+                        remote_components: RemoteComponents::new(
+                            file_download_client,
+                            temp_dir.to_path_buf(),
+                            offline,
+                        ),
+                        tools_with_ensured_common_deps,
+                    }
+                })
+            })
+            .await
     }
 
-    pub async fn update_wit_context(&mut self) -> anyhow::Result<()> {
+    pub async fn update_wit_context(&self) -> anyhow::Result<()> {
+        let mut wit = self.wit.write().await;
+        let (result, new_wit) = ResolvedWitApplication::new(
+            &self.application,
+            &self.tools_with_ensured_common_deps,
+            self.config.enable_wasmtime_fs_cache,
+        )
+        .await
+        .take();
+
+        if let Some(new_wit) = new_wit {
+            *wit = new_wit;
+        }
+
         to_anyhow(
             "Failed to update application wit context, see problems above",
-            ResolvedWitApplication::new(
-                &self.application,
-                &self.tools_with_ensured_common_deps,
-                self.config.enable_wasmtime_fs_cache,
-            )
-            .await
-            .map(|wit| {
-                self.wit = wit;
-            }),
+            result,
             None,
         )
     }
 
+    // TODO: WASM RPC cleanup
+    /*
     pub fn component_stub_def(
-        &mut self,
+        &self,
         component_name: &ComponentName,
     ) -> anyhow::Result<&StubDefinition> {
         if !self.component_stub_defs.contains_key(component_name) {
@@ -270,6 +341,7 @@ impl ApplicationContext {
         };
         Ok(result)
     }
+    */
 
     pub fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
         match self
@@ -289,27 +361,14 @@ impl ApplicationContext {
     }
 
     pub fn component_base_output_wit_deps(
-        &mut self,
+        &self,
         component_name: &ComponentName,
-    ) -> anyhow::Result<&WitDepsResolver> {
-        // Not using the entry API, so we can skip copying the component name
-        if !self
-            .component_generated_base_wit_deps
-            .contains_key(component_name)
-        {
-            self.component_generated_base_wit_deps.insert(
-                component_name.clone(),
-                WitDepsResolver::new(vec![self
-                    .application
-                    .component(component_name)
-                    .generated_base_wit()
-                    .join(naming::wit::DEPS_DIR)])?,
-            );
-        }
-        Ok(self
-            .component_generated_base_wit_deps
-            .get(component_name)
-            .unwrap())
+    ) -> anyhow::Result<WitDepsResolver> {
+        WitDepsResolver::new(vec![self
+            .application
+            .component(component_name)
+            .generated_base_wit()
+            .join(naming::wit::DEPS_DIR)])
     }
 
     pub fn select_components(
@@ -436,16 +495,20 @@ impl ApplicationContext {
             .collect()
     }
 
-    pub async fn build(&mut self) -> anyhow::Result<()> {
-        build_app(self).await
+    pub async fn build(&self, build_config: &BuildConfig) -> anyhow::Result<()> {
+        build_app(&BuildContext::new(self, build_config)).await
     }
 
-    pub async fn custom_command(&self, command_name: &str) -> Result<(), CustomCommandError> {
-        execute_custom_command(self, command_name).await
+    pub async fn custom_command(
+        &self,
+        build_config: &BuildConfig,
+        command_name: &str,
+    ) -> Result<(), CustomCommandError> {
+        execute_custom_command(&BuildContext::new(self, build_config), command_name).await
     }
 
-    pub fn clean(&self, mode: CleanMode) -> anyhow::Result<()> {
-        clean_app(self, mode)
+    pub fn clean(&self, build_config: &BuildConfig, mode: CleanMode) -> anyhow::Result<()> {
+        clean_app(&BuildContext::new(self, build_config), mode)
     }
 
     pub async fn resolve_binary_component_source(
@@ -744,8 +807,8 @@ fn collect_sources_and_switch_to_app_root(
     let _indent = LogIndent::new();
 
     fn collect_by_main_source(source: &Path) -> Option<ValidatedResult<BTreeSet<PathBuf>>> {
-        let source_ext = PathExtra::new(&source);
-        let source_dir = source_ext.parent().unwrap();
+        let source_dir =
+            fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
         std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
 
         let includes = includes_from_yaml_file(source);
@@ -753,12 +816,11 @@ fn collect_sources_and_switch_to_app_root(
             Some(ValidatedResult::Ok(BTreeSet::from([source.to_path_buf()])))
         } else {
             Some(
-                ValidatedResult::from_result(compile_and_collect_globs(source_dir, &includes)).map(
-                    |mut sources| {
+                ValidatedResult::from_result(fs::compile_and_collect_globs(source_dir, &includes))
+                    .map(|mut sources| {
                         sources.insert(0, source.to_path_buf());
                         sources.into_iter().collect()
-                    },
-                ),
+                    }),
             )
         }
     }

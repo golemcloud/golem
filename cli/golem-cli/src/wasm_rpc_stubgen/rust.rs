@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::fs;
-use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::{FunctionResultStub, FunctionStub, StubDefinition};
@@ -24,6 +23,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use semver::Version;
 use std::collections::{HashMap, HashSet};
+use tracing::debug;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
     Enum, Flags, Handle, PackageName, Record, Result_, Tuple, Type, TypeDef, TypeDefKind,
@@ -322,14 +322,14 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let syntax_tree = syn::parse2(lib)?;
     let src = prettyplease::unparse(&syntax_tree);
 
-    let target_rust_path = PathExtra::new(def.client_rust_path());
+    let target_rust_path = def.client_rust_path();
 
     log_action(
         "Generating",
         format!("stub source to {}", target_rust_path.log_color_highlight()),
     );
-    println!("target: {:?}", target_rust_path.as_path());
-    fs::create_dir_all(target_rust_path.parent()?)?;
+    debug!("target: {:?}", target_rust_path.as_path());
+    fs::create_dir_all(fs::parent_or_err(&target_rust_path)?)?;
     fs::write(def.client_rust_path(), src)?;
     Ok(())
 }
