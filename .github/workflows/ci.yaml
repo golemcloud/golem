@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.0.22"
+  WASM_RQUICKJS_VERSION: "0.0.23"
 
 jobs:
   build-and-store:
