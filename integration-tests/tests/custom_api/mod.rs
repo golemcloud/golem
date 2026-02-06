@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod agent_http_routes_ts;
+mod agent_http_routes_rust;
 // mod echo_agent;
 // mod shopping_cart;
 

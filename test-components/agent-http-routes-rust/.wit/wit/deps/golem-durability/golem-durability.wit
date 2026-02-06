@@ -1,0 +1,92 @@
+package golem:durability@1.3.0;
+
+interface durability {
+    use golem:api/host@1.3.0.{persistence-level};
+    use golem:api/oplog@1.3.0.{oplog-index, wrapped-function-type};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use wasi:io/poll@0.2.3.{pollable};
+    use golem:rpc/types@0.2.2.{value-and-type};
+
+    type durable-function-type = wrapped-function-type;
+
+    /// Represents the current durable execution state
+    record durable-execution-state {
+        /// If true, the executor is in live mode, side-effects should be performed and persisted.
+        /// If false, the executor is in replay mode, side-effects should be replayed from the persisted data.
+        is-live: bool,
+        /// The currently active persistence level
+        persistence-level: persistence-level,
+    }
+
+    /// Represents the oplog entry version; this is for backward compatibility and most use cases should always use
+    /// (and expect) the latest version.
+    enum oplog-entry-version {
+        v1,
+        v2
+    }
+
+    /// Represents a persisted durable function invocation. The `response` field
+    /// contains a value and its type information together, making the user-defined payload observable by external tools.
+    record persisted-durable-function-invocation {
+        /// The timestamp of the invocation.
+        timestamp: datetime,
+        /// The invoked function's unique name
+        function-name: string,
+        /// Arbitrary structured value (and type) describing the invocation's result
+        response: value-and-type,
+        /// Type of the durable function invocation
+        function-type: durable-function-type,
+        /// Oplog entry version
+        entry-version: oplog-entry-version
+    }
+
+    /// Observes a function call (produces logs and metrics)
+    observe-function-call: func(iface: string, function: string);
+
+    /// Marks the beginning of a durable function.
+    ///
+    /// There must be a corresponding call to `end-durable-function` after the function has
+    /// performed its work (it can be ended in a different context, for example after an async
+    /// pollable operation has been completed)
+    begin-durable-function: func(function-type: durable-function-type) -> oplog-index;
+
+    /// Marks the end of a durable function
+    ///
+    /// This is a pair of `begin-durable-function` and should be called after the durable function
+    /// has performed and persisted or replayed its work. The `begin-index` should be the index
+    /// returned by `begin-durable-function`.
+    ///
+    /// Normally commit behavior is decided by the executor based on the `function-type`. However, in special
+    /// cases the `forced-commit` parameter can be used to force commit the oplog in an efficient way.
+    end-durable-function: func(function-type: durable-function-type, begin-index: oplog-index, forced-commit: bool);
+
+    /// Gets the current durable execution state
+    current-durable-execution-state: func() -> durable-execution-state;
+
+    /// Writes a record to the agent's oplog representing a durable function invocation
+    ///
+    /// The request and response are defined as pairs of value and type, which makes it
+    /// self-describing for observers of oplogs.
+    persist-durable-function-invocation: func(
+        function-name: string,
+        request: value-and-type,
+        response: value-and-type,
+        function-type: durable-function-type,
+    );
+
+    /// Reads the next persisted durable function invocation from the oplog during replay
+    read-persisted-durable-function-invocation: func() -> persisted-durable-function-invocation;
+
+    /// A pollable which can be later attached to a real `pollable`, but it can be subscribed to even
+    /// before that.
+    resource lazy-initialized-pollable {
+        /// Creates a `pollable` that is never ready until it gets attached to a real `pollable` implementation
+        /// using `set-lazy-initialized-pollable`.
+        constructor();
+
+        /// Sets the underlying `pollable` for a pollable created with `create-lazy-initialized-pollable`.
+        set: func(pollable: pollable);
+
+        subscribe: func() -> pollable;
+    }
+}
