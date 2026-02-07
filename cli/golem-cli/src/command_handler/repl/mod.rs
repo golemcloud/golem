@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::context::ApplicationContext;
-use crate::command::shared_args::DeployArgs;
+use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::repl::rib::CliRibRepl;
 use crate::command_handler::repl::rust::RustRepl;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
@@ -53,7 +53,7 @@ impl ReplHandler {
         language: Option<ReplLanguage>,
         component_name: Option<ComponentName>,
         component_revision: Option<ComponentRevision>,
-        deploy_args: Option<&DeployArgs>,
+        post_deploy_args: Option<&PostDeployArgs>,
         script: Option<String>,
         script_file: Option<PathBuf>,
         stream_logs: bool,
@@ -72,7 +72,7 @@ impl ReplHandler {
             self.rib_repl(
                 component_name,
                 component_revision,
-                deploy_args,
+                post_deploy_args,
                 script_input,
                 stream_logs,
             )
@@ -82,7 +82,7 @@ impl ReplHandler {
                 bail!("Component name and revision is only supported for Rib REPL.");
             }
 
-            if deploy_args.is_some() {
+            if post_deploy_args.is_some() {
                 bail!("Deploy arguments are only supported for Rib REPL.");
             }
 
@@ -186,7 +186,7 @@ impl ReplHandler {
         &self,
         component_name: Option<ComponentName>,
         component_revision: Option<ComponentRevision>,
-        deploy_args: Option<&DeployArgs>,
+        post_deploy_args: Option<&PostDeployArgs>,
         script: Option<String>,
         stream_logs: bool,
     ) -> anyhow::Result<()> {
@@ -216,7 +216,7 @@ impl ReplHandler {
                 ComponentNameMatchKind::App,
                 &component_name,
                 component_revision.map(|r| r.into()),
-                deploy_args,
+                post_deploy_args,
             )
             .await?;
 

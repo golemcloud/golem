@@ -17,8 +17,8 @@ use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_action;
+use crate::log::log_error;
 use crate::model::format::Format;
-use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use std::sync::Arc;
 

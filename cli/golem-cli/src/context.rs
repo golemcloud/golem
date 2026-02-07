@@ -14,7 +14,7 @@
 
 use crate::app::context::ApplicationContext;
 use crate::client::{new_reqwest_client, GolemClients};
-use crate::command::shared_args::DeployArgs;
+use crate::command::shared_args::PostDeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::config::{
@@ -66,7 +66,7 @@ pub struct Context {
     config_dir: PathBuf,
     format: Format,
     help_mode: bool,
-    deploy_args: DeployArgs,
+    post_deploy_args: PostDeployArgs,
     profile: NamedProfile,
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<SelectedManifestEnvironment>,
@@ -230,7 +230,7 @@ impl Context {
         let profile = Self::load_profile(&global_flags, use_cloud_profile_for_env)?;
 
         let mut yes = global_flags.yes;
-        let mut deploy_args = DeployArgs::none();
+        let mut deploy_args = PostDeployArgs::none();
         if let Some(selected_manifest_environment) = &manifest_environment {
             if let Some(cli) = selected_manifest_environment.environment.cli.as_ref() {
                 if cli.auto_confirm == Some(Marker) {
@@ -330,7 +330,7 @@ impl Context {
             config_dir: global_flags.config_dir(),
             format,
             help_mode: log_output_for_help.is_some(),
-            deploy_args,
+            post_deploy_args: deploy_args,
             profile,
             app_context_config,
             http_batch_size: global_flags.http_batch_size(),
@@ -397,8 +397,8 @@ impl Context {
         self.show_sensitive
     }
 
-    pub fn deploy_args(&self) -> &DeployArgs {
-        &self.deploy_args
+    pub fn deploy_args(&self) -> &PostDeployArgs {
+        &self.post_deploy_args
     }
 
     pub fn server_no_limit_change(&self) -> bool {
