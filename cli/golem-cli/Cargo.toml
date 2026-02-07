@@ -145,3 +145,8 @@ wasm-metadata = { workspace = true }
 [build-dependencies]
 lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }
+
+# MCP Server dependencies
+warp = "0.3"
+walkdir = "2.5"
+serde_json = "1.0"
