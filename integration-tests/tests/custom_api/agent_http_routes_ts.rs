@@ -87,6 +87,7 @@ async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resul
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ]),
+        webhooks_url: None,
     };
 
     client

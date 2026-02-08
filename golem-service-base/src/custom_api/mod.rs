@@ -28,6 +28,8 @@ use golem_wasm::analysis::{AnalysedType, TypeList, TypeOption};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
+use golem_common::model::{OplogIndex, PromiseId, WorkerId};
+use base64::Engine;
 
 pub type RouteId = i32;
 
@@ -230,6 +232,7 @@ pub struct CompiledRoute {
     pub route_id: RouteId,
     pub method: HttpMethod,
     pub path: Vec<PathSegment>,
+    // TODO: move this into the individual route behaviours
     pub body: RequestBodySchema,
     pub behavior: RouteBehaviour,
     pub security_scheme: Option<SecuritySchemeId>,
@@ -241,6 +244,7 @@ pub struct CompiledRoute {
 pub enum RouteBehaviour {
     CallAgent(CallAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
+    WebhookCallback(WebhookCallbackBehaviour)
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -261,6 +265,12 @@ pub struct CallAgentBehaviour {
 pub struct CorsPreflightBehaviour {
     pub allowed_origins: BTreeSet<OriginPattern>,
     pub allowed_methods: BTreeSet<HttpMethod>,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct WebhookCallbackBehaviour {
+    pub component_id: ComponentId
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +306,36 @@ impl OriginPattern {
         } else {
             self.0 == origin
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+/// PromiseId (-component-id) to be base64-url encoded and used as the final segment in a webhook callback
+pub struct AgentWebhookId {
+    pub worker_name: String,
+    pub oplog_idx: OplogIndex,
+}
+
+impl AgentWebhookId {
+    pub fn into_promise_id(self, component_id: ComponentId) -> PromiseId {
+        PromiseId {
+            worker_id: WorkerId {
+                component_id,
+                worker_name: self.worker_name
+            },
+            oplog_idx: self.oplog_idx
+        }
+    }
+
+    pub fn to_base64_url(&self) -> String {
+        let bytes = serde_json::to_vec(self)
+            .expect("AgentWebhookId serialization must not fail");
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    pub fn from_base64_url(s: &str) -> anyhow::Result<Self> {
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s)?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
 }
 

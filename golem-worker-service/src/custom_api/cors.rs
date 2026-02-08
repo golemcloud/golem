@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::error::RequestHandlerError;
-use super::model::RichRequest;
+use super::RichRequest;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::HttpMethod;

@@ -5,8 +5,12 @@ import {
     endpoint,
     UnstructuredBinary,
 } from '@golemcloud/golem-ts-sdk';
+import { createWebhook } from 'golem:agent/host';
 
-@agent({ mount: '/http-agents/{agentName}' })
+@agent({
+  mount: '/http-agents/{agentName}',
+  webhookSuffix: '/http-agent'
+})
 class HttpAgent extends BaseAgent {
 
   constructor(readonly agentName: string) {
@@ -146,6 +150,15 @@ class CorsAgent extends BaseAgent {
     cors: ["https://app.example.com"]
   })
   preflight(body: { name: string }): { received: string } {
+    return { received: body.name };
+  }
+
+  // Webhook callback dance
+  @endpoint({
+    post: "/test-webhook",
+  })
+  testWebhook(): { received: string } {
+    let webhook_url = createWebhook();
     return { received: body.name };
   }
 }

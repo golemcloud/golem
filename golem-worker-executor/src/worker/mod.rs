@@ -30,7 +30,7 @@ use crate::services::{
     HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
     HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
     HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps, HasAgentDeploymentsService,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -2039,6 +2039,7 @@ impl RunningWorker {
             parent.worker_fork_service(),
             parent.resource_limits(),
             parent.agent_types(),
+            parent.agent_deployments(),
             parent.shard_service(),
             pending_update,
             None,

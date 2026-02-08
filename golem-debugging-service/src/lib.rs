@@ -72,6 +72,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, Instrument};
 use wasmtime::component::Linker;
 use wasmtime::Engine;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 
 #[cfg(test)]
 test_r::enable!();
@@ -137,6 +138,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> =
@@ -186,6 +188,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -218,12 +221,14 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
             agent_types_service,
+            agent_deployments_service,
             engine,
             linker,
             runtime.clone(),

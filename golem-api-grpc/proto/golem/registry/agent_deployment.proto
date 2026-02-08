@@ -12,6 +12,10 @@ message RegisteredAgentTypeImplementer {
 
 message RegisteredAgentType {
   golem.component.AgentType agent_type = 1;
-  RegisteredAgentTypeImplementer implementedBy = 2;
+  RegisteredAgentTypeImplementer implemented_by = 2;
 }
 
+message AgentDeploymentDetails {
+  string agent_type_name = 1;
+  optional string webhook_prefix_authority_and_path = 3;
+}

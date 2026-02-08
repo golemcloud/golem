@@ -19,6 +19,7 @@ pub mod error;
 pub mod model;
 pub mod poem_endpoint;
 pub mod request_handler;
+mod rich_request;
 pub mod route_resolver;
 pub mod router;
 pub mod security;
@@ -26,6 +27,7 @@ pub mod security;
 use self::poem_endpoint::CustomApiPoemEndpoint;
 use crate::bootstrap::Services;
 pub use model::*;
+pub use rich_request::RichRequest;
 
 pub fn make_custom_api_endpoint(services: &Services) -> CustomApiPoemEndpoint {
     CustomApiPoemEndpoint::new(services.request_handler.clone())

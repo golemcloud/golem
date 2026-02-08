@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent_deployments_service;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
@@ -80,9 +81,7 @@ use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, GolemConfig,
-    GrpcApiConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
-    MemoryConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -134,6 +133,8 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
+use self::agent_deployments_service::DisabledAgentDeploymentsService;
 
 #[cfg(test)]
 test_r::enable!();
@@ -685,6 +686,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -718,6 +720,7 @@ impl WorkerCtx for TestWorkerCtx {
             file_loader,
             worker_fork,
             agent_types_service,
+            agent_deployments_service,
             shard_service,
             pending_update,
             original_phantom_id,
@@ -1000,6 +1003,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
+    fn create_agent_deployments_service(
+        &self,
+        _config: &AgentDeploymentsServiceConfig,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn AgentDeploymentsService> {
+        Arc::new(DisabledAgentDeploymentsService)
+    }
+
     fn create_component_service(
         &self,
         _golem_config: &GolemConfig,
@@ -1039,6 +1050,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits =
@@ -1077,6 +1089,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             extra_deps.clone(),
         ));
 
@@ -1109,11 +1122,13 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             extra_deps.clone(),
         ));
         Ok(All::new(
             active_workers,
             agent_types_service,
+            agent_deployments_service,
             engine,
             linker,
             runtime,

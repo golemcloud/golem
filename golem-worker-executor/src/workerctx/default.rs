@@ -74,6 +74,7 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
+use crate::services::agent_deployments::AgentDeploymentsService;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
@@ -588,6 +589,7 @@ impl WorkerCtx for Context {
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -615,6 +617,7 @@ impl WorkerCtx for Context {
             file_loader,
             worker_fork,
             agent_types_service,
+            agent_deployments_service,
             shard_service,
             pending_update,
             original_phantom_id,

@@ -20,10 +20,7 @@ use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_worker_executor::services::golem_config::{
-    ActiveWorkersConfig, AgentTypesServiceConfig, ComponentCacheConfig, EngineConfig, GolemConfig,
-    GrpcApiConfig, IndexedStorageConfig, KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig,
-    RdbmsConfig, ResourceLimitsConfig, SchedulerConfig, ShardManagerServiceConfig,
-    ShardManagerServiceSingleShardConfig, SuspendConfig, WorkerServiceGrpcConfig,
+    ActiveWorkersConfig, AgentDeploymentsServiceConfig, AgentTypesServiceConfig, ComponentCacheConfig, EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig, KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, RdbmsConfig, ResourceLimitsConfig, SchedulerConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig, WorkerServiceGrpcConfig
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -51,6 +48,7 @@ pub struct DebugConfig {
     pub http_port: u16,
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
+    pub agent_deployments_service: AgentDeploymentsServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
     pub resource_limits: ResourceLimitsConfig,
@@ -78,6 +76,7 @@ impl DebugConfig {
             resource_limits: self.resource_limits,
             component_cache: self.component_cache,
             agent_types_service: self.agent_types_service,
+            agent_deployments_service: self.agent_deployments_service,
             engine: self.engine,
             // unused
             grpc: GrpcApiConfig::default(),
@@ -128,6 +127,7 @@ impl Default for DebugConfig {
             component_cache: ComponentCacheConfig::default(),
             registry_service: GrpcRegistryServiceConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
+            agent_deployments_service: AgentDeploymentsServiceConfig::default(),
             engine: EngineConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),

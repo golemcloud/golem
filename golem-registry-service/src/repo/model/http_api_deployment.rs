@@ -49,6 +49,7 @@ error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct HttpApiDeploymentData {
+    pub webhooks_url: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
 
@@ -90,6 +91,7 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn creation(
         http_api_deployment_id: HttpApiDeploymentId,
+        webhooks_url: String,
         agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         actor: AccountId,
     ) -> Self {
@@ -98,7 +100,10 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: HttpApiDeploymentRevision::INITIAL.into(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
-            data: Blob::new(HttpApiDeploymentData { agents }),
+            data: Blob::new(HttpApiDeploymentData {
+                webhooks_url,
+                agents
+            }),
         };
         value.update_hash();
         value
@@ -111,6 +116,7 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit,
             data: Blob::new(HttpApiDeploymentData {
+                webhooks_url: value.webhooks_url,
                 agents: value.agents,
             }),
         };
@@ -129,6 +135,7 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             data: Blob::new(HttpApiDeploymentData {
+                webhooks_url: "".to_string(),
                 agents: BTreeMap::new(),
             }),
         }
@@ -136,6 +143,7 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
+            webhooks_url: self.data.value().webhooks_url.clone(),
             agents: self
                 .data
                 .value()
@@ -177,13 +185,15 @@ pub struct HttpApiDeploymentExtRevisionRecord {
 impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
     type Error = HttpApiDeploymentRepoError;
     fn try_from(value: HttpApiDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {
+        let data = value.revision.data.into_value();
         Ok(Self {
             id: HttpApiDeploymentId(value.revision.http_api_deployment_id),
             revision: value.revision.revision_id.try_into()?,
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
-            agents: value.revision.data.into_value().agents,
+            webhooks_url: data.webhooks_url,
+            agents: data.agents,
             created_at: value.entity_created_at.into(),
         })
     }

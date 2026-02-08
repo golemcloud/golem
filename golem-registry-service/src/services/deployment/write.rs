@@ -19,7 +19,7 @@ use crate::services::component::{ComponentError, ComponentService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use futures::TryFutureExt;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -129,6 +129,22 @@ pub enum DeployValidationError {
         agent_type: AgentTypeName,
         error: String,
     },
+    #[error(
+        "Agent type {agent_type} is deployed to multiple domains. An agent type can only be deployed to one domain at a time"
+    )]
+    HttpApiDeploymentMultipleDeploymentsForAgentType { agent_type: AgentTypeName },
+    #[error(
+        "Agent type {agent_type} is deployed to a domain but does not have http mount details"
+    )]
+    HttpApiDeploymentAgentTypeMissingHttpMount { agent_type: AgentTypeName },
+    #[error(
+        "Agent type {agent_type} uses forbidden patterns in its webhook. Variable and catchall segments are not allowed in webhook urls"
+    )]
+    HttpApiDeploymentInvalidAgentWebhookSegmentType { agent_type: AgentTypeName },
+    #[error(
+        "Agent type {agent_type} has an invalid final webhook url {url}. (Protocol is a placeholder)"
+    )]
+    HttpApiDeploymentInvalidWebhookUrl { agent_type: AgentTypeName, url: String }
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -256,7 +272,7 @@ impl DeploymentWriteService {
                 .into_values()
                 .collect(),
             compiled_routes,
-            registered_agent_types.into_values().collect(),
+            registered_agent_types.into_values().map(DeployedRegisteredAgentType::from).collect(),
         );
 
         let deployment: CurrentDeployment = self

@@ -170,6 +170,7 @@ message RouteBehaviour {
   oneof kind {
     CallAgent call_agent = 1;
     CorsPreflight cors_preflight = 2;
+    WebhookCallback webhook_callback = 3;
   }
 
   message CallAgent {
@@ -186,6 +187,10 @@ message RouteBehaviour {
   message CorsPreflight {
     repeated string allowed_origins = 1;
     repeated golem.component.HttpMethod allowed_methods = 2;
+  }
+
+  message WebhookCallback {
+    golem.component.ComponentId component_id = 1;
   }
 }
 

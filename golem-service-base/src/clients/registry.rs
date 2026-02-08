@@ -15,23 +15,12 @@
 use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
-use crate::model::{AccountResourceLimits, ResourceLimits};
+use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
-    GetAllDeployedComponentRevisionsRequest, GetAuthDetailsForEnvironmentRequest,
-    GetComponentMetadataRequest, GetDeployedComponentMetadataRequest, GetResourceLimitsRequest,
-    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
-    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_deployed_component_metadata_response,
-    get_resource_limits_response, resolve_component_response,
-    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest, GetActiveRoutesForDomainRequest, GetAgentDeploymentsRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest, GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest, GetDeployedComponentMetadataRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response, batch_update_fuel_usage_response, download_component_response, get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response, get_all_deployed_component_revisions_response, get_auth_details_for_environment_response, get_component_metadata_response, get_deployed_component_metadata_response, get_resource_limits_response, resolve_component_response, resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response, update_worker_limit_response
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;
@@ -147,11 +136,6 @@ pub trait RegistryService: Send + Sync {
         name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
-    async fn get_active_routes_for_domain(
-        &self,
-        domain: &Domain,
-    ) -> Result<CompiledRoutes, RegistryServiceError>;
-
     async fn resolve_latest_agent_type_by_names(
         &self,
         account_id: &AccountId,
@@ -159,6 +143,16 @@ pub trait RegistryService: Send + Sync {
         environment_name: &EnvironmentName,
         agent_type_name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
+
+    async fn get_active_routes_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<CompiledRoutes, RegistryServiceError>;
+
+    async fn get_agent_deployments(
+        &self,
+        environment_id: EnvironmentId
+    ) -> Result<HashMap<AgentTypeName, AgentDeploymentDetails>, RegistryServiceError>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -638,34 +632,6 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_active_routes_for_domain(
-        &self,
-        domain: &Domain,
-    ) -> Result<CompiledRoutes, RegistryServiceError> {
-        let response = self
-            .client
-            .call("get_active_routes_for_domain", move |client| {
-                let request = GetActiveRoutesForDomainRequest {
-                    domain: domain.0.clone(),
-                };
-                Box::pin(client.get_active_routes_for_domain(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(get_active_routes_for_domain_response::Result::Success(payload)) => {
-                let converted = payload
-                    .compiled_routes
-                    .ok_or("missing compiled_routes field")?
-                    .try_into()?;
-                Ok(converted)
-            }
-            Some(get_active_routes_for_domain_response::Result::Error(error)) => Err(error.into()),
-        }
-    }
-
     async fn resolve_latest_agent_type_by_names(
         &self,
         account_id: &AccountId,
@@ -698,6 +664,63 @@ impl RegistryService for GrpcRegistryService {
             Some(resolve_latest_agent_type_by_names_response::Result::Error(error)) => {
                 Err(error.into())
             }
+        }
+    }
+
+    async fn get_active_routes_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<CompiledRoutes, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_active_routes_for_domain", move |client| {
+                let request = GetActiveRoutesForDomainRequest {
+                    domain: domain.0.clone(),
+                };
+                Box::pin(client.get_active_routes_for_domain(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_active_routes_for_domain_response::Result::Success(payload)) => {
+                let converted = payload
+                    .compiled_routes
+                    .ok_or("missing compiled_routes field")?
+                    .try_into()?;
+                Ok(converted)
+            }
+            Some(get_active_routes_for_domain_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_agent_deployments(
+        &self,
+        environment_id: EnvironmentId
+    ) -> Result<HashMap<AgentTypeName, AgentDeploymentDetails>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_active_domains_for_agent_types", move |client| {
+                let request = GetAgentDeploymentsRequest {
+                    environment_id: Some(environment_id.into()),
+                };
+                Box::pin(client.get_agent_deployments(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_agent_deployments_response::Result::Success(payload)) => {
+                let mut result = HashMap::new();
+                for entry in payload.agent_deployment_details {
+                    let converted = AgentDeploymentDetails::from(entry);
+                    result.insert(converted.agent_type_name.clone(), converted);
+                }
+                Ok(result)
+            }
+            Some(get_agent_deployments_response::Result::Error(error)) => Err(error.into()),
         }
     }
 }

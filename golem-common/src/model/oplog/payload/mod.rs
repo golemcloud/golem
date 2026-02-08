@@ -213,6 +213,9 @@ oplog_payload! {
         FileSystemStat {
             result: Result<SerializableFileTimes, FileSystemError>,
         },
+        GolemAgentWebhookUrl {
+            result: Result<String, String>
+        },
         GolemApiAgentId {
             result: Result<Option<WorkerId>, String>
         },
@@ -406,6 +409,7 @@ pub mod host_functions {
         (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
+        (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),

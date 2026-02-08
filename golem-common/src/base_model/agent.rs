@@ -86,6 +86,30 @@ pub struct RegisteredAgentType {
     pub implemented_by: RegisteredAgentTypeImplementer,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+/// RegisteredAgentType with deployment specific information
+/// Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
+pub struct DeployedRegisteredAgentType {
+    pub agent_type: AgentType,
+    pub implemented_by: RegisteredAgentTypeImplementer,
+    pub webhook_prefix_authority_and_path: Option<String>
+}
+
+impl From<DeployedRegisteredAgentType> for RegisteredAgentType {
+    fn from(value: DeployedRegisteredAgentType) -> Self {
+        Self {
+            agent_type: value.agent_type,
+            implemented_by: value.implemented_by
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]

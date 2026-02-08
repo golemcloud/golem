@@ -57,7 +57,7 @@ use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{worker_enumeration, HasAll};
+use golem_worker_executor::services::{HasAll, worker_enumeration};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
@@ -72,6 +72,7 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 
 pub struct DebugContext {
     pub durable_ctx: DurableWorkerCtx<Self>,
@@ -535,6 +536,7 @@ impl WorkerCtx for DebugContext {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
@@ -562,6 +564,7 @@ impl WorkerCtx for DebugContext {
             file_loader,
             worker_fork,
             agent_types_service,
+            agent_deployments_service,
             shard_service,
             pending_update,
             original_phantom_id,

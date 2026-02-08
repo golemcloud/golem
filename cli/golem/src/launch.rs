@@ -35,10 +35,7 @@ use golem_service_base::service::compiled_component::{
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
-    ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
+    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig, KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig, ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig
 };
 use golem_worker_service::config::{
     RouteResolverConfig, SqliteSessionStoreConfig, WorkerServiceConfig,
@@ -307,6 +304,11 @@ fn worker_executor_config(
             host: args.router_addr.clone(),
             port: worker_service_run_details.grpc_port,
             client_config: GrpcClientConfig::default(),
+        },
+        agent_deployments_service: AgentDeploymentsServiceConfig {
+            cache_capacity: 0,
+            use_https_for_webhook_url: false,
+            ..Default::default()
         },
         ..Default::default()
     };

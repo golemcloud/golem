@@ -35,6 +35,7 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
@@ -568,7 +569,7 @@ impl EnvironmentsApi {
         environment_id: Path<EnvironmentId>,
         deployment_id: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
+    ) -> ApiResult<Json<Page<DeployedRegisteredAgentType>>> {
         let record = recorded_http_api_request!(
             "list_deployment_agent_types",
             environment_id = environment_id.0.to_string(),
@@ -590,7 +591,7 @@ impl EnvironmentsApi {
         environment_id: EnvironmentId,
         deployment_id: DeploymentRevision,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
+    ) -> ApiResult<Json<Page<DeployedRegisteredAgentType>>> {
         let agent_types = self
             .deployment_service
             .list_deployment_agent_types(environment_id, deployment_id, &auth)
@@ -612,7 +613,7 @@ impl EnvironmentsApi {
         deployment_id: Path<DeploymentRevision>,
         agent_type_name: Path<AgentTypeName>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<RegisteredAgentType>> {
+    ) -> ApiResult<Json<DeployedRegisteredAgentType>> {
         let record = recorded_http_api_request!(
             "get_deployment_agent_type",
             environment_id = environment_id.0.to_string(),
@@ -641,7 +642,7 @@ impl EnvironmentsApi {
         deployment_id: DeploymentRevision,
         agent_type_name: AgentTypeName,
         auth: AuthCtx,
-    ) -> ApiResult<Json<RegisteredAgentType>> {
+    ) -> ApiResult<Json<DeployedRegisteredAgentType>> {
         let agent_type = self
             .deployment_service
             .get_deployment_agent_type(environment_id, deployment_id, &agent_type_name, &auth)
