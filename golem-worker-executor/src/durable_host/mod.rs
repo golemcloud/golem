@@ -41,6 +41,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
+use crate::services::agent_deployments::AgentDeploymentsService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
@@ -129,7 +130,6 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-use crate::services::agent_deployments::AgentDeploymentsService;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {

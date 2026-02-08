@@ -35,6 +35,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
@@ -72,7 +73,6 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, Instrument};
 use wasmtime::component::Linker;
 use wasmtime::Engine;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 
 #[cfg(test)]
 test_r::enable!();

@@ -15,26 +15,15 @@ use super::{OidcSession, ParsedRequestBody};
 // limitations under the License.
 
 use super::error::RequestHandlerError;
-use chrono::{DateTime, Utc};
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{BinarySource, BinaryType};
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, SecuritySchemeDetails, WebhookCallbackBehaviour,
-};
-use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
-use http::{HeaderMap, Method};
-use http::{HeaderName, StatusCode};
-use openidconnect::Scope;
-use openidconnect::core::CoreIdTokenClaims;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::sync::{Arc, OnceLock};
-use uuid::Uuid;
-use golem_api_grpc::proto::golem::customapi::route_behaviour::WebhookCallback;
 use anyhow::anyhow;
+use golem_common::model::agent::{BinarySource, BinaryType};
+use golem_service_base::custom_api::RequestBodySchema;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
+use http::HeaderMap;
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use uuid::Uuid;
 
 const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
 
@@ -194,7 +183,6 @@ impl RichRequest {
             binary_type: BinaryType { mime_type },
         })))
     }
-
 }
 
 #[cfg(test)]
@@ -237,7 +225,8 @@ mod request_body_tests {
     async fn unused_body_schema_does_not_consume_body() {
         let mut request = json_request(json!({ "x": 1 }));
 
-        let result = request.parse_request_body(&RequestBodySchema::Unused)
+        let result = request
+            .parse_request_body(&RequestBodySchema::Unused)
             .await
             .unwrap();
 

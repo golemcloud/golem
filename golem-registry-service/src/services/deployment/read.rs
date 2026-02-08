@@ -17,7 +17,8 @@ use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
@@ -32,7 +33,6 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {

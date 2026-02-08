@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::file_loader::FileLoader;
+use super::{agent_deployments, HasAgentDeploymentsService};
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
@@ -50,7 +51,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use uuid::Uuid;
-use super::{HasAgentDeploymentsService, agent_deployments};
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {

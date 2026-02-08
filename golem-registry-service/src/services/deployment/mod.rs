@@ -15,35 +15,13 @@
 mod deployment_context;
 mod http_parameter_conversion;
 mod read;
-mod routes;
 mod route_compilation;
+mod routes;
 mod write;
 
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};
-
-use crate::repo::deployment::DeploymentRepo;
-use crate::repo::model::deployment::DeployRepoError;
-use crate::services::application::{ApplicationError, ApplicationService};
-use crate::services::environment::{EnvironmentError, EnvironmentService};
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName};
-use golem_common::model::application::ApplicationName;
-use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::deployment::{
-    DeploymentPlan, DeploymentRevision, DeploymentSummary, DeploymentVersion,
-};
-use golem_common::model::environment::{Environment, EnvironmentName};
-use golem_common::{
-    SafeDisplay, error_forwarding,
-    model::{deployment::Deployment, environment::EnvironmentId},
-};
-use golem_service_base::model::auth::EnvironmentAction;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use golem_service_base::repo::RepoError;
-use std::sync::Arc;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{
@@ -56,4 +34,4 @@ macro_rules! ok_or_continue {
         }
     }};
 }
-pub(self) use ok_or_continue;
+use ok_or_continue;

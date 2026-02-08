@@ -926,7 +926,7 @@ impl Default for AgentDeploymentsServiceConfig {
             cache_capacity: 1000,
             cache_ttl: Duration::from_mins(5),
             cache_eviction_interval: Duration::from_mins(1),
-            use_https_for_webhook_url: true
+            use_https_for_webhook_url: true,
         }
     }
 }
@@ -936,8 +936,16 @@ impl SafeDisplay for AgentDeploymentsServiceConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);
         let _ = writeln!(&mut result, "cache_ttl: {:?}", self.cache_ttl);
-        let _ = writeln!(&mut result, "cache_eviction_interval: {:?}", self.cache_eviction_interval);
-        let _ = writeln!(&mut result, "use_https_for_webhook_url: {:?}", self.use_https_for_webhook_url);
+        let _ = writeln!(
+            &mut result,
+            "cache_eviction_interval: {:?}",
+            self.cache_eviction_interval
+        );
+        let _ = writeln!(
+            &mut result,
+            "use_https_for_webhook_url: {:?}",
+            self.use_https_for_webhook_url
+        );
         result
     }
 }

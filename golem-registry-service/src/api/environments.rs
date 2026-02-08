@@ -18,7 +18,8 @@ use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
@@ -35,7 +36,6 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 pub mod active_workers;
-pub mod agent_types;
 pub mod agent_deployments;
+pub mod agent_types;
 pub mod blob_store;
 pub mod component;
 pub mod events;
@@ -36,6 +36,7 @@ pub mod worker_event;
 pub mod worker_fork;
 pub mod worker_proxy;
 
+use self::agent_deployments::AgentDeploymentsService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::worker_activator::WorkerActivator;
@@ -43,7 +44,6 @@ use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
 use std::sync::Arc;
 use tokio::runtime::Handle;
-use self::agent_deployments::AgentDeploymentsService;
 
 #[derive(Clone)]
 pub struct NoAdditionalDeps {}

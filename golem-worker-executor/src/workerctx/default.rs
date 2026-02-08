@@ -17,6 +17,7 @@ use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableW
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_deployments::AgentDeploymentsService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
@@ -74,7 +75,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use crate::services::agent_deployments::AgentDeploymentsService;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,

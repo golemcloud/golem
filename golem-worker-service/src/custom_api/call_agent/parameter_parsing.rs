@@ -12,14 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ParsedRequestBody;
 use crate::custom_api::error::RequestHandlerError;
-use crate::custom_api::RichRequest;
-use anyhow::anyhow;
-use golem_common::model::agent::{BinarySource, BinaryType, UntypedElementValue};
-use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType, RequestBodySchema};
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_common::model::agent::UntypedElementValue;
+use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType};
 
 pub fn parse_path_segment_value(
     value: String,

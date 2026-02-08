@@ -29,6 +29,8 @@ pub mod workerctx;
 #[cfg(test)]
 test_r::enable!();
 
+use self::services::agent_deployments::{AgentDeploymentsService, GrpcAgentDeploymentService};
+use self::services::golem_config::AgentDeploymentsServiceConfig;
 use self::services::promise::LazyPromiseService;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
@@ -101,8 +103,6 @@ use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{info, Instrument};
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
-use self::services::agent_deployments::{AgentDeploymentsService, GrpcAgentDeploymentService};
-use self::services::golem_config::AgentDeploymentsServiceConfig;
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -129,7 +129,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             config.cache_capacity,
             config.cache_ttl,
             config.cache_eviction_interval,
-            config.use_https_for_webhook_url
+            config.use_https_for_webhook_url,
         ))
     }
 

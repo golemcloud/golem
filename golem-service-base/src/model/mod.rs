@@ -18,6 +18,7 @@ pub mod plugin_registration;
 use derive_more::Display;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::component::{
     ComponentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
@@ -32,7 +33,6 @@ use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
-use golem_common::model::agent::{AgentType, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -413,36 +413,36 @@ impl<T> std::ops::Index<SafeIndex> for [T] {
 pub struct AgentDeploymentDetails {
     pub agent_type_name: AgentTypeName,
     /// Webhook callback url of the agent missing the protocol in the front and `/{promise_id}` at the end.
-    pub webhook_prefix_authority_and_path: Option<String>
+    pub webhook_prefix_authority_and_path: Option<String>,
 }
 
 impl From<DeployedRegisteredAgentType> for AgentDeploymentDetails {
     fn from(value: DeployedRegisteredAgentType) -> Self {
         Self {
             agent_type_name: value.agent_type.type_name,
-            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         }
     }
 }
 
-impl From<AgentDeploymentDetails> for golem_api_grpc::proto::golem::registry::AgentDeploymentDetails {
-    fn from(
-        value: AgentDeploymentDetails,
-    ) -> Self {
+impl From<AgentDeploymentDetails>
+    for golem_api_grpc::proto::golem::registry::AgentDeploymentDetails
+{
+    fn from(value: AgentDeploymentDetails) -> Self {
         Self {
             agent_type_name: value.agent_type_name.0,
-            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         }
     }
 }
 
-impl From<golem_api_grpc::proto::golem::registry::AgentDeploymentDetails> for AgentDeploymentDetails {
-    fn from(
-        value: golem_api_grpc::proto::golem::registry::AgentDeploymentDetails,
-    ) -> Self {
+impl From<golem_api_grpc::proto::golem::registry::AgentDeploymentDetails>
+    for AgentDeploymentDetails
+{
+    fn from(value: golem_api_grpc::proto::golem::registry::AgentDeploymentDetails) -> Self {
         Self {
             agent_type_name: AgentTypeName(value.agent_type_name),
-            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         }
     }
 }

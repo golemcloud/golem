@@ -12,19 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use async_trait::async_trait;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::custom_api::AgentWebhookId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
-use golem_service_base::custom_api::AgentWebhookId;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 
 pub struct DisabledAgentDeploymentsService;
 
 #[async_trait]
 impl AgentDeploymentsService for DisabledAgentDeploymentsService {
-    async fn get_agent_deployment(&self, _environment: EnvironmentId, _agent_type: &AgentTypeName) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError> {
+    async fn get_agent_deployment(
+        &self,
+        _environment: EnvironmentId,
+        _agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError> {
         unimplemented!()
     }
 
@@ -32,7 +36,7 @@ impl AgentDeploymentsService for DisabledAgentDeploymentsService {
         &self,
         _environment: EnvironmentId,
         _agent_type: &AgentTypeName,
-        _webhook_id: &AgentWebhookId
+        _webhook_id: &AgentWebhookId,
     ) -> Result<Option<String>, WorkerExecutorError> {
         unimplemented!()
     }

@@ -12,27 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::error::RequestHandlerError;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{BinarySource, BinaryType};
+use golem_common::model::agent::BinarySource;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, SecuritySchemeDetails, WebhookCallbackBehaviour,
+    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, SecuritySchemeDetails,
+    WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
-use http::{HeaderMap, Method};
+use http::Method;
 use http::{HeaderName, StatusCode};
 use openidconnect::Scope;
 use openidconnect::core::CoreIdTokenClaims;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::{Arc, OnceLock};
-use uuid::Uuid;
-use golem_api_grpc::proto::golem::customapi::route_behaviour::WebhookCallback;
-use anyhow::anyhow;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct OidcSession {
@@ -88,7 +83,7 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
         match value {
             RouteBehaviour::CallAgent(inner) => Self::CallAgent(inner),
             RouteBehaviour::CorsPreflight(inner) => Self::CorsPreflight(inner),
-            RouteBehaviour::WebhookCallback(inner) => Self::WebhookCallback(inner)
+            RouteBehaviour::WebhookCallback(inner) => Self::WebhookCallback(inner),
         }
     }
 }

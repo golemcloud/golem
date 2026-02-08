@@ -26,11 +26,12 @@ use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
-    HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
-    HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps, HasAgentDeploymentsService,
+    All, HasActiveWorkers, HasAgentDeploymentsService, HasAgentTypesService, HasAll,
+    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
+    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasRdbmsService,
+    HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;

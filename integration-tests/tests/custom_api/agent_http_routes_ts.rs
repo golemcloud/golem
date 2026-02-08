@@ -118,7 +118,7 @@ async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resul
         user,
         env_id: env.id,
         deployment_revision: deployment.revision,
-        host_header
+        host_header,
     })
 }
 
@@ -867,15 +867,11 @@ async fn cors_get_wildcard_origin(agent: &TestContext) -> anyhow::Result<()> {
 #[test]
 #[tracing::instrument]
 async fn webhook_callback(agent: &TestContext) -> anyhow::Result<()> {
-    use axum::{
-        body::Bytes,
-        routing::post,
-        Router,
-    };
-    use tokio::spawn;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use axum::{body::Bytes, routing::post, Router};
     use reqwest::Client;
+    use std::sync::Arc;
+    use tokio::spawn;
+    use tokio::sync::Mutex;
 
     let host_header = agent.host_header.clone();
     let (agent_host, agent_port) = agent.base_url.authority().split_once(':').unwrap();
@@ -894,8 +890,7 @@ async fn webhook_callback(agent: &TestContext) -> anyhow::Result<()> {
             post(move |body: Bytes| {
                 let received_webhook_request_clone = received_webhook_request_clone.clone();
                 async move {
-                    let body_json: serde_json::Value =
-                        serde_json::from_slice(&body).unwrap();
+                    let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
                     let webhook_url_str = body_json["webhookUrl"].as_str().unwrap();
 
                     let mut lock = received_webhook_request_clone.lock().await;
@@ -926,7 +921,11 @@ async fn webhook_callback(agent: &TestContext) -> anyhow::Result<()> {
     let test_server_url = format!("http://127.0.0.1:{}/", port);
     agent
         .client
-        .post(agent.base_url.join("/webhook-agents/test-agent/set-test-server-url")?)
+        .post(
+            agent
+                .base_url
+                .join("/webhook-agents/test-agent/set-test-server-url")?,
+        )
         .json(&serde_json::json!({ "test-server-url": test_server_url }))
         .send()
         .await?
@@ -934,7 +933,11 @@ async fn webhook_callback(agent: &TestContext) -> anyhow::Result<()> {
 
     let response = agent
         .client
-        .post(agent.base_url.join("/webhook-agents/test-agent/test-webhook")?)
+        .post(
+            agent
+                .base_url
+                .join("/webhook-agents/test-agent/test-webhook")?,
+        )
         .send()
         .await?;
 

@@ -133,9 +133,7 @@ pub enum DeployValidationError {
         "Agent type {agent_type} is deployed to multiple domains. An agent type can only be deployed to one domain at a time"
     )]
     HttpApiDeploymentMultipleDeploymentsForAgentType { agent_type: AgentTypeName },
-    #[error(
-        "Agent type {agent_type} is deployed to a domain but does not have http mount details"
-    )]
+    #[error("Agent type {agent_type} is deployed to a domain but does not have http mount details")]
     HttpApiDeploymentAgentTypeMissingHttpMount { agent_type: AgentTypeName },
     #[error(
         "Agent type {agent_type} uses forbidden patterns in its webhook. Variable and catchall segments are not allowed in webhook urls"
@@ -144,7 +142,10 @@ pub enum DeployValidationError {
     #[error(
         "Agent type {agent_type} has an invalid final webhook url {url}. (Protocol is a placeholder)"
     )]
-    HttpApiDeploymentInvalidWebhookUrl { agent_type: AgentTypeName, url: String }
+    HttpApiDeploymentInvalidWebhookUrl {
+        agent_type: AgentTypeName,
+        url: String,
+    },
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -272,7 +273,10 @@ impl DeploymentWriteService {
                 .into_values()
                 .collect(),
             compiled_routes,
-            registered_agent_types.into_values().map(DeployedRegisteredAgentType::from).collect(),
+            registered_agent_types
+                .into_values()
+                .map(DeployedRegisteredAgentType::from)
+                .collect(),
         );
 
         let deployment: CurrentDeployment = self

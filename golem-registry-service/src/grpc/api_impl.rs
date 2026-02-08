@@ -24,8 +24,33 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
+use golem_api_grpc::proto::golem::registry::v1::get_agent_deployments_response::GetAgentDeploymentsSuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse, BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse, DownloadComponentRequest, DownloadComponentResponse, GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse, GetAgentDeploymentsRequest, GetAgentDeploymentsResponse, GetAgentTypeRequest, GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse, GetAuthDetailsForEnvironmentRequest, GetAuthDetailsForEnvironmentResponse, GetAuthDetailsForEnvironmentSuccessResponse, GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetDeployedComponentMetadataRequest, GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse, GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, RegistryServiceError, ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse, ResolveLatestAgentTypeByNamesRequest, ResolveLatestAgentTypeByNamesResponse, ResolveLatestAgentTypeByNamesSuccessResponse, UpdateWorkerConnectionLimitRequest, UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse, authenticate_token_response, batch_update_fuel_usage_response, download_component_response, get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response, get_all_deployed_component_revisions_response, get_auth_details_for_environment_response, get_component_metadata_response, get_deployed_component_metadata_response, get_resource_limits_response, registry_service_error, resolve_component_response, resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response, update_worker_limit_response
+    AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
+    BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse,
+    DownloadComponentRequest, DownloadComponentResponse, GetActiveRoutesForDomainRequest,
+    GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse,
+    GetAgentDeploymentsRequest, GetAgentDeploymentsResponse, GetAgentTypeRequest,
+    GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
+    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
+    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
+    GetAllDeployedComponentRevisionsSuccessResponse, GetAuthDetailsForEnvironmentRequest,
+    GetAuthDetailsForEnvironmentResponse, GetAuthDetailsForEnvironmentSuccessResponse,
+    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    GetDeployedComponentMetadataRequest, GetDeployedComponentMetadataResponse,
+    GetDeployedComponentMetadataSuccessResponse, GetResourceLimitsRequest,
+    GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, RegistryServiceError,
+    ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
+    ResolveLatestAgentTypeByNamesRequest, ResolveLatestAgentTypeByNamesResponse,
+    ResolveLatestAgentTypeByNamesSuccessResponse, UpdateWorkerConnectionLimitRequest,
+    UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response,
+    get_all_agent_types_response, get_all_deployed_component_revisions_response,
+    get_auth_details_for_environment_response, get_component_metadata_response,
+    get_deployed_component_metadata_response, get_resource_limits_response, registry_service_error,
+    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
@@ -39,13 +64,12 @@ use golem_service_base::grpc::{
     proto_account_id_string, proto_application_id_string, proto_component_id_string,
     proto_environment_id_string,
 };
+use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing_futures::Instrument;
-use golem_api_grpc::proto::golem::registry::v1::get_agent_deployments_response::GetAgentDeploymentsSuccessResponse;
-use golem_service_base::model::AgentDeploymentDetails;
 
 pub struct RegistryServiceGrpcApi {
     auth_service: Arc<AuthService>,
@@ -332,7 +356,10 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetAllAgentTypesSuccessResponse {
-            agent_types: agent_types.into_iter().map(|at| RegisteredAgentType::from(at).into()).collect(),
+            agent_types: agent_types
+                .into_iter()
+                .map(|at| RegisteredAgentType::from(at).into())
+                .collect(),
         })
     }
 
@@ -388,7 +415,10 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetAgentDeploymentsSuccessResponse {
-            agent_deployment_details: agent_types.into_iter().map(|at| AgentDeploymentDetails::from(at).into()).collect(),
+            agent_deployment_details: agent_types
+                .into_iter()
+                .map(|at| AgentDeploymentDetails::from(at).into())
+                .collect(),
         })
     }
 

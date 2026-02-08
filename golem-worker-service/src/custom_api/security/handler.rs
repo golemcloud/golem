@@ -16,7 +16,7 @@ use super::IdentityProvider;
 use super::model::AuthorizationUrl;
 use super::session_store::SessionStore;
 use crate::custom_api::error::RequestHandlerError;
-use crate::custom_api::model::{OidcSession};
+use crate::custom_api::model::OidcSession;
 use crate::custom_api::route_resolver::ResolvedRouteEntry;
 use crate::custom_api::security::model::SessionId;
 use crate::custom_api::{ResponseBody, RichRequest, RouteExecutionResult};

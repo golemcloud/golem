@@ -20,7 +20,11 @@ use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_worker_executor::services::golem_config::{
-    ActiveWorkersConfig, AgentDeploymentsServiceConfig, AgentTypesServiceConfig, ComponentCacheConfig, EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig, KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, RdbmsConfig, ResourceLimitsConfig, SchedulerConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig, WorkerServiceGrpcConfig
+    ActiveWorkersConfig, AgentDeploymentsServiceConfig, AgentTypesServiceConfig,
+    ComponentCacheConfig, EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
+    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, RdbmsConfig, ResourceLimitsConfig,
+    SchedulerConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    SuspendConfig, WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;

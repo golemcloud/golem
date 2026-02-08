@@ -35,7 +35,10 @@ use golem_service_base::service::compiled_component::{
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig, KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig, ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig
+    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
+    ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::config::{
     RouteResolverConfig, SqliteSessionStoreConfig, WorkerServiceConfig,

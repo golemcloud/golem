@@ -16,6 +16,7 @@
 mod protobuf;
 
 use crate::model::SafeIndex;
+use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod};
@@ -23,13 +24,12 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
+use golem_common::model::{OplogIndex, PromiseId, WorkerId};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::{AnalysedType, TypeList, TypeOption};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
-use golem_common::model::{OplogIndex, PromiseId, WorkerId};
-use base64::Engine;
 
 pub type RouteId = i32;
 
@@ -244,7 +244,7 @@ pub struct CompiledRoute {
 pub enum RouteBehaviour {
     CallAgent(CallAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
-    WebhookCallback(WebhookCallbackBehaviour)
+    WebhookCallback(WebhookCallbackBehaviour),
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -270,7 +270,7 @@ pub struct CorsPreflightBehaviour {
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct WebhookCallbackBehaviour {
-    pub component_id: ComponentId
+    pub component_id: ComponentId,
 }
 
 #[derive(Debug, Clone)]
@@ -321,15 +321,14 @@ impl AgentWebhookId {
         PromiseId {
             worker_id: WorkerId {
                 component_id,
-                worker_name: self.worker_name
+                worker_name: self.worker_name,
             },
-            oplog_idx: self.oplog_idx
+            oplog_idx: self.oplog_idx,
         }
     }
 
     pub fn to_base64_url(&self) -> String {
-        let bytes = serde_json::to_vec(self)
-            .expect("AgentWebhookId serialization must not fail");
+        let bytes = serde_json::to_vec(self).expect("AgentWebhookId serialization must not fail");
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
     }
 

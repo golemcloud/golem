@@ -10,6 +10,7 @@ ttl = "8h"
 [agent_deployments_service]
 cache_capacity = 1000
 cache_eviction_interval = "1m"
+use_https_for_webhook_url = true
 
 [agent_deployments_service.cache_ttl]
 nanos = 0
@@ -254,6 +255,7 @@ without_time = false
 # [agent_deployments_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
+# use_https_for_webhook_url = true
 # 
 # [agent_deployments_service.cache_ttl]
 # nanos = 0
@@ -490,6 +492,7 @@ without_time = false
 # [agent_deployments_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
+# use_https_for_webhook_url = true
 # 
 # [agent_deployments_service.cache_ttl]
 # nanos = 0

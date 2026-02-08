@@ -5277,7 +5277,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_RegisteredAgentType'
+                $ref: '#/components/schemas/Page_DeployedRegisteredAgentType'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5363,7 +5363,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/RegisteredAgentType'
+                $ref: '#/components/schemas/DeployedRegisteredAgentType'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -13062,6 +13062,22 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/NamedElementSchemas'
+    DeployedRegisteredAgentType:
+      title: DeployedRegisteredAgentType
+      description: |-
+        RegisteredAgentType with deployment specific information
+        Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
+      type: object
+      properties:
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        implementedBy:
+          $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
+        webhookPrefixAuthorityAndPath:
+          type: string
+      required:
+      - agentType
+      - implementedBy
     Deployment:
       title: Deployment
       type: object
@@ -13796,6 +13812,8 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
+        webhooksUrl:
+          type: string
         createdAt:
           type: string
           format: date-time
@@ -13806,6 +13824,7 @@ components:
       - domain
       - hash
       - agents
+      - webhooksUrl
       - createdAt
     HttpApiDeploymentAgentOptions:
       title: HttpApiDeploymentAgentOptions
@@ -13822,6 +13841,9 @@ components:
       type: object
       properties:
         domain:
+          type: string
+        webhooksUrl:
+          description: webhooks url to use for agents deployed to this domain. Defaults to `/webhooks/` if not provided.
           type: string
         agents:
           type: object
@@ -14221,6 +14243,16 @@ components:
             $ref: '#/components/schemas/ComponentDto'
       required:
       - values
+    Page_DeployedRegisteredAgentType:
+      title: Page_DeployedRegisteredAgentType
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeployedRegisteredAgentType'
+      required:
+      - values
     Page_Deployment:
       title: Page_Deployment
       type: object
@@ -14319,16 +14351,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginRegistrationDto'
-      required:
-      - values
-    Page_RegisteredAgentType:
-      title: Page_RegisteredAgentType
-      type: object
-      properties:
-        values:
-          type: array
-          items:
-            $ref: '#/components/schemas/RegisteredAgentType'
       required:
       - values
     Page_SecuritySchemeDto:
@@ -14704,17 +14726,6 @@ components:
       required:
       - queryParamName
       - variableName
-    RegisteredAgentType:
-      title: RegisteredAgentType
-      type: object
-      properties:
-        agentType:
-          $ref: '#/components/schemas/AgentType'
-        implementedBy:
-          $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
-      required:
-      - agentType
-      - implementedBy
     RegisteredAgentTypeImplementer:
       title: RegisteredAgentTypeImplementer
       type: object

@@ -12,22 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::DeploymentWriteError;
-use super::http_parameter_conversion::{
-    build_http_agent_constructor_parameters, build_http_agent_method_parameters,
-};
+use super::deployment_context::InProgressDeployedRegisteredAgentType;
+use super::http_parameter_conversion::build_http_agent_method_parameters;
 use crate::model::api_definition::UnboundCompiledRoute;
-use crate::model::component::Component;
+use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::Empty;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
-    HttpMethod, HttpMountDetails, NamedElementSchemas,
-    RegisteredAgentTypeImplementer, SystemVariable,
+    HttpMethod, HttpMountDetails, NamedElementSchemas, RegisteredAgentTypeImplementer,
+    SystemVariable,
 };
-use golem_common::model::component::ComponentName;
-use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
 use golem_service_base::custom_api::{
@@ -35,11 +30,8 @@ use golem_service_base::custom_api::{
     PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
 };
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use golem_common::model::agent::DeployedRegisteredAgentType;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
-use crate::services::deployment::ok_or_continue;
-use super::deployment_context::InProgressDeployedRegisteredAgentType;
 
 pub fn add_agent_method_http_routes(
     deployment: &HttpApiDeployment,
@@ -129,9 +121,7 @@ pub fn add_agent_method_http_routes(
             let security_scheme = if auth_required {
                 let security_scheme = ok_or_continue!(
                     deployment_agent_options.security_scheme.clone().ok_or(
-                        DeployValidationError::NoSecuritySchemeConfigured(
-                            agent.type_name.clone()
-                        )
+                        DeployValidationError::NoSecuritySchemeConfigured(agent.type_name.clone())
                     ),
                     errors
                 );
@@ -166,8 +156,7 @@ pub fn add_agent_method_http_routes(
 
             {
                 let key = (http_endpoint.http_method.clone(), path_segments);
-                if let std::collections::hash_map::Entry::Vacant(e) = compiled_routes.entry(key)
-                {
+                if let std::collections::hash_map::Entry::Vacant(e) = compiled_routes.entry(key) {
                     e.insert(compiled);
                 } else {
                     errors.push(make_route_validation_error(
@@ -206,9 +195,7 @@ pub fn add_cors_preflight_http_routes(
                 .entry(compiled_route.path.clone())
                 .or_insert(PreflightMapEntry::new());
 
-            entry
-                .allowed_methods
-                .insert(compiled_route.method.clone());
+            entry.allowed_methods.insert(compiled_route.method.clone());
             for allowed_pattern in &compiled_route.cors.allowed_patterns {
                 entry.allowed_origins.insert(allowed_pattern.clone());
             }
@@ -265,27 +252,30 @@ pub fn add_webhook_callback_routes(
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
 
-        let mut typed_segments: Vec<PathSegment> = segments.iter().cloned().map(|value| PathSegment::Literal { value }).collect();
+        let mut typed_segments: Vec<PathSegment> = segments
+            .iter()
+            .cloned()
+            .map(|value| PathSegment::Literal { value })
+            .collect();
         // final segment for promise id
         typed_segments.push(PathSegment::Variable);
 
         let compiled = UnboundCompiledRoute {
             route_id,
             domain: deployment.domain.clone(),
-            method: HttpMethod::Post(Empty {  }),
+            method: HttpMethod::Post(Empty {}),
             path: typed_segments,
             body: RequestBodySchema::UnrestrictedBinary,
             behaviour: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: agent_type.implemented_by.component_id,
             }),
             security_scheme: None,
-            cors: CorsOptions { allowed_patterns: Vec::new() },
+            cors: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
         };
 
-        compiled_routes.insert(
-            (compiled.method.clone(), compiled.path.clone()),
-            compiled
-        );
+        compiled_routes.insert((compiled.method.clone(), compiled.path.clone()), compiled);
     }
 }
 
@@ -293,39 +283,54 @@ pub fn build_agent_http_api_deployment_details(
     agent_type_name: &AgentTypeName,
     agent_type: &AgentType,
     implementer: &RegisteredAgentTypeImplementer,
-    http_api_deployments: &BTreeMap<Domain, HttpApiDeployment>
+    http_api_deployments: &BTreeMap<Domain, HttpApiDeployment>,
 ) -> Result<Option<(Domain, Vec<String>)>, DeployValidationError> {
-    let agent_http_api_deployments: Vec<(&Domain, &HttpApiDeployment)> = http_api_deployments.iter().filter(|(_, d)| d.agents.contains_key(agent_type_name)).collect();
+    let agent_http_api_deployments: Vec<(&Domain, &HttpApiDeployment)> = http_api_deployments
+        .iter()
+        .filter(|(_, d)| d.agents.contains_key(agent_type_name))
+        .collect();
 
     if agent_http_api_deployments.len() > 1 {
-        return Err(DeployValidationError::HttpApiDeploymentMultipleDeploymentsForAgentType {
-            agent_type: agent_type_name.clone(),
-        })
+        return Err(
+            DeployValidationError::HttpApiDeploymentMultipleDeploymentsForAgentType {
+                agent_type: agent_type_name.clone(),
+            },
+        );
     }
 
-    let (domain, agent_http_api_deployment) = if let Some(v) = agent_http_api_deployments.iter().next() {
+    let (domain, agent_http_api_deployment) = if let Some(v) = agent_http_api_deployments.first() {
         *v
     } else {
-        return Ok(None)
+        return Ok(None);
     };
 
     let agent_http_mount = if let Some(v) = &agent_type.http_mount {
         v
     } else {
-        return Err(DeployValidationError::HttpApiDeploymentAgentTypeMissingHttpMount { agent_type: agent_type_name.clone() })
+        return Err(
+            DeployValidationError::HttpApiDeploymentAgentTypeMissingHttpMount {
+                agent_type: agent_type_name.clone(),
+            },
+        );
     };
 
-    let agent_webhook_prefix: Vec<PathSegment> = parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_url);
-    let agent_webhook_suffix = agent_http_mount.webhook_suffix.iter().map(|s| compile_agent_path_segment(&agent_type, implementer, s));
+    let agent_webhook_prefix: Vec<PathSegment> =
+        parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_url);
+    let agent_webhook_suffix = agent_http_mount
+        .webhook_suffix
+        .iter()
+        .map(|s| compile_agent_path_segment(agent_type, implementer, s));
 
     let agent_webhook = agent_webhook_prefix
         .into_iter()
         .chain(agent_webhook_suffix)
-        .map(|segment| {
-            match segment {
-                PathSegment::Literal { value } => Ok(value),
-                PathSegment::Variable { .. } | PathSegment::CatchAll => Err(DeployValidationError::HttpApiDeploymentInvalidAgentWebhookSegmentType { agent_type: agent_type_name.clone() })
-            }
+        .map(|segment| match segment {
+            PathSegment::Literal { value } => Ok(value),
+            PathSegment::Variable | PathSegment::CatchAll => Err(
+                DeployValidationError::HttpApiDeploymentInvalidAgentWebhookSegmentType {
+                    agent_type: agent_type_name.clone(),
+                },
+            ),
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -472,7 +477,9 @@ fn compile_agent_path_segment(
     use golem_common::model::agent::PathSegment as AgentPathSegment;
 
     match path_segment {
-        AgentPathSegment::Literal(lit) => PathSegment::Literal { value: lit.value.clone() },
+        AgentPathSegment::Literal(lit) => PathSegment::Literal {
+            value: lit.value.clone(),
+        },
         AgentPathSegment::PathVariable(_) => PathSegment::Variable,
         AgentPathSegment::RemainingPathVariable(_) => PathSegment::CatchAll,
         AgentPathSegment::SystemVariable(system_var) => {
@@ -505,10 +512,16 @@ mod tests {
         let result = parse_literal_only_path_segments("/foo/{id}/*/bar");
 
         let expected = vec![
-            PathSegment::Literal { value: "foo".into() },
-            PathSegment::Literal { value: "{id}".into() },
+            PathSegment::Literal {
+                value: "foo".into(),
+            },
+            PathSegment::Literal {
+                value: "{id}".into(),
+            },
             PathSegment::Literal { value: "*".into() },
-            PathSegment::Literal { value: "bar".into() },
+            PathSegment::Literal {
+                value: "bar".into(),
+            },
         ];
 
         assert_eq!(result, expected);
@@ -527,9 +540,9 @@ mod tests {
     fn parses_single_segment() {
         let result = parse_literal_only_path_segments("foo");
 
-        let expected = vec![
-            PathSegment::Literal { value: "foo".into() },
-        ];
+        let expected = vec![PathSegment::Literal {
+            value: "foo".into(),
+        }];
 
         assert_eq!(result, expected);
     }
@@ -539,8 +552,12 @@ mod tests {
         let result = parse_literal_only_path_segments("foo/bar");
 
         let expected = vec![
-            PathSegment::Literal { value: "foo".into() },
-            PathSegment::Literal { value: "bar".into() },
+            PathSegment::Literal {
+                value: "foo".into(),
+            },
+            PathSegment::Literal {
+                value: "bar".into(),
+            },
         ];
 
         assert_eq!(result, expected);

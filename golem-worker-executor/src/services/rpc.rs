@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::file_loader::FileLoader;
+use super::{agent_deployments, HasAgentDeploymentsService};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
@@ -43,7 +44,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tracing::debug;
-use super::{HasAgentDeploymentsService, agent_deployments};
 
 #[async_trait]
 pub trait Rpc: Send + Sync {

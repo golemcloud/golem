@@ -40,6 +40,7 @@ use golem_worker_executor::model::{
     ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
@@ -57,7 +58,7 @@ use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{HasAll, worker_enumeration};
+use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
@@ -72,7 +73,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 
 pub struct DebugContext {
     pub durable_ctx: DurableWorkerCtx<Self>,

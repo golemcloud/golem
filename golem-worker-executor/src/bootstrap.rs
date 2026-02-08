@@ -15,6 +15,7 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::{golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_deployments::AgentDeploymentsService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
@@ -49,7 +50,6 @@ use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
-use crate::services::agent_deployments::AgentDeploymentsService;
 
 #[cfg(test)]
 test_r::enable!();

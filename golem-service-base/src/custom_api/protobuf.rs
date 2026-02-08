@@ -256,9 +256,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
-            RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
-                component_id,
-            }) => Self {
+            RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour { component_id }) => Self {
                 kind: Some(Kind::WebhookCallback(
                     proto::golem::customapi::route_behaviour::WebhookCallback {
                         component_id: Some(component_id.into()),

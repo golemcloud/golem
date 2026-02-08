@@ -21,7 +21,8 @@ use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRe
 use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentType, RegisteredAgentType, RegisteredAgentTypeImplementer};
+use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::{AgentType, RegisteredAgentTypeImplementer};
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -37,7 +38,6 @@ use sqlx::FromRow;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use uuid::Uuid;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeployRepoError {
@@ -323,7 +323,8 @@ impl DeploymentRegisteredAgentTypeRecord {
                 .implemented_by
                 .component_revision
                 .into(),
-            webhook_prefix_authority_and_path: registered_agent_type.webhook_prefix_authority_and_path,
+            webhook_prefix_authority_and_path: registered_agent_type
+                .webhook_prefix_authority_and_path,
             agent_type: Blob::new(registered_agent_type.agent_type),
         }
     }
@@ -338,7 +339,7 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
             },
-            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })
     }
 }

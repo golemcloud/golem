@@ -17,6 +17,7 @@ pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
 
+use self::agent_deployments_service::DisabledAgentDeploymentsService;
 use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{anyhow, Error};
@@ -75,13 +76,17 @@ use golem_worker_executor::model::{
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::golem_api_1_x;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig
+    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
+    EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -133,8 +138,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
-use self::agent_deployments_service::DisabledAgentDeploymentsService;
 
 #[cfg(test)]
 test_r::enable!();

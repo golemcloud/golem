@@ -13,38 +13,28 @@
 // limitations under the License.
 
 use super::DeploymentWriteError;
-use super::http_parameter_conversion::{
-    build_http_agent_constructor_parameters, build_http_agent_method_parameters,
-};
+use super::http_parameter_conversion::build_http_agent_constructor_parameters;
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::model::component::Component;
-use crate::services::deployment::write::DeployValidationError;
-use golem_common::model::Empty;
-use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{
-    AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
-    HttpMethod, HttpMountDetails, NamedElementSchemas,
-    RegisteredAgentTypeImplementer, SystemVariable,
+use crate::services::deployment::ok_or_continue;
+use crate::services::deployment::route_compilation::{
+    add_agent_method_http_routes, add_cors_preflight_http_routes, add_webhook_callback_routes,
+    build_agent_http_api_deployment_details, make_invalid_agent_mount_error_maker,
 };
+use crate::services::deployment::write::DeployValidationError;
+use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
-use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OriginPattern,
-    PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
-};
-use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use golem_common::model::agent::DeployedRegisteredAgentType;
-use url::Url;
-use crate::services::deployment::route_compilation::{add_agent_method_http_routes, add_cors_preflight_http_routes, add_webhook_callback_routes, build_agent_http_api_deployment_details, make_invalid_agent_mount_error_maker};
-use crate::services::deployment::ok_or_continue;
+use golem_common::model::http_api_deployment::HttpApiDeployment;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub struct InProgressDeployedRegisteredAgentType {
     pub agent_type: AgentType,
     pub implemented_by: RegisteredAgentTypeImplementer,
-    pub webhook_domain_and_segments: Option<(Domain, Vec<String>)>
+    pub webhook_domain_and_segments: Option<(Domain, Vec<String>)>,
 }
 
 impl From<InProgressDeployedRegisteredAgentType> for DeployedRegisteredAgentType {
@@ -52,8 +42,9 @@ impl From<InProgressDeployedRegisteredAgentType> for DeployedRegisteredAgentType
         Self {
             agent_type: value.agent_type,
             implemented_by: value.implemented_by,
-            webhook_prefix_authority_and_path: value.webhook_domain_and_segments
-                .map(|(domain, segments)| format!("{}/{}", domain.0, segments.join("/")))
+            webhook_prefix_authority_and_path: value
+                .webhook_domain_and_segments
+                .map(|(domain, segments)| format!("{}/{}", domain.0, segments.join("/"))),
         }
     }
 }
@@ -98,7 +89,8 @@ impl DeploymentContext {
 
     pub fn extract_registered_agent_types(
         &self,
-    ) -> Result<HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>, DeploymentWriteError> {
+    ) -> Result<HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>, DeploymentWriteError>
+    {
         let mut agent_types = HashMap::new();
         let mut errors = Vec::new();
 
@@ -126,7 +118,7 @@ impl DeploymentContext {
                         component_id: component.id,
                         component_revision: component.revision,
                     },
-                    webhook_domain_and_segments
+                    webhook_domain_and_segments,
                 };
 
                 // Agent types can only be implemented once per deployments
@@ -135,7 +127,9 @@ impl DeploymentContext {
                         .insert(agent_type_name, registered_agent_type)
                         .is_some()
                     {
-                        Err(DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()))
+                        Err(DeployValidationError::AmbiguousAgentTypeName(
+                            agent_type.type_name.clone(),
+                        ))
                     } else {
                         Ok(())
                     },
@@ -184,7 +178,11 @@ impl DeploymentContext {
                     if let Some(v) = &registered_agent_type.agent_type.http_mount {
                         Ok(v)
                     } else {
-                        Err(DeployValidationError::HttpApiDeploymentAgentTypeMissingHttpMount { agent_type: agent_type.clone() })
+                        Err(
+                            DeployValidationError::HttpApiDeploymentAgentTypeMissingHttpMount {
+                                agent_type: agent_type.clone(),
+                            },
+                        )
                     },
                     errors
                 );
@@ -221,13 +219,13 @@ impl DeploymentContext {
                     deployment,
                     registered_agent_type,
                     &mut current_route_id,
-                    &mut compiled_routes
+                    &mut compiled_routes,
                 );
 
                 add_cors_preflight_http_routes(
                     deployment,
                     &mut current_route_id,
-                    &mut compiled_routes
+                    &mut compiled_routes,
                 );
             }
         }

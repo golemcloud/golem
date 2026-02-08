@@ -71,11 +71,14 @@ impl Diffable for HttpApiDeployment {
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
         let webhooks_url_changed = new.webhooks_url != current.webhooks_url;
-        let agents_changes = new.agents.diff_with_current(&current.agents).unwrap_or_default();
+        let agents_changes = new
+            .agents
+            .diff_with_current(&current.agents)
+            .unwrap_or_default();
         if webhooks_url_changed || !agents_changes.is_empty() {
             Some(Self::DiffResult {
                 webhooks_url_changed,
-                agents_changes
+                agents_changes,
             })
         } else {
             None

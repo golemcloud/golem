@@ -102,7 +102,7 @@ impl HttpApiDeploymentRevisionRecord {
             audit: DeletableRevisionAuditFields::new(actor.0),
             data: Blob::new(HttpApiDeploymentData {
                 webhooks_url,
-                agents
+                agents,
             }),
         };
         value.update_hash();

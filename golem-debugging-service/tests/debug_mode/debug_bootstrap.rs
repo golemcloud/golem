@@ -12,13 +12,14 @@ use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentDeploymentsServiceConfig, GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig
+    AgentDeploymentsServiceConfig, GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -39,6 +40,7 @@ use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
 use golem_worker_executor::{Bootstrap, RunDetails};
+use golem_worker_executor_test_utils::agent_deployments_service::DisabledAgentDeploymentsService;
 use golem_worker_executor_test_utils::component_service::ComponentServiceLocalFileSystem;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
@@ -48,8 +50,6 @@ use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
-use golem_worker_executor_test_utils::agent_deployments_service::DisabledAgentDeploymentsService;
 
 // A test bootstrap which depends on the original
 // bootstrap (inner) as much as possible except for auth service

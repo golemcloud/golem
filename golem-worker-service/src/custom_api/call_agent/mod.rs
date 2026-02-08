@@ -20,8 +20,8 @@ use self::parameter_parsing::{
     parse_query_or_header_value,
 };
 use self::response_mapping::interpret_agent_response;
-use super::error::RequestHandlerError;
 use super::RichRequest;
+use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
@@ -56,7 +56,9 @@ impl CallAgentHandler {
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let worker_id = self.build_worker_id(resolved_route, behaviour)?;
 
-        let parsed_body = request.parse_request_body(&resolved_route.route.body).await?;
+        let parsed_body = request
+            .parse_request_body(&resolved_route.route.body)
+            .await?;
 
         let method_params =
             self.resolve_method_arguments(resolved_route, request, behaviour, parsed_body)?;
