@@ -124,8 +124,6 @@ impl DeploymentContext {
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
 
-        dbg!(&registered_agent_types.keys());
-
         for deployment in self.http_api_deployments.values() {
             for (agent_type, agent_options) in &deployment.agents {
                 let registered_agent_type = ok_or_continue!(

@@ -706,6 +706,10 @@ mod tests {
             "HTTP mount details should be set"
         );
 
+        assert!(agent.methods.iter().all(
+            |m| !m.http_endpoint.is_empty()
+        ), "All methods should have HTTP endpoint details");
+
         assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)
     }
 

@@ -116,13 +116,13 @@ async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resul
 
 #[test]
 #[tracing::instrument]
-async fn string_path_var(agent: &TestContext) -> anyhow::Result<()> {
+async fn string_path_var_rust(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agent/string-path-var/foo")?,
+                .join("/http-agents/test-agenfddft/string-path-var/foo")?,
         )
         .send()
         .await?;
