@@ -196,7 +196,7 @@ export class Repl {
     replServer.defineCommand('reload', {
       help: 'Reload the REPL',
       action() {
-        reload();
+        CliReplInterop.exitWithReloadCode();
       },
     });
   }
@@ -204,10 +204,6 @@ export class Repl {
   async run() {
     await this.getReplServer();
   }
-}
-
-function reload() {
-  process.exit(75);
 }
 
 const INFO_PREFIX = pc.bold(pc.red('>'));

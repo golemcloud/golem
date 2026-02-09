@@ -105,12 +105,34 @@ export class CliReplInterop {
     return [completions, currentToken];
   }
 
-  private async runReplCliCommand(command: ReplCliCommand, rawArgs: string): Promise<void> {
-    const args = shellQuote
+  static exitWithReloadCode() {
+    process.exit(75);
+  }
+
+  private async runReplCliCommand(
+    command: ReplCliCommand,
+    rawArgs: string,
+  ): Promise<{
+    ok: boolean;
+    code: number | null;
+  }> {
+    let args = shellQuote
       .parse((rawArgs ?? '').trim())
       .filter((t): t is string => typeof t === 'string' && t.length > 0);
 
-    await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit' });
+    const hook = COMMAND_HOOKS[command.replCommand];
+
+    if (hook) {
+      args = hook.adaptArgs(args);
+    }
+
+    let result = await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit' });
+
+    if (hook) {
+      hook.handleResult(command.commandPath.concat(args), result);
+    }
+
+    return result;
   }
 
   private async completeArgValue(
@@ -161,6 +183,23 @@ export class CliReplInterop {
     };
   }
 }
+
+type CommandHookId = string;
+type CommandHook = {
+  adaptArgs: (args: string[]) => string[];
+  handleResult: (args: string[], result: { ok: boolean; code: number | null }) => void;
+};
+
+const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
+  deploy: {
+    adaptArgs: (args) => ['--repl-bridge-sdk-target', 'ts', ...args],
+    handleResult: (args, result) => {
+      if (args.includes('--plan') || args.includes('stage')) return;
+      if (!result.ok) return;
+      CliReplInterop.exitWithReloadCode();
+    },
+  },
+};
 
 type CompletionHookId = string;
 type CompletionHookFn = (cli: GolemCli, currentToken: string) => Promise<string[]>;
