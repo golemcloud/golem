@@ -60,3 +60,17 @@ pub fn generic_type_in_agent_return_type_error(
 pub fn compile_error(item_trait: &ItemTrait, msg: &str) -> proc_macro2::TokenStream {
     syn::Error::new_spanned(item_trait, msg).to_compile_error()
 }
+
+pub fn endpoint_on_static_method_error(span: Span) -> proc_macro2::TokenStream {
+    syn::Error::new(
+        span,
+        "#[endpoint] attribute is not allowed on static methods. Please ensure the method takes &self or &mut self as the first parameter."
+    ).to_compile_error()
+}
+
+pub fn endpoint_on_constructor_method_error(span: Span) -> proc_macro2::TokenStream {
+    syn::Error::new(
+        span,
+        "#[endpoint] attribute is not allowed on constructor methods. Please remove the #[endpoint] attribute from this method."
+    ).to_compile_error()
+}
