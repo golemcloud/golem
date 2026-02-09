@@ -662,11 +662,7 @@ mod tests {
         get = "/path-and-header/{resource_id}",
         headers("X-Request-ID" = "request_id")
         )]
-        fn path_and_header(
-            &self,
-            resource_id: String,
-            request_id: String,
-        ) -> String;
+        fn path_and_header(&self, resource_id: String, request_id: String) -> String;
 
         #[endpoint(get = "/greet?l={location}&n={name}")]
         fn greet1(&self, location: String, name: String) -> String;
@@ -714,17 +710,21 @@ mod tests {
             .iter()
             .find(|a| a.type_name == "ComplexHttpAgent")
             .expect("ComplexHttpAgent not found");
-        
+
         assert!(
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
         );
-        
-        assert!(!agent.methods.is_empty(), "Agent should have methods defined");
 
-        assert!(agent.methods.iter().all(
-            |m| !m.http_endpoint.is_empty()
-        ), "All methods should have HTTP endpoint details");
+        assert!(
+            !agent.methods.is_empty(),
+            "Agent should have methods defined"
+        );
+
+        assert!(
+            agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),
+            "All methods should have HTTP endpoint details"
+        );
 
         assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)
     }
