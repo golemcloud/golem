@@ -240,8 +240,8 @@ async fn path_and_header_rust(agent: &TestContext) -> anyhow::Result<()> {
     assert_eq!(
         body,
         json!({
-            "resourceId": "res-42",
-            "requestId": "req-abc"
+            "resource-id": "res-42",
+            "request-id": "req-abc"
         })
     );
 
