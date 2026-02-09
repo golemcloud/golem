@@ -19,29 +19,25 @@ import {
   Config,
   ConfigureClient,
 } from './config';
-import { CliCommands } from './cli-commands';
+import { CliReplInterop } from './cli-repl-interop';
 import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
 import process from 'node:process';
-import shellQuote from 'shell-quote';
-import childProcess from 'node:child_process';
 import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 
 export class Repl {
   private readonly config: Config;
   private readonly clientConfig: ClientConfig;
-  private readonly cliCommands: CliCommands | undefined;
+  private readonly cli: CliReplInterop;
   private languageService: LanguageService | undefined;
   private replServer: repl.REPLServer | undefined;
 
   constructor(config: Config) {
     this.config = config;
     this.clientConfig = clientConfigFromEnv();
-    this.cliCommands = new CliCommands(
-      cliCommandsConfigFromBaseConfig(this.config, this.clientConfig),
-    );
+    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
   }
 
   private getLanguageService(): LanguageService {
@@ -152,23 +148,22 @@ export class Repl {
   private setupReplCompleter(replServer: repl.REPLServer) {
     const nodeCompleter = replServer.completer;
     const languageService = this.getLanguageService();
-    const cliCommands = this.cliCommands;
+    const cli = this.cli;
     const customCompleter: AsyncCompleter = function (line, callback) {
+      // TODO: how to check for builtin ones
       if (line.trimStart().startsWith('.')) {
-        if (cliCommands) {
-          cliCommands
-            .complete(line)
-            .then((result) => {
-              if (result) {
-                callback(null, result);
-              } else {
-                nodeCompleter(line, callback);
-              }
-            })
-            .catch(() => nodeCompleter(line, callback));
-        } else {
-          nodeCompleter(line, callback);
-        }
+        cli
+          .complete(line)
+          .then((result) => {
+            if (result) {
+              callback(null, result);
+            } else {
+              nodeCompleter(line, callback);
+            }
+          })
+          .catch(() => {
+            nodeCompleter(line, callback);
+          });
       } else {
         languageService.setSnippet(line);
         const completions = languageService.getSnippetCompletions();
@@ -197,45 +192,7 @@ export class Repl {
   }
 
   private setupReplCommands(replServer: repl.REPLServer) {
-    const clientConfig = this.clientConfig;
-    this.cliCommands?.defineCommands(replServer);
-    replServer.defineCommand('deploy', {
-      help: 'Deploy the current Golem Application',
-      async action(raw_args: string) {
-        this.pause();
-
-        const parsed_args = shellQuote.parse((raw_args ?? '').trim());
-
-        let args = parsed_args.filter((t): t is string => typeof t === 'string' && t.length > 0);
-        args = [
-          'deploy',
-          '--environment',
-          clientConfig.environment,
-          '--repl-bridge-sdk-target',
-          'ts',
-          ...args,
-        ];
-
-        const child = childProcess.spawn('golem', args, { stdio: 'inherit' });
-        let result: {
-          code: number | null;
-          signal: NodeJS.Signals | null;
-        } = await new Promise((resolve) =>
-          child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-            resolve({ code, signal });
-          }),
-        );
-
-        if (result.code === 0) {
-          reload();
-        }
-
-        this.resume();
-        this.displayPrompt();
-        this.clearBufferedCommand();
-      },
-    });
-
+    this.cli.defineCommands(replServer);
     replServer.defineCommand('reload', {
       help: 'Reload the REPL',
       action() {

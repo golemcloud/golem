@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { env } from 'node:process';
-import { CliCommandMetadata } from './cli-commands';
 import fs from 'node:fs';
 
 export type Config = {
@@ -49,6 +48,45 @@ export type CliCommandsConfig = {
   appMainDir: string;
   clientConfig: ClientConfig;
   commandMetadata: CliCommandMetadata;
+};
+
+export type CliCommandMetadata = {
+  path: string[];
+  name: string;
+  displayName?: string | null;
+  about?: string | null;
+  longAbout?: string | null;
+  hidden: boolean;
+  visibleAliases: string[];
+  args: CliArgMetadata[];
+  subcommands: CliCommandMetadata[];
+};
+
+export type CliArgMetadata = {
+  id: string;
+  help?: string | null;
+  longHelp?: string | null;
+  valueNames: string[];
+  valueHint: string;
+  possibleValues: CliPossibleValueMetadata[];
+  action: string;
+  numArgs?: string | null;
+  isPositional: boolean;
+  isRequired: boolean;
+  isGlobal: boolean;
+  isHidden: boolean;
+  index?: number | null;
+  long: string[];
+  short: string[];
+  defaultValues: string[];
+  takesValue: boolean;
+};
+
+export type CliPossibleValueMetadata = {
+  name: string;
+  help?: string | null;
+  hidden: boolean;
+  aliases: string[];
 };
 
 export function clientConfigFromEnv(): ClientConfig {

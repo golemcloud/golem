@@ -13,156 +13,36 @@
 // limitations under the License.
 
 import childProcess from 'node:child_process';
-import fs from 'node:fs';
 import repl from 'node:repl';
 import shellQuote from 'shell-quote';
-import { CliCommandsConfig, ClientConfig } from './config';
+import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig, ClientConfig } from './config';
 
-export type CliCommandMetadata = {
-  path: string[];
-  name: string;
-  displayName?: string | null;
-  about?: string | null;
-  longAbout?: string | null;
-  hidden: boolean;
-  visibleAliases: string[];
-  args: CliArgMetadata[];
-  subcommands: CliCommandMetadata[];
-};
-
-export type CliArgMetadata = {
-  id: string;
-  help?: string | null;
-  longHelp?: string | null;
-  valueNames: string[];
-  valueHint: string;
-  possibleValues: CliPossibleValueMetadata[];
-  action: string;
-  numArgs?: string | null;
-  isPositional: boolean;
-  isRequired: boolean;
-  isGlobal: boolean;
-  isHidden: boolean;
-  index?: number | null;
-  long: string[];
-  short: string[];
-  defaultValues: string[];
-  takesValue: boolean;
-};
-
-export type CliPossibleValueMetadata = {
-  name: string;
-  help?: string | null;
-  hidden: boolean;
-  aliases: string[];
-};
-
-type CompletionHookId = string;
-
-type CompletionContext = {
-  cwd: string;
-  clientConfig: ClientConfig;
-  currentToken: string;
-};
-
-type CompletionHook = (context: CompletionContext) => Promise<string[]>;
-
-type ReplCliCommand = {
-  replCommand: string;
-  commandPath: string[];
-  about: string;
-  args: CliArgMetadata[];
-  flagArgs: Map<string, CliArgMetadata>;
-  positionalArgs: CliArgMetadata[];
-};
-
-const DEFAULT_ARG_COMPLETION_HOOKS: Record<string, CompletionHookId> = {
-  agent_id: 'agentId',
-  AGENT_ID: 'agentId',
-  component_name: 'componentName',
-  COMPONENT_NAME: 'componentName',
-};
-
-const COMPLETION_HOOKS: Record<CompletionHookId, CompletionHook> = {
-  agentId: async ({ cwd, clientConfig, currentToken }) => {
-    const currentTokenStartsWithSingleQuote = currentToken.startsWith("'");
-    const rawCurrentToken = currentTokenStartsWithSingleQuote
-      ? currentToken.slice(1, -1)
-      : currentToken;
-
-    const json = await runGolemJson(cwd, [
-      '--format',
-      'json',
-      '--environment',
-      clientConfig.environment,
-      'agent',
-      'list',
-    ]);
-
-    if (!json || !Array.isArray(json.workers)) {
-      return [];
-    }
-
-    const values = json.workers
-      .map((worker: any) => worker.workerName)
-      .filter((value: unknown): value is string => typeof value === 'string');
-
-    let matches = filterByPrefix(values, rawCurrentToken);
-    if (currentTokenStartsWithSingleQuote) {
-      if (matches.length === 0) {
-        matches = matches.map((match) => `'${match}'`);
-      } else {
-        matches = matches.map((match) => `'${match}'`);
-      }
-    }
-    return matches;
-  },
-  componentName: async ({ cwd, clientConfig, currentToken }) => {
-    const json = await runGolemJson(cwd, [
-      '--format',
-      'json',
-      '--environment',
-      clientConfig.environment,
-      'component',
-      'list',
-    ]);
-    if (!Array.isArray(json)) {
-      return [];
-    }
-
-    const values = json
-      .map((component: any) => component?.componentName)
-      .filter((value: unknown): value is string => typeof value === 'string');
-
-    return filterByPrefix(values, currentToken);
-  },
-};
-
-export class CliCommands {
+export class CliReplInterop {
   private readonly config: CliCommandsConfig;
   private readonly commands: ReplCliCommand[];
   private readonly commandsByName: Map<string, ReplCliCommand>;
+  private readonly cli: GolemCli;
 
   constructor(config: CliCommandsConfig) {
     this.config = config;
-    this.commands = addReplCommands(this.config.commandMetadata);
+    this.commands = collectReplCliCommands(this.config.commandMetadata);
     this.commandsByName = new Map(this.commands.map((command) => [command.replCommand, command]));
+    this.cli = new GolemCli({
+      binary: 'golem', // TODO: from config
+      cwd: this.config.appMainDir,
+      clientConfig: this.config.clientConfig,
+    });
   }
 
   defineCommands(replServer: repl.REPLServer) {
-    const reserved = new Set(['deploy', 'reload']);
-    const clientConfig = this.config.clientConfig;
-    const appMainDir = this.config.appMainDir;
+    const interop = this;
     for (const command of this.commands) {
-      if (reserved.has(command.replCommand)) continue;
-
-      const help = command.about || `Run golem ${command.commandPath.join(' ')}`;
       replServer.defineCommand(command.replCommand, {
-        help,
+        help: command.about,
         async action(rawArgs: string) {
           this.pause();
 
-          await runReplCliCommand(command, appMainDir, rawArgs, clientConfig);
+          await interop.runReplCliCommand(command, rawArgs);
 
           this.resume();
           this.displayPrompt();
@@ -201,12 +81,7 @@ export class CliCommands {
     const { usedArgIds, positionalValues, expectingValueFor } = parseArgs(command, argTokens);
 
     if (expectingValueFor) {
-      const values = await completeArgValue(
-        expectingValueFor,
-        currentToken,
-        this.config.appMainDir,
-        this.config.clientConfig,
-      );
+      const values = await this.completeArgValue(expectingValueFor, currentToken);
       return [values, currentToken];
     }
 
@@ -217,35 +92,153 @@ export class CliCommands {
 
     const nextPositional = command.positionalArgs[positionalValues.length];
     if (currentToken.length > 0 && nextPositional) {
-      const values = await completeArgValue(
-        nextPositional,
-        currentToken,
-        this.config.appMainDir,
-        this.config.clientConfig,
-      );
+      const values = await this.completeArgValue(nextPositional, currentToken);
       return [values, currentToken];
     }
 
     const positionalValuesList = nextPositional
-      ? await completeArgValue(
-          nextPositional,
-          currentToken,
-          this.config.appMainDir,
-          this.config.clientConfig,
-        )
+      ? await this.completeArgValue(nextPositional, currentToken)
       : [];
     const flagValuesList = completeFlags(command, usedArgIds, currentToken);
     const completions = mergeUnique(positionalValuesList, flagValuesList);
     return [completions, currentToken];
   }
+
+  private async runReplCliCommand(command: ReplCliCommand, rawArgs: string): Promise<void> {
+    const args = shellQuote
+      .parse((rawArgs ?? '').trim())
+      .filter((t): t is string => typeof t === 'string' && t.length > 0);
+
+    await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit' });
+  }
+
+  private async completeArgValue(arg: CliArgMetadata, currentToken: string): Promise<string[]> {
+    if (arg.possibleValues.length > 0) {
+      return filterByPrefix(
+        arg.possibleValues.map((value) => value.name),
+        currentToken,
+      );
+    }
+
+    const hook = findArgCompletionHook(arg);
+    if (!hook) return [];
+
+    return hook(this.cli, currentToken);
+  }
 }
 
-function addReplCommands(root: CliCommandMetadata): ReplCliCommand[] {
+type CompletionHookId = string;
+type CompletionHook = (cli: GolemCli, currentToken: string) => Promise<string[]>;
+
+const COMPLETION_HOOKS: Record<CompletionHookId, CompletionHook> = {
+  AGENT_ID: async (cli, currentToken) => {
+    const result = await cli.runJson({ args: ['agent', 'list'] });
+
+    if (!result.ok || !result.json || !Array.isArray(result.json.workers)) {
+      return [];
+    }
+
+    const values = result.json.workers
+      .map((worker: any) => worker.workerName)
+      .filter((value: unknown): value is string => typeof value === 'string');
+
+    return filterByPrefix(values, currentToken);
+  },
+
+  COMPONENT_NAME: async (cli, currentToken) => {
+    const result = await cli.runJson({ args: ['component', 'list'] });
+    if (!result.ok) {
+      return [];
+    }
+
+    if (!result.json || !Array.isArray(result.json)) {
+      return [];
+    }
+
+    const values = result.json
+      .map((component: any) => component?.componentName)
+      .filter((value: unknown): value is string => typeof value === 'string');
+
+    return filterByPrefix(values, currentToken);
+  },
+};
+
+class GolemCli {
+  private readonly binaryName: string;
+  private readonly cwd: string;
+  private readonly clientConfig: ClientConfig;
+
+  constructor(opts: { binary: string; cwd: string; clientConfig: ClientConfig }) {
+    this.binaryName = opts.binary;
+    this.cwd = opts.cwd;
+    this.clientConfig = opts.clientConfig;
+  }
+
+  async run(opts: { args: string[]; mode: 'inherit' | 'piped' }): Promise<{
+    ok: boolean;
+    code: number | null;
+    stdout: string;
+    stderr: string;
+  }> {
+    const child = childProcess.spawn(
+      this.binaryName,
+      ['--environment', this.clientConfig.environment, ...opts.args],
+      {
+        cwd: this.cwd,
+        stdio: ((mode) => {
+          switch (mode) {
+            case 'inherit':
+              return 'inherit';
+            case 'piped':
+              return ['ignore', 'pipe', 'pipe'];
+          }
+        })(opts.mode),
+      },
+    );
+
+    return new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+
+      if (opts.mode === 'piped') {
+        child.stdout?.on('data', (chunk) => {
+          stdout += chunk.toString();
+        });
+
+        child.stderr?.on('data', (chunk) => {
+          stderr += chunk.toString();
+        });
+      }
+
+      child.once('exit', (code) => {
+        resolve({ ok: code === 0, code, stdout, stderr });
+      });
+    });
+  }
+
+  async runJson(opts: {
+    args: string[];
+  }): Promise<{ ok: boolean; code: number | null; json: any }> {
+    const result = await this.run({ args: ['--format', 'json', ...opts.args], mode: 'piped' });
+    return { ok: result.ok, code: result.code, json: JSON.parse(result.stdout) };
+  }
+}
+
+type ReplCliCommand = {
+  replCommand: string;
+  commandPath: string[];
+  about: string;
+  args: CliArgMetadata[];
+  flagArgs: Map<string, CliArgMetadata>;
+  positionalArgs: CliArgMetadata[];
+};
+
+function collectReplCliCommands(root: CliCommandMetadata): ReplCliCommand[] {
   const leafCommands = collectLeafCommands(root);
   const commands: ReplCliCommand[] = [];
 
   for (const command of leafCommands) {
-    const replCommand = toLowerCamelCase(command.path);
+    const replCommand = commandPathToReplCommandName(command.path);
     const about = command.about ?? command.longAbout ?? command.name;
     const { flagArgs, positionalArgs } = indexArgs(command.args);
 
@@ -259,7 +252,7 @@ function addReplCommands(root: CliCommandMetadata): ReplCliCommand[] {
     });
   }
 
-  return commands;
+  return commands.sort((left, right) => left.replCommand.localeCompare(right.replCommand));
 }
 
 function collectLeafCommands(command: CliCommandMetadata): CliCommandMetadata[] {
@@ -338,37 +331,11 @@ function completeFlags(command: ReplCliCommand, usedArgIds: Set<string>, prefix:
   return filterByPrefix(flags, prefix);
 }
 
-async function completeArgValue(
-  arg: CliArgMetadata,
-  currentToken: string,
-  cwd: string,
-  clientConfig: ClientConfig,
-): Promise<string[]> {
-  if (arg.possibleValues.length > 0) {
-    return filterByPrefix(
-      arg.possibleValues.map((value) => value.name),
-      currentToken,
-    );
-  }
-
-  const hookId = resolveCompletionHookId(arg);
-  if (!hookId) return [];
-
-  const hook = COMPLETION_HOOKS[hookId];
-  if (!hook) return [];
-
-  return hook({ cwd, clientConfig, currentToken });
-}
-
-function resolveCompletionHookId(arg: CliArgMetadata): CompletionHookId | undefined {
+function findArgCompletionHook(arg: CliArgMetadata): CompletionHook | undefined {
   const candidates = [arg.id, ...arg.valueNames];
   for (const candidate of candidates) {
-    const hookId = DEFAULT_ARG_COMPLETION_HOOKS[candidate];
-    if (hookId) return hookId;
-    const upper = candidate.toUpperCase();
-    if (DEFAULT_ARG_COMPLETION_HOOKS[upper]) {
-      return DEFAULT_ARG_COMPLETION_HOOKS[upper];
-    }
+    let hook = COMPLETION_HOOKS[candidate.toUpperCase()];
+    if (hook) return hook;
   }
   return;
 }
@@ -385,7 +352,7 @@ function mergeUnique(left: string[], right: string[]): string[] {
   return [...set];
 }
 
-function toLowerCamelCase(segments: string[]): string {
+function commandPathToReplCommandName(segments: string[]): string {
   const parts = segments
     .flatMap((segment) => segment.split(/[-_]/g))
     .filter((segment) => segment.length > 0);
@@ -395,62 +362,4 @@ function toLowerCamelCase(segments: string[]): string {
       return part[0].toUpperCase() + part.slice(1).toLowerCase();
     })
     .join('');
-}
-
-async function runReplCliCommand(
-  command: ReplCliCommand,
-  cwd: string,
-  rawArgs: string,
-  clientConfig: ClientConfig,
-): Promise<void> {
-  const parsedArgs = shellQuote.parse((rawArgs ?? '').trim());
-  const args = parsedArgs.filter((t): t is string => typeof t === 'string' && t.length > 0);
-
-  const cliArgs = ['--environment', clientConfig.environment, ...command.commandPath, ...args];
-  const child = childProcess.spawn('golem', cliArgs, {
-    stdio: 'inherit',
-    cwd,
-  });
-  await new Promise<void>((resolve) =>
-    child.once('exit', () => {
-      resolve();
-    }),
-  );
-}
-
-async function runGolemJson(cwd: string, args: string[]): Promise<any> {
-  const result = await runGolem(cwd, args);
-  if (!result.ok) return;
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    return;
-  }
-}
-
-async function runGolem(
-  cwd: string,
-  args: string[],
-): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  const child = childProcess.spawn('golem', args, {
-    cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.once('exit', (code) => {
-      resolve({ ok: code === 0, stdout, stderr });
-    });
-  });
 }
