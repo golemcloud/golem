@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_http_routes_rust;
 mod agent_http_routes_ts;
+mod http_test_context;
 // mod echo_agent;
 // mod shopping_cart;
 

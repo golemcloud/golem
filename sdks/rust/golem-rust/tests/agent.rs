@@ -658,6 +658,12 @@ mod tests {
     trait ComplexHttpAgent {
         fn new(foo: String, bar: String) -> Self;
 
+        #[endpoint(
+        get = "/path-and-header/{resource_id}",
+        headers("X-Request-ID" = "request_id")
+        )]
+        fn path_and_header(&self, resource_id: String, request_id: String) -> String;
+
         #[endpoint(get = "/greet?l={location}&n={name}")]
         fn greet1(&self, location: String, name: String) -> String;
 
@@ -675,6 +681,10 @@ mod tests {
     impl ComplexHttpAgent for AgentWithHttpMountImpl {
         fn new(_foo: String, _bar: String) -> Self {
             AgentWithHttpMountImpl {}
+        }
+
+        fn path_and_header(&self, _resource_id: String, _request_id: String) -> String {
+            "foo".to_string()
         }
 
         fn greet1(&self, _location: String, _name: String) -> String {
@@ -704,6 +714,16 @@ mod tests {
         assert!(
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
+        );
+
+        assert!(
+            !agent.methods.is_empty(),
+            "Agent should have methods defined"
+        );
+
+        assert!(
+            agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),
+            "All methods should have HTTP endpoint details"
         );
 
         assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)

@@ -63,4 +63,8 @@ impl WebhookRequestPayload {
     pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, String> {
         serde_json::from_slice(&self.payload).map_err(|e| format!("Invalid input: {}", e))
     }
+
+    pub fn raw_data(self) -> Vec<u8> {
+        self.payload
+    }
 }
