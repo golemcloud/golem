@@ -870,6 +870,24 @@ impl From<golem_wasm::AgentId> for WorkerId {
     }
 }
 
+impl From<PromiseId> for golem_wasm::PromiseId {
+    fn from(promise_id: PromiseId) -> Self {
+        golem_wasm::PromiseId {
+            agent_id: promise_id.worker_id.into(),
+            oplog_idx: promise_id.oplog_idx.into(),
+        }
+    }
+}
+
+impl From<golem_wasm::PromiseId> for PromiseId {
+    fn from(host: golem_wasm::PromiseId) -> Self {
+        Self {
+            worker_id: host.agent_id.into(),
+            oplog_idx: OplogIndex::from_u64(host.oplog_idx),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, IntoValue, FromValue, BinaryCodec)]
 pub enum ForkResult {
     /// The original worker that called `fork`

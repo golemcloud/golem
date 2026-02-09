@@ -17,27 +17,9 @@ pub mod golem {
             pub type ComponentId = super::super::super::golem::rpc::types::ComponentId;
             pub type Uuid = super::super::super::golem::rpc::types::Uuid;
             pub type AgentId = super::super::super::golem::rpc::types::AgentId;
+            pub type PromiseId = super::super::super::golem::rpc::types::PromiseId;
+            pub type OplogIndex = super::super::super::golem::rpc::types::OplogIndex;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
-            /// An index into the persistent log storing all performed operations of an agent
-            pub type OplogIndex = u64;
-            /// A promise ID is a value that can be passed to an external Golem API to complete that promise
-            /// from an arbitrary external source, while Golem agents can await for this completion.
-            #[derive(Clone)]
-            pub struct PromiseId {
-                pub agent_id: AgentId,
-                pub oplog_idx: OplogIndex,
-            }
-            impl ::core::fmt::Debug for PromiseId {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("PromiseId")
-                        .field("agent-id", &self.agent_id)
-                        .field("oplog-idx", &self.oplog_idx)
-                        .finish()
-                }
-            }
             /// Represents a Golem component's version
             pub type ComponentRevision = u64;
             /// Represents a Golem environment
@@ -1242,7 +1224,7 @@ pub mod golem {
                     let l7 = *ptr0
                         .add(16 + 2 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>();
-                    let result8 = PromiseId {
+                    let result8 = super::super::super::golem::rpc::types::PromiseId {
                         agent_id: super::super::super::golem::rpc::types::AgentId {
                             component_id: super::super::super::golem::rpc::types::ComponentId {
                                 uuid: super::super::super::golem::rpc::types::Uuid {
@@ -1261,7 +1243,10 @@ pub mod golem {
             /// Gets a handle to the result of the promise. Can only be called in the same agent that orignally created the promise.
             pub fn get_promise(promise_id: &PromiseId) -> GetPromiseResult {
                 unsafe {
-                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
+                    let super::super::super::golem::rpc::types::PromiseId {
+                        agent_id: agent_id0,
+                        oplog_idx: oplog_idx0,
+                    } = promise_id;
                     let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id1,
                         agent_id: agent_id1,
@@ -1315,7 +1300,10 @@ pub mod golem {
             /// if the promise was already completed. The payload is passed to the agent that is awaiting the promise.
             pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
                 unsafe {
-                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
+                    let super::super::super::golem::rpc::types::PromiseId {
+                        agent_id: agent_id0,
+                        oplog_idx: oplog_idx0,
+                    } = promise_id;
                     let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id1,
                         agent_id: agent_id1,
@@ -15926,6 +15914,9 @@ pub mod golem {
             use super::super::super::_rt;
             pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
             pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            /// An index into the persistent log storing all performed operations of an agent
+            /// FIXME: move into golem:api/host
+            pub type OplogIndex = u64;
             /// UUID
             #[repr(C)]
             #[derive(Clone, Copy)]
@@ -15978,6 +15969,7 @@ pub mod golem {
                 }
             }
             /// Represents a Golem account
+            /// FIXME: move into golem:api/host
             #[repr(C)]
             #[derive(Clone, Copy)]
             pub struct AccountId {
@@ -15989,6 +15981,25 @@ pub mod golem {
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     f.debug_struct("AccountId").field("uuid", &self.uuid).finish()
+                }
+            }
+            /// A promise ID is a value that can be passed to an external Golem API to complete that promise
+            /// from an arbitrary external source, while Golem agents can await for this completion.
+            /// FIXME: move into golem:api/host
+            #[derive(Clone)]
+            pub struct PromiseId {
+                pub agent_id: AgentId,
+                pub oplog_idx: OplogIndex,
+            }
+            impl ::core::fmt::Debug for PromiseId {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("PromiseId")
+                        .field("agent-id", &self.agent_id)
+                        .field("oplog-idx", &self.oplog_idx)
+                        .finish()
                 }
             }
             /// The index type used in `wit-value` and `wit-type` to identify nodes
@@ -25879,236 +25890,238 @@ pub(crate) use __export_oplog_processor_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 11390] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf8W\x01A\x02\x01A(\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 11465] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc3X\x01A\x02\x01A*\x01\
 B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\
 \x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-cloc\
 k@0.2.3\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\
 \x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[me\
 thod]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04pol\
 l\x01\x06\x03\0\x12wasi:io/poll@0.2.3\x05\x01\x02\x03\0\0\x08datetime\x02\x03\0\x01\
-\x08pollable\x01BW\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
-\x03\x04\0\x08pollable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uu\
-id\x03\0\x04\x01r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0cco\
-mponent-id\x07\x08agent-ids\x04\0\x08agent-id\x03\0\x08\x01r\x01\x04uuid\x05\x04\
-\0\x0aaccount-id\x03\0\x0a\x01z\x04\0\x0anode-index\x03\0\x0c\x01w\x04\0\x0breso\
-urce-id\x03\0\x0e\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x10\
-\x01o\x02s\x0d\x01p\x12\x01k\x0d\x01o\x02s\x14\x01p\x15\x01ps\x01p\x0d\x01o\x02\x14\
-\x14\x01o\x02\x0f\x11\x01q\x16\x0brecord-type\x01\x13\0\x0cvariant-type\x01\x16\0\
-\x09enum-type\x01\x17\0\x0aflags-type\x01\x17\0\x0atuple-type\x01\x18\0\x09list-\
-type\x01\x0d\0\x0boption-type\x01\x0d\0\x0bresult-type\x01\x19\0\x0cprim-u8-type\
-\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-t\
-ype\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f\
-32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
-prim-string-type\0\0\x0bhandle-type\x01\x1a\0\x04\0\x0dwit-type-node\x03\0\x1b\x01\
-ks\x01r\x03\x04name\x1d\x05owner\x1d\x04type\x1c\x04\0\x13named-wit-type-node\x03\
-\0\x1e\x01p\x1f\x01r\x01\x05nodes\x20\x04\0\x08wit-type\x03\0!\x01r\x01\x05value\
-s\x04\0\x03uri\x03\0#\x01o\x02y\x14\x01p\x7f\x01j\x01\x14\x01\x14\x01o\x02$w\x01\
-q\x16\x0crecord-value\x01\x18\0\x0dvariant-value\x01%\0\x0aenum-value\x01y\0\x0b\
-flags-value\x01&\0\x0btuple-value\x01\x18\0\x0alist-value\x01\x18\0\x0coption-va\
-lue\x01\x14\0\x0cresult-value\x01'\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08pri\
-m-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-s32\
-\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09prim\
--char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01(\0\x04\0\
-\x08wit-node\x03\0)\x01p*\x01r\x01\x05nodes+\x04\0\x09wit-value\x03\0,\x01r\x02\x05\
-value-\x03typ\"\x04\0\x0evalue-and-type\x03\0.\x01q\x04\x0eprotocol-error\x01s\0\
-\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09r\
-pc-error\x03\00\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x04\
-\0\x12cancellation-token\x03\x01\x01i2\x01@\x01\x08agent-id\x09\05\x04\0\x15[con\
-structor]wasm-rpc\x016\x01h2\x01p-\x01j\x01-\x011\x01@\x03\x04self7\x0dfunction-\
-names\x0ffunction-params8\09\x04\0![method]wasm-rpc.invoke-and-await\x01:\x01j\0\
-\x011\x01@\x03\x04self7\x0dfunction-names\x0ffunction-params8\0;\x04\0\x17[metho\
-d]wasm-rpc.invoke\x01<\x01i3\x01@\x03\x04self7\x0dfunction-names\x0ffunction-par\
-ams8\0=\x04\0'[method]wasm-rpc.async-invoke-and-await\x01>\x01@\x04\x04self7\x0e\
-scheduled-time\x01\x0dfunction-names\x0ffunction-params8\x01\0\x04\0$[method]was\
-m-rpc.schedule-invocation\x01?\x01i4\x01@\x04\x04self7\x0escheduled-time\x01\x0d\
-function-names\x0ffunction-params8\0\xc0\0\x04\0/[method]wasm-rpc.schedule-cance\
-lable-invocation\x01A\x01h3\x01i\x03\x01@\x01\x04self\xc2\0\0\xc3\0\x04\0&[metho\
-d]future-invoke-result.subscribe\x01D\x01k9\x01@\x01\x04self\xc2\0\0\xc5\0\x04\0\
-\x20[method]future-invoke-result.get\x01F\x01h4\x01@\x01\x04self\xc7\0\x01\0\x04\
-\0![method]cancellation-token.cancel\x01H\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc9\
-\0\x04\0\x0aparse-uuid\x01J\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01K\
-\x03\0\x15golem:rpc/types@0.2.2\x05\x04\x01B\x0f\x02\x03\x02\x01\x03\x04\0\x08po\
-llable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x04\x01\
-@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\x01\
-\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04when\x05\
-\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/monotonic-clock@0.2\
-.3\x05\x05\x02\x03\0\x03\x08duration\x02\x03\0\x02\x0ccomponent-id\x02\x03\0\x02\
-\x04uuid\x02\x03\0\x02\x0evalue-and-type\x02\x03\0\x02\x08agent-id\x01B\x85\x01\x02\
-\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0ccomponen\
-t-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\
-\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\x08agent-id\x03\0\x08\x02\
-\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x0a\x01w\x04\0\x0boplog-index\x03\0\x0c\
-\x01r\x02\x08agent-id\x09\x09oplog-idx\x0d\x04\0\x0apromise-id\x03\0\x0e\x01w\x04\
-\0\x12component-revision\x03\0\x10\x01r\x01\x04uuid\x05\x04\0\x0eenvironment-id\x03\
-\0\x12\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amult\
-iplieru\x11max-jitter-factor\x14\x04\0\x0cretry-policy\x03\0\x15\x01q\x03\x0fper\
-sist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persis\
-tence-level\x03\0\x17\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mo\
-de\x03\0\x19\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-\
-equal\x04less\x04\0\x11filter-comparator\x03\0\x1b\x01m\x05\x05equal\x09not-equa\
-l\x04like\x08not-like\x0bstarts-with\x04\0\x18string-filter-comparator\x03\0\x1d\
-\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06\
-exited\x04\0\x0cagent-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\
-\x11agent-name-filter\x03\0!\x01r\x02\x0acomparator\x1c\x05value\x20\x04\0\x13ag\
-ent-status-filter\x03\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x14agent-ver\
-sion-filter\x03\0%\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x17agent-created-a\
-t-filter\x03\0'\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\0\x10agent-env\
--filter\x03\0)\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\0\x18agent-conf\
-ig-vars-filter\x03\0+\x01q\x06\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\
-\x0acreated-at\x01(\0\x03env\x01*\0\x10wasi-config-vars\x01,\0\x04\0\x15agent-pr\
-operty-filter\x03\0-\x01p.\x01r\x01\x07filters/\x04\0\x10agent-all-filter\x03\00\
-\x01p1\x01r\x01\x07filters2\x04\0\x10agent-any-filter\x03\03\x01ps\x01o\x02ss\x01\
-p6\x01r\x07\x08agent-id\x09\x04args5\x03env7\x0bconfig-vars7\x06status\x20\x12co\
-mponent-revisionw\x0bretry-countw\x04\0\x0eagent-metadata\x03\08\x04\0\x0aget-ag\
-ents\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\x0d\0\x17revert-last-invocati\
-ons\x01w\0\x04\0\x13revert-agent-target\x03\0;\x01r\x01\x11forked-phantom-id\x05\
-\x04\0\x0cfork-details\x03\0=\x01q\x02\x08original\x01>\0\x06forked\x01>\0\x04\0\
-\x0bfork-result\x03\0?\x04\0\x12get-promise-result\x03\x01\x01k4\x01i:\x01@\x03\x0c\
-component-id\x03\x06filter\xc2\0\x07precise\x7f\0\xc3\0\x04\0\x17[constructor]ge\
-t-agents\x01D\x01h:\x01p9\x01k\xc6\0\x01@\x01\x04self\xc5\0\0\xc7\0\x04\0\x1b[me\
-thod]get-agents.get-next\x01H\x01hA\x01i\x0b\x01@\x01\x04self\xc9\0\0\xca\0\x04\0\
-$[method]get-promise-result.subscribe\x01K\x01p}\x01k\xcc\0\x01@\x01\x04self\xc9\
-\0\0\xcd\0\x04\0\x1e[method]get-promise-result.get\x01N\x01@\0\0\x0f\x04\0\x0ecr\
-eate-promise\x01O\x01iA\x01@\x01\x0apromise-id\x0f\0\xd0\0\x04\0\x0bget-promise\x01\
-Q\x01@\x02\x0apromise-id\x0f\x04data\xcc\0\0\x7f\x04\0\x10complete-promise\x01R\x01\
-@\0\0\x0d\x04\0\x0fget-oplog-index\x01S\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0f\
-set-oplog-index\x01T\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01U\x04\0\
-\x14mark-begin-operation\x01S\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-oper\
-ation\x01V\x01@\0\0\x16\x04\0\x10get-retry-policy\x01W\x01@\x01\x10new-retry-pol\
-icy\x16\x01\0\x04\0\x10set-retry-policy\x01X\x01@\0\0\x18\x04\0\x1bget-oplog-per\
-sistence-level\x01Y\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1bset-opl\
-og-persistence-level\x01Z\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01[\x01@\x01\
-\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01\\\x01@\0\0\x05\x04\0\x18\
-generate-idempotency-key\x01]\x01@\x03\x08agent-id\x09\x0ftarget-revision\x11\x04\
-mode\x1a\x01\0\x04\0\x0cupdate-agent\x01^\x01@\0\09\x04\0\x11get-self-metadata\x01\
-_\x01k9\x01@\x01\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\
-\x0fsource-agent-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\
-\0\x0afork-agent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target<\x01\0\x04\0\x0c\
-revert-agent\x01c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14res\
-olve-component-id\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\
-\xe6\0\x04\0\x10resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\
-\0\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0b\x01B7\x02\x03\
-\x02\x01\x02\x04\0\x08datetime\x03\0\0\x04\0\x04span\x03\x01\x04\0\x12invocation\
--context\x03\x01\x01q\x01\x06string\x01s\0\x04\0\x0fattribute-value\x03\0\x04\x01\
-r\x02\x03keys\x05value\x05\x04\0\x09attribute\x03\0\x06\x01p\x05\x01r\x02\x03key\
-s\x06values\x08\x04\0\x0fattribute-chain\x03\0\x09\x01s\x04\0\x08trace-id\x03\0\x0b\
-\x01s\x04\0\x07span-id\x03\0\x0d\x01h\x02\x01@\x01\x04self\x0f\0\x01\x04\0\x17[m\
-ethod]span.started-at\x01\x10\x01@\x03\x04self\x0f\x04names\x05value\x05\x01\0\x04\
-\0\x1a[method]span.set-attribute\x01\x11\x01p\x07\x01@\x02\x04self\x0f\x0aattrib\
-utes\x12\x01\0\x04\0\x1b[method]span.set-attributes\x01\x13\x01@\x01\x04self\x0f\
-\x01\0\x04\0\x13[method]span.finish\x01\x14\x01h\x03\x01@\x01\x04self\x15\0\x0c\x04\
-\0#[method]invocation-context.trace-id\x01\x16\x01@\x01\x04self\x15\0\x0e\x04\0\"\
-[method]invocation-context.span-id\x01\x17\x01i\x03\x01k\x18\x01@\x01\x04self\x15\
-\0\x19\x04\0![method]invocation-context.parent\x01\x1a\x01k\x05\x01@\x03\x04self\
-\x15\x03keys\x09inherited\x7f\0\x1b\x04\0([method]invocation-context.get-attribu\
-te\x01\x1c\x01@\x02\x04self\x15\x09inherited\x7f\0\x12\x04\0)[method]invocation-\
-context.get-attributes\x01\x1d\x01@\x02\x04self\x15\x03keys\0\x08\x04\0.[method]\
-invocation-context.get-attribute-chain\x01\x1e\x01p\x0a\x01@\x01\x04self\x15\0\x1f\
-\x04\0/[method]invocation-context.get-attribute-chains\x01\x20\x01o\x02ss\x01p!\x01\
-@\x01\x04self\x15\0\"\x04\00[method]invocation-context.trace-context-headers\x01\
-#\x01i\x02\x01@\x01\x04names\0$\x04\0\x0astart-span\x01%\x01@\0\0\x18\x04\0\x0fc\
-urrent-context\x01&\x01@\x01\x05allow\x7f\0\x7f\x04\0&allow-forwarding-trace-con\
-text-headers\x01'\x03\0\x17golem:api/context@1.3.0\x05\x0c\x02\x03\0\x02\x0aacco\
-unt-id\x02\x03\0\x04\x12component-revision\x02\x03\0\x04\x0boplog-index\x02\x03\0\
-\x04\x11persistence-level\x02\x03\0\x04\x0eenvironment-id\x02\x03\0\x04\x0cretry\
--policy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x08agent-id\x02\x03\0\x05\x09attribu\
-te\x02\x03\0\x05\x0fattribute-value\x02\x03\0\x05\x07span-id\x02\x03\0\x05\x08tr\
-ace-id\x01B\x8f\x01\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
-\x09\x04\0\x0evalue-and-type\x03\0\x02\x02\x03\x02\x01\x0d\x04\0\x0aaccount-id\x03\
-\0\x04\x02\x03\x02\x01\x0e\x04\0\x12component-revision\x03\0\x06\x02\x03\x02\x01\
-\x0f\x04\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\x10\x04\0\x11persistence-lev\
-el\x03\0\x0a\x02\x03\x02\x01\x11\x04\0\x0eenvironment-id\x03\0\x0c\x02\x03\x02\x01\
-\x12\x04\0\x0cretry-policy\x03\0\x0e\x02\x03\x02\x01\x13\x04\0\x04uuid\x03\0\x10\
-\x02\x03\x02\x01\x14\x04\0\x08agent-id\x03\0\x12\x02\x03\x02\x01\x15\x04\0\x09at\
-tribute\x03\0\x14\x02\x03\x02\x01\x16\x04\0\x0fattribute-value\x03\0\x16\x02\x03\
-\x02\x01\x17\x04\0\x07span-id\x03\0\x18\x02\x03\x02\x01\x18\x04\0\x08trace-id\x03\
-\0\x1a\x01k\x09\x01q\x06\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\
-\x0cwrite-remote\0\0\x14write-remote-batched\x01\x1c\0\x18write-remote-transacti\
-on\x01\x1c\0\x04\0\x15wrapped-function-type\x03\0\x1d\x01o\x02ss\x01p\x1f\x01r\x03\
-\x04names\x07versions\x0aparameters\x20\x04\0\x1fplugin-installation-description\
-\x03\0!\x01ps\x01k\x13\x01p\"\x01r\x0c\x09timestamp\x01\x08agent-id\x13\x12compo\
-nent-revision\x07\x04args#\x03env\x20\x0acreated-by\x05\x0eenvironment-id\x0d\x06\
-parent$\x0ecomponent-sizew\x20initial-total-linear-memory-sizew\x16initial-activ\
-e-plugins%\x0bconfig-vars\x20\x04\0\x11create-parameters\x03\0&\x01r\x05\x09time\
-stamp\x01\x0dfunction-names\x07request\x03\x08response\x03\x15wrapped-function-t\
-ype\x1e\x04\0$imported-function-invoked-parameters\x03\0(\x01k\x19\x01kw\x01p\x15\
-\x01r\x06\x07span-id\x19\x05start\x01\x06parent*\x0elinked-context+\x0aattribute\
-s,\x09inherited\x7f\x04\0\x0flocal-span-data\x03\0-\x01r\x01\x07span-id\x19\x04\0\
-\x12external-span-data\x03\0/\x01q\x02\x0alocal-span\x01.\0\x0dexternal-span\x01\
-0\0\x04\0\x09span-data\x03\01\x01p\x03\x01p2\x01p4\x01r\x07\x09timestamp\x01\x0d\
-function-names\x07request3\x0fidempotency-keys\x08trace-id\x1b\x0ctrace-states#\x12\
-invocation-context5\x04\0$exported-function-invoked-parameters\x03\06\x01k\x03\x01\
-r\x03\x09timestamp\x01\x08response8\x0dconsumed-fuelx\x04\0&exported-function-co\
-mpleted-parameters\x03\09\x01r\x03\x09timestamp\x01\x05errors\x0aretry-from\x09\x04\
-\0\x10error-parameters\x03\0;\x01r\x02\x05start\x09\x03end\x09\x04\0\x0coplog-re\
-gion\x03\0=\x01r\x02\x09timestamp\x01\x04jump>\x04\0\x0fjump-parameters\x03\0?\x01\
-r\x02\x09timestamp\x01\x0anew-policy\x0f\x04\0\x1echange-retry-policy-parameters\
-\x03\0A\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-\
-parameters\x03\0C\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remo\
-te-write-parameters\x03\0E\x01k3\x01r\x06\x0fidempotency-keys\x0dfunction-names\x05\
-input\xc7\0\x08trace-ids\x0ctrace-states#\x12invocation-context5\x04\0'exported-\
-function-invocation-parameters\x03\0H\x01q\x02\x11exported-function\x01\xc9\0\0\x0d\
-manual-update\x01\x07\0\x04\0\x10agent-invocation\x03\0J\x01r\x02\x09timestamp\x01\
-\x0ainvocation\xcb\0\x04\0#pending-agent-invocation-parameters\x03\0L\x01p}\x01q\
-\x02\x0bauto-update\0\0\x0esnapshot-based\x01\xce\0\0\x04\0\x12update-descriptio\
-n\x03\0O\x01r\x03\x09timestamp\x01\x0ftarget-revision\x07\x12update-description\xd0\
-\0\x04\0\x19pending-update-parameters\x03\0Q\x01r\x04\x09timestamp\x01\x0ftarget\
--revision\x07\x12new-component-sizew\x12new-active-plugins%\x04\0\x1csuccessful-\
-update-parameters\x03\0S\x01ks\x01r\x03\x09timestamp\x01\x0ftarget-revision\x07\x07\
-details\xd5\0\x04\0\x18failed-update-parameters\x03\0V\x01r\x02\x09timestamp\x01\
-\x05deltaw\x04\0\x16grow-memory-parameters\x03\0X\x01w\x04\0\x11agent-resource-i\
-d\x03\0Z\x01r\x04\x09timestamp\x01\x0bresource-id\xdb\0\x04names\x05owners\x04\0\
-\x1acreate-resource-parameters\x03\0\\\x01r\x04\x09timestamp\x01\x0bresource-id\xdb\
-\0\x04names\x05owners\x04\0\x18drop-resource-parameters\x03\0^\x01m\x08\x06stdou\
-t\x06stderr\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x09log-\
-level\x03\0`\x01r\x04\x09timestamp\x01\x05level\xe1\0\x07contexts\x07messages\x04\
-\0\x0elog-parameters\x03\0b\x01r\x02\x09timestamp\x01\x06plugin\"\x04\0\x1aactiv\
-ate-plugin-parameters\x03\0d\x01r\x02\x09timestamp\x01\x06plugin\"\x04\0\x1cdeac\
-tivate-plugin-parameters\x03\0f\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\
-\x04\0\x11revert-parameters\x03\0h\x01r\x02\x09timestamp\x01\x0fidempotency-keys\
-\x04\0\x1ccancel-invocation-parameters\x03\0j\x01r\x05\x09timestamp\x01\x07span-\
-id\x19\x06parent*\x0elinked-context*\x0aattributes,\x04\0\x15start-span-paramete\
-rs\x03\0l\x01r\x02\x09timestamp\x01\x07span-id\x19\x04\0\x16finish-span-paramete\
-rs\x03\0n\x01r\x04\x09timestamp\x01\x07span-id\x19\x03keys\x05value\x17\x04\0\x1d\
-set-span-attribute-parameters\x03\0p\x01r\x02\x09timestamp\x01\x11persistence-le\
-vel\x0b\x04\0#change-persistence-level-parameters\x03\0r\x01r\x02\x09timestamp\x01\
-\x0etransaction-ids\x04\0#begin-remote-transaction-parameters\x03\0t\x01r\x02\x09\
-timestamp\x01\x0bbegin-index\x09\x04\0\x1dremote-transaction-parameters\x03\0v\x01\
-r\x01\x09timestamp\x01\x04\0\x09timestamp\x03\0x\x01q%\x06create\x01'\0\x19impor\
-ted-function-invoked\x01)\0\x19exported-function-invoked\x017\0\x1bexported-func\
-tion-completed\x01:\0\x07suspend\x01\xf9\0\0\x05error\x01<\0\x05no-op\x01\xf9\0\0\
-\x04jump\x01\xc0\0\0\x0binterrupted\x01\xf9\0\0\x06exited\x01\xf9\0\0\x13change-\
-retry-policy\x01\xc2\0\0\x13begin-atomic-region\x01\xf9\0\0\x11end-atomic-region\
-\x01\xc4\0\0\x12begin-remote-write\x01\xf9\0\0\x10end-remote-write\x01\xc6\0\0\x18\
-pending-agent-invocation\x01\xcd\0\0\x0epending-update\x01\xd2\0\0\x11successful\
--update\x01\xd4\0\0\x0dfailed-update\x01\xd7\0\0\x0bgrow-memory\x01\xd9\0\0\x0fc\
-reate-resource\x01\xdd\0\0\x0ddrop-resource\x01\xdf\0\0\x03log\x01\xe3\0\0\x07re\
-start\x01\xf9\0\0\x0factivate-plugin\x01\xe5\0\0\x11deactivate-plugin\x01\xe7\0\0\
-\x06revert\x01\xe9\0\0\x11cancel-invocation\x01\xeb\0\0\x0astart-span\x01\xed\0\0\
-\x0bfinish-span\x01\xef\0\0\x12set-span-attribute\x01\xf1\0\0\x18change-persiste\
-nce-level\x01\xf3\0\0\x18begin-remote-transaction\x01\xf5\0\0\x1dpre-commit-remo\
-te-transaction\x01\xf7\0\0\x1fpre-rollback-remote-transaction\x01\xf7\0\0\x1ccom\
-mitted-remote-transaction\x01\xf7\0\0\x1erolled-back-remote-transaction\x01\xf7\0\
-\0\x04\0\x0boplog-entry\x03\0z\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\
-\x01\x01i|\x01@\x02\x08agent-id\x13\x05start\x09\0\xfe\0\x04\0\x16[constructor]g\
-et-oplog\x01\x7f\x01h|\x01p\xfb\0\x01k\x81\x01\x01@\x01\x04self\x80\x01\0\x82\x01\
-\x04\0\x1a[method]get-oplog.get-next\x01\x83\x01\x01i}\x01@\x02\x08agent-id\x13\x04\
-texts\0\x84\x01\x04\0\x19[constructor]search-oplog\x01\x85\x01\x01h}\x01o\x02\x09\
+\x08pollable\x01B[\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\
+\x03\x04\0\x08pollable\x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01r\x02\x09\
+high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x06\x01r\x01\x04uuid\x07\x04\0\x0cco\
+mponent-id\x03\0\x08\x01r\x02\x0ccomponent-id\x09\x08agent-ids\x04\0\x08agent-id\
+\x03\0\x0a\x01r\x01\x04uuid\x07\x04\0\x0aaccount-id\x03\0\x0c\x01r\x02\x08agent-\
+id\x0b\x09oplog-idx\x05\x04\0\x0apromise-id\x03\0\x0e\x01z\x04\0\x0anode-index\x03\
+\0\x10\x01w\x04\0\x0bresource-id\x03\0\x12\x01m\x02\x05owned\x08borrowed\x04\0\x0d\
+resource-mode\x03\0\x14\x01o\x02s\x11\x01p\x16\x01k\x11\x01o\x02s\x18\x01p\x19\x01\
+ps\x01p\x11\x01o\x02\x18\x18\x01o\x02\x13\x15\x01q\x16\x0brecord-type\x01\x17\0\x0c\
+variant-type\x01\x1a\0\x09enum-type\x01\x1b\0\x0aflags-type\x01\x1b\0\x0atuple-t\
+ype\x01\x1c\0\x09list-type\x01\x11\0\x0boption-type\x01\x11\0\x0bresult-type\x01\
+\x1d\0\x0cprim-u8-type\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64\
+-type\0\0\x0cprim-s8-type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-\
+s64-type\0\0\x0dprim-f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0e\
+prim-bool-type\0\0\x10prim-string-type\0\0\x0bhandle-type\x01\x1e\0\x04\0\x0dwit\
+-type-node\x03\0\x1f\x01ks\x01r\x03\x04name!\x05owner!\x04type\x20\x04\0\x13name\
+d-wit-type-node\x03\0\"\x01p#\x01r\x01\x05nodes$\x04\0\x08wit-type\x03\0%\x01r\x01\
+\x05values\x04\0\x03uri\x03\0'\x01o\x02y\x18\x01p\x7f\x01j\x01\x18\x01\x18\x01o\x02\
+(w\x01q\x16\x0crecord-value\x01\x1c\0\x0dvariant-value\x01)\0\x0aenum-value\x01y\
+\0\x0bflags-value\x01*\0\x0btuple-value\x01\x1c\0\x0alist-value\x01\x1c\0\x0copt\
+ion-value\x01\x18\0\x0cresult-value\x01+\0\x07prim-u8\x01}\0\x08prim-u16\x01{\0\x08\
+prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08prim-\
+s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\x09p\
+rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01,\0\x04\
+\0\x08wit-node\x03\0-\x01p.\x01r\x01\x05nodes/\x04\0\x09wit-value\x03\00\x01r\x02\
+\x05value1\x03typ&\x04\0\x0evalue-and-type\x03\02\x01q\x04\x0eprotocol-error\x01\
+s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09\
+rpc-error\x03\04\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\
+\x04\0\x12cancellation-token\x03\x01\x01i6\x01@\x01\x08agent-id\x0b\09\x04\0\x15\
+[constructor]wasm-rpc\x01:\x01h6\x01p1\x01j\x011\x015\x01@\x03\x04self;\x0dfunct\
+ion-names\x0ffunction-params<\0=\x04\0![method]wasm-rpc.invoke-and-await\x01>\x01\
+j\0\x015\x01@\x03\x04self;\x0dfunction-names\x0ffunction-params<\0?\x04\0\x17[me\
+thod]wasm-rpc.invoke\x01@\x01i7\x01@\x03\x04self;\x0dfunction-names\x0ffunction-\
+params<\0\xc1\0\x04\0'[method]wasm-rpc.async-invoke-and-await\x01B\x01@\x04\x04s\
+elf;\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params<\x01\0\x04\0$[me\
+thod]wasm-rpc.schedule-invocation\x01C\x01i8\x01@\x04\x04self;\x0escheduled-time\
+\x01\x0dfunction-names\x0ffunction-params<\0\xc4\0\x04\0/[method]wasm-rpc.schedu\
+le-cancelable-invocation\x01E\x01h7\x01i\x03\x01@\x01\x04self\xc6\0\0\xc7\0\x04\0\
+&[method]future-invoke-result.subscribe\x01H\x01k=\x01@\x01\x04self\xc6\0\0\xc9\0\
+\x04\0\x20[method]future-invoke-result.get\x01J\x01h8\x01@\x01\x04self\xcb\0\x01\
+\0\x04\0![method]cancellation-token.cancel\x01L\x01j\x01\x07\x01s\x01@\x01\x04uu\
+ids\0\xcd\0\x04\0\x0aparse-uuid\x01N\x01@\x01\x04uuid\x07\0s\x04\0\x0euuid-to-st\
+ring\x01O\x03\0\x15golem:rpc/types@0.2.2\x05\x04\x01B\x0f\x02\x03\x02\x01\x03\x04\
+\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\
+\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\
+\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\
+\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/monoton\
+ic-clock@0.2.3\x05\x05\x02\x03\0\x03\x08duration\x02\x03\0\x02\x0ccomponent-id\x02\
+\x03\0\x02\x04uuid\x02\x03\0\x02\x0evalue-and-type\x02\x03\0\x02\x08agent-id\x02\
+\x03\0\x02\x0apromise-id\x02\x03\0\x02\x0boplog-index\x01B\x85\x01\x02\x03\x02\x01\
+\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\
+\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-\
+and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\x08agent-id\x03\0\x08\x02\x03\x02\x01\
+\x0b\x04\0\x0apromise-id\x03\0\x0a\x02\x03\x02\x01\x0c\x04\0\x0boplog-index\x03\0\
+\x0c\x02\x03\x02\x01\x03\x04\0\x08pollable\x03\0\x0e\x01w\x04\0\x12component-rev\
+ision\x03\0\x10\x01r\x01\x04uuid\x05\x04\0\x0eenvironment-id\x03\0\x12\x01ku\x01\
+r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-j\
+itter-factor\x14\x04\0\x0cretry-policy\x03\0\x15\x01q\x03\x0fpersist-nothing\0\0\
+\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\
+\x17\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\
+\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\
+\0\x11filter-comparator\x03\0\x1b\x01m\x05\x05equal\x09not-equal\x04like\x08not-\
+like\x0bstarts-with\x04\0\x18string-filter-comparator\x03\0\x1d\x01m\x07\x07runn\
+ing\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0c\
+agent-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\x11agent-name-\
+filter\x03\0!\x01r\x02\x0acomparator\x1c\x05value\x20\x04\0\x13agent-status-filt\
+er\x03\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x14agent-version-filter\x03\
+\0%\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x17agent-created-at-filter\x03\0'\
+\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\0\x10agent-env-filter\x03\0)\x01\
+r\x03\x04names\x0acomparator\x1e\x05values\x04\0\x18agent-config-vars-filter\x03\
+\0+\x01q\x06\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\x0acreated-at\x01\
+(\0\x03env\x01*\0\x10wasi-config-vars\x01,\0\x04\0\x15agent-property-filter\x03\0\
+-\x01p.\x01r\x01\x07filters/\x04\0\x10agent-all-filter\x03\00\x01p1\x01r\x01\x07\
+filters2\x04\0\x10agent-any-filter\x03\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x08age\
+nt-id\x09\x04args5\x03env7\x0bconfig-vars7\x06status\x20\x12component-revisionw\x0b\
+retry-countw\x04\0\x0eagent-metadata\x03\08\x04\0\x0aget-agents\x03\x01\x01q\x02\
+\x15revert-to-oplog-index\x01\x0d\0\x17revert-last-invocations\x01w\0\x04\0\x13r\
+evert-agent-target\x03\0;\x01r\x01\x11forked-phantom-id\x05\x04\0\x0cfork-detail\
+s\x03\0=\x01q\x02\x08original\x01>\0\x06forked\x01>\0\x04\0\x0bfork-result\x03\0\
+?\x04\0\x12get-promise-result\x03\x01\x01k4\x01i:\x01@\x03\x0ccomponent-id\x03\x06\
+filter\xc2\0\x07precise\x7f\0\xc3\0\x04\0\x17[constructor]get-agents\x01D\x01h:\x01\
+p9\x01k\xc6\0\x01@\x01\x04self\xc5\0\0\xc7\0\x04\0\x1b[method]get-agents.get-nex\
+t\x01H\x01hA\x01i\x0f\x01@\x01\x04self\xc9\0\0\xca\0\x04\0$[method]get-promise-r\
+esult.subscribe\x01K\x01p}\x01k\xcc\0\x01@\x01\x04self\xc9\0\0\xcd\0\x04\0\x1e[m\
+ethod]get-promise-result.get\x01N\x01@\0\0\x0b\x04\0\x0ecreate-promise\x01O\x01i\
+A\x01@\x01\x0apromise-id\x0b\0\xd0\0\x04\0\x0bget-promise\x01Q\x01@\x02\x0apromi\
+se-id\x0b\x04data\xcc\0\0\x7f\x04\0\x10complete-promise\x01R\x01@\0\0\x0d\x04\0\x0f\
+get-oplog-index\x01S\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0fset-oplog-index\x01\
+T\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01U\x04\0\x14mark-begin-ope\
+ration\x01S\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01V\x01@\0\0\
+\x16\x04\0\x10get-retry-policy\x01W\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\
+\x10set-retry-policy\x01X\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01Y\
+\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-leve\
+l\x01Z\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01[\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01\\\x01@\0\0\x05\x04\0\x18generate-idempo\
+tency-key\x01]\x01@\x03\x08agent-id\x09\x0ftarget-revision\x11\x04mode\x1a\x01\0\
+\x04\0\x0cupdate-agent\x01^\x01@\0\09\x04\0\x11get-self-metadata\x01_\x01k9\x01@\
+\x01\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\x0fsource\
+-agent-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\0\x0afor\
+k-agent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target<\x01\0\x04\0\x0crevert-ag\
+ent\x01c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-comp\
+onent-id\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\
+\0\x10resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\0\0\xc0\0\
+\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0d\x01B7\x02\x03\x02\x01\x02\
+\x04\0\x08datetime\x03\0\0\x04\0\x04span\x03\x01\x04\0\x12invocation-context\x03\
+\x01\x01q\x01\x06string\x01s\0\x04\0\x0fattribute-value\x03\0\x04\x01r\x02\x03ke\
+ys\x05value\x05\x04\0\x09attribute\x03\0\x06\x01p\x05\x01r\x02\x03keys\x06values\
+\x08\x04\0\x0fattribute-chain\x03\0\x09\x01s\x04\0\x08trace-id\x03\0\x0b\x01s\x04\
+\0\x07span-id\x03\0\x0d\x01h\x02\x01@\x01\x04self\x0f\0\x01\x04\0\x17[method]spa\
+n.started-at\x01\x10\x01@\x03\x04self\x0f\x04names\x05value\x05\x01\0\x04\0\x1a[\
+method]span.set-attribute\x01\x11\x01p\x07\x01@\x02\x04self\x0f\x0aattributes\x12\
+\x01\0\x04\0\x1b[method]span.set-attributes\x01\x13\x01@\x01\x04self\x0f\x01\0\x04\
+\0\x13[method]span.finish\x01\x14\x01h\x03\x01@\x01\x04self\x15\0\x0c\x04\0#[met\
+hod]invocation-context.trace-id\x01\x16\x01@\x01\x04self\x15\0\x0e\x04\0\"[metho\
+d]invocation-context.span-id\x01\x17\x01i\x03\x01k\x18\x01@\x01\x04self\x15\0\x19\
+\x04\0![method]invocation-context.parent\x01\x1a\x01k\x05\x01@\x03\x04self\x15\x03\
+keys\x09inherited\x7f\0\x1b\x04\0([method]invocation-context.get-attribute\x01\x1c\
+\x01@\x02\x04self\x15\x09inherited\x7f\0\x12\x04\0)[method]invocation-context.ge\
+t-attributes\x01\x1d\x01@\x02\x04self\x15\x03keys\0\x08\x04\0.[method]invocation\
+-context.get-attribute-chain\x01\x1e\x01p\x0a\x01@\x01\x04self\x15\0\x1f\x04\0/[\
+method]invocation-context.get-attribute-chains\x01\x20\x01o\x02ss\x01p!\x01@\x01\
+\x04self\x15\0\"\x04\00[method]invocation-context.trace-context-headers\x01#\x01\
+i\x02\x01@\x01\x04names\0$\x04\0\x0astart-span\x01%\x01@\0\0\x18\x04\0\x0fcurren\
+t-context\x01&\x01@\x01\x05allow\x7f\0\x7f\x04\0&allow-forwarding-trace-context-\
+headers\x01'\x03\0\x17golem:api/context@1.3.0\x05\x0e\x02\x03\0\x02\x0aaccount-i\
+d\x02\x03\0\x04\x12component-revision\x02\x03\0\x04\x0boplog-index\x02\x03\0\x04\
+\x11persistence-level\x02\x03\0\x04\x0eenvironment-id\x02\x03\0\x04\x0cretry-pol\
+icy\x02\x03\0\x04\x04uuid\x02\x03\0\x04\x08agent-id\x02\x03\0\x05\x09attribute\x02\
+\x03\0\x05\x0fattribute-value\x02\x03\0\x05\x07span-id\x02\x03\0\x05\x08trace-id\
+\x01B\x8f\x01\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x09\x04\
+\0\x0evalue-and-type\x03\0\x02\x02\x03\x02\x01\x0f\x04\0\x0aaccount-id\x03\0\x04\
+\x02\x03\x02\x01\x10\x04\0\x12component-revision\x03\0\x06\x02\x03\x02\x01\x11\x04\
+\0\x0boplog-index\x03\0\x08\x02\x03\x02\x01\x12\x04\0\x11persistence-level\x03\0\
+\x0a\x02\x03\x02\x01\x13\x04\0\x0eenvironment-id\x03\0\x0c\x02\x03\x02\x01\x14\x04\
+\0\x0cretry-policy\x03\0\x0e\x02\x03\x02\x01\x15\x04\0\x04uuid\x03\0\x10\x02\x03\
+\x02\x01\x16\x04\0\x08agent-id\x03\0\x12\x02\x03\x02\x01\x17\x04\0\x09attribute\x03\
+\0\x14\x02\x03\x02\x01\x18\x04\0\x0fattribute-value\x03\0\x16\x02\x03\x02\x01\x19\
+\x04\0\x07span-id\x03\0\x18\x02\x03\x02\x01\x1a\x04\0\x08trace-id\x03\0\x1a\x01k\
+\x09\x01q\x06\x0aread-local\0\0\x0bwrite-local\0\0\x0bread-remote\0\0\x0cwrite-r\
+emote\0\0\x14write-remote-batched\x01\x1c\0\x18write-remote-transaction\x01\x1c\0\
+\x04\0\x15wrapped-function-type\x03\0\x1d\x01o\x02ss\x01p\x1f\x01r\x03\x04names\x07\
+versions\x0aparameters\x20\x04\0\x1fplugin-installation-description\x03\0!\x01ps\
+\x01k\x13\x01p\"\x01r\x0c\x09timestamp\x01\x08agent-id\x13\x12component-revision\
+\x07\x04args#\x03env\x20\x0acreated-by\x05\x0eenvironment-id\x0d\x06parent$\x0ec\
+omponent-sizew\x20initial-total-linear-memory-sizew\x16initial-active-plugins%\x0b\
+config-vars\x20\x04\0\x11create-parameters\x03\0&\x01r\x05\x09timestamp\x01\x0df\
+unction-names\x07request\x03\x08response\x03\x15wrapped-function-type\x1e\x04\0$\
+imported-function-invoked-parameters\x03\0(\x01k\x19\x01kw\x01p\x15\x01r\x06\x07\
+span-id\x19\x05start\x01\x06parent*\x0elinked-context+\x0aattributes,\x09inherit\
+ed\x7f\x04\0\x0flocal-span-data\x03\0-\x01r\x01\x07span-id\x19\x04\0\x12external\
+-span-data\x03\0/\x01q\x02\x0alocal-span\x01.\0\x0dexternal-span\x010\0\x04\0\x09\
+span-data\x03\01\x01p\x03\x01p2\x01p4\x01r\x07\x09timestamp\x01\x0dfunction-name\
+s\x07request3\x0fidempotency-keys\x08trace-id\x1b\x0ctrace-states#\x12invocation\
+-context5\x04\0$exported-function-invoked-parameters\x03\06\x01k\x03\x01r\x03\x09\
+timestamp\x01\x08response8\x0dconsumed-fuelx\x04\0&exported-function-completed-p\
+arameters\x03\09\x01r\x03\x09timestamp\x01\x05errors\x0aretry-from\x09\x04\0\x10\
+error-parameters\x03\0;\x01r\x02\x05start\x09\x03end\x09\x04\0\x0coplog-region\x03\
+\0=\x01r\x02\x09timestamp\x01\x04jump>\x04\0\x0fjump-parameters\x03\0?\x01r\x02\x09\
+timestamp\x01\x0anew-policy\x0f\x04\0\x1echange-retry-policy-parameters\x03\0A\x01\
+r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1cend-atomic-region-parameters\x03\
+\0C\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1bend-remote-write-param\
+eters\x03\0E\x01k3\x01r\x06\x0fidempotency-keys\x0dfunction-names\x05input\xc7\0\
+\x08trace-ids\x0ctrace-states#\x12invocation-context5\x04\0'exported-function-in\
+vocation-parameters\x03\0H\x01q\x02\x11exported-function\x01\xc9\0\0\x0dmanual-u\
+pdate\x01\x07\0\x04\0\x10agent-invocation\x03\0J\x01r\x02\x09timestamp\x01\x0ain\
+vocation\xcb\0\x04\0#pending-agent-invocation-parameters\x03\0L\x01p}\x01q\x02\x0b\
+auto-update\0\0\x0esnapshot-based\x01\xce\0\0\x04\0\x12update-description\x03\0O\
+\x01r\x03\x09timestamp\x01\x0ftarget-revision\x07\x12update-description\xd0\0\x04\
+\0\x19pending-update-parameters\x03\0Q\x01r\x04\x09timestamp\x01\x0ftarget-revis\
+ion\x07\x12new-component-sizew\x12new-active-plugins%\x04\0\x1csuccessful-update\
+-parameters\x03\0S\x01ks\x01r\x03\x09timestamp\x01\x0ftarget-revision\x07\x07det\
+ails\xd5\0\x04\0\x18failed-update-parameters\x03\0V\x01r\x02\x09timestamp\x01\x05\
+deltaw\x04\0\x16grow-memory-parameters\x03\0X\x01w\x04\0\x11agent-resource-id\x03\
+\0Z\x01r\x04\x09timestamp\x01\x0bresource-id\xdb\0\x04names\x05owners\x04\0\x1ac\
+reate-resource-parameters\x03\0\\\x01r\x04\x09timestamp\x01\x0bresource-id\xdb\0\
+\x04names\x05owners\x04\0\x18drop-resource-parameters\x03\0^\x01m\x08\x06stdout\x06\
+stderr\x05trace\x05debug\x04info\x04warn\x05error\x08critical\x04\0\x09log-level\
+\x03\0`\x01r\x04\x09timestamp\x01\x05level\xe1\0\x07contexts\x07messages\x04\0\x0e\
+log-parameters\x03\0b\x01r\x02\x09timestamp\x01\x06plugin\"\x04\0\x1aactivate-pl\
+ugin-parameters\x03\0d\x01r\x02\x09timestamp\x01\x06plugin\"\x04\0\x1cdeactivate\
+-plugin-parameters\x03\0f\x01r\x03\x09timestamp\x01\x05start\x09\x03end\x09\x04\0\
+\x11revert-parameters\x03\0h\x01r\x02\x09timestamp\x01\x0fidempotency-keys\x04\0\
+\x1ccancel-invocation-parameters\x03\0j\x01r\x05\x09timestamp\x01\x07span-id\x19\
+\x06parent*\x0elinked-context*\x0aattributes,\x04\0\x15start-span-parameters\x03\
+\0l\x01r\x02\x09timestamp\x01\x07span-id\x19\x04\0\x16finish-span-parameters\x03\
+\0n\x01r\x04\x09timestamp\x01\x07span-id\x19\x03keys\x05value\x17\x04\0\x1dset-s\
+pan-attribute-parameters\x03\0p\x01r\x02\x09timestamp\x01\x11persistence-level\x0b\
+\x04\0#change-persistence-level-parameters\x03\0r\x01r\x02\x09timestamp\x01\x0et\
+ransaction-ids\x04\0#begin-remote-transaction-parameters\x03\0t\x01r\x02\x09time\
+stamp\x01\x0bbegin-index\x09\x04\0\x1dremote-transaction-parameters\x03\0v\x01r\x01\
+\x09timestamp\x01\x04\0\x09timestamp\x03\0x\x01q%\x06create\x01'\0\x19imported-f\
+unction-invoked\x01)\0\x19exported-function-invoked\x017\0\x1bexported-function-\
+completed\x01:\0\x07suspend\x01\xf9\0\0\x05error\x01<\0\x05no-op\x01\xf9\0\0\x04\
+jump\x01\xc0\0\0\x0binterrupted\x01\xf9\0\0\x06exited\x01\xf9\0\0\x13change-retr\
+y-policy\x01\xc2\0\0\x13begin-atomic-region\x01\xf9\0\0\x11end-atomic-region\x01\
+\xc4\0\0\x12begin-remote-write\x01\xf9\0\0\x10end-remote-write\x01\xc6\0\0\x18pe\
+nding-agent-invocation\x01\xcd\0\0\x0epending-update\x01\xd2\0\0\x11successful-u\
+pdate\x01\xd4\0\0\x0dfailed-update\x01\xd7\0\0\x0bgrow-memory\x01\xd9\0\0\x0fcre\
+ate-resource\x01\xdd\0\0\x0ddrop-resource\x01\xdf\0\0\x03log\x01\xe3\0\0\x07rest\
+art\x01\xf9\0\0\x0factivate-plugin\x01\xe5\0\0\x11deactivate-plugin\x01\xe7\0\0\x06\
+revert\x01\xe9\0\0\x11cancel-invocation\x01\xeb\0\0\x0astart-span\x01\xed\0\0\x0b\
+finish-span\x01\xef\0\0\x12set-span-attribute\x01\xf1\0\0\x18change-persistence-\
+level\x01\xf3\0\0\x18begin-remote-transaction\x01\xf5\0\0\x1dpre-commit-remote-t\
+ransaction\x01\xf7\0\0\x1fpre-rollback-remote-transaction\x01\xf7\0\0\x1ccommitt\
+ed-remote-transaction\x01\xf7\0\0\x1erolled-back-remote-transaction\x01\xf7\0\0\x04\
+\0\x0boplog-entry\x03\0z\x04\0\x09get-oplog\x03\x01\x04\0\x0csearch-oplog\x03\x01\
+\x01i|\x01@\x02\x08agent-id\x13\x05start\x09\0\xfe\0\x04\0\x16[constructor]get-o\
+plog\x01\x7f\x01h|\x01p\xfb\0\x01k\x81\x01\x01@\x01\x04self\x80\x01\0\x82\x01\x04\
+\0\x1a[method]get-oplog.get-next\x01\x83\x01\x01i}\x01@\x02\x08agent-id\x13\x04t\
+exts\0\x84\x01\x04\0\x19[constructor]search-oplog\x01\x85\x01\x01h}\x01o\x02\x09\
 \xfb\0\x01p\x87\x01\x01k\x88\x01\x01@\x01\x04self\x86\x01\0\x89\x01\x04\0\x1d[me\
-thod]search-oplog.get-next\x01\x8a\x01\x03\0\x15golem:api/oplog@1.3.0\x05\x19\x01\
+thod]search-oplog.get-next\x01\x8a\x01\x03\0\x15golem:api/oplog@1.3.0\x05\x1b\x01\
 B\x03\x01ps\x01@\0\0\0\x04\0\x15get-invoked-functions\x01\x01\x04\0\x13golem:com\
-ponent/api\x05\x1a\x02\x03\0\x02\x09wit-value\x02\x03\0\x04\x0eagent-metadata\x02\
+ponent/api\x05\x1c\x02\x03\0\x02\x09wit-value\x02\x03\0\x04\x0eagent-metadata\x02\
 \x03\0\x06\x0boplog-entry\x01B\x18\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\
-\x02\x03\x02\x01\x1b\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0d\x04\0\x0aa\
-ccount-id\x03\0\x04\x02\x03\x02\x01\x0f\x04\0\x0boplog-index\x03\0\x06\x02\x03\x02\
-\x01\x1c\x04\0\x0eagent-metadata\x03\0\x08\x02\x03\x02\x01\x1d\x04\0\x0boplog-en\
+\x02\x03\x02\x01\x1d\x04\0\x09wit-value\x03\0\x02\x02\x03\x02\x01\x0f\x04\0\x0aa\
+ccount-id\x03\0\x04\x02\x03\x02\x01\x11\x04\0\x0boplog-index\x03\0\x06\x02\x03\x02\
+\x01\x1e\x04\0\x0eagent-metadata\x03\0\x08\x02\x03\x02\x01\x1f\x04\0\x0boplog-en\
 try\x03\0\x0a\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x0c\x02\x03\x02\x01\
 \x0a\x04\0\x08agent-id\x03\0\x0e\x01r\x01\x0aaccount-id\x05\x04\0\x0caccount-inf\
 o\x03\0\x10\x01o\x02ss\x01p\x12\x01p\x0b\x01j\0\x01s\x01@\x07\x0caccount-info\x11\
 \x06config\x13\x0ccomponent-id\x0d\x08agent-id\x0f\x08metadata\x09\x11first-entr\
 y-index\x07\x07entries\x14\0\x15\x04\0\x07process\x01\x16\x04\0\x1fgolem:api/opl\
-og-processor@1.3.0\x05\x1e\x04\0\x1fgolem:component/oplog-processor\x04\0\x0b\x15\
+og-processor@1.3.0\x05\x20\x04\0\x1fgolem:component/oplog-processor\x04\0\x0b\x15\
 \x01\0\x0foplog-processor\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit\
 -component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]

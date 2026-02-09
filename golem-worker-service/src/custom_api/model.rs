@@ -123,6 +123,7 @@ impl RichRequest {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct OidcSession {
     pub subject: String,
     pub issuer: String,

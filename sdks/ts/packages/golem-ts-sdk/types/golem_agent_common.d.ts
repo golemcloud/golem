@@ -5,6 +5,7 @@ declare module 'golem:agent/common' {
   export type WitValue = golemRpc022Types.WitValue;
   export type AgentId = golemRpc022Types.AgentId;
   export type AccountId = golemRpc022Types.AccountId;
+  export type ComponentId = golemRpc022Types.ComponentId;
   export type Url = string;
   export type AgentMode = "durable" | "ephemeral";
   export type CorsOptions = {
@@ -201,6 +202,13 @@ declare module 'golem:agent/common' {
     dependencies: AgentDependency[];
     mode: AgentMode;
     httpMount?: HttpMountDetails;
+  };
+  /**
+   * Associates an agent type with a component that implements it
+   */
+  export type RegisteredAgentType = {
+    agentType: AgentType;
+    implementedBy: ComponentId;
   };
   export type BinarySource = {
     data: Uint8Array;

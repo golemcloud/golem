@@ -18,7 +18,6 @@ use super::{
     QueryVariable, SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
-use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
     AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
@@ -624,9 +623,9 @@ impl From<TextType> for super::bindings::golem::agent::common::TextType {
     }
 }
 
-impl From<RegisteredAgentType> for host::RegisteredAgentType {
+impl From<RegisteredAgentType> for super::bindings::golem::agent::common::RegisteredAgentType {
     fn from(value: RegisteredAgentType) -> Self {
-        host::RegisteredAgentType {
+        super::bindings::golem::agent::common::RegisteredAgentType {
             agent_type: value.agent_type.into(),
             implemented_by: value.implemented_by.component_id.into(),
         }
