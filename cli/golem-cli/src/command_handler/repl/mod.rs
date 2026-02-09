@@ -155,6 +155,16 @@ impl ReplHandler {
             }
             let repl_history_file_path = fs::canonicalize_path(&repl_history_file_path)?;
 
+            let repl_cli_commands_metadata_json_path = app_ctx
+                .application()
+                .repl_cli_commands_metadata_json(language);
+            // TODO: cleanup
+            if !repl_cli_commands_metadata_json_path.exists() {
+                fs::write(&repl_cli_commands_metadata_json_path, "")?;
+            }
+            let repl_cli_commands_metadata_json_path =
+                fs::canonicalize_path(&repl_cli_commands_metadata_json_path)?;
+
             BridgeReplArgs {
                 environment,
                 script,
@@ -163,6 +173,7 @@ impl ReplHandler {
                 repl_root_bridge_sdk_dir,
                 repl_bridge_sdk_target,
                 repl_history_file_path,
+                repl_cli_commands_metadata_json_path,
             }
         };
 

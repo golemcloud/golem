@@ -29,6 +29,7 @@ use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
+use crate::model::cli_command_metadata::CliCommandMetadata;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
@@ -60,6 +61,12 @@ pub struct GolemCliCommand {
 
     #[clap(subcommand)]
     pub subcommand: GolemCliSubcommand,
+}
+
+impl GolemCliCommand {
+    pub fn collect_metadata() -> CliCommandMetadata {
+        CliCommandMetadata::new(&GolemCliCommand::command())
+    }
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,

@@ -102,6 +102,7 @@ pub struct BridgeReplArgs {
     pub stream_logs: bool,
     pub repl_root_dir: PathBuf,
     pub repl_root_bridge_sdk_dir: PathBuf,
+    pub repl_cli_commands_metadata_json_path: PathBuf,
     pub repl_bridge_sdk_target: CustomBridgeSdkTarget,
     pub repl_history_file_path: PathBuf,
 }

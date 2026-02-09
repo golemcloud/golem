@@ -706,6 +706,11 @@ impl Application {
         self.repl_root_dir(language).join("repl-metadata.json")
     }
 
+    pub fn repl_cli_commands_metadata_json(&self, language: GuestLanguage) -> PathBuf {
+        self.repl_root_dir(language)
+            .join("repl-cli-commands-metadata.json")
+    }
+
     pub fn repl_history_file(&self, language: ReplLanguage) -> PathBuf {
         self.temp_dir()
             .join("repl-history")

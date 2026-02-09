@@ -5,6 +5,7 @@ use crate::app::context::BuildContext;
 use crate::bridge_gen::rust::RustBridgeGenerator;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
+use crate::command::GolemCliCommand;
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::log_error;
@@ -44,7 +45,12 @@ pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
             fs::write_str(
                 ctx.application().repl_metadata_json(language),
                 &serde_json::to_string(&repl_meta)?,
-            )?
+            )?;
+            // TODO: from golden file, with "auto-exported static asset" support
+            fs::write_str(
+                ctx.application().repl_cli_commands_metadata_json(language),
+                &serde_json::to_string(&GolemCliCommand::collect_metadata())?,
+            )?;
         }
 
         targets.extend(repl_targets);

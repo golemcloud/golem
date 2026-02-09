@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { ClientConfiguration, clientConfigurationFromEnv, Config, ConfigureClient } from './config';
+import {
+  cliCommandsConfigFromBaseConfig,
+  ClientConfig,
+  clientConfigFromEnv,
+  Config,
+  ConfigureClient,
+} from './config';
+import { CliCommands } from './cli-commands';
 import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
@@ -24,13 +31,17 @@ import { AsyncCompleter } from 'readline';
 
 export class Repl {
   private readonly config: Config;
-  private readonly clientConfig: ClientConfiguration;
+  private readonly clientConfig: ClientConfig;
+  private readonly cliCommands: CliCommands | undefined;
   private languageService: LanguageService | undefined;
   private replServer: repl.REPLServer | undefined;
 
   constructor(config: Config) {
     this.config = config;
-    this.clientConfig = clientConfigurationFromEnv();
+    this.clientConfig = clientConfigFromEnv();
+    this.cliCommands = new CliCommands(
+      cliCommandsConfigFromBaseConfig(this.config, this.clientConfig),
+    );
   }
 
   private getLanguageService(): LanguageService {
@@ -141,9 +152,23 @@ export class Repl {
   private setupReplCompleter(replServer: repl.REPLServer) {
     const nodeCompleter = replServer.completer;
     const languageService = this.getLanguageService();
+    const cliCommands = this.cliCommands;
     const customCompleter: AsyncCompleter = function (line, callback) {
       if (line.trimStart().startsWith('.')) {
-        nodeCompleter(line, callback);
+        if (cliCommands) {
+          cliCommands
+            .complete(line)
+            .then((result) => {
+              if (result) {
+                callback(null, result);
+              } else {
+                nodeCompleter(line, callback);
+              }
+            })
+            .catch(() => nodeCompleter(line, callback));
+        } else {
+          nodeCompleter(line, callback);
+        }
       } else {
         languageService.setSnippet(line);
         const completions = languageService.getSnippetCompletions();
@@ -173,6 +198,7 @@ export class Repl {
 
   private setupReplCommands(replServer: repl.REPLServer) {
     const clientConfig = this.clientConfig;
+    this.cliCommands?.defineCommands(replServer);
     replServer.defineCommand('deploy', {
       help: 'Deploy the current Golem Application',
       async action(raw_args: string) {

@@ -80,7 +80,6 @@ impl TypeScriptRepl {
         let app_ctx = app_ctx.some_or_err()?;
 
         let repl_metadata = load_repl_metadata(app_ctx, GuestLanguage::TypeScript).await?;
-
         let package_json_path = args.repl_root_dir.join("package.json");
         let tsconfig_json_path = args.repl_root_dir.join("tsconfig.json");
         let repl_ts_path = args.repl_root_dir.join("repl.ts");
@@ -120,6 +119,7 @@ impl TypeScriptRepl {
                         &repl_metadata,
                         &repl_ts_path,
                         &args.repl_history_file_path,
+                        &args.repl_cli_commands_metadata_json_path,
                     )?;
 
                     Command::new("npm")
@@ -216,6 +216,7 @@ impl TypeScriptRepl {
         repl_metadata: &ReplMetadata,
         repl_ts_path: &Path,
         repl_history_file_path: &Path,
+        repl_cli_commands_metadata_json_path: &Path,
     ) -> anyhow::Result<()> {
         let agents_config = repl_metadata
             .agents
@@ -255,11 +256,14 @@ impl TypeScriptRepl {
                   {agents_config}
                   }},
                   historyFile: {repl_history_file_path},
+                  cliCommandsMetadataJsonPath: {repl_cli_commands_metadata_json_path},
                 }});
 
                 await repl.run();
             ",
             repl_history_file_path = js_string_literal(repl_history_file_path.display().to_string())?,
+            repl_cli_commands_metadata_json_path =
+                js_string_literal(repl_cli_commands_metadata_json_path.display().to_string())?,
         };
 
         fs::write_str(repl_ts_path, repl_ts)
