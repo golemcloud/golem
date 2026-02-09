@@ -714,18 +714,12 @@ mod tests {
             .iter()
             .find(|a| a.type_name == "ComplexHttpAgent")
             .expect("ComplexHttpAgent not found");
-
-
-        dbg!(&agent);
-
+        
         assert!(
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
         );
-
-
-        assert!(false);
-
+        
         assert!(!agent.methods.is_empty(), "Agent should have methods defined");
 
         assert!(agent.methods.iter().all(
