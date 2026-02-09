@@ -35,6 +35,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
@@ -137,6 +138,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> =
@@ -186,6 +188,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -218,12 +221,14 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
             agent_types_service,
+            agent_deployments_service,
             engine,
             linker,
             runtime.clone(),

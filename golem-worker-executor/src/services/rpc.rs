@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::file_loader::FileLoader;
+use super::{agent_deployments, HasAgentDeploymentsService};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
@@ -342,6 +343,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
+    agent_deployments_service: Arc<dyn agent_deployments::AgentDeploymentsService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -373,6 +375,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             agent_types_service: self.agent_types_service.clone(),
+            agent_deployments_service: self.agent_deployments_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -393,6 +396,12 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasAgentTypesService for DirectWorkerInvocationRpc<Ctx> {
     fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService> {
         self.agent_types_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasAgentDeploymentsService for DirectWorkerInvocationRpc<Ctx> {
+    fn agent_deployments(&self) -> Arc<dyn agent_deployments::AgentDeploymentsService> {
+        self.agent_deployments_service.clone()
     }
 }
 
@@ -569,6 +578,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
+        agent_deployments_service: Arc<dyn agent_deployments::AgentDeploymentsService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -597,6 +607,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin,
             resource_limits,
             agent_types_service,
+            agent_deployments_service,
             extra_deps,
         }
     }

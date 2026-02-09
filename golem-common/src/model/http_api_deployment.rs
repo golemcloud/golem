@@ -19,6 +19,7 @@ pub use crate::base_model::http_api_deployment::*;
 impl HttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
+            webhooks_url: self.webhooks_url.clone(),
             agents: self
                 .agents
                 .iter()

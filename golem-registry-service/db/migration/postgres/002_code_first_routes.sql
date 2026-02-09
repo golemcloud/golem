@@ -50,3 +50,6 @@ CREATE TABLE deployment_compiled_routes
 
 CREATE INDEX deployment_compiled_routes_domain_idx
     ON deployment_compiled_routes (domain);
+
+ALTER TABLE deployment_registered_agent_types
+        ADD webhook_prefix_authority_and_path TEXT;

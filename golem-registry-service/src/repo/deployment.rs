@@ -850,6 +850,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_wrapper_type_name,
                         r.component_id,
                         r.component_revision_id,
+                        r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
@@ -877,6 +878,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_wrapper_type_name,
                         r.component_id,
                         r.component_revision_id,
+                        r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
@@ -903,6 +905,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_wrapper_type_name,
                         r.component_id,
                         r.component_revision_id,
+                        r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -931,6 +934,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_wrapper_type_name,
                         r.component_id,
                         r.component_revision_id,
+                        r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -982,6 +986,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_wrapper_type_name,
                         r.component_id,
                         r.component_revision_id,
+                        r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1
@@ -1018,6 +1023,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_wrapper_type_name,
                         r.component_id,
                         r.component_revision_id,
+                        r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1
@@ -1268,8 +1274,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     (environment_id, deployment_revision_id,
                      agent_type_name, agent_wrapper_type_name,
                      component_id, component_revision_id,
-                     agent_type)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     webhook_prefix_authority_and_path, agent_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#})
             .bind(registered_agent_type.environment_id)
             .bind(registered_agent_type.deployment_revision_id)
@@ -1277,6 +1283,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind(&registered_agent_type.agent_wrapper_type_name)
             .bind(registered_agent_type.component_id)
             .bind(registered_agent_type.component_revision_id)
+            .bind(&registered_agent_type.webhook_prefix_authority_and_path)
             .bind(&registered_agent_type.agent_type),
         )
         .await?;

@@ -27,6 +27,8 @@ declare module 'golem:agent/host' {
    * Note the following behaviours:
    * * Only agents whoose agent types are _currently_ deployed via an http api are allowed to create a webhook. Calling this function while the agent
    *    is not deployed via an http api will trap.
+   * * Only the agent type that created the promise is allowed to create a webhook for it. Using this host function
+   *   from a different agent type will trap.
    */
   export function createWebhook(promiseId: PromiseId): string;
   export type ComponentId = golemRpc022Types.ComponentId;

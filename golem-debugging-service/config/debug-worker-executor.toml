@@ -8,6 +8,15 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
+[agent_deployments_service]
+cache_capacity = 1000
+cache_eviction_interval = "1m"
+use_https_for_webhook_url = true
+
+[agent_deployments_service.cache_ttl]
+nanos = 0
+secs = 300
+
 [agent_types_service]
 type = "Grpc"
 
@@ -209,6 +218,15 @@ without_time = false
 # [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
+# 
+# [agent_deployments_service]
+# cache_capacity = 1000
+# cache_eviction_interval = "1m"
+# use_https_for_webhook_url = true
+# 
+# [agent_deployments_service.cache_ttl]
+# nanos = 0
+# secs = 300
 # 
 # [agent_types_service]
 # type = "Grpc"

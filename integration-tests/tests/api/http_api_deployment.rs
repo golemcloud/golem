@@ -52,6 +52,7 @@ async fn create_http_api_deployment_for_nonexitant_domain(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let result = client
@@ -82,6 +83,7 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let http_api_deployment = client
@@ -129,6 +131,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let http_api_deployment = client
@@ -216,6 +219,7 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let http_api_deployment = client
@@ -278,6 +282,7 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     client
@@ -314,6 +319,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let http_api_deployment = client
@@ -362,6 +368,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let http_api_deployment_1 = client
@@ -444,6 +451,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
             AgentTypeName("ephemeral-echo-agent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let http_api_deployment = client
@@ -486,6 +494,7 @@ async fn cannot_access_http_api_deployment_from_another_user(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let deployment = client_a
@@ -524,6 +533,7 @@ async fn cannot_delete_http_api_deployment_from_another_user(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let deployment = client_a
@@ -559,6 +569,7 @@ async fn delete_with_wrong_revision_is_rejected(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let deployment = client
@@ -595,6 +606,7 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let deployment = client

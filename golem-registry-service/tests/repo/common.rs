@@ -822,6 +822,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
                 AgentTypeName("test-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             )]),
+            webhooks_url: "/webhooks/".to_string(),
         }),
     }
     .with_updated_hash();

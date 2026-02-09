@@ -115,6 +115,11 @@ async fn env_vars(
             "2",
         )
         .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
+        .with_str("GOLEM__AGENT_DEPLOYMENTS_SERVICE__CACHE_CAPACITY", "0")
+        .with_str(
+            "GOLEM__AGENT_DEPLOYMENTS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
+            "false",
+        )
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("worker_executor", otlp)

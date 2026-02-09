@@ -144,6 +144,7 @@ impl Services {
             route_resolver.clone(),
             call_agent_handler.clone(),
             oidc_handler.clone(),
+            worker_service.clone(),
         ));
 
         let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new(
