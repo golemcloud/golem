@@ -169,8 +169,15 @@ fn get_agent_type_with_remote_client(
     let methods = agent_definition_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
 
-            let parsed_endpoint_details: Vec<ParsedHttpEndpointDetails> =
+            let parsed_endpoint_details_result: syn::Result<Vec<ParsedHttpEndpointDetails>> =
                 extract_http_endpoints(&trait_fn.attrs);
+
+            let parsed_endpoint_details = match parsed_endpoint_details_result {
+                Ok(details) => details,
+                Err(err) => {
+                    return Some(err.to_compile_error());
+                }
+            };
 
             if !parsed_endpoint_details.is_empty() && is_constructor_method(&trait_fn.sig, None) {
                 return Some(
