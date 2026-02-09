@@ -18,6 +18,7 @@ use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::http_api::HttpApiDeploymentDeployProperties;
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
 use anyhow::{anyhow, bail};
 use golem_client::api::ApiDeploymentClient;
@@ -26,10 +27,9 @@ use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
-use golem_common::model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
-use golem_common::model::http_api_deployment_legacy::{
-    LegacyHttpApiDeployment, LegacyHttpApiDeploymentCreation, LegacyHttpApiDeploymentUpdate,
+use golem_common::model::http_api_deployment::{
+    HttpApiDeployment, HttpApiDeploymentCreation, HttpApiDeploymentId, HttpApiDeploymentRevision,
+    HttpApiDeploymentUpdate,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -86,7 +86,7 @@ impl ApiDeploymentCommandHandler {
                         .golem_clients()
                         .await?
                         .api_deployment
-                        .list_http_api_deployments_in_deployment_legacy(
+                        .list_http_api_deployments_in_deployment(
                             &environment.environment_id.0,
                             current_deployment_revision.into(),
                         )
@@ -107,7 +107,7 @@ impl ApiDeploymentCommandHandler {
         environment: &ResolvedEnvironmentIdentity,
         domain: &Domain,
         revision: Option<&HttpApiDeploymentRevision>,
-    ) -> anyhow::Result<Option<LegacyHttpApiDeployment>> {
+    ) -> anyhow::Result<Option<HttpApiDeployment>> {
         environment
             .with_current_deployment_revision_or_default_warn(
                 |current_deployment_revision| async move {
@@ -115,7 +115,7 @@ impl ApiDeploymentCommandHandler {
 
                     let Some(deployment) = clients
                         .api_deployment
-                        .get_http_api_deployment_in_deployment_legacy(
+                        .get_http_api_deployment_in_deployment(
                             &environment.environment_id.0,
                             current_deployment_revision.get(),
                             &domain.0,
@@ -132,10 +132,7 @@ impl ApiDeploymentCommandHandler {
 
                     clients
                         .api_deployment
-                        .get_http_api_deployment_revision_legacy(
-                            &deployment.id.0,
-                            (*revision).into(),
-                        )
+                        .get_http_api_deployment_revision(&deployment.id.0, (*revision).into())
                         .await
                         .map_service_error_not_found_as_opt()
                 },
@@ -146,7 +143,7 @@ impl ApiDeploymentCommandHandler {
     pub async fn deployable_manifest_api_deployments(
         &self,
         environment_name: &EnvironmentName,
-    ) -> anyhow::Result<BTreeMap<Domain, Vec<HttpApiDefinitionName>>> {
+    ) -> anyhow::Result<BTreeMap<Domain, HttpApiDeploymentDeployProperties>> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
         Ok(app_ctx
@@ -155,16 +152,7 @@ impl ApiDeploymentCommandHandler {
             .map(|deployments| {
                 deployments
                     .iter()
-                    .map(|(name, sources)| {
-                        (
-                            name.clone(),
-                            sources
-                                .iter()
-                                .flat_map(|source_and_value| source_and_value.value.iter())
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                        )
-                    })
+                    .map(|(name, source)| (name.clone(), source.value.clone()))
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default())
@@ -174,7 +162,7 @@ impl ApiDeploymentCommandHandler {
         &self,
         http_api_deployment_id: &HttpApiDeploymentId,
         revision: HttpApiDeploymentRevision,
-    ) -> anyhow::Result<LegacyHttpApiDeployment> {
+    ) -> anyhow::Result<HttpApiDeployment> {
         self.ctx
             .caches()
             .http_api_deployment_revision
@@ -184,7 +172,7 @@ impl ApiDeploymentCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .api_deployment
-                        .get_http_api_deployment_revision_legacy(
+                        .get_http_api_deployment_revision(
                             &http_api_deployment_id.0,
                             revision.into(),
                         )
@@ -201,7 +189,7 @@ impl ApiDeploymentCommandHandler {
         &self,
         environment: &ResolvedEnvironmentIdentity,
         domain: &Domain,
-        deployable_http_api_deployment: &[HttpApiDefinitionName],
+        deployable_http_api_deployment: &HttpApiDeploymentDeployProperties,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
@@ -214,11 +202,12 @@ impl ApiDeploymentCommandHandler {
         let create = async || {
             clients
                 .api_deployment
-                .create_http_api_deployment_legacy(
+                .create_http_api_deployment(
                     &environment.environment_id.0,
-                    &LegacyHttpApiDeploymentCreation {
+                    &HttpApiDeploymentCreation {
                         domain: domain.clone(),
-                        api_definitions: deployable_http_api_deployment.to_vec(),
+                        webhooks_url: deployable_http_api_deployment.webhooks_url.clone(),
+                        agents: deployable_http_api_deployment.agents.clone(),
                     },
                 )
                 .await
@@ -266,7 +255,7 @@ impl ApiDeploymentCommandHandler {
             .golem_clients()
             .await?
             .api_deployment
-            .delete_http_api_deployment_legacy(
+            .delete_http_api_deployment(
                 &http_api_deployment.id.0,
                 http_api_deployment.revision.into(),
             )
@@ -291,8 +280,8 @@ impl ApiDeploymentCommandHandler {
     pub async fn update_staged_http_api_deployment(
         &self,
         http_api_deployment: &DeploymentPlanHttpApiDeploymentEntry,
-        deployable_http_api_deployment: &[HttpApiDefinitionName],
-        _diff: &diff::DiffForHashOf<diff::HttpApiDeploymentLegacy>,
+        deployable_http_api_deployment: &HttpApiDeploymentDeployProperties,
+        diff: &diff::DiffForHashOf<diff::HttpApiDeployment>,
     ) -> anyhow::Result<()> {
         log_action(
             "Updating",
@@ -303,16 +292,35 @@ impl ApiDeploymentCommandHandler {
         );
         let _indent = LogIndent::new();
 
+        let webhook_url_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => diff.webhooks_url_changed,
+        };
+
+        let agents_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => !diff.agents_changes.is_empty(),
+        };
+
         let deployment = self
             .ctx
             .golem_clients()
             .await?
             .api_deployment
-            .update_http_api_deployment_legacy(
+            .update_http_api_deployment(
                 &http_api_deployment.id.0,
-                &LegacyHttpApiDeploymentUpdate {
+                &HttpApiDeploymentUpdate {
                     current_revision: http_api_deployment.revision,
-                    api_definitions: Some(deployable_http_api_deployment.to_vec()),
+                    webhook_url: if webhook_url_changed {
+                        Some(deployable_http_api_deployment.webhooks_url.clone())
+                    } else {
+                        None
+                    },
+                    agents: if agents_changed {
+                        Some(deployable_http_api_deployment.agents.clone())
+                    } else {
+                        None
+                    },
                 },
             )
             .await

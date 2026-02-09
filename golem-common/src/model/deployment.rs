@@ -35,11 +35,6 @@ impl DeploymentPlan {
                 .iter()
                 .map(|component| (component.name.0.clone(), component.hash.into()))
                 .collect(),
-            http_api_definitions: self
-                .http_api_definitions
-                .iter()
-                .map(|had| (had.name.0.clone(), had.hash.into()))
-                .collect(),
             http_api_deployments: self
                 .http_api_deployments
                 .iter()
@@ -56,11 +51,6 @@ impl DeploymentSummary {
                 .components
                 .iter()
                 .map(|component| (component.name.0.clone(), component.hash.into()))
-                .collect(),
-            http_api_definitions: self
-                .http_api_definitions
-                .iter()
-                .map(|had| (had.name.0.clone(), had.hash.into()))
                 .collect(),
             http_api_deployments: self
                 .http_api_deployments

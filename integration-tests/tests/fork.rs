@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use test_r::{flaky, inherit_test_dep, test, timeout};
+use test_r::{inherit_test_dep, test, timeout};
 use tracing::{info, Instrument};
 use uuid::Uuid;
 
@@ -192,9 +192,7 @@ async fn fork_running_worker_1(
 }
 
 #[test]
-#[ignore]
 #[tracing::instrument]
-#[flaky(5)]
 #[timeout(120000)]
 async fn fork_running_worker_2(
     deps: &EnvBasedTestDependencies,

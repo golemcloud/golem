@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::BTreeMapDiff;
-use crate::model::diff::{hash_from_serialized_value, BTreeSetDiff, Diffable, Hash, Hashable};
+use crate::model::diff::{hash_from_serialized_value, Diffable, Hash, Hashable};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,24 +83,5 @@ impl Diffable for HttpApiDeployment {
         } else {
             None
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct HttpApiDeploymentLegacy {
-    pub agent_types: BTreeSet<String>,
-}
-
-impl Hashable for HttpApiDeploymentLegacy {
-    fn hash(&self) -> Hash {
-        hash_from_serialized_value(self)
-    }
-}
-
-impl Diffable for HttpApiDeploymentLegacy {
-    type DiffResult = BTreeSetDiff<String>;
-
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        new.agent_types.diff_with_current(&current.agent_types)
     }
 }

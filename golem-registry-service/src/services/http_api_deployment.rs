@@ -135,12 +135,9 @@ impl HttpApiDeploymentService {
             })?;
 
         let id = HttpApiDeploymentId::new();
-        let webhooks_url = data
-            .webhooks_url
-            .unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url);
         let record = HttpApiDeploymentRevisionRecord::creation(
             id,
-            webhooks_url,
+            data.webhooks_url,
             data.agents,
             auth.account_id(),
         );
@@ -207,6 +204,9 @@ impl HttpApiDeploymentService {
         };
 
         http_api_deployment.revision = http_api_deployment.revision.next()?;
+        if let Some(webhooks_url) = update.webhook_url {
+            http_api_deployment.webhooks_url = webhooks_url;
+        };
         if let Some(api_definitions) = update.agents {
             http_api_deployment.agents = api_definitions;
         };

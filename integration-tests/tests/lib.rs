@@ -15,7 +15,6 @@
 mod api;
 mod custom_api;
 mod fork;
-mod invocation_context;
 mod plugins;
 mod rib;
 mod rib_repl;

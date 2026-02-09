@@ -51,14 +51,13 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
-    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision, DeploymentVersion,
+    CurrentDeployment, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
+    DeploymentRevision, DeploymentVersion,
 };
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
@@ -778,12 +777,6 @@ impl AppCommandHandler {
             .deployable_manifest_components()
             .await?;
 
-        let deployable_manifest_http_api_definitions = self
-            .ctx
-            .api_definition_handler()
-            .deployable_manifest_http_api_definitions()
-            .await?;
-
         let deployable_manifest_http_api_deployments = self
             .ctx
             .api_deployment_handler()
@@ -807,31 +800,21 @@ impl AppCommandHandler {
             diffable_components
         };
 
-        let diffable_local_http_api_definitions = {
-            let mut diffable_http_api_definitions =
-                BTreeMap::<String, diff::HashOf<diff::HttpApiDefinition>>::new();
-            for (http_api_definition_name, http_api_definition) in
-                &deployable_manifest_http_api_definitions
-            {
-                diffable_http_api_definitions.insert(
-                    http_api_definition_name.0.clone(),
-                    http_api_definition.to_diffable().into(),
-                );
-            }
-            diffable_http_api_definitions
-        };
-
         let diffable_local_http_api_deployments = {
             let mut diffable_local_http_api_deployments =
-                BTreeMap::<String, diff::HashOf<diff::HttpApiDeploymentLegacy>>::new();
+                BTreeMap::<String, diff::HashOf<diff::HttpApiDeployment>>::new();
             for (domain, http_api_deployment) in &deployable_manifest_http_api_deployments {
+                let agents = http_api_deployment
+                    .agents
+                    .iter()
+                    .map(|(k, v)| (k.0.clone(), v.to_diffable()))
+                    .collect();
+
                 diffable_local_http_api_deployments.insert(
                     domain.0.clone(),
-                    diff::HttpApiDeploymentLegacy {
-                        agent_types: http_api_deployment
-                            .iter()
-                            .map(|def| def.0.clone())
-                            .collect(),
+                    diff::HttpApiDeployment {
+                        webhooks_url: http_api_deployment.webhooks_url.clone(),
+                        agents,
                     }
                     .into(),
                 );
@@ -841,7 +824,6 @@ impl AppCommandHandler {
 
         let diffable_local_deployment = diff::Deployment {
             components: diffable_local_components,
-            http_api_definitions: diffable_local_http_api_definitions,
             http_api_deployments: diffable_local_http_api_deployments,
         };
 
@@ -850,7 +832,6 @@ impl AppCommandHandler {
         Ok(DeployQuickDiff {
             environment,
             deployable_manifest_components,
-            deployable_manifest_http_api_definitions,
             deployable_manifest_http_api_deployments,
             diffable_local_deployment,
             local_deployment_hash,
@@ -907,8 +888,6 @@ impl AppCommandHandler {
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
             deployable_components: deploy_quick_diff.deployable_manifest_components,
-            deployable_http_api_definitions: deploy_quick_diff
-                .deployable_manifest_http_api_definitions,
             deployable_http_api_deployments: deploy_quick_diff
                 .deployable_manifest_http_api_deployments,
             diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
@@ -968,7 +947,6 @@ impl AppCommandHandler {
         };
 
         let component_handler = self.ctx.component_handler();
-        let http_api_definition_handler = self.ctx.api_definition_handler();
         let http_api_deployment_handler = self.ctx.api_deployment_handler();
 
         let component_details = stream::iter(diff.components.iter().filter_map(
@@ -1001,34 +979,6 @@ impl AppCommandHandler {
         .buffer_unordered(parallelism)
         .try_collect::<Vec<_>>();
 
-        let http_api_definition_details = stream::iter(
-            diff.http_api_definitions.iter().filter_map(
-                |(http_api_definition_name, http_api_definition_diff)| {
-                    match http_api_definition_diff {
-                        diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => None,
-                        diff::BTreeMapDiffValue::Update(_) => Some(http_api_definition_name),
-                    }
-                },
-            ),
-        )
-        .map(|http_api_definition_name| {
-            let http_api_definition_name = HttpApiDefinitionName(http_api_definition_name.clone());
-            let definition_identity =
-                deploy_diff.http_api_definition_identity(kind, &http_api_definition_name);
-            async {
-                let _permit = limiter.acquire().await?;
-                let definition = http_api_definition_handler
-                    .get_http_api_definition_revision_by_id(
-                        &definition_identity.id,
-                        definition_identity.revision,
-                    )
-                    .await?;
-                Ok::<_, anyhow::Error>((http_api_definition_name, definition))
-            }
-        })
-        .buffer_unordered(parallelism)
-        .try_collect::<Vec<_>>();
-
         let http_api_deployment_details =
             stream::iter(diff.http_api_deployments.iter().filter_map(
                 |(domain, http_api_deployment_diff)| match http_api_deployment_diff {
@@ -1053,15 +1003,11 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let (component, http_api_definition, http_api_deployment) = tokio::try_join!(
-            component_details,
-            http_api_definition_details,
-            http_api_deployment_details,
-        )?;
+        let (component, http_api_deployment) =
+            tokio::try_join!(component_details, http_api_deployment_details,)?;
 
         Ok(Some(DeployDetails {
             component,
-            http_api_definition,
             http_api_deployment,
         }))
     }
@@ -1219,49 +1165,6 @@ impl AppCommandHandler {
         .buffer_unordered(parallelism)
         .try_collect::<Vec<_>>();
 
-        let http_api_definition_details = stream::iter(
-            rollback_diff.diff.http_api_definitions.iter().map(
-                |(http_api_definition_name, http_api_definition_diff)| {
-                    RollbackEntityDetails::new_identity(
-                        HttpApiDefinitionName(http_api_definition_name.clone()),
-                        RollbackDiff::target_http_api_definition_identity,
-                        RollbackDiff::current_http_api_definition_identity,
-                        &rollback_diff,
-                        http_api_definition_diff,
-                    )
-                },
-            ),
-        )
-        .map(|details| {
-            let ctx = self.ctx.clone();
-            let limiter = limiter.clone();
-            async move {
-                let get =
-                    async |identity: Option<&DeploymentPlanHttpApiDefintionEntry>| match identity {
-                        Some(identity) => {
-                            let _permit = limiter.acquire().await?;
-                            Ok::<_, anyhow::Error>(Some(
-                                ctx.api_definition_handler()
-                                    .get_http_api_definition_revision_by_id(
-                                        &identity.id,
-                                        identity.revision,
-                                    )
-                                    .await?,
-                            ))
-                        }
-                        None => Ok::<_, anyhow::Error>(None),
-                    };
-
-                Ok::<_, anyhow::Error>(RollbackEntityDetails {
-                    name: details.name,
-                    new: get(details.new).await?,
-                    current: get(details.current).await?,
-                })
-            }
-        })
-        .buffer_unordered(parallelism)
-        .try_collect::<Vec<_>>();
-
         let http_api_deployment_details =
             stream::iter(rollback_diff.diff.http_api_deployments.iter().map(
                 |(domain, http_api_deployment_diff)| {
@@ -1305,15 +1208,11 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let (component, http_api_definition, http_api_deployment) = tokio::try_join!(
-            component_details,
-            http_api_definition_details,
-            http_api_deployment_details,
-        )?;
+        let (component, http_api_deployment) =
+            tokio::try_join!(component_details, http_api_deployment_details,)?;
 
         rollback_diff.add_details(RollbackDetails {
             component,
-            http_api_definition,
             http_api_deployment,
         })?;
 
@@ -1334,7 +1233,6 @@ impl AppCommandHandler {
         let _indent = LogIndent::new();
 
         let component_handler = self.ctx.component_handler();
-        let http_api_definition_handler = self.ctx.api_definition_handler();
         let http_api_deployment_handler = self.ctx.api_deployment_handler();
         let interactive_handler = self.ctx.interactive_handler();
 
@@ -1374,46 +1272,6 @@ impl AppCommandHandler {
                             deploy_diff.staged_component_identity(&component_name),
                             deploy_diff.deployable_manifest_component(&component_name),
                             component_diff,
-                        )
-                        .await?
-                }
-            }
-        }
-
-        for (http_api_definition_name, http_api_definition_diff) in &diff_stage.http_api_definitions
-        {
-            approve()?;
-
-            let http_api_definition_name =
-                HttpApiDefinitionName(http_api_definition_name.to_string());
-
-            match http_api_definition_diff {
-                diff::BTreeMapDiffValue::Create => {
-                    http_api_definition_handler
-                        .create_staged_http_api_definition(
-                            &deploy_diff.environment,
-                            &http_api_definition_name,
-                            deploy_diff
-                                .deployable_manifest_http_api_definition(&http_api_definition_name),
-                        )
-                        .await?
-                }
-                diff::BTreeMapDiffValue::Delete => {
-                    http_api_definition_handler
-                        .delete_staged_http_api_definition(
-                            deploy_diff
-                                .staged_http_api_definition_identity(&http_api_definition_name),
-                        )
-                        .await?
-                }
-                diff::BTreeMapDiffValue::Update(http_api_definition_diff) => {
-                    http_api_definition_handler
-                        .update_staged_http_api_definition(
-                            deploy_diff
-                                .staged_http_api_definition_identity(&http_api_definition_name),
-                            deploy_diff
-                                .deployable_manifest_http_api_definition(&http_api_definition_name),
-                            http_api_definition_diff,
                         )
                         .await?
                 }
