@@ -8,7 +8,7 @@ lto = true
 
 [workspace.dependencies]
 
-golem-rust = { path = "/Users/afsalthaj/projects/ribbb/golem/sdks/rust/golem-rust", features = [
+golem-rust = { path = "../../sdks/rust/golem-rust", features = [
     "export_golem_agentic",
 #    "golem_ai" # Uncomment to use Golem AI libraries
 ] }
