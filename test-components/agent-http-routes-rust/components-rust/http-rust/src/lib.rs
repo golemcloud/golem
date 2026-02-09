@@ -89,7 +89,7 @@ struct HttpAgentImpl {
     agent_name: String,
 }
 
-
+#[agent_implementation]
 impl HttpAgent for HttpAgentImpl {
     fn new(agent_name: String) -> HttpAgentImpl {
         HttpAgentImpl {
