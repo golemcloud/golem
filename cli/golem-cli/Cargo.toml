@@ -126,6 +126,9 @@ wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
 
+rust-mcp-sdk = { workspace = true }
+rust-mcp-schema = { workspace = true }
+
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
 openssl = { workspace = true }
 openssl-sys = { workspace = true }

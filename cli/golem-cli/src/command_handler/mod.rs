@@ -398,6 +398,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
+            GolemCliSubcommand::Serve { port } => crate::mcp::server::start_mcp_server(port).await,
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
         }
     }

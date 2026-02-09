@@ -345,6 +345,9 @@ wit-parser = "0.235"
 x509-certificate = "0.23.1"
 zstd = "0.13"
 
+rust-mcp-sdk = { version = "0.8.3", features = ["hyper-server"] }
+rust-mcp-schema = "0.9.5"
+
 [patch.crates-io]
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }

@@ -32,6 +32,7 @@ pub mod error;
 pub mod fs;
 pub mod fuzzy;
 pub mod log;
+pub mod mcp;
 pub mod model;
 pub mod process;
 pub mod validation;
