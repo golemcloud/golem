@@ -134,6 +134,8 @@ impl ReplHandler {
             .await?;
 
         let args = {
+            let app_main_dir = fs::canonicalize_path(&std::env::current_dir()?)?;
+
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
 
@@ -169,6 +171,7 @@ impl ReplHandler {
                 environment,
                 script,
                 stream_logs,
+                app_main_dir,
                 repl_root_dir,
                 repl_root_bridge_sdk_dir,
                 repl_bridge_sdk_target,

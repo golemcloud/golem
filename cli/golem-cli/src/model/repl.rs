@@ -100,6 +100,7 @@ pub struct BridgeReplArgs {
     pub environment: ResolvedEnvironmentIdentity,
     pub script: Option<String>,
     pub stream_logs: bool,
+    pub app_main_dir: PathBuf,
     pub repl_root_dir: PathBuf,
     pub repl_root_bridge_sdk_dir: PathBuf,
     pub repl_cli_commands_metadata_json_path: PathBuf,

@@ -17,6 +17,7 @@ import { CliCommandMetadata } from './cli-commands';
 import fs from 'node:fs';
 
 export type Config = {
+  appMainDir: string;
   agents: Record<string, AgentConfig>;
   historyFile: string;
   cliCommandsMetadataJsonPath: string;
@@ -45,6 +46,7 @@ export type EnvironmentName = string;
 export type ConfigureClient = (config: ClientConfig) => void;
 
 export type CliCommandsConfig = {
+  appMainDir: string;
   clientConfig: ClientConfig;
   commandMetadata: CliCommandMetadata;
 };
@@ -65,6 +67,7 @@ export function cliCommandsConfigFromBaseConfig(
   const commandMetadata = JSON.parse(commandMetadataContents) as CliCommandMetadata;
 
   return {
+    appMainDir: config.appMainDir,
     clientConfig,
     commandMetadata,
   };

@@ -20,7 +20,7 @@ use crate::command_handler::repl::load_repl_metadata;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, logln, LogIndent};
 use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata};
 use crate::process::{CommandExt, ExitStatusExt};
@@ -68,9 +68,11 @@ impl TypeScriptRepl {
             }
 
             {
+                logln("");
                 log_action("Reloading", "TypeScript REPL");
                 let _indent = LogIndent::new();
                 self.generate_repl_package(&args).await?;
+                logln("");
             }
         }
     }
@@ -116,6 +118,7 @@ impl TypeScriptRepl {
                         &tsconfig_json_path,
                     )?;
                     self.generate_repl_ts(
+                        &args.app_main_dir,
                         &repl_metadata,
                         &repl_ts_path,
                         &args.repl_history_file_path,
@@ -213,6 +216,7 @@ impl TypeScriptRepl {
 
     fn generate_repl_ts(
         &self,
+        app_main_dir: &Path,
         repl_metadata: &ReplMetadata,
         repl_ts_path: &Path,
         repl_history_file_path: &Path,
@@ -252,6 +256,7 @@ impl TypeScriptRepl {
                 const {{ Repl }} = await import('@golem/golem-ts-repl');
 
                 const repl = new Repl({{
+                  appMainDir: {app_main_dir},
                   agents: {{
                   {agents_config}
                   }},
@@ -261,6 +266,7 @@ impl TypeScriptRepl {
 
                 await repl.run();
             ",
+            app_main_dir = js_string_literal(app_main_dir.display().to_string())?,
             repl_history_file_path = js_string_literal(repl_history_file_path.display().to_string())?,
             repl_cli_commands_metadata_json_path =
                 js_string_literal(repl_cli_commands_metadata_json_path.display().to_string())?,

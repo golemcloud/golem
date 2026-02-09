@@ -16,6 +16,29 @@ use clap::builder::PossibleValue;
 use clap::{Arg, Command};
 use serde_derive::{Deserialize, Serialize};
 
+pub struct CliMetadataFilter {
+    pub command_path_prefix_exclude: Vec<Vec<&'static str>>,
+    pub arg_id_exclude: Vec<&'static str>,
+    pub exclude_hidden: bool,
+}
+
+impl CliMetadataFilter {
+    fn exclude_path(&self, path: &[String]) -> bool {
+        self.command_path_prefix_exclude.iter().any(|prefix| {
+            path.len() >= prefix.len()
+                && path
+                    .iter()
+                    .zip(prefix.iter())
+                    .all(|(segment, expected)| segment == expected)
+        })
+    }
+
+    fn exclude_arg(&self, arg: &Arg) -> bool {
+        self.arg_id_exclude.iter().any(|id| arg.get_id() == id)
+            || self.exclude_hidden && arg.is_hide_set()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliCommandMetadata {
@@ -33,19 +56,39 @@ pub struct CliCommandMetadata {
 impl CliCommandMetadata {
     pub fn new(command: &Command) -> CliCommandMetadata {
         let mut path = Vec::new();
-        Self::collect_command_metadata(&mut path, command)
+        Self::collect_command_metadata(&mut path, command, None)
     }
 
-    fn collect_command_metadata(path: &mut Vec<String>, command: &Command) -> CliCommandMetadata {
-        path.push(command.get_name().to_string());
+    pub fn new_filtered(command: &Command, filter: &CliMetadataFilter) -> CliCommandMetadata {
+        let mut path = Vec::new();
+        Self::collect_command_metadata(&mut path, command, Some(filter))
+    }
 
+    fn collect_command_metadata(
+        path: &mut Vec<String>,
+        command: &Command,
+        filter: Option<&CliMetadataFilter>,
+    ) -> CliCommandMetadata {
         let args = command
             .get_arguments()
-            .map(Self::collect_arg_metadata)
+            .filter_map(|arg| {
+                (!filter.as_ref().map(|f| f.exclude_arg(arg)).unwrap_or(false))
+                    .then(|| Self::collect_arg_metadata(arg))
+            })
             .collect::<Vec<_>>();
+
         let subcommands = command
             .get_subcommands()
-            .map(|subcommand| Self::collect_command_metadata(path, subcommand))
+            .filter_map(|subcommand| {
+                path.push(subcommand.get_name().to_string());
+                let subcommand_metadata = (!filter
+                    .as_ref()
+                    .map(|f| f.exclude_path(path))
+                    .unwrap_or(false))
+                .then(|| Self::collect_command_metadata(path, subcommand, filter));
+                path.pop();
+                subcommand_metadata
+            })
             .collect::<Vec<_>>();
 
         let metadata = CliCommandMetadata {
@@ -63,7 +106,6 @@ impl CliCommandMetadata {
             subcommands,
         };
 
-        path.pop();
         metadata
     }
 

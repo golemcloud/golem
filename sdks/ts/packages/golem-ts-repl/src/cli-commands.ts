@@ -18,13 +18,6 @@ import repl from 'node:repl';
 import shellQuote from 'shell-quote';
 import { CliCommandsConfig, ClientConfig } from './config';
 
-export type CliCommandFilterEntry = {
-  path: string[];
-  replCommand?: string;
-};
-
-export const CLI_COMMAND_FILTER: CliCommandFilterEntry[] = [{ path: ['agent', 'update'] }];
-
 export type CliCommandMetadata = {
   path: string[];
   name: string;
@@ -67,6 +60,7 @@ export type CliPossibleValueMetadata = {
 type CompletionHookId = string;
 
 type CompletionContext = {
+  cwd: string;
   clientConfig: ClientConfig;
   currentToken: string;
 };
@@ -90,8 +84,13 @@ const DEFAULT_ARG_COMPLETION_HOOKS: Record<string, CompletionHookId> = {
 };
 
 const COMPLETION_HOOKS: Record<CompletionHookId, CompletionHook> = {
-  agentId: async ({ clientConfig, currentToken }) => {
-    const json = await runGolemJson([
+  agentId: async ({ cwd, clientConfig, currentToken }) => {
+    const currentTokenStartsWithSingleQuote = currentToken.startsWith("'");
+    const rawCurrentToken = currentTokenStartsWithSingleQuote
+      ? currentToken.slice(1, -1)
+      : currentToken;
+
+    const json = await runGolemJson(cwd, [
       '--format',
       'json',
       '--environment',
@@ -99,27 +98,27 @@ const COMPLETION_HOOKS: Record<CompletionHookId, CompletionHook> = {
       'agent',
       'list',
     ]);
+
     if (!json || !Array.isArray(json.workers)) {
       return [];
     }
 
     const values = json.workers
-      .map((worker: any) => {
-        const componentName = worker.componentName;
-        const workerName = worker.workerName;
-        if (typeof workerName !== 'string') return undefined;
-        if (workerName.includes('/')) return workerName;
-        if (typeof componentName === 'string' && componentName.length > 0) {
-          return `${componentName}/${workerName}`;
-        }
-        return workerName;
-      })
+      .map((worker: any) => worker.workerName)
       .filter((value: unknown): value is string => typeof value === 'string');
 
-    return filterByPrefix(values, currentToken);
+    let matches = filterByPrefix(values, rawCurrentToken);
+    if (currentTokenStartsWithSingleQuote) {
+      if (matches.length === 0) {
+        matches = matches.map((match) => `'${match}'`);
+      } else {
+        matches = matches.map((match) => `'${match}'`);
+      }
+    }
+    return matches;
   },
-  componentName: async ({ clientConfig, currentToken }) => {
-    const json = await runGolemJson([
+  componentName: async ({ cwd, clientConfig, currentToken }) => {
+    const json = await runGolemJson(cwd, [
       '--format',
       'json',
       '--environment',
@@ -146,14 +145,14 @@ export class CliCommands {
 
   constructor(config: CliCommandsConfig) {
     this.config = config;
-
-    this.commands = buildReplCommands(this.config.commandMetadata);
+    this.commands = addReplCommands(this.config.commandMetadata);
     this.commandsByName = new Map(this.commands.map((command) => [command.replCommand, command]));
   }
 
   defineCommands(replServer: repl.REPLServer) {
     const reserved = new Set(['deploy', 'reload']);
     const clientConfig = this.config.clientConfig;
+    const appMainDir = this.config.appMainDir;
     for (const command of this.commands) {
       if (reserved.has(command.replCommand)) continue;
 
@@ -163,7 +162,7 @@ export class CliCommands {
         async action(rawArgs: string) {
           this.pause();
 
-          await runReplCliCommand(command, rawArgs, clientConfig);
+          await runReplCliCommand(command, appMainDir, rawArgs, clientConfig);
 
           this.resume();
           this.displayPrompt();
@@ -205,6 +204,7 @@ export class CliCommands {
       const values = await completeArgValue(
         expectingValueFor,
         currentToken,
+        this.config.appMainDir,
         this.config.clientConfig,
       );
       return [values, currentToken];
@@ -217,12 +217,22 @@ export class CliCommands {
 
     const nextPositional = command.positionalArgs[positionalValues.length];
     if (currentToken.length > 0 && nextPositional) {
-      const values = await completeArgValue(nextPositional, currentToken, this.config.clientConfig);
+      const values = await completeArgValue(
+        nextPositional,
+        currentToken,
+        this.config.appMainDir,
+        this.config.clientConfig,
+      );
       return [values, currentToken];
     }
 
     const positionalValuesList = nextPositional
-      ? await completeArgValue(nextPositional, currentToken, this.config.clientConfig)
+      ? await completeArgValue(
+          nextPositional,
+          currentToken,
+          this.config.appMainDir,
+          this.config.clientConfig,
+        )
       : [];
     const flagValuesList = completeFlags(command, usedArgIds, currentToken);
     const completions = mergeUnique(positionalValuesList, flagValuesList);
@@ -230,21 +240,18 @@ export class CliCommands {
   }
 }
 
-function buildReplCommands(root: CliCommandMetadata): ReplCliCommand[] {
+function addReplCommands(root: CliCommandMetadata): ReplCliCommand[] {
+  const leafCommands = collectLeafCommands(root);
   const commands: ReplCliCommand[] = [];
-  for (const entry of CLI_COMMAND_FILTER) {
-    const command = findCommandByPath(root, entry.path);
-    if (!command) continue;
-    if (command.subcommands.length > 0) continue;
 
-    const replCommand = entry.replCommand ?? toLowerCamelCase(entry.path);
+  for (const command of leafCommands) {
+    const replCommand = toLowerCamelCase(command.path);
     const about = command.about ?? command.longAbout ?? command.name;
-    const commandPath = stripRootPath(command.path, root.name);
     const { flagArgs, positionalArgs } = indexArgs(command.args);
 
     commands.push({
       replCommand,
-      commandPath,
+      commandPath: command.path,
       about,
       args: command.args,
       flagArgs,
@@ -253,6 +260,14 @@ function buildReplCommands(root: CliCommandMetadata): ReplCliCommand[] {
   }
 
   return commands;
+}
+
+function collectLeafCommands(command: CliCommandMetadata): CliCommandMetadata[] {
+  if (command.subcommands.length === 0) {
+    return [command];
+  }
+
+  return command.subcommands.flatMap((subcommand) => collectLeafCommands(subcommand));
 }
 
 function indexArgs(args: CliArgMetadata[]): {
@@ -266,11 +281,14 @@ function indexArgs(args: CliArgMetadata[]): {
 
   for (const arg of args) {
     if (arg.isPositional) continue;
-    for (const long of arg.long) {
-      flagArgs.set(`--${long}`, arg);
-    }
-    for (const short of arg.short) {
-      flagArgs.set(`-${short}`, arg);
+    if (arg.long.length > 0) {
+      for (const long of arg.long) {
+        flagArgs.set(`--${long}`, arg);
+      }
+    } else {
+      for (const short of arg.short) {
+        flagArgs.set(`-${short}`, arg);
+      }
     }
   }
 
@@ -323,6 +341,7 @@ function completeFlags(command: ReplCliCommand, usedArgIds: Set<string>, prefix:
 async function completeArgValue(
   arg: CliArgMetadata,
   currentToken: string,
+  cwd: string,
   clientConfig: ClientConfig,
 ): Promise<string[]> {
   if (arg.possibleValues.length > 0) {
@@ -338,7 +357,7 @@ async function completeArgValue(
   const hook = COMPLETION_HOOKS[hookId];
   if (!hook) return [];
 
-  return hook({ clientConfig, currentToken });
+  return hook({ cwd, clientConfig, currentToken });
 }
 
 function resolveCompletionHookId(arg: CliArgMetadata): CompletionHookId | undefined {
@@ -366,26 +385,6 @@ function mergeUnique(left: string[], right: string[]): string[] {
   return [...set];
 }
 
-function findCommandByPath(
-  root: CliCommandMetadata,
-  path: string[],
-): CliCommandMetadata | undefined {
-  const normalized = stripRootPath(path, root.name);
-  let current: CliCommandMetadata | undefined = root;
-  for (const segment of normalized) {
-    current = current.subcommands.find((command) => command.name === segment);
-    if (!current) return;
-  }
-  return current;
-}
-
-function stripRootPath(path: string[], rootName: string): string[] {
-  if (path.length > 0 && path[0] === rootName) {
-    return path.slice(1);
-  }
-  return path;
-}
-
 function toLowerCamelCase(segments: string[]): string {
   const parts = segments
     .flatMap((segment) => segment.split(/[-_]/g))
@@ -398,17 +397,9 @@ function toLowerCamelCase(segments: string[]): string {
     .join('');
 }
 
-function readCliMetadata(path: string): CliCommandMetadata | undefined {
-  try {
-    const contents = fs.readFileSync(path, 'utf8');
-    return JSON.parse(contents) as CliCommandMetadata;
-  } catch {
-    return;
-  }
-}
-
 async function runReplCliCommand(
   command: ReplCliCommand,
+  cwd: string,
   rawArgs: string,
   clientConfig: ClientConfig,
 ): Promise<void> {
@@ -416,7 +407,10 @@ async function runReplCliCommand(
   const args = parsedArgs.filter((t): t is string => typeof t === 'string' && t.length > 0);
 
   const cliArgs = ['--environment', clientConfig.environment, ...command.commandPath, ...args];
-  const child = childProcess.spawn('golem', cliArgs, { stdio: 'inherit' });
+  const child = childProcess.spawn('golem', cliArgs, {
+    stdio: 'inherit',
+    cwd,
+  });
   await new Promise<void>((resolve) =>
     child.once('exit', () => {
       resolve();
@@ -424,8 +418,8 @@ async function runReplCliCommand(
   );
 }
 
-async function runGolemJson(args: string[]): Promise<any> {
-  const result = await runGolem(args);
+async function runGolemJson(cwd: string, args: string[]): Promise<any> {
+  const result = await runGolem(cwd, args);
   if (!result.ok) return;
   try {
     return JSON.parse(result.stdout);
@@ -434,8 +428,12 @@ async function runGolemJson(args: string[]): Promise<any> {
   }
 }
 
-async function runGolem(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+async function runGolem(
+  cwd: string,
+  args: string[],
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   const child = childProcess.spawn('golem', args, {
+    cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
