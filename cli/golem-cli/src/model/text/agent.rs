@@ -16,7 +16,7 @@ use crate::model::agent::view::AgentTypeView;
 use crate::model::text::fmt::{
     format_message_highlight, log_table, FieldsBuilder, MessageWithFields, TextView,
 };
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 
 impl MessageWithFields for AgentTypeView {
     fn message(&self) -> String {
@@ -37,13 +37,13 @@ impl MessageWithFields for AgentTypeView {
     }
 }
 
-impl From<&RegisteredAgentType> for AgentTypeView {
-    fn from(value: &RegisteredAgentType) -> Self {
+impl From<&DeployedRegisteredAgentType> for AgentTypeView {
+    fn from(value: &DeployedRegisteredAgentType) -> Self {
         AgentTypeView::new(value, true)
     }
 }
 
-impl TextView for Vec<RegisteredAgentType> {
+impl TextView for Vec<DeployedRegisteredAgentType> {
     fn log(&self) {
         log_table::<_, AgentTypeView>(self);
     }

@@ -3547,7 +3547,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_RegisteredAgentType'
+                $ref: '#/components/schemas/Page_DeployedRegisteredAgentType'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3630,7 +3630,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/RegisteredAgentType'
+                $ref: '#/components/schemas/DeployedRegisteredAgentType'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -8471,6 +8471,22 @@ components:
             - Multimodal
             example: Multimodal
       - $ref: '#/components/schemas/NamedElementSchemas'
+    DeployedRegisteredAgentType:
+      type: object
+      title: DeployedRegisteredAgentType
+      description: |-
+        RegisteredAgentType with deployment specific information
+        Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
+      required:
+      - agentType
+      - implementedBy
+      properties:
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        implementedBy:
+          $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
+        webhookPrefixAuthorityAndPath:
+          type: string
     Deployment:
       type: object
       title: Deployment
@@ -9214,6 +9230,7 @@ components:
       - domain
       - hash
       - agents
+      - webhooksUrl
       - createdAt
       properties:
         id:
@@ -9234,6 +9251,8 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
+        webhooksUrl:
+          type: string
         createdAt:
           type: string
           format: date-time
@@ -9256,6 +9275,9 @@ components:
       properties:
         domain:
           type: string
+        webhooksUrl:
+          type: string
+          description: webhooks url to use for agents deployed to this domain. Defaults to `/webhooks/` if not provided.
         agents:
           type: object
           additionalProperties:
@@ -9672,6 +9694,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ComponentDto'
+    Page_DeployedRegisteredAgentType:
+      type: object
+      title: Page_DeployedRegisteredAgentType
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeployedRegisteredAgentType'
     Page_Deployment:
       type: object
       title: Page_Deployment
@@ -9772,16 +9804,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginRegistrationDto'
-    Page_RegisteredAgentType:
-      type: object
-      title: Page_RegisteredAgentType
-      required:
-      - values
-      properties:
-        values:
-          type: array
-          items:
-            $ref: '#/components/schemas/RegisteredAgentType'
     Page_SecuritySchemeDto:
       type: object
       title: Page_SecuritySchemeDto
@@ -10155,17 +10177,6 @@ components:
           type: string
         variableName:
           type: string
-    RegisteredAgentType:
-      type: object
-      title: RegisteredAgentType
-      required:
-      - agentType
-      - implementedBy
-      properties:
-        agentType:
-          $ref: '#/components/schemas/AgentType'
-        implementedBy:
-          $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
     RegisteredAgentTypeImplementer:
       type: object
       title: RegisteredAgentTypeImplementer

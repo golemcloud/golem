@@ -41,6 +41,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
+use crate::services::agent_deployments::AgentDeploymentsService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
@@ -168,6 +169,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -251,6 +253,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 rdbms_service,
                 component_service,
                 agent_types_service,
+                agent_deployments_service,
                 config.clone(),
                 owned_worker_id.clone(),
                 rpc,
@@ -2643,6 +2646,7 @@ struct PrivateDurableWorkerState {
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
+    agent_deployments_service: Arc<dyn AgentDeploymentsService>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
@@ -2724,6 +2728,7 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc>,
@@ -2759,6 +2764,7 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             component_service,
             agent_types_service,
+            agent_deployments_service,
             config,
             owned_worker_id,
             current_idempotency_key: None,

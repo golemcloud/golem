@@ -22,12 +22,15 @@ use golem_common::model::agent::bindings::golem::agent::common::{
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentId, AgentTypeName};
 use golem_common::model::oplog::host_functions::{
-    GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
+    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestNoInput,
-    HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
+    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemApiPromiseId,
+    HostRequestNoInput, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
+    HostResponseGolemAgentWebhookUrl,
 };
+use golem_common::model::PromiseId;
+use golem_service_base::custom_api::AgentWebhookId;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -156,8 +159,75 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn create_webhook(
         &mut self,
-        _promise_id: crate::preview2::golem_api_1_x::host::PromiseId,
+        promise_id: crate::preview2::golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<String> {
-        unimplemented!()
+        let durability =
+            Durability::<GolemAgentCreateWebhook>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
+
+        if durability.is_live() {
+            let promise_id: PromiseId = promise_id.clone().into();
+            if promise_id.worker_id.component_id != self.state.component_metadata.id {
+                let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
+                let persisted = durability
+                    .persist(
+                        self,
+                        HostRequestGolemApiPromiseId { promise_id },
+                        HostResponseGolemAgentWebhookUrl { result: Err(error) },
+                    )
+                    .await?;
+                return persisted.result.map_err(|e| anyhow!(e));
+            }
+
+            let Some(agent_id) = self.state.agent_id.as_ref() else {
+                let error =
+                    "Creating webhook urls is only supported for agentic components".to_string();
+                let persisted = durability
+                    .persist(
+                        self,
+                        HostRequestGolemApiPromiseId { promise_id },
+                        HostResponseGolemAgentWebhookUrl { result: Err(error) },
+                    )
+                    .await?;
+                return persisted.result.map_err(|e| anyhow!(e));
+            };
+
+            let webhook_id = AgentWebhookId {
+                worker_name: promise_id.worker_id.worker_name.clone(),
+                oplog_idx: promise_id.oplog_idx,
+            };
+
+            let webhook_url = self
+                .state
+                .agent_deployments_service
+                .get_agent_webhook_url(
+                    self.state.component_metadata.environment_id,
+                    &agent_id.agent_type,
+                    &webhook_id,
+                )
+                .await?;
+
+            let Some(webhook_url) = webhook_url else {
+                return Err(anyhow!("Agent is not currently deployed as part of an http api. Only deployed agents can create webhook urls"));
+            };
+
+            let persisted = durability
+                .persist(
+                    self,
+                    HostRequestGolemApiPromiseId { promise_id },
+                    HostResponseGolemAgentWebhookUrl {
+                        result: Ok(webhook_url),
+                    },
+                )
+                .await?;
+
+            Ok(persisted.result.map_err(|e| anyhow!(e))?)
+        } else {
+            Ok(durability
+                .replay(self)
+                .await?
+                .result
+                .map_err(|e| anyhow!(e))?)
+        }
     }
 }

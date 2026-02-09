@@ -15,7 +15,7 @@ import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
 import "golem/component/dynamic_linked_instance.proto";
 import "golem/registry/fuel_usage_update.proto";
-import "golem/registry/registered_agent_type.proto";
+import "golem/registry/agent_deployment.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
 import "golem/customapi/core.proto";
@@ -44,8 +44,9 @@ service RegistryService {
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
   rpc ResolveLatestAgentTypeByNames (ResolveLatestAgentTypeByNamesRequest) returns (ResolveLatestAgentTypeByNamesResponse);
 
-  // active routes api
+  // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
+  rpc GetAgentDeployments (GetAgentDeploymentsRequest) returns (GetAgentDeploymentsResponse);
 }
 
 message AuthenticateTokenRequest {
@@ -278,4 +279,19 @@ message GetActiveRoutesForDomainResponse {
 
 message GetActiveRoutesForDomainSuccessResponse {
   golem.customapi.CompiledRoutes compiled_routes = 1;
+}
+
+message GetAgentDeploymentsRequest {
+  golem.common.EnvironmentId environment_id = 1;
+}
+
+message GetAgentDeploymentsResponse {
+  oneof result {
+    GetAgentDeploymentsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+
+  message GetAgentDeploymentsSuccessResponse {
+    repeated AgentDeploymentDetails agent_deployment_details = 1;
+  }
 }

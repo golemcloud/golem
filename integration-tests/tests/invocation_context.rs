@@ -163,6 +163,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
             AgentTypeName("placeholder-agent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     client

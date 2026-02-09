@@ -4,9 +4,14 @@ import {
     agent,
     endpoint,
     UnstructuredBinary,
+    createPromise,
+    awaitPromise,
 } from '@golemcloud/golem-ts-sdk';
+import { createWebhook } from 'golem:agent/host';
 
-@agent({ mount: '/http-agents/{agentName}' })
+@agent({
+  mount: '/http-agents/{agentName}',
+})
 class HttpAgent extends BaseAgent {
 
   constructor(readonly agentName: string) {
@@ -147,5 +152,45 @@ class CorsAgent extends BaseAgent {
   })
   preflight(body: { name: string }): { received: string } {
     return { received: body.name };
+  }
+}
+
+@agent({
+  mount: '/webhook-agents/{agentName}',
+  webhookSuffix: '/webhook-agent'
+})
+class WebhookAgent extends BaseAgent {
+  testServerUrl: string = "";
+
+  constructor(readonly agentName: string) {
+    super();
+  }
+
+  @endpoint({
+    post: "/set-test-server-url",
+  })
+  setTestServerUrl(testServerUrl: string) {
+    this.testServerUrl = testServerUrl
+  }
+
+  // Webhook callback dance
+  @endpoint({
+    post: "/test-webhook",
+  })
+  async testWebhook(): Promise<{ payloadLength: number }> {
+    let promiseId = createPromise();
+    let webhookUrl = createWebhook(promiseId);
+    await fetch(this.testServerUrl!, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ webhookUrl: webhookUrl })
+      });
+
+    let data = await awaitPromise(promiseId);
+
+    return { payloadLength: data.byteLength };
   }
 }

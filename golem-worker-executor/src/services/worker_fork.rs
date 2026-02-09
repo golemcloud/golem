@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::file_loader::FileLoader;
+use super::{agent_deployments, HasAgentDeploymentsService};
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
@@ -77,6 +78,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc>,
     pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
+    pub agent_deployments: Arc<dyn agent_deployments::AgentDeploymentsService>,
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
@@ -118,6 +120,12 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasAgentTypesService for DefaultWorkerFork<Ctx> {
     fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService> {
         self.agent_types.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasAgentDeploymentsService for DefaultWorkerFork<Ctx> {
+    fn agent_deployments(&self) -> Arc<dyn agent_deployments::AgentDeploymentsService> {
+        self.agent_deployments.clone()
     }
 }
 
@@ -269,6 +277,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             rpc: self.rpc.clone(),
             active_workers: self.active_workers.clone(),
             agent_types: self.agent_types.clone(),
+            agent_deployments: self.agent_deployments.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -326,12 +335,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
+        agent_deployments: Arc<dyn agent_deployments::AgentDeploymentsService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
             rpc,
             active_workers,
             agent_types,
+            agent_deployments,
             engine,
             linker,
             runtime,

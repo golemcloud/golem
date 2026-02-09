@@ -258,6 +258,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             AgentTypeName("shopping-cart".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: None,
     };
 
     let http_api_deployment = client
