@@ -67,3 +67,9 @@ pub struct OkResponse {
 pub struct PreflightRequest {
     pub name: String,
 }
+
+#[derive(Schema)]
+pub struct WebhookResponse {
+    pub payload_length: u64,
+
+}

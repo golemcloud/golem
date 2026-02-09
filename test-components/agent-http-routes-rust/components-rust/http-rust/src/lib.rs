@@ -3,7 +3,11 @@ mod model;
 use model::*;
 
 use golem_rust::{agent_definition, agent_implementation, endpoint, AllowedMimeTypes};
-use golem_rust::agentic::UnstructuredBinary;
+use golem_rust::agentic::{create_webhook, UnstructuredBinary};
+use serde::Deserialize;
+use serde::Serialize;
+use wstd::http::{Body, Client, HeaderValue, IntoBody, Request};
+use wstd::http::request::JsonRequest;
 
 #[agent_definition(mount = "/http-agents/{agent_name}")]
 pub trait HttpAgent {
@@ -89,6 +93,7 @@ pub trait HttpAgent {
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
 pub enum MyMimeTypes {
+    #[mime_type("image/gif")]
     ImageGif
 }
 
@@ -280,6 +285,71 @@ impl CorsAgent for CorsAgentImpl {
     fn preflight(&self, body: PreflightRequest) -> PreflightResponse {
         PreflightResponse {
             received: body.name,
+        }
+    }
+}
+
+#[agent_definition(
+    mount = "/webhook-agents/{agent_name}",
+    webhook_suffix = "/webhook-agent"
+)]
+pub trait WebhookAgent {
+    fn new(agent_name: String) -> Self;
+
+    #[endpoint(post = "/set-test-server-url")]
+    fn set_test_server_url(&mut self, test_server_url: String);
+
+    #[endpoint(post = "/test-webhook")]
+    async fn test_webhook(&self) -> WebhookResponse;
+}
+
+struct WebhookAgentImpl {
+    agent_name: String,
+    test_server_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WebhookUrl {
+    // Important since we have a common server implementation in integration tests to
+    // accept callbacks through webhook
+    #[serde(rename = "webhookUrl")]
+    webhook_url: String
+}
+
+#[agent_implementation]
+impl WebhookAgent for WebhookAgentImpl {
+    fn new(agent_name: String) -> Self {
+        WebhookAgentImpl{
+            agent_name,
+            test_server_url: None,
+        }
+    }
+
+    fn set_test_server_url(&mut self, test_server_url: String) {
+        self.test_server_url = Some(test_server_url);
+    }
+
+    async fn test_webhook(&self) -> WebhookResponse {
+        let webhook = create_webhook();
+
+        let url = WebhookUrl {
+            webhook_url: webhook.url().to_string(),
+        };
+
+        let request = Request::post(self.test_server_url.clone().unwrap())
+            .header("Accept", HeaderValue::from_str("application/json").unwrap())
+            .header("Content-Type", "application/json")
+            .json(&url).map_err(|err| err.to_string()).unwrap();
+
+        let _ =
+            Client::new().send(request).await.map_err(|err| err.to_string()).unwrap().into_body();
+
+        let request = webhook.await;
+
+        let data: String = request.json().unwrap();
+
+        WebhookResponse {
+            payload_length: data.len() as u64,
         }
     }
 }

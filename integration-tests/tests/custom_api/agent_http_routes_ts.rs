@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use axum::http::{HeaderValue};
-use golem_common::model::domain_registration::{DomainRegistrationCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies};
-use golem_test_framework::dsl::{TestDslExtended};
 use pretty_assertions::assert_eq;
 use reqwest::Url;
 use serde_json::json;
-use std::fmt::{Formatter};
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
 use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};

@@ -23,7 +23,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    test_context_internal(deps, "http_rust", "http:rust")
+    test_context_internal(deps, "http_rust_debug", "http:rust")
         .await
         .unwrap()
 }
