@@ -58,7 +58,8 @@ export class CliReplInterop {
 
     const afterDot = trimmed.slice(1);
     const endsWithSpace = /\s$/.test(line);
-    const parsed = shellQuote.parse(afterDot);
+    const quoteInfo = detectSingleQuoteInfo(afterDot, endsWithSpace);
+    const parsed = shellQuote.parse(quoteInfo.balancedInput);
     const tokens = parsed.filter((t): t is string => typeof t === 'string');
     const currentToken = endsWithSpace ? '' : tokens.length > 0 ? tokens[tokens.length - 1] : '';
     const consumedTokens = endsWithSpace ? tokens : tokens.slice(0, -1);
@@ -81,8 +82,8 @@ export class CliReplInterop {
     const { usedArgIds, positionalValues, expectingValueFor } = parseArgs(command, argTokens);
 
     if (expectingValueFor) {
-      const values = await this.completeArgValue(expectingValueFor, currentToken);
-      return [values, currentToken];
+      const result = await this.completeArgValue(expectingValueFor, currentToken, quoteInfo);
+      return [result.values, result.completeOn];
     }
 
     if (currentToken.startsWith('-')) {
@@ -92,12 +93,12 @@ export class CliReplInterop {
 
     const nextPositional = command.positionalArgs[positionalValues.length];
     if (currentToken.length > 0 && nextPositional) {
-      const values = await this.completeArgValue(nextPositional, currentToken);
-      return [values, currentToken];
+      const result = await this.completeArgValue(nextPositional, currentToken, quoteInfo);
+      return [result.values, result.completeOn];
     }
 
     const positionalValuesList = nextPositional
-      ? await this.completeArgValue(nextPositional, currentToken)
+      ? (await this.completeArgValue(nextPositional, currentToken, quoteInfo)).values
       : [];
     const flagValuesList = completeFlags(command, usedArgIds, currentToken);
     const completions = mergeUnique(positionalValuesList, flagValuesList);
@@ -112,56 +113,105 @@ export class CliReplInterop {
     await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit' });
   }
 
-  private async completeArgValue(arg: CliArgMetadata, currentToken: string): Promise<string[]> {
+  private async completeArgValue(
+    arg: CliArgMetadata,
+    currentToken: string,
+    quoteInfo: SingleQuoteInfo,
+  ): Promise<{ values: string[]; completeOn: string }> {
+    const isSingleQuoted = quoteInfo.isSingleQuoted;
+    const tokenForCompletion = isSingleQuoted ? quoteInfo.unquotedToken : currentToken;
+
     if (arg.possibleValues.length > 0) {
-      return filterByPrefix(
+      const values = filterByPrefix(
         arg.possibleValues.map((value) => value.name),
-        currentToken,
+        tokenForCompletion,
       );
+      if (isSingleQuoted && !quoteInfo.isClosed) {
+        return {
+          values: applySingleQuoteCompletionsOpen(values),
+          completeOn: '',
+        };
+      }
+      return {
+        values: isSingleQuoted ? applySingleQuoteCompletions(values) : values,
+        completeOn: isSingleQuoted ? quoteInfo.rawToken : currentToken,
+      };
     }
 
     const hook = findArgCompletionHook(arg);
-    if (!hook) return [];
+    if (!hook) {
+      return { values: [], completeOn: isSingleQuoted ? quoteInfo.rawToken : currentToken };
+    }
 
-    return hook(this.cli, currentToken);
+    const requiresSingleQuotes = hook.requiresSingleQuotes ?? false;
+    const useSingleQuotes = isSingleQuoted || requiresSingleQuotes;
+    const values = await hook.complete(this.cli, tokenForCompletion);
+    return {
+      values: useSingleQuotes
+        ? isSingleQuoted && !quoteInfo.isClosed
+          ? applySingleQuoteCompletionsOpen(values)
+          : applySingleQuoteCompletions(values)
+        : values,
+      completeOn:
+        isSingleQuoted && !quoteInfo.isClosed
+          ? ''
+          : isSingleQuoted
+            ? quoteInfo.rawToken
+            : currentToken,
+    };
   }
 }
 
 type CompletionHookId = string;
-type CompletionHook = (cli: GolemCli, currentToken: string) => Promise<string[]>;
+type CompletionHookFn = (cli: GolemCli, currentToken: string) => Promise<string[]>;
+type CompletionHook = { complete: CompletionHookFn; requiresSingleQuotes?: boolean };
 
-const COMPLETION_HOOKS: Record<CompletionHookId, CompletionHook> = {
-  AGENT_ID: async (cli, currentToken) => {
-    const result = await cli.runJson({ args: ['agent', 'list'] });
+const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
+  AGENT_ID: {
+    requiresSingleQuotes: true,
+    complete: async (cli, currentToken) => {
+      const result = await cli.runJson({ args: ['agent', 'list'] });
 
-    if (!result.ok || !result.json || !Array.isArray(result.json.workers)) {
-      return [];
-    }
+      if (!result.ok || !result.json || !Array.isArray(result.json.workers)) {
+        return [];
+      }
 
-    const values = result.json.workers
-      .map((worker: any) => worker.workerName)
-      .filter((value: unknown): value is string => typeof value === 'string');
+      const values = result.json.workers
+        .map((worker: any) => worker.workerName)
+        .filter((value: unknown): value is string => typeof value === 'string');
 
-    return filterByPrefix(values, currentToken);
+      return filterByPrefix(values, currentToken);
+    },
   },
 
-  COMPONENT_NAME: async (cli, currentToken) => {
-    const result = await cli.runJson({ args: ['component', 'list'] });
-    if (!result.ok) {
-      return [];
-    }
+  COMPONENT_NAME: {
+    complete: async (cli, currentToken) => {
+      const result = await cli.runJson({ args: ['component', 'list'] });
+      if (!result.ok) {
+        return [];
+      }
 
-    if (!result.json || !Array.isArray(result.json)) {
-      return [];
-    }
+      if (!result.json || !Array.isArray(result.json)) {
+        return [];
+      }
 
-    const values = result.json
-      .map((component: any) => component?.componentName)
-      .filter((value: unknown): value is string => typeof value === 'string');
+      const values = result.json
+        .map((component: any) => component?.componentName)
+        .filter((value: unknown): value is string => typeof value === 'string');
 
-    return filterByPrefix(values, currentToken);
+      return filterByPrefix(values, currentToken);
+    },
   },
 };
+
+function findArgCompletionHook(arg: CliArgMetadata): CompletionHook | undefined {
+  const candidates = [arg.id, ...arg.valueNames];
+  for (const candidate of candidates) {
+    const hook = COMPLETION_HOOKS[candidate];
+    if (hook) return hook;
+  }
+  return;
+}
 
 class GolemCli {
   private readonly binaryName: string;
@@ -331,15 +381,6 @@ function completeFlags(command: ReplCliCommand, usedArgIds: Set<string>, prefix:
   return filterByPrefix(flags, prefix);
 }
 
-function findArgCompletionHook(arg: CliArgMetadata): CompletionHook | undefined {
-  const candidates = [arg.id, ...arg.valueNames];
-  for (const candidate of candidates) {
-    let hook = COMPLETION_HOOKS[candidate.toUpperCase()];
-    if (hook) return hook;
-  }
-  return;
-}
-
 function filterByPrefix(values: string[], prefix: string): string[] {
   if (!prefix) return Array.from(new Set(values));
   return Array.from(new Set(values.filter((value) => value.startsWith(prefix))));
@@ -362,4 +403,67 @@ function commandPathToReplCommandName(segments: string[]): string {
       return part[0].toUpperCase() + part.slice(1).toLowerCase();
     })
     .join('');
+}
+
+type SingleQuoteInfo = {
+  balancedInput: string;
+  rawToken: string;
+  unquotedToken: string;
+  isSingleQuoted: boolean;
+  isClosed: boolean;
+};
+
+function detectSingleQuoteInfo(input: string, endsWithSpace: boolean): SingleQuoteInfo {
+  const matchInput = endsWithSpace ? input.trimEnd() : input;
+  const quotedMatch = matchInput.match(/'(?:\\'|[^'])*'?$/);
+  const wordMatch = matchInput.match(/(?:^|\s)([^\s]*)$/);
+  const rawToken = quotedMatch?.[0] ?? wordMatch?.[1] ?? '';
+  const isSingleQuoted = rawToken.startsWith("'");
+  const isClosed =
+    isSingleQuoted &&
+    rawToken.length > 1 &&
+    rawToken.endsWith("'") &&
+    !isEscaped(rawToken, rawToken.length - 1);
+  const unquotedToken = isSingleQuoted
+    ? unescapeSingleQuotes(rawToken.slice(1, isClosed ? -1 : rawToken.length))
+    : rawToken;
+
+  return {
+    balancedInput: isSingleQuoted && !isClosed ? `${input}'` : input,
+    rawToken,
+    unquotedToken,
+    isSingleQuoted,
+    isClosed,
+  };
+}
+
+function isEscaped(value: string, index: number): boolean {
+  let count = 0;
+  for (let i = index - 1; i >= 0; i--) {
+    if (value[i] !== '\\') break;
+    count++;
+  }
+  return count % 2 === 1;
+}
+
+function unescapeSingleQuotes(value: string): string {
+  return value.replace(/\\'/g, "'");
+}
+
+function applySingleQuoteCompletions(values: string[]): string[] {
+  if (values.length === 1) {
+    return [`'${escapeSingleQuotes(values[0])}'`];
+  }
+  return values.map((value) => `'${escapeSingleQuotes(value)}`);
+}
+
+function applySingleQuoteCompletionsOpen(values: string[]): string[] {
+  if (values.length === 1) {
+    return [`${escapeSingleQuotes(values[0])}'`];
+  }
+  return values.map((value) => escapeSingleQuotes(value));
+}
+
+function escapeSingleQuotes(value: string): string {
+  return value.replace(/'/g, "\\'");
 }
