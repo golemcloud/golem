@@ -122,7 +122,7 @@ async fn string_path_var_rust(agent: &TestContext) -> anyhow::Result<()> {
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agenfddft/string-path-var/foo")?,
+                .join("/http-agents/test-agent/string-path-var/foo")?,
         )
         .send()
         .await?;
@@ -135,7 +135,7 @@ async fn string_path_var_rust(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn multi_path_vars(agent: &TestContext) -> anyhow::Result<()> {
+async fn multi_path_vars_rust(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -213,7 +213,7 @@ async fn path_and_query(agent: &TestContext) -> anyhow::Result<()> {
         body,
         json!({
             "id": "item-123",
-            "limit": 10.0
+            "limit": 10
         })
     );
 

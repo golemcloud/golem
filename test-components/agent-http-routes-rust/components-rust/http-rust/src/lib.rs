@@ -14,6 +14,7 @@ pub trait HttpAgent {
 
     #[endpoint(get = "/multi-path-vars/{first}/{second}")]
     fn multi_path_vars(
+        &self,
         first: String,
         second: String,
     ) -> MultiPathVarsResponse;
@@ -111,6 +112,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn multi_path_vars(
+        &self,
         first: String,
         second: String,
     ) -> MultiPathVarsResponse {
@@ -146,7 +148,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn json_body(
-         &self,
+        &self,
         _id: String,
         _name: String,
         _count: u64,
