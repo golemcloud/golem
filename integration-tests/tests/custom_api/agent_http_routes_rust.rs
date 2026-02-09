@@ -250,7 +250,7 @@ async fn path_and_header_rust(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn json_body(agent: &TestContext) -> anyhow::Result<()> {
+async fn json_body_rust(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(

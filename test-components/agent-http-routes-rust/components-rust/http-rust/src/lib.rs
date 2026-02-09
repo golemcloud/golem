@@ -31,7 +31,7 @@ pub trait HttpAgent {
 
     #[endpoint(
         get = "/path-and-header/{resource_id}",
-        headers = { "x-request-id" => "request_id" }
+        headers("x-request-id" = "request_id")
     )]
     fn path_and_header(
         &self,
