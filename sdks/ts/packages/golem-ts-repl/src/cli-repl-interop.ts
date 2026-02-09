@@ -323,58 +323,126 @@ type ReplCliCommand = {
 };
 
 function collectReplCliCommands(root: CliCommandMetadata): ReplCliCommand[] {
-  const leafCommands = collectLeafCommands(root);
   const commands: ReplCliCommand[] = [];
 
-  for (const command of leafCommands) {
+  function collect(
+    parentGlobalFlagsArgs: Map<string, CliArgMetadata>,
+    command: CliCommandMetadata,
+  ) {
     const replCommand = commandPathToReplCommandName(command.path);
     const about = command.about ?? command.longAbout ?? command.name;
-    const { flagArgs, positionalArgs } = indexArgs(command.args);
+    const { globalFlagArgs, flagArgs, positionalArgs } = partitionArgs(command.args);
 
-    commands.push({
-      replCommand,
-      commandPath: command.path,
-      about,
-      args: command.args,
-      flagArgs,
-      positionalArgs,
+    flagArgs.set('--help', {
+      action: '',
+      defaultValues: [],
+      id: 'help',
+      isGlobal: false,
+      isHidden: false,
+      isPositional: false,
+      isRequired: false,
+      long: [],
+      possibleValues: [],
+      short: [],
+      takesValue: false,
+      valueHint: '',
+      valueNames: [],
     });
+
+    for (let [flagName, flagArg] of parentGlobalFlagsArgs) {
+      flagArgs.set(flagName, flagArg);
+    }
+
+    const subcommandGlobalFlagArgs =
+      globalFlagArgs.size === 0
+        ? parentGlobalFlagsArgs
+        : new Map([...parentGlobalFlagsArgs, ...globalFlagArgs]);
+
+    if (command.subcommands.length === 0) {
+      commands.push({
+        replCommand,
+        commandPath: command.path,
+        about,
+        args: command.args,
+        flagArgs,
+        positionalArgs,
+      });
+    } else {
+      for (const subcommand of command.subcommands) {
+        collect(subcommandGlobalFlagArgs, subcommand);
+      }
+    }
   }
+
+  collect(new Map(), root);
 
   return commands.sort((left, right) => left.replCommand.localeCompare(right.replCommand));
 }
 
-function collectLeafCommands(command: CliCommandMetadata): CliCommandMetadata[] {
-  if (command.subcommands.length === 0) {
-    return [command];
-  }
-
-  return command.subcommands.flatMap((subcommand) => collectLeafCommands(subcommand));
-}
-
-function indexArgs(args: CliArgMetadata[]): {
+function partitionArgs(args: CliArgMetadata[]): {
+  globalFlagArgs: Map<string, CliArgMetadata>;
   flagArgs: Map<string, CliArgMetadata>;
   positionalArgs: CliArgMetadata[];
 } {
+  const globalFlagArgs = new Map<string, CliArgMetadata>();
   const flagArgs = new Map<string, CliArgMetadata>();
+
   const positionalArgs = args
     .filter((arg) => arg.isPositional)
     .sort((left, right) => (left.index ?? 0) - (right.index ?? 0));
 
   for (const arg of args) {
     if (arg.isPositional) continue;
+
+    // TODO: either fix clap extraction, or patch it in golem bin
+    if (arg.id === 'format') {
+      arg.possibleValues = [
+        {
+          name: 'text',
+          hidden: false,
+          aliases: [],
+        },
+        {
+          name: 'json',
+          hidden: false,
+          aliases: [],
+        },
+        {
+          name: 'yaml',
+          hidden: false,
+          aliases: [],
+        },
+        {
+          name: 'pretty-json',
+          hidden: false,
+          aliases: [],
+        },
+        {
+          name: 'pretty-yaml',
+          hidden: false,
+          aliases: [],
+        },
+      ];
+    }
+
     if (arg.long.length > 0) {
       for (const long of arg.long) {
         flagArgs.set(`--${long}`, arg);
+        if (arg.isGlobal) {
+          globalFlagArgs.set(`--${long}`, arg);
+        }
       }
     } else {
       for (const short of arg.short) {
         flagArgs.set(`-${short}`, arg);
+        if (arg.isGlobal) {
+          globalFlagArgs.set(`-${short}`, arg);
+        }
       }
     }
   }
 
-  return { flagArgs, positionalArgs };
+  return { globalFlagArgs, flagArgs, positionalArgs };
 }
 
 function parseArgs(command: ReplCliCommand, tokens: string[]) {
