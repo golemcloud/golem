@@ -156,7 +156,7 @@ async fn multi_path_vars_rust(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn remaining_path_variable(agent: &TestContext) -> anyhow::Result<()> {
+async fn remaining_path_variable_rust(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -182,7 +182,7 @@ async fn remaining_path_variable(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn remaining_path_missing(agent: &TestContext) -> anyhow::Result<()> {
+async fn remaining_path_missing_rust(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/http-agents/test-agent/rest")?)
@@ -195,7 +195,7 @@ async fn remaining_path_missing(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn path_and_query(agent: &TestContext) -> anyhow::Result<()> {
+async fn path_and_query_rust(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -222,7 +222,7 @@ async fn path_and_query(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn path_and_header(agent: &TestContext) -> anyhow::Result<()> {
+async fn path_and_header_rust(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
