@@ -21,6 +21,7 @@ pub struct HttpTestContext {
     pub deployment_revision: DeploymentRevision,
     pub client: reqwest::Client,
     pub base_url: Url,
+    pub host_header: HeaderValue,
 }
 
 impl Debug for HttpTestContext {
@@ -29,11 +30,7 @@ impl Debug for HttpTestContext {
     }
 }
 
-pub async fn test_context_internal(
-    deps: &EnvBasedTestDependencies,
-    component_name: &str,
-    package_name: &str,
-) -> anyhow::Result<HttpTestContext> {
+pub async fn test_context_internal(deps: &EnvBasedTestDependencies, component_name: &str, package_name: &str) -> anyhow::Result<HttpTestContext> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
@@ -65,7 +62,12 @@ pub async fn test_context_internal(
                 AgentTypeName("cors-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
+            (
+                AgentTypeName("webhook-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
         ]),
+        webhooks_url: None,
     };
 
     client
@@ -73,10 +75,11 @@ pub async fn test_context_internal(
         .await?;
 
     let deployment = user.deploy_environment(&env.id).await?;
+    let host_header = HeaderValue::from_str(&domain.0)?;
 
     let client = {
         let mut headers = HeaderMap::new();
-        headers.insert("Host", HeaderValue::from_str(&domain.0)?);
+        headers.insert("Host", host_header.clone());
         reqwest::Client::builder()
             .default_headers(headers)
             .build()?
@@ -90,5 +93,6 @@ pub async fn test_context_internal(
         user,
         env_id: env.id,
         deployment_revision: deployment.revision,
+        host_header,
     })
 }
