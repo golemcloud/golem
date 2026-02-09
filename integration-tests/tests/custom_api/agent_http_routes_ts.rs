@@ -12,20 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_test_framework::config::{EnvBasedTestDependencies};
+use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};
+use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use reqwest::Url;
 use serde_json::json;
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
-use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    test_context_internal(deps, "golem_it_agent_http_routes_ts", "golem-it:agent-http-routes-ts").await.unwrap()
+    test_context_internal(
+        deps,
+        "golem_it_agent_http_routes_ts",
+        "golem-it:agent-http-routes-ts",
+    )
+    .await
+    .unwrap()
 }
 
 #[test]
@@ -253,7 +258,9 @@ async fn unrestricted_unstructured_binary_inline(agent: &HttpTestContext) -> any
 
 #[test]
 #[tracing::instrument]
-async fn unrestricted_unstructured_binary_missing_body(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn unrestricted_unstructured_binary_missing_body(
+    agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -321,7 +328,9 @@ async fn restricted_unstructured_binary_inline(agent: &HttpTestContext) -> anyho
 
 #[test]
 #[tracing::instrument]
-async fn restricted_unstructured_binary_missing_body(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn restricted_unstructured_binary_missing_body(
+    agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(

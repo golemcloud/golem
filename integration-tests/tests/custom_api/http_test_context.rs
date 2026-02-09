@@ -30,7 +30,11 @@ impl Debug for HttpTestContext {
     }
 }
 
-pub async fn test_context_internal(deps: &EnvBasedTestDependencies, component_name: &str, package_name: &str) -> anyhow::Result<HttpTestContext> {
+pub async fn test_context_internal(
+    deps: &EnvBasedTestDependencies,
+    component_name: &str,
+    package_name: &str,
+) -> anyhow::Result<HttpTestContext> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
