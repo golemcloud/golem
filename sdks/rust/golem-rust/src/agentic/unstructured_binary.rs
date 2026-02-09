@@ -86,7 +86,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
 
                     let mime_type = binary_source.binary_type.mime_type;
 
-                    if !allowed.contains(&mime_type) {
+                    if !allowed.is_empty() && !allowed.contains(&mime_type) {
                         return Err(format!(
                             "Mime type '{}' is not allowed. Allowed mime types: {:?}",
                             mime_type,

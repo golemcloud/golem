@@ -70,7 +70,7 @@ async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resul
         )
         .await?;
 
-    user.component(&env.id, "http_rust_debug")
+    user.component(&env.id, "http_rust")
         .name("http:rust")
         .store()
         .await?;
@@ -116,7 +116,7 @@ async fn test_context_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resul
 
 #[test]
 #[tracing::instrument]
-async fn string_path_var_rust(agent: &TestContext) -> anyhow::Result<()> {
+async fn string_path_var(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -135,7 +135,7 @@ async fn string_path_var_rust(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn multi_path_vars_rust(agent: &TestContext) -> anyhow::Result<()> {
+async fn multi_path_vars(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -156,7 +156,7 @@ async fn multi_path_vars_rust(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn remaining_path_variable_rust(agent: &TestContext) -> anyhow::Result<()> {
+async fn remaining_path_variable(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -182,7 +182,7 @@ async fn remaining_path_variable_rust(agent: &TestContext) -> anyhow::Result<()>
 
 #[test]
 #[tracing::instrument]
-async fn remaining_path_missing_rust(agent: &TestContext) -> anyhow::Result<()> {
+async fn remaining_path_missing(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/http-agents/test-agent/rest")?)
@@ -195,7 +195,7 @@ async fn remaining_path_missing_rust(agent: &TestContext) -> anyhow::Result<()> 
 
 #[test]
 #[tracing::instrument]
-async fn path_and_query_rust(agent: &TestContext) -> anyhow::Result<()> {
+async fn path_and_query(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -222,7 +222,7 @@ async fn path_and_query_rust(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn path_and_header_rust(agent: &TestContext) -> anyhow::Result<()> {
+async fn path_and_header(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -250,7 +250,7 @@ async fn path_and_header_rust(agent: &TestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn json_body_rust(agent: &TestContext) -> anyhow::Result<()> {
+async fn json_body(agent: &TestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -332,7 +332,7 @@ async fn unrestricted_unstructured_binary_inline(agent: &TestContext) -> anyhow:
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(5.0));
+    assert_eq!(body, json!(5));
 
     Ok(())
 }
@@ -353,7 +353,7 @@ async fn unrestricted_unstructured_binary_missing_body(agent: &TestContext) -> a
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(0.0));
+    assert_eq!(body, json!(0));
 
     Ok(())
 }
@@ -377,7 +377,7 @@ async fn unrestricted_unstructured_binary_json_content_type(
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(13.0));
+    assert_eq!(body, json!(13));
 
     Ok(())
 }
@@ -400,7 +400,7 @@ async fn restricted_unstructured_binary_inline(agent: &TestContext) -> anyhow::R
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(5.0));
+    assert_eq!(body, json!(5));
 
     Ok(())
 }
