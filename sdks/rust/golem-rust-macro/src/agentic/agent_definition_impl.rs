@@ -176,7 +176,7 @@ fn get_agent_type_with_remote_client(
                 return Some(
                     endpoint_on_constructor_method_error(
                         trait_fn.sig.ident.span()
-                    ).into()
+                    )
                 );
             }
 
@@ -184,7 +184,7 @@ fn get_agent_type_with_remote_client(
                 return Some(
                     endpoint_on_static_method_error(
                         trait_fn.sig.ident.span()
-                    ).into()
+                    )
                 );
             }
 
