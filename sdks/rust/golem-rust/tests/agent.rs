@@ -705,6 +705,8 @@ mod tests {
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
         );
+        
+        assert!(!agent.methods.is_empty(), "Agent should have methods defined");
 
         assert!(agent.methods.iter().all(
             |m| !m.http_endpoint.is_empty()

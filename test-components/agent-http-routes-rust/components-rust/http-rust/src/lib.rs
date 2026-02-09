@@ -10,7 +10,7 @@ pub trait HttpAgent {
     fn new(agent_name: String) -> Self;
 
     #[endpoint(get = "/string-path-var/{path_var}")]
-    fn string_path_var(path_var: String) -> StringPathVarResponse;
+    fn string_path_var(&self, path_var: String) -> StringPathVarResponse;
 
     #[endpoint(get = "/multi-path-vars/{first}/{second}")]
     fn multi_path_vars(
@@ -19,10 +19,11 @@ pub trait HttpAgent {
     ) -> MultiPathVarsResponse;
 
     #[endpoint(get = "/rest/{*tail}")]
-    fn remaining_path(tail: String) -> RemainingPathResponse;
+    fn remaining_path(&self, tail: String) -> RemainingPathResponse;
 
     #[endpoint(get = "/path-and-query/{item_id}?limit={limit}")]
     fn path_and_query(
+        &self,
         item_id: String,
         limit: u64,
     ) -> PathAndQueryResponse;
@@ -32,12 +33,14 @@ pub trait HttpAgent {
         headers = { "x-request-id" => "request_id" }
     )]
     fn path_and_header(
+        &self,
         resource_id: String,
         request_id: String,
     ) -> PathAndHeaderResponse;
 
     #[endpoint(post = "/json-body/{id}")]
     fn json_body(
+        &self,
         id: String,
         name: String,
         count: u64,
@@ -45,38 +48,42 @@ pub trait HttpAgent {
 
     #[endpoint(post = "/unrestricted-unstructured-binary/{bucket}")]
     fn unrestricted_unstructured_binary(
+        &self,
         bucket: String,
         payload: UnstructuredBinary<String>,
     ) -> i64;
 
     #[endpoint(post = "/restricted-unstructured-binary/{bucket}")]
     fn restricted_unstructured_binary(
+        &self,
         bucket: String,
         payload: UnstructuredBinary<MyMimeTypes>,
     ) -> i64;
 
     #[endpoint(get = "/resp/no-content")]
-    fn no_content();
+    fn no_content(&self);
 
+    // https://github.com/golemcloud/golem/issues/2725
     #[endpoint(get = "/resp/json")]
-    fn json_response() -> JsonResponse;
+    fn json_response_func(&self) -> JsonResponse;
 
     #[endpoint(get = "/resp/optional/{found}")]
-    fn optional_response(found: bool) -> Option<OptionalResponse>;
+    fn optional_response_func(&self, found: bool) -> Option<OptionalResponse>;
 
     #[endpoint(get = "/resp/result-json-json/{ok}")]
     fn result_ok_or_err(
+        &self,
         ok: bool,
     ) -> Result<ResultOkResponse, ResultErrResponse>;
 
     #[endpoint(post = "/resp/result-void-json")]
-    fn result_void_err() -> Result<(), ResultErrResponse>;
+    fn result_void_err(&self) -> Result<(), ResultErrResponse>;
 
     #[endpoint(get = "/resp/result-json-void")]
-    fn result_json_void() -> Result<ResultOkResponse, ()>;
+    fn result_json_void(&self) -> Result<ResultOkResponse, ()>;
 
     #[endpoint(get = "/resp/binary")]
-    fn binary_response() -> UnstructuredBinary<String>;
+    fn binary_response(&self) -> UnstructuredBinary<String>;
 }
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
@@ -97,7 +104,7 @@ impl HttpAgent for HttpAgentImpl {
         }
     }
 
-    fn string_path_var(path_var: String) -> StringPathVarResponse {
+    fn string_path_var(&self, path_var: String) -> StringPathVarResponse {
         StringPathVarResponse {
             value: path_var,
         }
@@ -112,11 +119,12 @@ impl HttpAgent for HttpAgentImpl {
         }
     }
 
-    fn remaining_path(tail: String) -> RemainingPathResponse {
+    fn remaining_path(&self, tail: String) -> RemainingPathResponse {
         RemainingPathResponse { tail }
     }
 
     fn path_and_query(
+        &self,
         item_id: String,
         limit: u64,
     ) -> PathAndQueryResponse {
@@ -127,6 +135,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn path_and_header(
+        &self,
         resource_id: String,
         request_id: String,
     ) -> PathAndHeaderResponse {
@@ -137,6 +146,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn json_body(
+         &self,
         _id: String,
         _name: String,
         _count: u64,
@@ -145,6 +155,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn unrestricted_unstructured_binary(
+        &self,
         _bucket: String,
         payload: UnstructuredBinary<String>,
     ) -> i64 {
@@ -155,6 +166,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn restricted_unstructured_binary(
+        &self,
         _bucket: String,
         payload: UnstructuredBinary<MyMimeTypes>,
     ) -> i64 {
@@ -164,17 +176,17 @@ impl HttpAgent for HttpAgentImpl {
         }
     }
 
-    fn no_content() {
+    fn no_content(&self) {
         // intentionally empty (204)
     }
 
-    fn json_response() -> JsonResponse {
+    fn json_response_func(&self) -> JsonResponse {
         JsonResponse {
             value: "ok".to_string(),
         }
     }
 
-    fn optional_response(found: bool) -> Option<OptionalResponse> {
+    fn optional_response_func(&self, found: bool) -> Option<OptionalResponse> {
         if found {
             Some(OptionalResponse {
                 value: "yes".to_string(),
@@ -185,6 +197,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn result_ok_or_err(
+        &self,
         ok: bool,
     ) -> Result<ResultOkResponse, ResultErrResponse> {
         if ok {
@@ -198,19 +211,19 @@ impl HttpAgent for HttpAgentImpl {
         }
     }
 
-    fn result_void_err() -> Result<(), ResultErrResponse> {
+    fn result_void_err(&self) -> Result<(), ResultErrResponse> {
         Err(ResultErrResponse {
             error: "fail".to_string(),
         })
     }
 
-    fn result_json_void() -> Result<ResultOkResponse, ()> {
+    fn result_json_void(&self) -> Result<ResultOkResponse, ()> {
         Ok(ResultOkResponse {
             value: "ok".to_string(),
         })
     }
 
-    fn binary_response() -> UnstructuredBinary<String> {
+    fn binary_response(&self) -> UnstructuredBinary<String> {
         UnstructuredBinary::Inline {
             data: vec![1, 2, 3, 4],
             mime_type: "application/octet-stream".to_string(),
@@ -230,16 +243,16 @@ pub trait CorsAgent {
         get = "/wildcard",
         cors = ["*"]
     )]
-    fn wildcard() -> OkResponse;
+    fn wildcard(&self) -> OkResponse;
 
     #[endpoint(get = "/inherited")]
-    fn inherited() -> OkResponse;
+    fn inherited(&self) -> OkResponse;
 
     #[endpoint(
         post = "/preflight-required",
         cors = ["https://app.example.com"]
     )]
-    fn preflight(body: PreflightRequest) -> PreflightResponse;
+    fn preflight(&self, body: PreflightRequest) -> PreflightResponse;
 }
 
 pub struct CorsAgentImpl {
@@ -254,15 +267,15 @@ impl CorsAgent for CorsAgentImpl {
         }
     }
 
-    fn wildcard() -> OkResponse {
+    fn wildcard(&self) -> OkResponse {
         OkResponse { ok: true }
     }
 
-    fn inherited() -> OkResponse {
+    fn inherited(&self) -> OkResponse {
         OkResponse { ok: true }
     }
 
-    fn preflight(body: PreflightRequest) -> PreflightResponse {
+    fn preflight(&self, body: PreflightRequest) -> PreflightResponse {
         PreflightResponse {
             received: body.name,
         }
