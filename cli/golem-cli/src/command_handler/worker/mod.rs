@@ -108,7 +108,7 @@ impl WorkerCommandHandler {
                 idempotency_key,
                 no_stream,
                 stream_args,
-                post_deploy_args: deploy_args,
+                post_deploy_args,
             } => {
                 self.cmd_invoke(
                     worker_name,
@@ -118,7 +118,7 @@ impl WorkerCommandHandler {
                     idempotency_key,
                     no_stream,
                     stream_args,
-                    deploy_args,
+                    post_deploy_args,
                 )
                 .await
             }

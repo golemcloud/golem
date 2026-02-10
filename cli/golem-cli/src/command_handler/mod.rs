@@ -275,10 +275,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 language,
                 component_name,
                 revision,
-                post_deploy_args: deploy_args,
+                post_deploy_args,
                 script,
                 script_file,
                 disable_stream,
+                disable_auto_imports,
             } => {
                 self.ctx
                     .repl_handler()
@@ -286,10 +287,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         language,
                         component_name.component_name,
                         revision,
-                        deploy_args.as_ref(),
+                        post_deploy_args.as_ref(),
                         script,
                         script_file,
                         !disable_stream,
+                        disable_auto_imports,
                     )
                     .await
             }
@@ -300,7 +302,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 version,
                 revision,
                 force_build,
-                post_deploy_args: deploy_args,
+                post_deploy_args,
                 repl_bridge_sdk_target,
             } => {
                 self.ctx
@@ -312,7 +314,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         version,
                         revision,
                         force_build,
-                        deploy_args,
+                        post_deploy_args,
                         repl_bridge_sdk_target,
                     )
                     .await

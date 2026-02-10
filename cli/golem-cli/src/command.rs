@@ -686,6 +686,9 @@ pub enum GolemCliSubcommand {
         /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
         #[clap(long)]
         disable_stream: bool,
+        /// Disables automatic importing of Bridge SDK clients
+        #[clap(long)]
+        disable_auto_imports: bool,
     },
     /// Deploy application
     Deploy {

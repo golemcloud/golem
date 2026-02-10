@@ -143,6 +143,13 @@ where
         Ok(self)
     }
 
+    pub fn with_skip_check(self, skip_check: bool) -> Self {
+        Self {
+            skip_check: self.skip_check || skip_check,
+            ..self
+        }
+    }
+
     pub fn with_sources<NS, NSP, NFS>(
         self,
         sources: NFS,

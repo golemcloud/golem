@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Config } from './config';
+import { Config, ProcessArgs } from './config';
 
 import tsm, { ts } from 'ts-morph';
 import pc from 'picocolors';
@@ -52,16 +52,17 @@ export class LanguageService {
   private snippetEndPos: number;
   private snippetStartPos: number;
 
-  constructor(config: Config) {
-    this.snippetImports =
-      Object.entries(config.agents)
-        .map(([agentTypeName, agentConfig]) => {
-          return [
-            `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`,
-            `import * as ${agentConfig.clientPackageImportedName} from '${agentConfig.clientPackageName}';`,
-          ].join('\n');
-        })
-        .join('\n') + '\n';
+  constructor(config: Config, processArgs: ProcessArgs) {
+    this.snippetImports = processArgs.disableAutoImports
+      ? ''
+      : Object.entries(config.agents)
+          .map(([agentTypeName, agentConfig]) => {
+            return [
+              `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`,
+              `import * as ${agentConfig.clientPackageImportedName} from '${agentConfig.clientPackageName}';`,
+            ].join('\n');
+          })
+          .join('\n') + '\n';
 
     this.project = new tsm.Project({
       tsConfigFilePath: 'tsconfig.json',
@@ -158,11 +159,11 @@ export class LanguageService {
     try {
       nodeType = fullExpressionNode.getType();
     } catch (e) {
-      console.log();
-      console.log('If you see this, please report!');
-      console.log(fullExpressionNode);
+      console.error();
+      console.error('If you see this, please report it!');
+      console.error(fullExpressionNode);
       console.error(e);
-      console.log();
+      console.error();
     }
     if (!nodeType) return;
 
@@ -303,7 +304,7 @@ export class LanguageService {
     const callContext = getCallArgumentContext(snippet, pos);
     const checker = this.project.getTypeChecker();
     const fallbackContext = !callContext
-      ? getFallbackCallContext(snippet, pos, rawStart, checker)
+      ? getFallbackCallContext(snippet, pos, rawStart)
       : undefined;
     if (!callContext && !fallbackContext) return;
 
@@ -312,7 +313,7 @@ export class LanguageService {
     const argNode = callContext ? callContext.argNode : fallbackContext!.argNode;
 
     const signature = callContext
-      ? getResolvedSignature(callContext.callExpression, checker)
+      ? getResolvedSignature(callContext.callExpression)
       : fallbackContext!.signature;
     if (!signature) return;
     if (signature.getParameters().length === 0) {
@@ -464,7 +465,6 @@ function getFallbackCallContext(
   snippet: tsm.SourceFile,
   pos: number,
   rawStart: number,
-  checker: tsm.TypeChecker,
 ): FallbackCallContext | undefined {
   const snippetText = snippet.getText();
   if (snippetText[pos] !== '(') return;
@@ -515,7 +515,6 @@ function getCallTargetExpression(node: tsm.Node, pos: number): tsm.Expression | 
 
 function getResolvedSignature(
   callExpression: tsm.CallExpression | tsm.NewExpression,
-  checker: tsm.TypeChecker,
 ): tsm.Signature | undefined {
   const directSignature = (callExpression as any).getSignature?.();
   if (directSignature) return directSignature;
@@ -593,17 +592,11 @@ function getSignatureParameterType(
           return undefined;
         }
         const restIndex = Math.max(0, argIndex - (params.length - 1));
-        return (
-          tupleElements[restIndex] ??
-          tupleElements[tupleElements.length - 1] ??
-          resolvedType
-        );
+        return tupleElements[restIndex] ?? tupleElements[tupleElements.length - 1] ?? resolvedType;
       }
 
       const arrayElement =
-        resolvedType?.getArrayElementType() ??
-        resolvedType?.getNumberIndexType() ??
-        resolvedType;
+        resolvedType?.getArrayElementType() ?? resolvedType?.getNumberIndexType() ?? resolvedType;
       return arrayElement;
     }
   }
@@ -777,7 +770,7 @@ function buildTypePlaceholdersInner(
     type.getNumberIndexType();
   if (arrayElement || apparent.isArray() || type.isArray()) {
     const elementPlaceholder = arrayElement
-      ? buildTypePlaceholdersInner(arrayElement, checker, options, seen, depth + 1)[0] ?? '?'
+      ? (buildTypePlaceholdersInner(arrayElement, checker, options, seen, depth + 1)[0] ?? '?')
       : '?';
     const result = [`[${elementPlaceholder}]`];
     seen.delete(type);
@@ -861,7 +854,7 @@ function buildObjectPlaceholder(
     const key = isValidIdentifier(name) ? name : JSON.stringify(name);
     const propType = getSymbolType(prop, checker);
     const placeholder = propType
-      ? buildTypePlaceholdersInner(propType, checker, options, seen, depth)[0] ?? '?'
+      ? (buildTypePlaceholdersInner(propType, checker, options, seen, depth)[0] ?? '?')
       : '?';
     return `${key}: ${placeholder}`;
   });
@@ -888,7 +881,7 @@ function buildTaggedObjectPlaceholder(
     const key = isValidIdentifier(name) ? name : JSON.stringify(name);
     const propType = getSymbolType(prop, checker);
     const placeholder = propType
-      ? buildTypePlaceholdersInner(propType, checker, options, seen, depth)[0] ?? '?'
+      ? (buildTypePlaceholdersInner(propType, checker, options, seen, depth)[0] ?? '?')
       : '?';
     return `${key}: ${placeholder}`;
   });

@@ -21,7 +21,7 @@ use crate::log::{logln, set_log_output, Output};
 use crate::model::component::{ComponentRevisionSelection, ComponentView};
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
-use crate::model::repl::ReplLanguage;
+use crate::model::repl::{ReplLanguage, ReplScriptSource};
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
@@ -64,7 +64,13 @@ impl CliRibRepl {
         })
     }
 
-    pub async fn run(self: &Arc<Self>, script_input: Option<String>) -> anyhow::Result<()> {
+    pub async fn run(self: &Arc<Self>, script: Option<ReplScriptSource>) -> anyhow::Result<()> {
+        let script_input = match script {
+            Some(ReplScriptSource::Inline(script)) => Some(script),
+            Some(ReplScriptSource::FromFile(path)) => Some(std::fs::read_to_string(path)?),
+            None => None,
+        };
+
         let mut command_registry = CommandRegistry::default();
 
         command_registry.register(commands::Agents);

@@ -19,11 +19,11 @@ use crate::bridge_gen::bridge_client_directory_name;
 use crate::command_handler::repl::load_repl_metadata;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogIndent};
 use crate::model::app::BuildConfig;
-use crate::model::repl::{BridgeReplArgs, ReplMetadata};
+use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::process::{CommandExt, ExitStatusExt};
+use crate::{command_name, fs};
 use golem_templates::model::GuestLanguage;
 use heck::ToLowerCamelCase;
 use indoc::formatdoc;
@@ -51,9 +51,28 @@ impl TypeScriptRepl {
             self.generate_repl_package(&args).await?;
         }
 
+        let mut npx_args = vec!["tsx".to_string(), "repl.ts".to_string()];
+
+        if args.disable_auto_imports {
+            npx_args.push("--disable-auto-imports".to_string());
+        }
+
+        if let Some(script) = &args.script {
+            match script {
+                ReplScriptSource::Inline(script) => {
+                    npx_args.push("--script".to_string());
+                    npx_args.push(script.clone());
+                }
+                ReplScriptSource::FromFile(path) => {
+                    npx_args.push("--script-file".to_string());
+                    npx_args.push(fs::path_to_str(path)?.to_string());
+                }
+            }
+        }
+
         loop {
             let result = Command::new("npx")
-                .args(["tsx", "repl.ts"])
+                .args(&npx_args)
                 .current_dir(&args.repl_root_dir)
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())
@@ -62,6 +81,10 @@ impl TypeScriptRepl {
                 .spawn()?
                 .wait()
                 .await?;
+
+            if args.script.is_some() {
+                return result.check_exit_status();
+            }
 
             if result.code() != Some(75) {
                 return result.check_exit_status();
@@ -117,13 +140,7 @@ impl TypeScriptRepl {
                         &relative_bridge_sdk_unix_path,
                         &tsconfig_json_path,
                     )?;
-                    self.generate_repl_ts(
-                        &args.app_main_dir,
-                        &repl_metadata,
-                        &repl_ts_path,
-                        &args.repl_history_file_path,
-                        &args.repl_cli_commands_metadata_json_path,
-                    )?;
+                    self.generate_repl_ts(&args, &repl_metadata, &repl_ts_path)?;
 
                     Command::new("npm")
                         .arg("install")
@@ -216,11 +233,9 @@ impl TypeScriptRepl {
 
     fn generate_repl_ts(
         &self,
-        app_main_dir: &Path,
+        args: &BridgeReplArgs,
         repl_metadata: &ReplMetadata,
         repl_ts_path: &Path,
-        repl_history_file_path: &Path,
-        repl_cli_commands_metadata_json_path: &Path,
     ) -> anyhow::Result<()> {
         let agents_config = repl_metadata
             .agents
@@ -256,6 +271,7 @@ impl TypeScriptRepl {
                 const {{ Repl }} = await import('@golem/golem-ts-repl');
 
                 const repl = new Repl({{
+                  binary: {binary},
                   appMainDir: {app_main_dir},
                   agents: {{
                   {agents_config}
@@ -266,10 +282,11 @@ impl TypeScriptRepl {
 
                 await repl.run();
             ",
-            app_main_dir = js_string_literal(app_main_dir.display().to_string())?,
-            repl_history_file_path = js_string_literal(repl_history_file_path.display().to_string())?,
+            binary = js_string_literal(command_name())?,
+            app_main_dir = js_string_literal(args.app_main_dir.display().to_string())?,
+            repl_history_file_path = js_string_literal(args.repl_history_file_path.display().to_string())?,
             repl_cli_commands_metadata_json_path =
-                js_string_literal(repl_cli_commands_metadata_json_path.display().to_string())?,
+                js_string_literal(args.repl_cli_commands_metadata_json_path.display().to_string())?,
         };
 
         fs::write_str(repl_ts_path, repl_ts)

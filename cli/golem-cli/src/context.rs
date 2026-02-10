@@ -228,7 +228,7 @@ impl Context {
         let profile = Self::load_profile(&global_flags, use_cloud_profile_for_env)?;
 
         let mut yes = global_flags.yes;
-        let mut deploy_args = PostDeployArgs::none();
+        let mut post_deploy_args = PostDeployArgs::none();
         if let Some(selected_manifest_environment) = &manifest_environment {
             if let Some(cli) = selected_manifest_environment.environment.cli.as_ref() {
                 if cli.auto_confirm == Some(Marker) {
@@ -236,11 +236,11 @@ impl Context {
                 }
 
                 if cli.redeploy_agents == Some(Marker) {
-                    deploy_args.redeploy_agents = true;
+                    post_deploy_args.redeploy_agents = true;
                 }
 
                 if cli.reset == Some(Marker) {
-                    deploy_args.reset = true;
+                    post_deploy_args.reset = true;
                 }
             }
         }
@@ -328,7 +328,7 @@ impl Context {
             config_dir: global_flags.config_dir(),
             format,
             help_mode: log_output_for_help.is_some(),
-            post_deploy_args: deploy_args,
+            post_deploy_args,
             profile,
             app_context_config,
             http_batch_size: global_flags.http_batch_size(),

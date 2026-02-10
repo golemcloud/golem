@@ -14,12 +14,20 @@
 
 import { env } from 'node:process';
 import fs from 'node:fs';
+import util from 'node:util';
 
 export type Config = {
+  binary: string;
   appMainDir: string;
   agents: Record<string, AgentConfig>;
   historyFile: string;
   cliCommandsMetadataJsonPath: string;
+};
+
+export type ProcessArgs = {
+  script?: string;
+  scriptPath?: string;
+  disableAutoImports: boolean;
 };
 
 export type AgentConfig = {
@@ -45,6 +53,7 @@ export type EnvironmentName = string;
 export type ConfigureClient = (config: ClientConfig) => void;
 
 export type CliCommandsConfig = {
+  binary: string;
   appMainDir: string;
   clientConfig: ClientConfig;
   commandMetadata: CliCommandMetadata;
@@ -105,6 +114,7 @@ export function cliCommandsConfigFromBaseConfig(
   const commandMetadata = JSON.parse(commandMetadataContents) as CliCommandMetadata;
 
   return {
+    binary: config.binary,
     appMainDir: config.appMainDir,
     clientConfig,
     commandMetadata,
@@ -138,4 +148,42 @@ function requiredEnvVar(name: string): string {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+export function loadProcessArgs(): ProcessArgs {
+  const normalizedArgs = process.argv
+    .slice(2)
+    .map((arg) => (arg === '-script-file' ? '--script-file' : arg));
+
+  const { values } = util.parseArgs({
+    args: normalizedArgs,
+    options: {
+      script: { type: 'string' },
+      'script-file': { type: 'string' },
+      'disable-auto-imports': { type: 'boolean' },
+    },
+    allowPositionals: true,
+  });
+
+  if (values.script !== undefined) {
+    return {
+      script: values.script,
+      scriptPath: undefined,
+      disableAutoImports: values['disable-auto-imports'] ?? false,
+    };
+  }
+
+  if (values['script-file'] !== undefined) {
+    return {
+      script: fs.readFileSync(values['script-file'], 'utf8'),
+      scriptPath: values['script-file'],
+      disableAutoImports: values['disable-auto-imports'] ?? false,
+    };
+  }
+
+  return {
+    script: undefined,
+    scriptPath: undefined,
+    disableAutoImports: values['disable-auto-imports'] ?? false,
+  };
 }

@@ -18,6 +18,8 @@ import {
   clientConfigFromEnv,
   Config,
   ConfigureClient,
+  loadProcessArgs,
+  ProcessArgs,
 } from './config';
 import { CliReplInterop } from './cli-repl-interop';
 import { LanguageService } from './language-service';
@@ -26,38 +28,40 @@ import repl, { type REPLEval } from 'node:repl';
 import process from 'node:process';
 import util from 'node:util';
 import { AsyncCompleter } from 'readline';
+import { PassThrough } from 'node:stream';
 
 export class Repl {
   private readonly config: Config;
   private readonly clientConfig: ClientConfig;
   private readonly cli: CliReplInterop;
+  private readonly processArgs: ProcessArgs;
   private languageService: LanguageService | undefined;
-  private replServer: repl.REPLServer | undefined;
 
   constructor(config: Config) {
     this.config = config;
+    this.processArgs = loadProcessArgs();
     this.clientConfig = clientConfigFromEnv();
     this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
   }
 
   private getLanguageService(): LanguageService {
     if (!this.languageService) {
-      this.languageService = new LanguageService(this.config);
+      this.languageService = new LanguageService(this.config, this.processArgs);
     }
     return this.languageService;
   }
 
-  private async getReplServer(): Promise<repl.REPLServer> {
-    if (!this.replServer) {
-      const replServer = this.newBaseReplServer();
-      await this.setupRepl(replServer);
-      this.replServer = replServer;
-    }
-    return this.replServer!;
-  }
-
-  private newBaseReplServer(): repl.REPLServer {
+  private newBaseReplServer(options?: {
+    input?: NodeJS.ReadableStream;
+    output?: NodeJS.WritableStream;
+    terminal?: boolean;
+  }): repl.REPLServer {
+    const output = options?.output ?? process.stdout;
+    const terminal = options?.terminal ?? Boolean((output as any).isTTY);
     return repl.start({
+      input: options?.input ?? process.stdin,
+      output,
+      terminal,
       useColors: pc.isColorSupported,
       useGlobal: true,
       preview: false,
@@ -137,7 +141,7 @@ export class Repl {
           );
         }
 
-        console.log(typeCheckResult.formattedErrors);
+        replMessageSink.writeText(typeCheckResult.formattedErrors);
 
         callback(null, undefined);
       }
@@ -181,6 +185,10 @@ export class Repl {
   }
 
   private setupReplContext(replServer: repl.REPLServer) {
+    if (this.processArgs.disableAutoImports) {
+      return;
+    }
+
     const context = replServer.context;
     for (let agentTypeName in this.config.agents) {
       const agentConfig = this.config.agents[agentTypeName];
@@ -202,12 +210,84 @@ export class Repl {
   }
 
   async run() {
-    await this.getReplServer();
+    const script = this.processArgs.script;
+    const replServer = script
+      ? this.newBaseReplServer({
+          input: new PassThrough(),
+          output: new PassThrough(),
+          terminal: false,
+        })
+      : this.newBaseReplServer();
+
+    await this.setupRepl(replServer);
+
+    if (script) {
+      await this.runScript(replServer, script);
+      replServer.close();
+    }
+  }
+
+  private async runScript(replServer: repl.REPLServer, script: string) {
+    const previousSink = replMessageSink;
+    replMessageSink = stderrMessageSink;
+
+    let evalResult: { error: Error | null; result: unknown };
+    try {
+      evalResult = await this.evalScript(replServer, script);
+    } finally {
+      replMessageSink = previousSink;
+    }
+
+    if (evalResult.error) {
+      process.stderr.write(formatEvalError(evalResult.error));
+      return;
+    }
+
+    const jsonResult = tryJsonStringify(evalResult.result);
+    if (jsonResult !== undefined) {
+      process.stdout.write(jsonResult);
+      return;
+    }
+
+    this.printReplResult(replServer, evalResult.result);
+  }
+
+  private async evalScript(
+    replServer: repl.REPLServer,
+    script: string,
+  ): Promise<{ error: Error | null; result: unknown }> {
+    return await new Promise((resolve) => {
+      replServer.eval(script, replServer.context, 'repl-script', (err, result) => {
+        resolve({ error: err as Error | null, result });
+      });
+    });
+  }
+
+  private printReplResult(replServer: repl.REPLServer, result: unknown) {
+    if (result === undefined && replServer.ignoreUndefined) return;
+    const rendered = replServer.writer(result);
+    process.stdout.write(rendered);
   }
 }
 
 const INFO_PREFIX = pc.bold(pc.red('>'));
 const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
+
+type ReplMessageSink = {
+  writeText: (text: string) => void;
+};
+
+let replMessageSink: ReplMessageSink = {
+  writeText: (text: string) => {
+    console.log(text);
+  },
+};
+
+const stderrMessageSink: ReplMessageSink = {
+  writeText: (text: string) => {
+    process.stderr.write(text + '\n');
+  },
+};
 
 function logSnippetInfo(message: string) {
   if (!message) return;
@@ -215,11 +295,13 @@ function logSnippetInfo(message: string) {
   let maxLineLength = 0;
   message.split('\n').forEach((line) => {
     maxLineLength = Math.max(maxLineLength, util.stripVTControlCharacters(line).length);
-    console.log(INFO_PREFIX, line);
+    replMessageSink.writeText(`${INFO_PREFIX} ${line}`);
   });
 
   if (maxLineLength > 0) {
-    console.log(pc.dim('~'.repeat(Math.min(maxLineLength + INFO_PREFIX_LENGTH, terminalWidth))));
+    replMessageSink.writeText(
+      pc.dim('~'.repeat(Math.min(maxLineLength + INFO_PREFIX_LENGTH, terminalWidth))),
+    );
   }
 }
 
@@ -274,4 +356,20 @@ if (process.stdout.isTTY) {
   process.stdout.on('resize', () => {
     terminalWidth = process.stdout.columns;
   });
+}
+
+function formatEvalError(error: unknown) {
+  if (error instanceof Error) {
+    return error.stack ?? error.message;
+  }
+  return String(error);
+}
+
+function tryJsonStringify(value: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? undefined : json;
+  } catch {
+    return undefined;
+  }
 }

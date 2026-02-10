@@ -24,7 +24,7 @@ use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata};
+use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
 use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
 use anyhow::{anyhow, bail};
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -57,12 +57,15 @@ impl ReplHandler {
         script: Option<String>,
         script_file: Option<PathBuf>,
         stream_logs: bool,
+        disable_auto_imports: bool,
     ) -> anyhow::Result<()> {
-        let script_input = {
+        let script = {
             if let Some(script) = script {
-                Some(script)
+                Some(ReplScriptSource::Inline(script))
             } else if let Some(script_path) = script_file {
-                Some(fs::read_to_string(script_path)?)
+                Some(ReplScriptSource::FromFile(fs::canonicalize_path(
+                    &script_path,
+                )?))
             } else {
                 None
             }
@@ -73,7 +76,7 @@ impl ReplHandler {
                 component_name,
                 component_revision,
                 post_deploy_args,
-                script_input,
+                script,
                 stream_logs,
             )
             .await
@@ -88,8 +91,9 @@ impl ReplHandler {
 
             self.bridge_repl(
                 language.and_then(|l| l.to_guest_language()),
-                script_input,
+                script,
                 stream_logs,
+                disable_auto_imports,
             )
             .await
         }
@@ -98,8 +102,9 @@ impl ReplHandler {
     async fn bridge_repl(
         &self,
         language: Option<GuestLanguage>,
-        script: Option<String>,
+        script: Option<ReplScriptSource>,
         stream_logs: bool,
+        disable_auto_imports: bool,
     ) -> anyhow::Result<()> {
         let language = match language {
             Some(language) => language,
@@ -171,6 +176,7 @@ impl ReplHandler {
                 environment,
                 script,
                 stream_logs,
+                disable_auto_imports,
                 app_main_dir,
                 repl_root_dir,
                 repl_root_bridge_sdk_dir,
@@ -201,7 +207,7 @@ impl ReplHandler {
         component_name: Option<ComponentName>,
         component_revision: Option<ComponentRevision>,
         post_deploy_args: Option<&PostDeployArgs>,
-        script: Option<String>,
+        script: Option<ReplScriptSource>,
         stream_logs: bool,
     ) -> anyhow::Result<()> {
         let selected_components = self
