@@ -330,12 +330,7 @@ export class LanguageService {
         replaceEnd: replaceRange.replaceEnd,
       };
     }
-    const paramType = getSignatureParameterType(
-      signature,
-      argIndex,
-      checker,
-      expressionNode,
-    );
+    const paramType = getSignatureParameterType(signature, argIndex, checker, expressionNode);
     if (!paramType) return;
 
     const placeholders = getArgumentTypePlaceholders(paramType, checker, argNode);
@@ -550,7 +545,12 @@ function getCallTargetExpression(node: tsm.Node, pos: number): tsm.Expression | 
 }
 
 function findOpenParenForCall(text: string, pos: number): number | undefined {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    false,
+    ts.LanguageVariant.Standard,
+    text,
+  );
   const stack: number[] = [];
 
   for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
@@ -571,7 +571,12 @@ function getFallbackArgumentInfo(
   openParenPos: number,
   pos: number,
 ): { argIndex: number; replaceStartAbs: number } | undefined {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    false,
+    ts.LanguageVariant.Standard,
+    text,
+  );
 
   let parenDepth = 0;
   let bracketDepth = 0;
@@ -707,9 +712,9 @@ function getSignatureParameterType(
         return tupleElements[restIndex] ?? tupleElements[tupleElements.length - 1] ?? resolvedType;
       }
 
-      const arrayElement =
-        resolvedType?.getArrayElementType() ?? resolvedType?.getNumberIndexType() ?? resolvedType;
-      return arrayElement;
+      return (
+        resolvedType?.getArrayElementType() ?? resolvedType?.getNumberIndexType() ?? resolvedType
+      );
     }
   }
 
