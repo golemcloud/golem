@@ -29,6 +29,7 @@ use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
+use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
@@ -60,6 +61,46 @@ pub struct GolemCliCommand {
 
     #[clap(subcommand)]
     pub subcommand: GolemCliSubcommand,
+}
+
+impl GolemCliCommand {
+    pub fn collect_metadata() -> CliCommandMetadata {
+        CliCommandMetadata::new(&Self::command())
+    }
+
+    pub fn collect_metadata_for_repl() -> CliCommandMetadata {
+        CliCommandMetadata::new_filtered(
+            &GolemCliCommand::command(),
+            &CliMetadataFilter {
+                command_path_prefix_exclude: vec![
+                    vec!["api"], // TODO: recheck after code-first routes is implemented
+                    vec!["clean"],
+                    vec!["cloud"],
+                    vec!["completion"],
+                    vec!["generate-bridge"],
+                    vec!["new"],
+                    vec!["plugin"],
+                    vec!["profile"],
+                    vec!["repl"],
+                    vec!["server"],
+                ],
+                arg_id_exclude: vec![
+                    "app_manifest_path",
+                    "cloud",
+                    "config_dir",
+                    "dev_mode",
+                    "disable_app_manifest_discovery",
+                    "environment",
+                    "local",
+                    "preset",
+                    "profile",
+                    "show_sensitive",
+                    "template_group",
+                ],
+                exclude_hidden: true,
+            },
+        )
+    }
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,

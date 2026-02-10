@@ -11,11 +11,9 @@ use crate::fs;
 use crate::log::log_error;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent};
 use crate::model::app::{BridgeSdkTarget, CustomBridgeSdkTarget};
-use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use anyhow::bail;
 use camino::Utf8PathBuf;
-use clap::CommandFactory;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
@@ -51,7 +49,7 @@ pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
             // TODO: from golden file, with "auto-exported static asset" support
             fs::write_str(
                 ctx.application().repl_cli_commands_metadata_json(language),
-                &serde_json::to_string(&collect_cli_metadata_for_repl())?,
+                &serde_json::to_string(&GolemCliCommand::collect_metadata_for_repl())?,
             )?;
         }
 
@@ -263,38 +261,4 @@ async fn gen_bridge_sdk_target(
             },
         )
         .await
-}
-
-fn collect_cli_metadata_for_repl() -> CliCommandMetadata {
-    CliCommandMetadata::new_filtered(
-        &GolemCliCommand::command(),
-        &CliMetadataFilter {
-            command_path_prefix_exclude: vec![
-                vec!["api"], // TODO: recheck after code-first routes is implemented
-                vec!["clean"],
-                vec!["cloud"],
-                vec!["completion"],
-                vec!["generate-bridge"],
-                vec!["new"],
-                vec!["plugin"],
-                vec!["profile"],
-                vec!["repl"],
-                vec!["server"],
-            ],
-            arg_id_exclude: vec![
-                "app_manifest_path",
-                "cloud",
-                "config_dir",
-                "dev_mode",
-                "disable_app_manifest_discovery",
-                "environment",
-                "local",
-                "preset",
-                "profile",
-                "show_sensitive",
-                "template_group",
-            ],
-            exclude_hidden: true,
-        },
-    )
 }
