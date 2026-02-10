@@ -239,7 +239,7 @@ export class Repl {
     try {
       const preparedScript = prepareScriptForEval(script);
       const filename = this.processArgs.scriptPath ?? 'repl-script';
-      const evalFn = preparedScript.transpiled ? tsxEval : replServer.eval;
+      const evalFn = preparedScript.transformed ? tsxEval : replServer.eval;
       evalResult = await new Promise((resolve) => {
         evalFn.call(
           replServer,
@@ -380,22 +380,7 @@ function tryJsonStringify(value: unknown): string | undefined {
   }
 }
 
-function prepareScriptForEval(script: string): { script: string; transpiled: boolean } {
-  if (!hasModuleSyntax(script)) {
-    return { script, transpiled: false };
-  }
-
-  const output = ts.transpileModule(script, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-    },
-  });
-
-  return { script: output.outputText, transpiled: true };
-}
-
-function hasModuleSyntax(script: string): boolean {
+function prepareScriptForEval(script: string): { script: string; transformed: boolean } {
   const sourceFile = ts.createSourceFile(
     'repl-script.ts',
     script,
@@ -404,20 +389,103 @@ function hasModuleSyntax(script: string): boolean {
     ts.ScriptKind.TS,
   );
 
-  let hasModule = false;
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isImportDeclaration(node) ||
-      ts.isExportDeclaration(node) ||
-      ts.isExportAssignment(node) ||
-      ts.isImportEqualsDeclaration(node)
-    ) {
-      hasModule = true;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
+  let transformed = false;
+  const statements: ts.Statement[] = [];
 
-  ts.forEachChild(sourceFile, visit);
-  return hasModule;
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) {
+      statements.push(statement);
+      continue;
+    }
+
+    const importClause = statement.importClause;
+    transformed = true;
+    if (importClause?.isTypeOnly) {
+      continue;
+    }
+    const importCall = ts.factory.createCallExpression(
+      ts.factory.createToken(ts.SyntaxKind.ImportKeyword) as ts.Expression,
+      undefined,
+      [statement.moduleSpecifier],
+    );
+    const awaitedImport = ts.factory.createAwaitExpression(importCall);
+
+    if (!importClause) {
+      statements.push(ts.factory.createExpressionStatement(awaitedImport));
+      continue;
+    }
+
+    if (importClause.namedBindings && ts.isNamespaceImport(importClause.namedBindings)) {
+      const namespaceDecl = ts.factory.createVariableDeclaration(
+        importClause.namedBindings.name,
+        undefined,
+        undefined,
+        awaitedImport,
+      );
+      statements.push(
+        ts.factory.createVariableStatement(
+          undefined,
+          ts.factory.createVariableDeclarationList([namespaceDecl], ts.NodeFlags.Const),
+        ),
+      );
+      continue;
+    }
+
+    const bindings: ts.BindingElement[] = [];
+    if (importClause.name) {
+      bindings.push(
+        ts.factory.createBindingElement(
+          undefined,
+          ts.factory.createIdentifier('default'),
+          importClause.name,
+          undefined,
+        ),
+      );
+    }
+
+    if (importClause.namedBindings && ts.isNamedImports(importClause.namedBindings)) {
+      for (const element of importClause.namedBindings.elements) {
+        if (element.isTypeOnly) {
+          continue;
+        }
+        bindings.push(
+          ts.factory.createBindingElement(
+            undefined,
+            element.propertyName ?? element.name,
+            element.name,
+            undefined,
+          ),
+        );
+      }
+    }
+
+    if (bindings.length === 0) {
+      statements.push(ts.factory.createExpressionStatement(awaitedImport));
+      continue;
+    }
+
+    const objectBinding = ts.factory.createObjectBindingPattern(bindings);
+    const importDecl = ts.factory.createVariableDeclaration(
+      objectBinding,
+      undefined,
+      undefined,
+      awaitedImport,
+    );
+    statements.push(
+      ts.factory.createVariableStatement(
+        undefined,
+        ts.factory.createVariableDeclarationList([importDecl], ts.NodeFlags.Const),
+      ),
+    );
+  }
+
+  if (!transformed) {
+    return { script, transformed: false };
+  }
+
+  const updated = ts.factory.updateSourceFile(sourceFile, statements);
+  const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+  const transformedScript = printer.printFile(updated);
+
+  return { script: transformedScript, transformed: true };
 }
