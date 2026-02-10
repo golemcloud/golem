@@ -23,6 +23,7 @@ use crate::fs;
 use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
+use crate::model::deploy::DeployConfig;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
 use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
@@ -85,15 +86,12 @@ impl ReplHandler {
                 bail!("Component name and revision is only supported for Rib REPL.");
             }
 
-            if post_deploy_args.is_some() {
-                bail!("Deploy arguments are only supported for Rib REPL.");
-            }
-
             self.bridge_repl(
                 language.and_then(|l| l.to_guest_language()),
                 script,
                 stream_logs,
                 disable_auto_imports,
+                post_deploy_args,
             )
             .await
         }
@@ -105,6 +103,7 @@ impl ReplHandler {
         script: Option<ReplScriptSource>,
         stream_logs: bool,
         disable_auto_imports: bool,
+        post_deploy_args: Option<&PostDeployArgs>,
     ) -> anyhow::Result<()> {
         let language = match language {
             Some(language) => language,
@@ -186,15 +185,32 @@ impl ReplHandler {
             }
         };
 
-        self.ctx
-            .app_handler()
-            .build(
-                &BuildConfig::new()
-                    .with_repl_bridge_sdk_target(args.repl_bridge_sdk_target.clone()),
-                vec![],
-                &ApplicationComponentSelectMode::All,
-            )
-            .await?;
+        match post_deploy_args {
+            Some(post_deploy_args) => {
+                self.ctx
+                    .app_handler()
+                    .deploy(DeployConfig {
+                        plan: false,
+                        stage: false,
+                        approve_staging_steps: false,
+                        force_build: None,
+                        post_deploy_args: post_deploy_args.clone(),
+                        repl_bridge_sdk_target: Some(language),
+                    })
+                    .await?;
+            }
+            None => {
+                self.ctx
+                    .app_handler()
+                    .build(
+                        &BuildConfig::new()
+                            .with_repl_bridge_sdk_target(args.repl_bridge_sdk_target.clone()),
+                        vec![],
+                        &ApplicationComponentSelectMode::All,
+                    )
+                    .await?;
+            }
+        }
 
         match language {
             GuestLanguage::Rust => RustRepl::new(self.ctx.clone()).run(args).await,

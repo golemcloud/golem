@@ -19,6 +19,18 @@ impl Display for NonSuccessfulExit {
 
 impl Error for NonSuccessfulExit {}
 
+#[derive(Debug)]
+pub struct PipedExitCode(pub u8);
+
+impl Display for PipedExitCode {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> std::fmt::Result {
+        //NOP
+        Ok(())
+    }
+}
+
+impl Error for PipedExitCode {}
+
 #[derive(Clone, Copy, Debug, Display, EnumIter)]
 pub enum ShowClapHelpTarget {
     AppNew,

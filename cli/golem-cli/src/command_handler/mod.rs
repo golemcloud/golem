@@ -38,7 +38,7 @@ use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::repl::ReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
-use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
+use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{log_anyhow_error, logln, set_log_output, Output};
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
@@ -235,7 +235,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
         result.unwrap_or_else(|error| {
             log_anyhow_error(&error);
-            ExitCode::FAILURE
+            if let Some(piped) = error.downcast_ref::<PipedExitCode>() {
+                ExitCode::from(piped.0)
+            } else {
+                ExitCode::FAILURE
+            }
         })
     }
 

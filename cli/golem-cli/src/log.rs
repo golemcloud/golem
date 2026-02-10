@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::error::AppValidationError;
-use crate::error::NonSuccessfulExit;
+use crate::error::{NonSuccessfulExit, PipedExitCode};
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -177,7 +177,7 @@ pub fn set_log_output(output: Output) {
 }
 
 pub fn log_anyhow_error(error: &anyhow::Error) {
-    if error.downcast_ref::<NonSuccessfulExit>().is_some() {
+    if error.is::<NonSuccessfulExit>() || error.is::<PipedExitCode>() {
         // NOP
     } else if error
         .downcast_ref::<Arc<anyhow::Error>>()

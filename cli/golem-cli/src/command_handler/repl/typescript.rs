@@ -19,7 +19,7 @@ use crate::bridge_gen::bridge_client_directory_name;
 use crate::command_handler::repl::load_repl_metadata;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::log::{log_action, log_skipping_up_to_date, logln, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, logln, set_log_output, LogIndent, Output};
 use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::process::{CommandExt, ExitStatusExt};
@@ -83,7 +83,8 @@ impl TypeScriptRepl {
                 .await?;
 
             if args.script.is_some() {
-                return result.check_exit_status();
+                set_log_output(Output::TracingDebug);
+                return result.pipe_exit_status();
             }
 
             if result.code() != Some(75) {
