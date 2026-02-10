@@ -1,25 +1,21 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatRelativeTime } from "@/lib/utils";
 import { API } from "@/service";
-import { WSS } from "@/service/wss";
-import {
-  Invocation,
-  OplogWithIndex,
-  Terminal,
-  Agent,
-  WsMessage,
-} from "@/types/agent.ts";
+import { Invocation, OplogWithIndex, Terminal, Agent } from "@/types/agent.ts";
+
+interface IndexedTerminal extends Terminal {
+  oplogIndex: number;
+}
 import { Activity, ActivityIcon, Clock, Cog, LayoutGrid } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { InvocationsChart } from "./widgets/invocationCharts";
 
 export default function AgentDetails() {
   const { componentId = "", agentName = "", appId } = useParams();
   const [agentDetails, setAgentDetails] = useState({} as Agent);
-  const wsRef = useRef<WSS | null>(null);
   const [invocationData, setInvocationData] = useState<Invocation[]>([]);
-  const [terminal, setTerminal] = useState<Terminal[]>([]);
+  const [terminal, setTerminal] = useState<IndexedTerminal[]>([]);
 
   useEffect(() => {
     if (componentId && agentName) {
@@ -32,64 +28,22 @@ export default function AgentDetails() {
   }, [componentId, agentName]);
 
   useEffect(() => {
-    async function fetchData() {
-      setInvocationData([]);
-      setTerminal([]);
-      await getOpLog();
-      const initWebSocket = async () => {
-        try {
-          const url = `/v1/components/${componentId}/agents/${agentName}/connect`;
-          const ws = await WSS.getConnection(url);
-          wsRef.current = ws;
-
-          ws.onMessage((data: unknown) => {
-            const message = data as WsMessage;
-            if (message["InvocationStart"]) {
-              setInvocationData(prev => [
-                ...prev,
-                {
-                  timestamp: message.InvocationStart.timestamp,
-                  function: message.InvocationStart.function,
-                },
-              ]);
-            } else if (message["StdOut"]) {
-              const bytes = message.StdOut.bytes || [];
-              setTerminal(prev => [
-                ...prev,
-                {
-                  timestamp: message.StdOut.timestamp,
-                  message: String.fromCharCode(...bytes),
-                },
-              ]);
-            }
-          });
-        } catch (error) {
-          console.error("Failed to connect WebSocket:", error);
-        }
-      };
-
-      initWebSocket();
-    }
-
-    fetchData();
-
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
+    setInvocationData([]);
+    setTerminal([]);
+    getOpLog();
   }, []);
 
   const getOpLog = async () => {
     API.agentService
       .getOplog(appId!, componentId, agentName, "")
       .then(response => {
-        const terminalData = [] as Terminal[];
-        const invocationList = [] as Invocation[];
+        const terminalData: IndexedTerminal[] = [];
+        const invocationList: Invocation[] = [];
         if (!Array.isArray(response)) {
           return;
         }
         (response as OplogWithIndex[]).forEach((_item: OplogWithIndex) => {
+          const oplogIndex = _item[0];
           const item = _item[1];
           if (item.type === "ExportedFunctionInvoked") {
             invocationList.push({
@@ -98,6 +52,7 @@ export default function AgentDetails() {
             });
           } else {
             terminalData.push({
+              oplogIndex,
               timestamp: item.timestamp,
               message: item.type,
             });
@@ -199,7 +154,7 @@ export default function AgentDetails() {
               {terminal.length > 0 ? (
                 <div className="bg-background border rounded-md p-4 font-mono text-sm space-y-2 min-h-[200px]">
                   {terminal.map(message => (
-                    <div key={message.timestamp} className="border-b">
+                    <div key={message.oplogIndex} className="border-b">
                       {message.message}
                     </div>
                   ))}

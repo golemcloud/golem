@@ -1,33 +1,27 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-// import {
-//   Select,
-//   SelectContent,
-//   SelectItem,
-//   SelectTrigger,
-// } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useDebounce } from "@/hooks/debounce"; // Import the "debounce" hook
+import { useDebounce } from "@/hooks/debounce";
 import { formatTimestampInDateTimeFormat } from "@/lib/utils";
 import { API } from "@/service";
-import { WSS } from "@/service/wss";
-import {
-  Invocation,
-  OplogWithIndex,
-  Terminal,
-  WsMessage,
-} from "@/types/agent.ts";
+import { Invocation, OplogWithIndex, Terminal } from "@/types/agent.ts";
+
+interface IndexedInvocation extends Invocation {
+  oplogIndex: number;
+}
+
+interface IndexedTerminal extends Terminal {
+  oplogIndex: number;
+}
 import { RotateCw, Search, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
 export default function AgentLive() {
   const { componentId = "", agentName = "", appId } = useParams();
-  const wsRef = useRef<WSS | null>(null);
-  const [invocationData, setInvocationData] = useState<Invocation[]>([]);
-  const [terminal, setTerminal] = useState<Terminal[]>([]);
+  const [invocationData, setInvocationData] = useState<IndexedInvocation[]>([]);
+  const [terminal, setTerminal] = useState<IndexedTerminal[]>([]);
   const [activeTab, setActiveTab] = useState("log");
-  // const [count, setCount] = useState("100");
   const [searchQuery, setSearchQuery] = useState("");
 
   // Debounced values to prevent rapid API calls
@@ -35,52 +29,9 @@ export default function AgentLive() {
   const debouncedActiveTab = useDebounce(activeTab, 300);
 
   useEffect(() => {
-    async function fetchData() {
-      setInvocationData([]);
-      setTerminal([]);
-      await getOpLog(debouncedSearchQuery);
-
-      const initWebSocket = async () => {
-        try {
-          const ws = await WSS.getConnection(
-            `/v1/components/${componentId}/agents/${agentName}/connect`,
-          );
-          wsRef.current = ws;
-
-          ws.onMessage((data: unknown) => {
-            const message = data as WsMessage;
-            if (message["InvocationStart"]) {
-              setInvocationData(prev => [
-                ...prev,
-                {
-                  timestamp: message.InvocationStart.timestamp,
-                  function: message.InvocationStart.function,
-                },
-              ]);
-            } else if (message["StdOut"]) {
-              const bytes = message.StdOut.bytes || [];
-              setTerminal(prev => [
-                ...prev,
-                {
-                  timestamp: message.StdOut.timestamp,
-                  message: String.fromCharCode(...bytes),
-                },
-              ]);
-            }
-          });
-        } catch (error) {
-          console.error("Failed to connect WebSocket:", error);
-        }
-      };
-
-      initWebSocket();
-    }
-
-    fetchData();
-
-    return () => {
-      wsRef.current?.close();
-    };
+    setInvocationData([]);
+    setTerminal([]);
+    getOpLog(debouncedSearchQuery);
   }, []);
 
   useEffect(() => {
@@ -97,20 +48,23 @@ export default function AgentLive() {
         } ${search}`,
       )
       .then(response => {
-        const terminalData = [] as Terminal[];
-        const invocationList = [] as Invocation[];
+        const terminalData: IndexedTerminal[] = [];
+        const invocationList: IndexedInvocation[] = [];
         if (!Array.isArray(response)) {
           return;
         }
         (response as OplogWithIndex[]).forEach((_item: OplogWithIndex) => {
+          const oplogIndex = _item[0];
           const item = _item[1];
           if (item.type === "ExportedFunctionInvoked") {
             invocationList.push({
+              oplogIndex,
               timestamp: item.timestamp,
               function: item.functionName,
             });
           } else {
             terminalData.push({
+              oplogIndex,
               timestamp: item.timestamp,
               message: item.type,
             });
@@ -202,7 +156,7 @@ export default function AgentLive() {
                 {terminal.length > 0 ? (
                   terminal.map(log => (
                     <div
-                      key={log.timestamp}
+                      key={log.oplogIndex}
                       className="group flex py-1 hover:bg-muted/50 border-b"
                     >
                       <span className="shrink-0 text-muted-foreground/70">
@@ -226,7 +180,7 @@ export default function AgentLive() {
                 {invocationData.length > 0 ? (
                   invocationData.map(log => (
                     <div
-                      key={log.timestamp}
+                      key={log.oplogIndex}
                       className="group flex py-1 hover:bg-muted/50 border-b"
                     >
                       <span className="shrink-0 text-muted-foreground/70">
