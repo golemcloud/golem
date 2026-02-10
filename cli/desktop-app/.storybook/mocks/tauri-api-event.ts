@@ -1,6 +1,6 @@
 export async function listen(
   event: string,
-  handler: (event: unknown) => void
+  handler: (event: unknown) => void,
 ): Promise<() => void> {
   void event;
   void handler;

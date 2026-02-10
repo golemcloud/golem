@@ -49,7 +49,9 @@ export const Destructive: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument();
   },
 };
 

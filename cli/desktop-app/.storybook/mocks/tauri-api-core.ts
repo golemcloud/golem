@@ -4,7 +4,7 @@ export async function invoke(): Promise<string> {
 
 export function transformCallback(
   callback?: (response: unknown) => void,
-  once?: boolean
+  once?: boolean,
 ): number {
   void callback;
   void once;
@@ -14,7 +14,7 @@ export function transformCallback(
 export async function addPluginListener(
   plugin: string,
   event: string,
-  cb: (payload: unknown) => void
+  cb: (payload: unknown) => void,
 ): Promise<{ unregister: () => void }> {
   void plugin;
   void event;

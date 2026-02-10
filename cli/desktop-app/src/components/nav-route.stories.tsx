@@ -7,7 +7,7 @@ const meta = {
   title: "Components/NavRoutes",
   component: NavRoutes,
   decorators: [
-    (Story) => (
+    Story => (
       <SidebarProvider>
         <div className="w-64">
           <Story />

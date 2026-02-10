@@ -316,7 +316,10 @@ export const RecursiveParameterInput: React.FC<
                 }
                 className="rounded border-border/20"
               />
-              <label htmlFor={`${currentPath}-optional`} className="text-sm text-muted-foreground">
+              <label
+                htmlFor={`${currentPath}-optional`}
+                className="text-sm text-muted-foreground"
+              >
                 Optional value
               </label>
             </div>

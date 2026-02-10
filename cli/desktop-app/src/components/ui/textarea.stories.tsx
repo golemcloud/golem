@@ -48,9 +48,7 @@ export const Disabled: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(
-      canvas.getByPlaceholderText("Disabled"),
-    ).toBeDisabled();
+    await expect(canvas.getByPlaceholderText("Disabled")).toBeDisabled();
   },
 };
 
@@ -60,7 +58,9 @@ export const WithDefaultValue: Story = {
       <Label htmlFor="rib-input">RIB Expression</Label>
       <Textarea
         id="rib-input"
-        defaultValue={"let result = golem:shopping/api.{add-item}(item);\nresult"}
+        defaultValue={
+          "let result = golem:shopping/api.{add-item}(item);\nresult"
+        }
       />
     </div>
   ),

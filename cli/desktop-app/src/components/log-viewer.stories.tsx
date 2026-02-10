@@ -65,17 +65,13 @@ export const ErrorLog: Story = {
   },
   play: async () => {
     // Dialog renders in a portal, use screen
-    const title = await screen.findByText(
-      "Failed to invoke function add-item",
-    );
+    const title = await screen.findByText("Failed to invoke function add-item");
     await expect(title).toBeInTheDocument();
 
     // Verify error status elements
     await expect(screen.getByText("Invoke")).toBeInTheDocument();
     await expect(
-      screen.getByText(
-        "Operation failed. Review the logs above for details.",
-      ),
+      screen.getByText("Operation failed. Review the logs above for details."),
     ).toBeInTheDocument();
   },
 };
@@ -112,7 +108,7 @@ export const LongLog: Story = {
             "Running validations",
             "Generating bindings",
           ][i % 5]
-        } (${Math.floor(Math.random() * 500)}ms)`
+        } (${Math.floor(Math.random() * 500)}ms)`,
     ).join("\n"),
   },
 };

@@ -15,7 +15,7 @@ const meta = {
   title: "Components/NavMain",
   component: NavMain,
   decorators: [
-    (Story) => (
+    Story => (
       <SidebarProvider>
         <div className="w-64">
           <Story />

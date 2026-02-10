@@ -148,7 +148,7 @@ export const PreviewMode: Story = {
         ],
       },
       null,
-      2
+      2,
     ),
     resultValue: "",
   },
@@ -188,12 +188,12 @@ export const WithResult: Story = {
     value: JSON.stringify(
       { params: [{ name: "payment-method", value: "credit-card" }] },
       null,
-      2
+      2,
     ),
     resultValue: JSON.stringify(
       { ok: { "order-id": "ORD-2024-00142", total: 1249.97 } },
       null,
-      2
+      2,
     ),
   },
 };

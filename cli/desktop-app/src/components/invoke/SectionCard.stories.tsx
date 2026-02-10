@@ -49,7 +49,7 @@ export const Editable: Story = {
         ],
       },
       null,
-      2
+      2,
     ),
     readOnly: false,
     functionDetails: sampleFunctionDetails,
@@ -79,7 +79,7 @@ export const ReadOnly: Story = {
     value: JSON.stringify(
       { ok: "Item added successfully: Laptop Pro 16 x1" },
       null,
-      2
+      2,
     ),
     readOnly: true,
     functionDetails: sampleFunctionDetails,
@@ -102,7 +102,7 @@ export const WithFunctionDetails: Story = {
         results: [{ type: "result<string, string>" }],
       },
       null,
-      2
+      2,
     ),
     readOnly: true,
     functionDetails: sampleFunctionDetails,

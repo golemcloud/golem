@@ -49,9 +49,7 @@ const nestedNodes: FileTreeNode[] = [
         id: "comp-auth",
         name: "auth-service",
         type: "folder",
-        children: [
-          { id: "comp-auth-yaml", name: "golem.yaml", type: "file" },
-        ],
+        children: [{ id: "comp-auth-yaml", name: "golem.yaml", type: "file" }],
       },
     ],
   },

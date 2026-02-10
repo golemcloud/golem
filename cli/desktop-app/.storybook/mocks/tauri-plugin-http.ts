@@ -1,6 +1,6 @@
 export async function fetch(
   _url: string,
-  _options?: RequestInit
+  _options?: RequestInit,
 ): Promise<Response> {
   return new Response(JSON.stringify({}), {
     status: 200,

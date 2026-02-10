@@ -58,11 +58,7 @@ export const ReadOnly: Story = {
   render: () => (
     <div className="grid w-full max-w-sm items-center gap-1.5">
       <Label htmlFor="readonly-input">CLI Path</Label>
-      <Input
-        id="readonly-input"
-        value="/usr/local/bin/golem-cli"
-        readOnly
-      />
+      <Input id="readonly-input" value="/usr/local/bin/golem-cli" readOnly />
     </div>
   ),
   play: async ({ canvasElement }) => {

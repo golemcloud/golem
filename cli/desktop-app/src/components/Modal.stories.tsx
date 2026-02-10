@@ -54,7 +54,12 @@ export const WithFormContent: Story = {
         <h2 className="text-lg font-bold mb-4">Edit Profile</h2>
         <form className="space-y-4">
           <div>
-            <label htmlFor="profile-name" className="block text-sm font-medium mb-1">Name</label>
+            <label
+              htmlFor="profile-name"
+              className="block text-sm font-medium mb-1"
+            >
+              Name
+            </label>
             <input
               id="profile-name"
               type="text"
@@ -63,7 +68,12 @@ export const WithFormContent: Story = {
             />
           </div>
           <div>
-            <label htmlFor="profile-url" className="block text-sm font-medium mb-1">URL</label>
+            <label
+              htmlFor="profile-url"
+              className="block text-sm font-medium mb-1"
+            >
+              URL
+            </label>
             <input
               id="profile-url"
               type="text"
@@ -72,7 +82,9 @@ export const WithFormContent: Story = {
             />
           </div>
           <div className="flex justify-end gap-2">
-            <button className="px-4 py-2 border border-border rounded bg-background text-foreground hover:bg-muted">Cancel</button>
+            <button className="px-4 py-2 border border-border rounded bg-background text-foreground hover:bg-muted">
+              Cancel
+            </button>
             <button className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90">
               Save
             </button>

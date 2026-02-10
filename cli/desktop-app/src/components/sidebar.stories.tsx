@@ -16,7 +16,7 @@ const meta = {
   title: "Components/SidebarMenu",
   component: SidebarMenu,
   decorators: [
-    (Story) => (
+    Story => (
       <SidebarProvider>
         <Story />
       </SidebarProvider>

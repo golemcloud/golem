@@ -154,7 +154,13 @@ export const ListOfRecords: Story = {
 const shapeTypeDef: Typ = {
   type: "variant",
   cases: [
-    { name: "circle", typ: { type: "record", fields: [{ name: "radius", typ: { type: "f64" } }] } },
+    {
+      name: "circle",
+      typ: {
+        type: "record",
+        fields: [{ name: "radius", typ: { type: "f64" } }],
+      },
+    },
     {
       name: "rectangle",
       typ: {
@@ -396,18 +402,14 @@ const orderTypeDef: Typ = {
                     name: "percentage",
                     typ: {
                       type: "record",
-                      fields: [
-                        { name: "percent", typ: { type: "f64" } },
-                      ],
+                      fields: [{ name: "percent", typ: { type: "f64" } }],
                     },
                   },
                   {
                     name: "fixed-amount",
                     typ: {
                       type: "record",
-                      fields: [
-                        { name: "amount", typ: { type: "f64" } },
-                      ],
+                      fields: [{ name: "amount", typ: { type: "f64" } }],
                     },
                   },
                 ],
