@@ -1,5 +1,4 @@
 import { BaseDirectory } from "@tauri-apps/api/path";
-import TauriWebSocket from "@tauri-apps/plugin-websocket";
 // import { invoke } from "@tauri-apps/api/core";
 import { listen, TauriEvent as TauriEventEnum } from "@tauri-apps/api/event";
 import type { Event } from "@tauri-apps/api/event";
@@ -56,67 +55,5 @@ export async function fetchData(
     return tauriFetch(url, options); // Use Tauri HTTP plugin
   } else {
     return fetch(url, options); // Use standard browser fetch
-  }
-}
-
-export class UniversalWebSocket {
-  private ws: WebSocket | TauriWebSocket;
-
-  constructor(ws: WebSocket | TauriWebSocket) {
-    this.ws = ws;
-  }
-
-  static async connect(url: string): Promise<UniversalWebSocket> {
-    if (isTauri) {
-      return new UniversalWebSocket(await TauriWebSocket.connect(url));
-    } else {
-      return new UniversalWebSocket(new WebSocket(url));
-    }
-  }
-
-  public send(data: never) {
-    const message = JSON.stringify(data);
-    if (isTauri) {
-      (this.ws as TauriWebSocket)
-        .send(message)
-        .then(() => {})
-        .catch(console.error);
-    } else {
-      (this.ws as WebSocket).send(message);
-    }
-  }
-
-  public close() {
-    if (isTauri) {
-      (this.ws as TauriWebSocket)
-        .disconnect()
-        .then(() => {})
-        .catch(console.error);
-    } else {
-      (this.ws as WebSocket).close();
-    }
-  }
-
-  public onMessage(callback: (data: unknown) => void) {
-    if (isTauri) {
-      (this.ws as TauriWebSocket).addListener(event => {
-        try {
-          const message = event.data;
-          if (typeof message === "string") {
-            callback(JSON.parse(message));
-          }
-        } catch (e) {
-          console.error("Failed to parse Tauri WebSocket message", e);
-        }
-      });
-    } else {
-      (this.ws as WebSocket).onmessage = event => {
-        try {
-          callback(JSON.parse(event.data));
-        } catch (e) {
-          console.error("Failed to parse WebSocket message", e);
-        }
-      };
-    }
   }
 }

@@ -61,11 +61,6 @@ export interface Terminal {
   bytes?: [];
 }
 
-export interface WsMessage {
-  InvocationStart: Invocation;
-  StdOut: Terminal;
-}
-
 interface BaseLogEntry {
   type: string;
   timestamp: string;
