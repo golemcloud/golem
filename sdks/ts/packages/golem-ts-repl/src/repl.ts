@@ -218,6 +218,44 @@ export class Repl {
         CliReplInterop.exitWithReloadCode();
       },
     });
+    replServer.defineCommand('agentInfo', {
+      help: 'Show auto-imported agent client info',
+      action: () => {
+        this.showAutoImportClientInfo(replServer, true);
+      },
+    });
+  }
+
+  private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
+    if (this.processArgs.disableAutoImports) return;
+
+    const agentNames = Object.keys(this.config.agents).sort((a, b) => a.localeCompare(b));
+    if (agentNames.length === 0) return;
+
+    const languageService = this.getLanguageService();
+    const lines: string[] = [];
+    lines.push('');
+    lines.push(pc.bold('Available agents:'));
+
+    for (const agentTypeName of agentNames) {
+      const methods = languageService.getClientMethodSignatures(agentTypeName);
+      if (!methods?.length) {
+        lines.push('');
+        continue;
+      }
+      lines.push(`  ${pc.bold(agentTypeName)}`);
+      for (const method of methods) {
+        lines.push(`    ${pc.green(method.name)}: ${method.signature}`);
+      }
+      lines.push('');
+    }
+
+    if (!manual) {
+      lines.push(pc.dim('To see this message again, use .agentInfo!'));
+      replServer.output.write('\n');
+    }
+    logSnippetInfo(lines);
+    replServer.displayPrompt();
   }
 
   async run() {
@@ -231,6 +269,10 @@ export class Repl {
       : this.newBaseReplServer();
 
     await this.setupRepl(replServer);
+
+    if (!script) {
+      this.showAutoImportClientInfo(replServer, false);
+    }
 
     if (script) {
       await this.runScript(replServer, script);
@@ -297,19 +339,18 @@ const stderrMessageSink: ReplMessageSink = {
   },
 };
 
-function logSnippetInfo(message: string) {
-  if (!message) return;
+function logSnippetInfo(message: string | string[]) {
+  let lines = Array.isArray(message) ? message : message.split('\n');
+  if (lines.length === 0) return;
 
   let maxLineLength = 0;
-  message.split('\n').forEach((line) => {
+  lines.forEach((line) => {
     maxLineLength = Math.max(maxLineLength, util.stripVTControlCharacters(line).length);
     replMessageSink.writeText(`${INFO_PREFIX} ${line}`);
   });
 
   if (maxLineLength > 0) {
-    replMessageSink.writeText(
-      pc.dim('~'.repeat(Math.min(maxLineLength + INFO_PREFIX_LENGTH, terminalWidth))),
-    );
+    replMessageSink.writeText(pc.dim('~'.repeat(terminalWidth)));
   }
 }
 

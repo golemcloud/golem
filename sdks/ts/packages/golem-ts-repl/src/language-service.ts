@@ -308,6 +308,41 @@ export class LanguageService {
     }
   }
 
+  getClientMethodSignatures(
+    agentTypeName: string,
+  ): Array<{ name: string; signature: string }> | undefined {
+    if (!isValidIdentifier(agentTypeName)) return;
+
+    const sourceText =
+      this.snippetImports + `const __client = ${agentTypeName}.get();\n` + 'void __client;\n';
+    const sourceFile = this.project.createSourceFile('__client_info__.ts', sourceText, {
+      overwrite: true,
+    });
+
+    const clientDecl = sourceFile.getVariableDeclaration('__client');
+    if (!clientDecl) return;
+
+    const clientType = clientDecl.getType();
+    const checker = this.project.getTypeChecker();
+
+    return clientType
+      .getProperties()
+      .map((symbol) => {
+        if (symbol.getName().startsWith('__')) return;
+        const propType = checker.getTypeOfSymbolAtLocation(symbol, clientDecl);
+        const signatures = propType.getCallSignatures();
+        if (signatures.length === 0) return;
+        const rawTypeText = checker.getTypeText(propType, clientDecl);
+        const typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
+        return {
+          name: symbol.getName(),
+          signature: formatTypeText(typeText),
+        };
+      })
+      .filter((entry): entry is { name: string; signature: string } => Boolean(entry))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   private getSnippetPlaceholderCompletions(
     snippet: tsm.SourceFile,
     pos: number,
