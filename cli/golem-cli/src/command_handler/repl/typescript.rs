@@ -141,7 +141,7 @@ impl TypeScriptRepl {
                         &relative_bridge_sdk_unix_path,
                         &tsconfig_json_path,
                     )?;
-                    self.generate_repl_ts(&args, &repl_metadata, &repl_ts_path)?;
+                    self.generate_repl_ts(args, &repl_metadata, &repl_ts_path)?;
 
                     Command::new("npm")
                         .arg("install")

@@ -119,7 +119,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::Rust).unwrap();
 
-    let outputs = ctx.cli([cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
