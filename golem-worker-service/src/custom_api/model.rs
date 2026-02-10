@@ -17,8 +17,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::BinarySource;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, SecuritySchemeDetails,
-    WebhookCallbackBehaviour,
+    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
+    SecuritySchemeDetails, WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
 use http::Method;
@@ -75,6 +75,7 @@ pub enum RichRouteBehaviour {
     CallAgent(CallAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
+    OpenApiSpec(OpenApiSpecBehaviour),
     OidcCallback(OidcCallbackBehaviour),
 }
 
@@ -84,6 +85,7 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
             RouteBehaviour::CallAgent(inner) => Self::CallAgent(inner),
             RouteBehaviour::CorsPreflight(inner) => Self::CorsPreflight(inner),
             RouteBehaviour::WebhookCallback(inner) => Self::WebhookCallback(inner),
+            RouteBehaviour::OpenApiSpec(inner) => Self::OpenApiSpec(inner),
         }
     }
 }

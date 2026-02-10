@@ -16,6 +16,7 @@ pub mod api_definition_lookup;
 pub mod call_agent;
 mod cors;
 pub mod error;
+mod openapi_handler;
 pub mod model;
 pub mod poem_endpoint;
 pub mod request_handler;

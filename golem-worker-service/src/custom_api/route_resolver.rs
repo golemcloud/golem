@@ -21,7 +21,7 @@ use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
-use golem_service_base::custom_api::{CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema};
+use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
@@ -72,6 +72,20 @@ impl RouteResolver {
             ),
             api_definition_lookup,
         }
+    }
+
+    pub async fn get_routes_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<Vec<CompiledRoute>, RouteResolverError> {
+        self.api_definition_lookup
+            .get(domain)
+            .await
+            .map(|compiled_routes| compiled_routes.routes)
+            .map_err(|e| match e {
+                ApiDefinitionLookupError::UnknownSite(_) => RouteResolverError::NoMatchingRoute,
+                _ => RouteResolverError::CouldNotBuildRouter,
+            })
     }
 
     pub async fn resolve_matching_route(

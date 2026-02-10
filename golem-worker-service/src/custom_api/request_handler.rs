@@ -16,6 +16,7 @@ use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
+use super::openapi_handler::OpenApiHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::security::handler::OidcHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
@@ -23,7 +24,8 @@ use crate::custom_api::{ParsedRequestBody, RichRequest};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_service_base::custom_api::{
-    AgentWebhookId, CorsPreflightBehaviour, RequestBodySchema, WebhookCallbackBehaviour,
+    AgentWebhookId, CorsPreflightBehaviour, OpenApiSpecBehaviour, RequestBodySchema,
+    WebhookCallbackBehaviour,
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -119,6 +121,39 @@ impl RequestHandler {
                 self.oidc_handler
                     .handle_oidc_callback_behaviour(request, security_scheme)
                     .await
+            }
+
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { agent_type }) => {
+                // Get all routes for this domain and generate OpenAPI spec
+                match self
+                    .route_resolver
+                    .get_routes_for_domain(&resolved_route.domain)
+                    .await
+                {
+                    Ok(routes) => {
+                        match OpenApiHandler::generate_spec(agent_type, &routes) {
+                            Ok(yaml) => {
+                                let response = Response::builder()
+                                    .content_type("application/yaml; charset=utf-8")
+                                    .body(yaml);
+                                Ok(RouteExecutionResult {
+                                    status: StatusCode::OK,
+                                    headers: HashMap::new(),
+                                    body: ResponseBody::PlainText(
+                                        response.finish().into_string().ok(),
+                                    ),
+                                })
+                            }
+                            Err(e) => Err(RequestHandlerError::InvalidRequest(format!(
+                                "Failed to generate OpenAPI spec: {}",
+                                e
+                            ))),
+                        }
+                    }
+                    Err(_) => Err(RequestHandlerError::InvalidRequest(
+                        "Failed to fetch routes for OpenAPI spec generation".to_string(),
+                    )),
+                }
             }
 
             RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour { component_id }) => {

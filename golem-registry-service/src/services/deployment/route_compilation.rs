@@ -26,8 +26,8 @@ use golem_common::model::agent::{
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OriginPattern,
-    PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
+    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
+    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -276,6 +276,46 @@ pub fn add_webhook_callback_routes(
         };
 
         compiled_routes.insert((compiled.method.clone(), compiled.path.clone()), compiled);
+    }
+}
+
+pub fn add_openapi_spec_routes(
+    deployment: &HttpApiDeployment,
+    registered_agent_types: &std::collections::HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
+    current_route_id: &mut i32,
+    compiled_routes: &mut HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
+) {
+    for agent_type_name in deployment.agents.keys() {
+        if let Some(agent_type_record) = registered_agent_types.get(agent_type_name) {
+            // Create synthetic route: /agents/{agent_type}/.well-known/openapi.yaml
+            let route_id = *current_route_id;
+            *current_route_id = current_route_id.checked_add(1).unwrap();
+
+            // Path: /agents/{agent_type_name}/.well-known/openapi.yaml
+            let path = vec![
+                PathSegment::Literal { value: "agents".to_string() },
+                PathSegment::Literal { value: agent_type_name.0.clone() },
+                PathSegment::Literal { value: ".well-known".to_string() },
+                PathSegment::Literal { value: "openapi.yaml".to_string() },
+            ];
+
+            let compiled = UnboundCompiledRoute {
+                route_id,
+                domain: deployment.domain.clone(),
+                method: HttpMethod::Get(Empty {}),
+                path: path.clone(),
+                body: RequestBodySchema::Unused,
+                behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                    agent_type: agent_type_name.clone(),
+                }),
+                security_scheme: None,
+                cors: CorsOptions {
+                    allowed_patterns: Vec::new(),
+                },
+            };
+
+            compiled_routes.insert((compiled.method.clone(), compiled.path.clone()), compiled);
+        }
     }
 }
 

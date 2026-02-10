@@ -245,6 +245,13 @@ pub enum RouteBehaviour {
     CallAgent(CallAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
+    OpenApiSpec(OpenApiSpecBehaviour),
+}
+
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct OpenApiSpecBehaviour {
+    pub agent_type: AgentTypeName,
 }
 
 #[derive(Debug, BinaryCodec)]

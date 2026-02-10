@@ -207,6 +207,11 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                         .try_into()?,
                 }))
             }
+            Kind::OpenApiSpec(openapi_spec) => {
+                Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                    agent_type: AgentTypeName(openapi_spec.agent_type),
+                }))
+            }
         }
     }
 }
@@ -260,6 +265,13 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 kind: Some(Kind::WebhookCallback(
                     proto::golem::customapi::route_behaviour::WebhookCallback {
                         component_id: Some(component_id.into()),
+                    },
+                )),
+            },
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { agent_type }) => Self {
+                kind: Some(Kind::OpenApiSpec(
+                    proto::golem::customapi::route_behaviour::OpenApiSpec {
+                        agent_type: agent_type.0,
                     },
                 )),
             },
