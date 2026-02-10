@@ -242,13 +242,23 @@ export class LanguageService {
       };
     } else {
       const node = snippet.getDescendantAtPos(this.snippetEndPos);
+      const placeholderResult = this.getSnippetPlaceholderCompletions(snippet, pos, rawStart);
       if (!node) {
-        return {
-          entries: completions.entries.map((entry) => entry.name),
-          memberCompletion: false,
-          replaceStart: 0,
-          replaceEnd: this.rawSnippet.length,
-        };
+        if (placeholderResult?.entries.length) {
+          return {
+            entries: placeholderResult.entries,
+            memberCompletion: false,
+            replaceStart: placeholderResult.replaceStart,
+            replaceEnd: placeholderResult.replaceEnd,
+          };
+        } else {
+          return {
+            entries: completions.entries.map((entry) => entry.name),
+            memberCompletion: false,
+            replaceStart: 0,
+            replaceEnd: this.rawSnippet.length,
+          };
+        }
       }
 
       const parent = node.getParent();
@@ -260,15 +270,91 @@ export class LanguageService {
       const nodeStart = node.getStart();
       const nodeEnd = node.getEnd();
 
+      const completionEntries = completions.entries
+        .filter((entry) => entry.name.startsWith(nodeText))
+        .map((entry) => entry.name);
+
+      if (placeholderResult?.entries.length) {
+        const merged = mergeCompletionEntries(placeholderResult.entries, completionEntries);
+        return {
+          entries: merged,
+          memberCompletion: false,
+          replaceStart: placeholderResult.replaceStart,
+          replaceEnd: placeholderResult.replaceEnd,
+        };
+      }
+
       return {
-        entries: completions.entries
-          .filter((entry) => entry.name.startsWith(nodeText))
-          .map((entry) => entry.name),
+        entries: completionEntries,
         memberCompletion,
         replaceStart: Math.max(0, nodeStart - rawStart),
         replaceEnd: Math.max(0, nodeEnd - rawStart),
       };
     }
+  }
+
+  private getSnippetPlaceholderCompletions(
+    snippet: tsm.SourceFile,
+    pos: number,
+    rawStart: number,
+  ): { entries: string[]; replaceStart: number; replaceEnd: number } | undefined {
+    if (pos < 0) return;
+
+    const callContext = getCallArgumentContext(snippet, pos);
+    const checker = this.project.getTypeChecker();
+    const fallbackContext = !callContext
+      ? getFallbackCallContext(snippet, pos, rawStart, checker)
+      : undefined;
+    if (!callContext && !fallbackContext) return;
+
+    const callExpression = callContext?.callExpression;
+    const argIndex = callContext ? callContext.argIndex : fallbackContext!.argIndex;
+    const argNode = callContext ? callContext.argNode : fallbackContext!.argNode;
+
+    const signature = callContext
+      ? getResolvedSignature(callContext.callExpression, checker)
+      : fallbackContext!.signature;
+    if (!signature) return;
+    if (signature.getParameters().length === 0) {
+      const snippetText = snippet.getText();
+      if (snippetText[pos + 1] === ')') return;
+      const replaceRange = callContext
+        ? getArgumentReplaceRange(callExpression!, argIndex, pos, rawStart)
+        : fallbackContext!.replaceRange;
+      return {
+        entries: [')'],
+        replaceStart: replaceRange.replaceStart,
+        replaceEnd: replaceRange.replaceEnd,
+      };
+    }
+    const paramType = getSignatureParameterType(
+      signature,
+      argIndex,
+      checker,
+      callContext ? callExpression! : fallbackContext!.expressionNode,
+    );
+    if (!paramType) return;
+
+    const placeholders = getArgumentTypePlaceholders(paramType, checker, argNode);
+    if (!placeholders.length) return;
+
+    let filtered = placeholders;
+    const prefix = getArgumentPrefixText(snippet, argNode, pos);
+    if (prefix) {
+      filtered = placeholders.filter((entry) => entry.startsWith(prefix));
+    }
+
+    if (!filtered.length) return;
+
+    const { replaceStart, replaceEnd } = callContext
+      ? getArgumentReplaceRange(callExpression!, argIndex, pos, rawStart)
+      : fallbackContext!.replaceRange;
+
+    return {
+      entries: filtered.slice(0, MAX_PLACEHOLDER_ENTRIES),
+      replaceStart,
+      replaceEnd,
+    };
   }
 }
 
@@ -292,6 +378,620 @@ function matchTriggerCharacter(
     return ch as ts.CompletionsTriggerCharacter;
   }
   return undefined;
+}
+
+type CallArgumentContext = {
+  callExpression: tsm.CallExpression | tsm.NewExpression;
+  argIndex: number;
+  argNode: tsm.Expression | undefined;
+};
+
+type FallbackCallContext = {
+  expressionNode: tsm.Expression;
+  signature: tsm.Signature;
+  argIndex: number;
+  argNode: tsm.Expression | undefined;
+  replaceRange: { replaceStart: number; replaceEnd: number };
+};
+
+function getCallArgumentContext(
+  snippet: tsm.SourceFile,
+  pos: number,
+): CallArgumentContext | undefined {
+  const candidates = [
+    Math.min(pos, snippet.getEnd()),
+    Math.min(pos + 1, snippet.getEnd()),
+    Math.max(0, pos - 1),
+  ];
+
+  let callExpression: tsm.CallExpression | tsm.NewExpression | undefined;
+  for (const candidate of candidates) {
+    const node = snippet.getDescendantAtPos(candidate);
+    if (!node) continue;
+
+    callExpression =
+      node.getFirstAncestorByKind(tsm.SyntaxKind.CallExpression) ??
+      node.getFirstAncestorByKind(tsm.SyntaxKind.NewExpression);
+
+    if (callExpression) break;
+  }
+
+  if (!callExpression) {
+    const allCalls = [
+      ...snippet.getDescendantsOfKind(tsm.SyntaxKind.CallExpression),
+      ...snippet.getDescendantsOfKind(tsm.SyntaxKind.NewExpression),
+    ];
+
+    callExpression = allCalls
+      .filter((expr) => {
+        const openParen = expr.getFirstChildByKind(tsm.SyntaxKind.OpenParenToken);
+        if (!openParen) return false;
+        const closeParen = expr.getFirstChildByKind(tsm.SyntaxKind.CloseParenToken);
+        const closePos = closeParen ? closeParen.getStart() : snippet.getEnd();
+        return pos >= openParen.getStart() && pos <= closePos;
+      })
+      .sort((a, b) => b.getStart() - a.getStart())[0];
+  }
+
+  if (!callExpression) return;
+
+  const openParen = callExpression.getFirstChildByKind(tsm.SyntaxKind.OpenParenToken);
+  const closeParen = callExpression.getFirstChildByKind(tsm.SyntaxKind.CloseParenToken);
+  if (!openParen) return;
+
+  const closePos = closeParen ? closeParen.getStart() : snippet.getEnd();
+  if (pos < openParen.getStart() || pos > closePos) return;
+
+  const args = callExpression.getArguments();
+  let argIndex = args.length;
+  for (let i = 0; i < args.length; i++) {
+    if (pos <= args[i].getEnd()) {
+      argIndex = i;
+      break;
+    }
+  }
+
+  const argNode = argIndex < args.length ? (args[argIndex] as tsm.Expression) : undefined;
+
+  return {
+    callExpression,
+    argIndex,
+    argNode,
+  };
+}
+
+function getFallbackCallContext(
+  snippet: tsm.SourceFile,
+  pos: number,
+  rawStart: number,
+  checker: tsm.TypeChecker,
+): FallbackCallContext | undefined {
+  const snippetText = snippet.getText();
+  if (snippetText[pos] !== '(') return;
+
+  const nodeBefore = snippet.getDescendantAtPos(Math.max(0, pos - 1));
+  if (!nodeBefore) return;
+
+  const expressionNode = getCallTargetExpression(nodeBefore, pos);
+  if (!expressionNode) return;
+
+  const signature = getSignatureFromType(expressionNode.getType(), false);
+  if (!signature) return;
+
+  const replaceStart = Math.max(0, pos + 1 - rawStart);
+  const replaceEnd = replaceStart;
+
+  return {
+    expressionNode,
+    signature,
+    argIndex: 0,
+    argNode: undefined,
+    replaceRange: { replaceStart, replaceEnd },
+  };
+}
+
+function getCallTargetExpression(node: tsm.Node, pos: number): tsm.Expression | undefined {
+  let current: tsm.Node | undefined = node;
+  while (current) {
+    if (
+      tsm.Node.isPropertyAccessExpression(current) ||
+      tsm.Node.isElementAccessExpression(current)
+    ) {
+      if (current.getEnd() >= pos) {
+        return current as tsm.Expression;
+      }
+    }
+    if (
+      tsm.Node.isIdentifier(current) ||
+      tsm.Node.isThisExpression(current) ||
+      tsm.Node.isSuperExpression(current)
+    ) {
+      return current as tsm.Expression;
+    }
+    current = current.getParent();
+  }
+  return undefined;
+}
+
+function getResolvedSignature(
+  callExpression: tsm.CallExpression | tsm.NewExpression,
+  checker: tsm.TypeChecker,
+): tsm.Signature | undefined {
+  const directSignature = (callExpression as any).getSignature?.();
+  if (directSignature) return directSignature;
+
+  const isNew = callExpression.getKind() === tsm.SyntaxKind.NewExpression;
+  const expressionType = callExpression.getExpression().getType();
+  return getSignatureFromType(expressionType, isNew);
+}
+
+function findSignatureFromType(type: tsm.Type, isNew: boolean): tsm.Signature | undefined {
+  const signatures = isNew ? type.getConstructSignatures() : type.getCallSignatures();
+  if (signatures.length) return signatures[0];
+  return undefined;
+}
+
+function getSignatureFromType(type: tsm.Type, isNew: boolean): tsm.Signature | undefined {
+  const signature = findSignatureFromType(type, isNew);
+  if (signature) return signature;
+
+  const apparent = type.getApparentType();
+  const apparentSignature = findSignatureFromType(apparent, isNew);
+  if (apparentSignature) return apparentSignature;
+
+  if (type.isIntersection()) {
+    for (const intersectionType of type.getIntersectionTypes()) {
+      const intersectionSignature = findSignatureFromType(intersectionType, isNew);
+      if (intersectionSignature) return intersectionSignature;
+    }
+  }
+
+  if (apparent.isIntersection()) {
+    for (const intersectionType of apparent.getIntersectionTypes()) {
+      const intersectionSignature = findSignatureFromType(intersectionType, isNew);
+      if (intersectionSignature) return intersectionSignature;
+    }
+  }
+
+  if (type.isUnion()) {
+    for (const unionType of type.getUnionTypes()) {
+      const unionSignature = findSignatureFromType(unionType, isNew);
+      if (unionSignature) return unionSignature;
+    }
+  }
+
+  if (apparent.isUnion()) {
+    for (const unionType of apparent.getUnionTypes()) {
+      const unionSignature = findSignatureFromType(unionType, isNew);
+      if (unionSignature) return unionSignature;
+    }
+  }
+
+  return undefined;
+}
+
+function getSignatureParameterType(
+  signature: tsm.Signature,
+  argIndex: number,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+): tsm.Type | undefined {
+  const params = signature.getParameters();
+  if (!params.length) return;
+
+  let paramSymbol = params[Math.min(argIndex, params.length - 1)];
+  const contextualType = checker.getTypeOfSymbolAtLocation(paramSymbol, location);
+  const decl = paramSymbol.getDeclarations()[0];
+  const typeAtDecl = decl ? checker.getTypeAtLocation(decl) : undefined;
+  const resolvedType = contextualType ?? typeAtDecl;
+
+  if (paramSymbol === params[params.length - 1] && decl && tsm.Node.isParameterDeclaration(decl)) {
+    if (decl.isRestParameter()) {
+      if (resolvedType?.isTuple()) {
+        const tupleElements = resolvedType.getTupleElements();
+        if (tupleElements.length === 0) {
+          return undefined;
+        }
+        const restIndex = Math.max(0, argIndex - (params.length - 1));
+        return (
+          tupleElements[restIndex] ??
+          tupleElements[tupleElements.length - 1] ??
+          resolvedType
+        );
+      }
+
+      const arrayElement =
+        resolvedType?.getArrayElementType() ??
+        resolvedType?.getNumberIndexType() ??
+        resolvedType;
+      return arrayElement;
+    }
+  }
+
+  return resolvedType;
+}
+
+function getArgumentReplaceRange(
+  callExpression: tsm.CallExpression | tsm.NewExpression,
+  argIndex: number,
+  pos: number,
+  rawStart: number,
+): { replaceStart: number; replaceEnd: number } {
+  const args = callExpression.getArguments();
+  let replaceStartAbs = pos + 1;
+  let replaceEndAbs = pos + 1;
+
+  if (argIndex < args.length) {
+    replaceStartAbs = args[argIndex].getStart();
+    replaceEndAbs = args[argIndex].getEnd();
+  }
+
+  return {
+    replaceStart: Math.max(0, replaceStartAbs - rawStart),
+    replaceEnd: Math.max(0, replaceEndAbs - rawStart),
+  };
+}
+
+function getArgumentPrefixText(
+  snippet: tsm.SourceFile,
+  argNode: tsm.Expression | undefined,
+  pos: number,
+): string {
+  if (!argNode) return '';
+
+  const start = argNode.getStart();
+  if (pos < start) return '';
+
+  const end = Math.min(pos + 1, argNode.getEnd());
+  return snippet.getFullText().slice(start, end).trim();
+}
+
+type PlaceholderOptions = {
+  maxDepth: number;
+  maxProperties: number;
+  maxVariants: number;
+  maxTupleLength: number;
+};
+
+const PLACEHOLDER_OPTIONS: PlaceholderOptions = {
+  maxDepth: 3,
+  maxProperties: 5,
+  maxVariants: 8,
+  maxTupleLength: 6,
+};
+
+const MAX_PLACEHOLDER_ENTRIES = 12;
+
+function buildTypePlaceholders(type: tsm.Type, checker: tsm.TypeChecker): string[] {
+  const seen = new Set<tsm.Type>();
+  return buildTypePlaceholdersInner(type, checker, PLACEHOLDER_OPTIONS, seen, 0);
+}
+
+function getArgumentTypePlaceholders(
+  type: tsm.Type,
+  checker: tsm.TypeChecker,
+  argNode: tsm.Expression | undefined,
+): string[] {
+  const apparent = type.getApparentType();
+  if (!apparent.isUnion() || !argNode || !tsm.Node.isObjectLiteralExpression(argNode)) {
+    return buildTypePlaceholders(type, checker);
+  }
+
+  const tagged = getTaggedUnionInfo(apparent.getUnionTypes(), checker);
+  if (!tagged) {
+    return buildTypePlaceholders(type, checker);
+  }
+
+  const tagValue = getObjectLiteralTagValue(argNode, tagged.tagName);
+  if (!tagValue) {
+    return buildTypePlaceholders(type, checker);
+  }
+
+  const variant = tagged.variants.find((entry) => entry.tagValue === tagValue);
+  if (!variant) {
+    return buildTypePlaceholders(type, checker);
+  }
+
+  const seen = new Set<tsm.Type>();
+  return [
+    buildTaggedObjectPlaceholder(
+      variant.type,
+      tagged.tagName,
+      variant.tagValue,
+      checker,
+      PLACEHOLDER_OPTIONS,
+      seen,
+      0,
+    ),
+  ];
+}
+
+function buildTypePlaceholdersInner(
+  type: tsm.Type,
+  checker: tsm.TypeChecker,
+  options: PlaceholderOptions,
+  seen: Set<tsm.Type>,
+  depth: number,
+): string[] {
+  if (depth > options.maxDepth) return ['?'];
+  if (seen.has(type)) return ['?'];
+
+  seen.add(type);
+  const literalPlaceholder = getLiteralPlaceholder(type);
+  if (literalPlaceholder) {
+    seen.delete(type);
+    return [literalPlaceholder];
+  }
+
+  const primitivePlaceholder = getPrimitivePlaceholder(type);
+  if (primitivePlaceholder) {
+    seen.delete(type);
+    return [primitivePlaceholder];
+  }
+
+  const apparent = type.getApparentType();
+
+  if (apparent.isUnion()) {
+    const unionTypes = apparent.getUnionTypes();
+    const tagged = getTaggedUnionInfo(unionTypes, checker);
+    const entries = tagged
+      ? tagged.variants.map((variant) =>
+          buildTaggedObjectPlaceholder(
+            variant.type,
+            tagged.tagName,
+            variant.tagValue,
+            checker,
+            options,
+            seen,
+            depth + 1,
+          ),
+        )
+      : unionTypes.flatMap((unionType) =>
+          buildTypePlaceholdersInner(unionType, checker, options, seen, depth + 1),
+        );
+
+    const result = uniquePlaceholders(entries).slice(0, options.maxVariants);
+    seen.delete(type);
+    return result;
+  }
+
+  if (apparent.isIntersection()) {
+    const intersectionTypes = apparent.getIntersectionTypes();
+    if (intersectionTypes.length) {
+      const result = buildTypePlaceholdersInner(
+        intersectionTypes[0],
+        checker,
+        options,
+        seen,
+        depth + 1,
+      );
+      seen.delete(type);
+      return result;
+    }
+  }
+
+  const arrayElement =
+    apparent.getArrayElementType() ??
+    type.getArrayElementType() ??
+    apparent.getNumberIndexType() ??
+    type.getNumberIndexType();
+  if (arrayElement || apparent.isArray() || type.isArray()) {
+    const elementPlaceholder = arrayElement
+      ? buildTypePlaceholdersInner(arrayElement, checker, options, seen, depth + 1)[0] ?? '?'
+      : '?';
+    const result = [`[${elementPlaceholder}]`];
+    seen.delete(type);
+    return result;
+  }
+
+  if (apparent.isTuple() || type.isTuple()) {
+    const tupleElements = (apparent.isTuple() ? apparent : type)
+      .getTupleElements()
+      .slice(0, options.maxTupleLength);
+    const placeholders = tupleElements.map((elementType) => {
+      return buildTypePlaceholdersInner(elementType, checker, options, seen, depth + 1)[0] ?? '?';
+    });
+    const result = [`[${placeholders.join(', ')}]`];
+    seen.delete(type);
+    return result;
+  }
+
+  if (apparent.getCallSignatures().length) {
+    seen.delete(type);
+    return ['() => ?'];
+  }
+
+  if (isObjectType(apparent)) {
+    const result = [buildObjectPlaceholder(apparent, checker, options, seen, depth + 1)];
+    seen.delete(type);
+    return result;
+  }
+
+  seen.delete(type);
+  return ['?'];
+}
+
+function getLiteralPlaceholder(type: tsm.Type): string | undefined {
+  const flags = type.getFlags();
+  if (flags & tsm.TypeFlags.StringLiteral) return type.getText();
+  if (flags & tsm.TypeFlags.NumberLiteral) return type.getText();
+  if (flags & tsm.TypeFlags.BooleanLiteral) return type.getText();
+  if (flags & tsm.TypeFlags.BigIntLiteral) return type.getText();
+  return undefined;
+}
+
+function getPrimitivePlaceholder(type: tsm.Type): string | undefined {
+  const flags = type.getFlags();
+  if (flags & tsm.TypeFlags.String) return '"?"';
+  if (flags & tsm.TypeFlags.Number) return '0';
+  if (flags & tsm.TypeFlags.Boolean) return 'false';
+  if (flags & tsm.TypeFlags.BigInt) return '0n';
+  if (flags & tsm.TypeFlags.Null) return 'null';
+  if (flags & tsm.TypeFlags.Undefined) return 'undefined';
+  if (flags & tsm.TypeFlags.Any) return '?';
+  if (flags & tsm.TypeFlags.Unknown) return '?';
+  const symbolName = type.getSymbol()?.getName();
+  if (symbolName === 'String') return '"?"';
+  if (symbolName === 'Number') return '0';
+  if (symbolName === 'Boolean') return 'false';
+  if (symbolName === 'BigInt') return '0n';
+  return undefined;
+}
+
+function isObjectType(type: tsm.Type): boolean {
+  return (type.getFlags() & tsm.TypeFlags.Object) !== 0;
+}
+
+function buildObjectPlaceholder(
+  type: tsm.Type,
+  checker: tsm.TypeChecker,
+  options: PlaceholderOptions,
+  seen: Set<tsm.Type>,
+  depth: number,
+): string {
+  const props = type.getProperties();
+  if (!props.length) return '{}';
+
+  const required = props.filter((prop) => (prop.getFlags() & ts.SymbolFlags.Optional) === 0);
+  const optional = props.filter((prop) => (prop.getFlags() & ts.SymbolFlags.Optional) !== 0);
+  const ordered = [...required, ...optional].slice(0, options.maxProperties);
+
+  const entries = ordered.map((prop) => {
+    const name = prop.getName();
+    const key = isValidIdentifier(name) ? name : JSON.stringify(name);
+    const propType = getSymbolType(prop, checker);
+    const placeholder = propType
+      ? buildTypePlaceholdersInner(propType, checker, options, seen, depth)[0] ?? '?'
+      : '?';
+    return `${key}: ${placeholder}`;
+  });
+
+  return `{ ${entries.join(', ')} }`;
+}
+
+function buildTaggedObjectPlaceholder(
+  type: tsm.Type,
+  tagName: string,
+  tagValue: string,
+  checker: tsm.TypeChecker,
+  options: PlaceholderOptions,
+  seen: Set<tsm.Type>,
+  depth: number,
+): string {
+  const props = type.getProperties().filter((prop) => prop.getName() !== tagName);
+  const required = props.filter((prop) => (prop.getFlags() & ts.SymbolFlags.Optional) === 0);
+  const optional = props.filter((prop) => (prop.getFlags() & ts.SymbolFlags.Optional) !== 0);
+  const ordered = [...required, ...optional].slice(0, options.maxProperties);
+
+  const entries = ordered.map((prop) => {
+    const name = prop.getName();
+    const key = isValidIdentifier(name) ? name : JSON.stringify(name);
+    const propType = getSymbolType(prop, checker);
+    const placeholder = propType
+      ? buildTypePlaceholdersInner(propType, checker, options, seen, depth)[0] ?? '?'
+      : '?';
+    return `${key}: ${placeholder}`;
+  });
+
+  const tagKey = isValidIdentifier(tagName) ? tagName : JSON.stringify(tagName);
+  if (!entries.length) {
+    return `{ ${tagKey}: ${tagValue} }`;
+  }
+
+  return `{ ${tagKey}: ${tagValue}, ${entries.join(', ')} }`;
+}
+
+function getTaggedUnionInfo(
+  unionTypes: tsm.Type[],
+  checker: tsm.TypeChecker,
+): { tagName: string; variants: Array<{ type: tsm.Type; tagValue: string }> } | undefined {
+  if (!unionTypes.length) return;
+  if (!unionTypes.every((type) => isObjectType(type))) return;
+
+  const firstProps = unionTypes[0].getProperties();
+  for (const prop of firstProps) {
+    const name = prop.getName();
+    const variants: Array<{ type: tsm.Type; tagValue: string }> = [];
+
+    for (const variantType of unionTypes) {
+      const variantProp = variantType.getProperty(name);
+      if (!variantProp) {
+        variants.length = 0;
+        break;
+      }
+
+      const propType = getSymbolType(variantProp, checker);
+      const literalValue = propType ? getLiteralPlaceholder(propType) : undefined;
+      if (!literalValue) {
+        variants.length = 0;
+        break;
+      }
+
+      variants.push({ type: variantType, tagValue: literalValue });
+    }
+
+    if (variants.length === unionTypes.length) {
+      return { tagName: name, variants };
+    }
+  }
+
+  return undefined;
+}
+
+function getObjectLiteralTagValue(
+  node: tsm.ObjectLiteralExpression,
+  tagName: string,
+): string | undefined {
+  for (const property of node.getProperties()) {
+    if (!tsm.Node.isPropertyAssignment(property)) continue;
+    if (property.getName() !== tagName) continue;
+
+    const initializer = property.getInitializer();
+    if (!initializer) continue;
+
+    switch (initializer.getKind()) {
+      case tsm.SyntaxKind.StringLiteral:
+      case tsm.SyntaxKind.NumericLiteral:
+      case tsm.SyntaxKind.TrueKeyword:
+      case tsm.SyntaxKind.FalseKeyword:
+        return initializer.getText();
+      default:
+        return undefined;
+    }
+  }
+  return undefined;
+}
+
+function uniquePlaceholders(entries: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of entries) {
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    result.push(entry);
+  }
+  return result;
+}
+
+function mergeCompletionEntries(primary: string[], secondary: string[]): string[] {
+  return uniquePlaceholders([...primary, ...secondary]);
+}
+
+function isValidIdentifier(text: string): boolean {
+  if (!text.length) return false;
+  if (!ts.isIdentifierStart(text.charCodeAt(0), ts.ScriptTarget.Latest)) return false;
+  for (let i = 1; i < text.length; i++) {
+    if (!ts.isIdentifierPart(text.charCodeAt(i), ts.ScriptTarget.Latest)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function getSymbolType(symbol: tsm.Symbol, checker: tsm.TypeChecker): tsm.Type | undefined {
+  const decl = symbol.getDeclarations()[0] ?? symbol.getValueDeclaration();
+  if (!decl) return undefined;
+  return checker.getTypeAtLocation(decl);
 }
 
 function formatDisplayParts(parts: Array<{ text: string; kind: string }>): string {
