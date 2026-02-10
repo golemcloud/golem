@@ -71,10 +71,8 @@ impl CliCommandMetadata {
     ) -> CliCommandMetadata {
         let args = command
             .get_arguments()
-            .filter_map(|arg| {
-                (!filter.as_ref().map(|f| f.exclude_arg(arg)).unwrap_or(false))
-                    .then(|| Self::collect_arg_metadata(arg))
-            })
+            .filter(|&arg| !filter.as_ref().map(|f| f.exclude_arg(arg)).unwrap_or(false))
+            .map(Self::collect_arg_metadata)
             .collect::<Vec<_>>();
 
         let subcommands = command
