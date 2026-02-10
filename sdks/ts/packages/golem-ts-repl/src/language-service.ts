@@ -209,19 +209,33 @@ export class LanguageService {
     const rawEnd = rawStart + this.rawSnippet.length;
 
     if (triggerCharacter === '.') {
+      const memberLikeKinds = new Set<ts.ScriptElementKind>([
+        ts.ScriptElementKind.memberVariableElement,
+        ts.ScriptElementKind.memberFunctionElement,
+        ts.ScriptElementKind.memberGetAccessorElement,
+        ts.ScriptElementKind.memberSetAccessorElement,
+        ts.ScriptElementKind.memberAccessorVariableElement,
+        ts.ScriptElementKind.variableElement,
+        ts.ScriptElementKind.letElement,
+        ts.ScriptElementKind.constElement,
+        ts.ScriptElementKind.functionElement,
+        ts.ScriptElementKind.classElement,
+        ts.ScriptElementKind.interfaceElement,
+        ts.ScriptElementKind.typeElement,
+        ts.ScriptElementKind.enumElement,
+        ts.ScriptElementKind.enumMemberElement,
+        ts.ScriptElementKind.moduleElement,
+        ts.ScriptElementKind.alias,
+      ]);
+
+      const filteredEntries = completions.entries
+        .filter((entry) => memberLikeKinds.has(entry.kind))
+        .map((entry) => entry.name);
+
       return {
-        entries: completions.entries
-          .filter((entry) => {
-            const kind = entry.kind;
-            return (
-              kind === ts.ScriptElementKind.memberVariableElement ||
-              kind === ts.ScriptElementKind.memberFunctionElement ||
-              kind === ts.ScriptElementKind.memberGetAccessorElement ||
-              kind === ts.ScriptElementKind.memberSetAccessorElement ||
-              kind === ts.ScriptElementKind.memberAccessorVariableElement
-            );
-          })
-          .map((entry) => entry.name),
+        entries: filteredEntries.length
+          ? filteredEntries
+          : completions.entries.map((entry) => entry.name),
         memberCompletion: true,
         replaceStart: Math.max(0, pos + 1 - rawStart),
         replaceEnd: Math.max(0, rawEnd - rawStart),
