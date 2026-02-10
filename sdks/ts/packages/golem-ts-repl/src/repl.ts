@@ -29,6 +29,7 @@ import process from 'node:process';
 import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
+import { ts } from 'ts-morph';
 
 export class Repl {
   private readonly config: Config;
@@ -74,12 +75,13 @@ export class Repl {
     });
   }
 
-  private async setupRepl(replServer: repl.REPLServer) {
+  private async setupRepl(replServer: repl.REPLServer): Promise<repl.REPLEval> {
     await this.setupReplHistory(replServer);
-    this.setupReplEval(replServer);
+    const tsxEval = this.setupReplEval(replServer);
     this.setupReplCompleter(replServer);
     this.setupReplContext(replServer);
     this.setupReplCommands(replServer);
+    return tsxEval;
   }
 
   private async setupReplHistory(replServer: repl.REPLServer) {
@@ -94,7 +96,7 @@ export class Repl {
     });
   }
 
-  private setupReplEval(replServer: repl.REPLServer) {
+  private setupReplEval(replServer: repl.REPLServer): repl.REPLEval {
     const tsxEval = replServer.eval;
     const languageService = this.getLanguageService();
 
@@ -147,6 +149,8 @@ export class Repl {
       }
     };
     (replServer.eval as any) = customEval;
+
+    return tsxEval;
   }
 
   private setupReplCompleter(replServer: repl.REPLServer) {
@@ -219,21 +223,34 @@ export class Repl {
         })
       : this.newBaseReplServer();
 
-    await this.setupRepl(replServer);
+    const tsxEval = await this.setupRepl(replServer);
 
     if (script) {
-      await this.runScript(replServer, script);
+      await this.runScript(tsxEval, replServer, script);
       replServer.close();
     }
   }
 
-  private async runScript(replServer: repl.REPLServer, script: string) {
+  private async runScript(tsxEval: repl.REPLEval, replServer: repl.REPLServer, script: string) {
     const previousSink = replMessageSink;
     replMessageSink = stderrMessageSink;
 
     let evalResult: { error: Error | null; result: unknown };
     try {
-      evalResult = await this.evalScript(replServer, script);
+      const preparedScript = prepareScriptForEval(script);
+      const filename = this.processArgs.scriptPath ?? 'repl-script';
+      const evalFn = preparedScript.transpiled ? tsxEval : replServer.eval;
+      evalResult = await new Promise((resolve) => {
+        evalFn.call(
+          replServer,
+          preparedScript.script,
+          replServer.context,
+          filename,
+          (err, result) => {
+            resolve({ error: err as Error | null, result });
+          },
+        );
+      });
     } finally {
       replMessageSink = previousSink;
     }
@@ -250,17 +267,6 @@ export class Repl {
     }
 
     this.printReplResult(replServer, evalResult.result);
-  }
-
-  private async evalScript(
-    replServer: repl.REPLServer,
-    script: string,
-  ): Promise<{ error: Error | null; result: unknown }> {
-    return await new Promise((resolve) => {
-      replServer.eval(script, replServer.context, 'repl-script', (err, result) => {
-        resolve({ error: err as Error | null, result });
-      });
-    });
   }
 
   private printReplResult(replServer: repl.REPLServer, result: unknown) {
@@ -372,4 +378,46 @@ function tryJsonStringify(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function prepareScriptForEval(script: string): { script: string; transpiled: boolean } {
+  if (!hasModuleSyntax(script)) {
+    return { script, transpiled: false };
+  }
+
+  const output = ts.transpileModule(script, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+    },
+  });
+
+  return { script: output.outputText, transpiled: true };
+}
+
+function hasModuleSyntax(script: string): boolean {
+  const sourceFile = ts.createSourceFile(
+    'repl-script.ts',
+    script,
+    ts.ScriptTarget.ES2020,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  let hasModule = false;
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isImportDeclaration(node) ||
+      ts.isExportDeclaration(node) ||
+      ts.isExportAssignment(node) ||
+      ts.isImportEqualsDeclaration(node)
+    ) {
+      hasModule = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  ts.forEachChild(sourceFile, visit);
+  return hasModule;
 }
