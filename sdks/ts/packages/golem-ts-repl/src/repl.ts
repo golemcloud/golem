@@ -218,7 +218,7 @@ export class Repl {
     const replServer = script
       ? this.newBaseReplServer({
           input: new PassThrough(),
-          output: new PassThrough(),
+          output: process.stdout,
           terminal: false,
         })
       : this.newBaseReplServer();
@@ -421,7 +421,10 @@ function prepareScriptForEval(script: string): { script: string; transformed: bo
   return { script: updated, transformed: true };
 }
 
-function rewriteImportToDynamic(statement: ts.ImportDeclaration, sourceFile: ts.SourceFile): string {
+function rewriteImportToDynamic(
+  statement: ts.ImportDeclaration,
+  sourceFile: ts.SourceFile,
+): string {
   const importClause = statement.importClause;
   const moduleText = statement.moduleSpecifier.getText(sourceFile);
 
