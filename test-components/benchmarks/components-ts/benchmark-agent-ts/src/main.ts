@@ -1,11 +1,14 @@
 import {
     BaseAgent,
     agent,
+    endpoint
 } from '@golemcloud/golem-ts-sdk';
 
 import * as common from "common/lib";
 
-@agent()
+@agent({
+  mount: '/{name}',
+})
 class BenchmarkAgent extends BaseAgent {
     private readonly name: string;
 
@@ -14,14 +17,17 @@ class BenchmarkAgent extends BaseAgent {
         this.name = name;
     }
 
+    @endpoint({ post: "/echo/{message}" })
     echo(message: string): string {
         return common.echo(message);
     }
 
+    @endpoint({ post: "/large-input" })
     largeInput(input: Uint8Array): number {
         return common.largeInput(input);
     }
 
+    @endpoint({ post: "/cpu-intensive" })
     cpuIntensive(length: number): number {
         return common.cpuIntensive(length);
     }
