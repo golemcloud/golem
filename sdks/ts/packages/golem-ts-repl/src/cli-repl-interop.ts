@@ -14,7 +14,6 @@
 
 import childProcess from 'node:child_process';
 import repl from 'node:repl';
-import shellQuote from 'shell-quote';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig, ClientConfig } from './config';
 
 export class CliReplInterop {
@@ -59,9 +58,15 @@ export class CliReplInterop {
 
     const endsWithSpace = /\s$/.test(line);
     const tokens = parseRawArgs(startTrimmed);
+    const lastToken = tokens.length > 0 ? tokens[tokens.length - 1] : '';
+    const endsWithSeparator = endsWithSpace && !/\s$/.test(lastToken);
 
-    const currentToken = endsWithSpace ? '' : tokens.length > 0 ? tokens[tokens.length - 1] : '';
-    const consumedTokens = endsWithSpace ? tokens : tokens.slice(0, -1);
+    const currentToken = endsWithSeparator
+      ? ''
+      : tokens.length > 0
+        ? tokens[tokens.length - 1]
+        : '';
+    const consumedTokens = endsWithSeparator ? tokens : tokens.slice(0, -1);
 
     if (consumedTokens.length === 0) {
       const prefix = `.${currentToken}`;
@@ -369,37 +374,6 @@ function partitionArgs(args: CliArgMetadata[]): {
   for (const arg of args) {
     if (arg.isPositional) continue;
 
-    // TODO: either fix clap extraction, or patch it in golem bin
-    if (arg.id === 'format') {
-      arg.possibleValues = [
-        {
-          name: 'text',
-          hidden: false,
-          aliases: [],
-        },
-        {
-          name: 'json',
-          hidden: false,
-          aliases: [],
-        },
-        {
-          name: 'yaml',
-          hidden: false,
-          aliases: [],
-        },
-        {
-          name: 'pretty-json',
-          hidden: false,
-          aliases: [],
-        },
-        {
-          name: 'pretty-yaml',
-          hidden: false,
-          aliases: [],
-        },
-      ];
-    }
-
     if (arg.long.length > 0) {
       for (const long of arg.long) {
         flagArgs.set(`--${long}`, arg);
@@ -488,49 +462,137 @@ function commandPathToReplCommandName(segments: string[]): string {
 }
 
 function parseRawArgs(rawArgs: string): string[] {
-  const parsed = shellQuote.parse(rawArgs);
-  const realigned: string[] = [];
-  let insideAgentName = false;
+  const args: string[] = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  let escaping = false;
+  let inAgent = false;
+  let agentDepth = 0;
+  let agentInSingle = false;
+  let agentInDouble = false;
+  let agentEscaping = false;
 
-  function add(elem: string) {
-    if (realigned.length === 0) {
-      realigned.push(elem);
-    } else {
-      if (insideAgentName) {
-        realigned[realigned.length - 1] += elem;
-      } else {
-        realigned.push(elem);
-      }
+  function pushCurrent() {
+    if (current.length > 0) {
+      args.push(current);
+      current = '';
     }
   }
 
-  for (const entry of parsed) {
-    if (typeof entry === 'string') {
-      add(entry);
-    } else if ('op' in entry) {
-      if ('pattern' in entry) {
-      } else {
-        if (entry.op === '(') {
-          insideAgentName = true;
-          add('(');
-        } else if (entry.op === ')') {
-          add(')');
-          insideAgentName = false;
-        } else {
-          add(entry.op);
+  function isIdentChar(ch: string): boolean {
+    return /[A-Za-z0-9_-]/.test(ch);
+  }
+
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const ch = rawArgs[i];
+
+    if (inAgent) {
+      current += ch;
+
+      if (agentEscaping) {
+        agentEscaping = false;
+        continue;
+      }
+
+      if (agentInSingle) {
+        if (ch === "'") agentInSingle = false;
+        continue;
+      }
+
+      if (agentInDouble) {
+        if (ch === '\\') {
+          agentEscaping = true;
+        } else if (ch === '"') {
+          agentInDouble = false;
+        }
+        continue;
+      }
+
+      if (ch === "'") {
+        agentInSingle = true;
+        continue;
+      }
+      if (ch === '"') {
+        agentInDouble = true;
+        continue;
+      }
+
+      if (ch === '(') {
+        agentDepth += 1;
+      } else if (ch === ')') {
+        agentDepth -= 1;
+        if (agentDepth === 0) {
+          inAgent = false;
         }
       }
-    } else if ('comment' in entry) {
-      add(`#${entry.comment}`);
+      continue;
     }
+
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (inDouble) {
+      if (ch === '\\') {
+        escaping = true;
+      } else if (ch === '"') {
+        inDouble = false;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      pushCurrent();
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+
+    if (ch === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (current.length === 0 && isIdentChar(ch)) {
+      let j = i;
+      while (j < rawArgs.length && isIdentChar(rawArgs[j])) {
+        j += 1;
+      }
+      if (rawArgs[j] === '(') {
+        current += rawArgs.slice(i, j);
+        current += '(';
+        inAgent = true;
+        agentDepth = 1;
+        i = j;
+        continue;
+      }
+    }
+
+    current += ch;
   }
 
-  console.log('\n');
-  console.log({
-    parsed,
-    realigned,
-  });
-  console.log('\n');
-
-  return realigned;
+  pushCurrent();
+  return args;
 }
