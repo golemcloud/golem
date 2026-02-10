@@ -6,28 +6,6 @@
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 
-httpApi:
-  definitions:
-    benchmark-agent-ts-large-api:
-      version: '0.0.1'
-      routes:
-      - method: POST
-        path: /benchmark-agent-ts-large-api/{name}/increment
-        binding:
-          type: default
-          componentName: benchmark:agent-ts-large
-          response: |
-            let name: string = request.path.name;
-            let agent = counter-agent(name);
-            let new-value = agent.increment();
-            { status: 200, body: { result: "incremented ${name}, new value is ${new-value}" } }
-
-  deployments:
-    local:
-    - domain: localhost:9006
-      definitions:
-      - benchmark-agent-ts-large-api
-
 components:
   benchmark:agent-ts-large:
     templates: ts
