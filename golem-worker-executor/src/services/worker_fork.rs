@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent_webhooks::AgentWebhooksService;
 use super::file_loader::FileLoader;
-use super::{agent_deployments, HasAgentDeploymentsService};
+use super::HasAgentWebhooksService;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
@@ -78,7 +79,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc>,
     pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
-    pub agent_deployments: Arc<dyn agent_deployments::AgentDeploymentsService>,
+    pub agent_webhooks: Arc<AgentWebhooksService>,
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
@@ -123,9 +124,9 @@ impl<Ctx: WorkerCtx> HasAgentTypesService for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasAgentDeploymentsService for DefaultWorkerFork<Ctx> {
-    fn agent_deployments(&self) -> Arc<dyn agent_deployments::AgentDeploymentsService> {
-        self.agent_deployments.clone()
+impl<Ctx: WorkerCtx> HasAgentWebhooksService for DefaultWorkerFork<Ctx> {
+    fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
+        self.agent_webhooks.clone()
     }
 }
 
@@ -277,7 +278,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             rpc: self.rpc.clone(),
             active_workers: self.active_workers.clone(),
             agent_types: self.agent_types.clone(),
-            agent_deployments: self.agent_deployments.clone(),
+            agent_webhooks: self.agent_webhooks.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -335,14 +336,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
-        agent_deployments: Arc<dyn agent_deployments::AgentDeploymentsService>,
+        agent_webhooks: Arc<AgentWebhooksService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
             rpc,
             active_workers,
             agent_types,
-            agent_deployments,
+            agent_webhooks,
             engine,
             linker,
             runtime,

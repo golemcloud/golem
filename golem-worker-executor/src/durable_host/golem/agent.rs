@@ -30,7 +30,6 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::PromiseId;
-use golem_service_base::custom_api::AgentWebhookId;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -192,18 +191,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 return persisted.result.map_err(|e| anyhow!(e));
             };
 
-            let webhook_id = AgentWebhookId {
-                worker_name: promise_id.worker_id.worker_name.clone(),
-                oplog_idx: promise_id.oplog_idx,
-            };
-
             let webhook_url = self
                 .state
-                .agent_deployments_service
-                .get_agent_webhook_url(
+                .agent_webhooks_service
+                .get_agent_webhook_url_for_promise(
                     self.state.component_metadata.environment_id,
                     &agent_id.agent_type,
-                    &webhook_id,
+                    &promise_id,
                 )
                 .await?;
 

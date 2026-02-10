@@ -132,6 +132,9 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
+[webhook_callback_handler]
+hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+
 [worker_executor]
 connect_timeout = "10s"
 

@@ -18,18 +18,13 @@ use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::security::handler::OidcHandler;
+use super::webhoooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
-use crate::custom_api::{ParsedRequestBody, RichRequest};
-use crate::service::worker::WorkerService;
+use crate::custom_api::RichRequest;
 use anyhow::anyhow;
-use golem_service_base::custom_api::{
-    AgentWebhookId, CorsPreflightBehaviour, RequestBodySchema, WebhookCallbackBehaviour,
-};
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::custom_api::CorsPreflightBehaviour;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use http::StatusCode;
 use poem::{Request, Response};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{Instrument, debug};
 
@@ -37,7 +32,7 @@ pub struct RequestHandler {
     route_resolver: Arc<RouteResolver>,
     call_agent_handler: Arc<CallAgentHandler>,
     oidc_handler: Arc<OidcHandler>,
-    worker_service: Arc<WorkerService>,
+    webhook_callback_handler: Arc<WebhookCallbackHandler>,
 }
 
 #[allow(irrefutable_let_patterns)]
@@ -46,13 +41,13 @@ impl RequestHandler {
         route_resolver: Arc<RouteResolver>,
         call_agent_handler: Arc<CallAgentHandler>,
         oidc_handler: Arc<OidcHandler>,
-        worker_service: Arc<WorkerService>,
+        webhook_callback_handler: Arc<WebhookCallbackHandler>,
     ) -> Self {
         Self {
             route_resolver,
             call_agent_handler,
             oidc_handler,
-            worker_service,
+            webhook_callback_handler,
         }
     }
 
@@ -121,48 +116,10 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour { component_id }) => {
-                let webhook_id_segment = resolved_route.captured_path_parameters.first().ok_or(
-                    RequestHandlerError::invariant_violated(
-                        "no variable path segments for webhook callback ",
-                    ),
-                )?;
-                let webhook_id =
-                    AgentWebhookId::from_base64_url(webhook_id_segment).map_err(|_| {
-                        RequestHandlerError::ValueParsingFailed {
-                            value: webhook_id_segment.clone(),
-                            expected: "AgentWebhookId",
-                        }
-                    })?;
-                let promise_id = webhook_id.into_promise_id(*component_id);
-
-                let body = request
-                    .parse_request_body(&RequestBodySchema::UnrestrictedBinary)
-                    .await?;
-                let ParsedRequestBody::UnstructuredBinary(mut body_data) = body else {
-                    return Err(RequestHandlerError::invariant_violated(
-                        "UnrestrictedBinary body parsing yielded wrong type",
-                    ));
-                };
-                let body_binary = body_data.take().map(|bs| bs.data).unwrap_or_default();
-
-                let auth_ctx = AuthCtx::impersonated_user(resolved_route.route.account_id);
-
-                tracing::debug!("Completing promise due to webhook_callback: {promise_id}");
-                self.worker_service
-                    .complete_promise(
-                        &promise_id.worker_id,
-                        promise_id.oplog_idx.as_u64(),
-                        body_binary,
-                        auth_ctx,
-                    )
-                    .await?;
-
-                Ok(RouteExecutionResult {
-                    status: StatusCode::NO_CONTENT,
-                    headers: HashMap::new(),
-                    body: ResponseBody::NoBody,
-                })
+            RichRouteBehaviour::WebhookCallback(behaviour) => {
+                self.webhook_callback_handler
+                    .handle_webhook_callback_behaviour(request, resolved_route, behaviour)
+                    .await
             }
         }
     }

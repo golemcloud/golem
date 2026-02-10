@@ -15,6 +15,7 @@
 pub mod active_workers;
 pub mod agent_deployments;
 pub mod agent_types;
+pub mod agent_webhooks;
 pub mod blob_store;
 pub mod component;
 pub mod events;
@@ -36,7 +37,7 @@ pub mod worker_event;
 pub mod worker_fork;
 pub mod worker_proxy;
 
-use self::agent_deployments::AgentDeploymentsService;
+use self::agent_webhooks::AgentWebhooksService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::worker_activator::WorkerActivator;
@@ -69,8 +70,8 @@ pub trait HasAgentTypesService {
     fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService>;
 }
 
-pub trait HasAgentDeploymentsService {
-    fn agent_deployments(&self) -> Arc<dyn agent_deployments::AgentDeploymentsService>;
+pub trait HasAgentWebhooksService {
+    fn agent_webhooks(&self) -> Arc<AgentWebhooksService>;
 }
 
 pub trait HasComponentService {
@@ -181,7 +182,7 @@ pub trait HasResourceLimits {
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
     + HasAgentTypesService
-    + HasAgentDeploymentsService
+    + HasAgentWebhooksService
     + HasComponentService
     + HasConfig
     + HasWorkerForkService
@@ -214,7 +215,7 @@ impl<
         Ctx: WorkerCtx,
         T: HasActiveWorkers<Ctx>
             + HasAgentTypesService
-            + HasAgentDeploymentsService
+            + HasAgentWebhooksService
             + HasComponentService
             + HasConfig
             + HasWorkerForkService
@@ -249,7 +250,7 @@ impl<
 pub struct All<Ctx: WorkerCtx> {
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     agent_types: Arc<dyn agent_types::AgentTypesService>,
-    agent_deployments: Arc<dyn agent_deployments::AgentDeploymentsService>,
+    agent_webhooks: Arc<AgentWebhooksService>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
@@ -283,7 +284,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
         Self {
             active_workers: self.active_workers.clone(),
             agent_types: self.agent_types.clone(),
-            agent_deployments: self.agent_deployments.clone(),
+            agent_webhooks: self.agent_webhooks.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -318,7 +319,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
     pub fn new(
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
-        agent_deployments: Arc<dyn agent_deployments::AgentDeploymentsService>,
+        agent_webhooks: Arc<AgentWebhooksService>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -350,7 +351,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         Self {
             active_workers,
             agent_types,
-            agent_deployments,
+            agent_webhooks,
             engine,
             linker,
             runtime,
@@ -383,7 +384,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         All::new(
             this.active_workers(),
             this.agent_types(),
-            this.agent_deployments(),
+            this.agent_webhooks(),
             this.engine(),
             this.linker(),
             this.runtime(),
@@ -439,9 +440,9 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentTypesService for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentDeploymentsService for T {
-    fn agent_deployments(&self) -> Arc<dyn AgentDeploymentsService> {
-        self.all().agent_deployments.clone()
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentWebhooksService for T {
+    fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
+        self.all().agent_webhooks.clone()
     }
 }
 

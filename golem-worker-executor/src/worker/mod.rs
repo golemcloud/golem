@@ -26,7 +26,7 @@ use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentDeploymentsService, HasAgentTypesService, HasAll,
+    All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
     HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasRdbmsService,
     HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine,
@@ -2040,7 +2040,7 @@ impl RunningWorker {
             parent.worker_fork_service(),
             parent.resource_limits(),
             parent.agent_types(),
-            parent.agent_deployments(),
+            parent.agent_webhooks(),
             parent.shard_service(),
             pending_update,
             None,
