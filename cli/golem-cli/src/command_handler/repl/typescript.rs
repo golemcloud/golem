@@ -280,7 +280,7 @@ impl TypeScriptRepl {
                   cliCommandsMetadataJsonPath: {repl_cli_commands_metadata_json_path},
                 }});
 
-                await repl.run();
+                void repl.run();
             ",
             binary = js_string_literal(command_name())?,
             app_main_dir = js_string_literal(args.app_main_dir.display().to_string())?,
