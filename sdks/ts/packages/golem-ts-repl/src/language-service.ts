@@ -193,6 +193,14 @@ export class LanguageService {
       ? ts.CompletionTriggerKind.TriggerCharacter
       : ts.CompletionTriggerKind.Invoked;
 
+    const rawStart = this.snippetStartPos;
+    const rawEnd = rawStart + this.rawSnippet.length;
+
+    const placeholderResult =
+      triggerCharacter === '.'
+        ? undefined
+        : this.getSnippetPlaceholderCompletions(snippet, pos, rawStart);
+
     const tsLs = this.project.getLanguageService().compilerObject;
 
     const completions = tsLs.getCompletionsAtPosition(snippet.getFilePath(), pos + 1, {
@@ -204,10 +212,17 @@ export class LanguageService {
       includeCompletionsWithSnippetText: false,
     });
 
-    if (!completions) return;
-
-    const rawStart = this.snippetStartPos;
-    const rawEnd = rawStart + this.rawSnippet.length;
+    if (!completions) {
+      if (placeholderResult?.entries.length) {
+        return {
+          entries: placeholderResult.entries,
+          memberCompletion: false,
+          replaceStart: placeholderResult.replaceStart,
+          replaceEnd: placeholderResult.replaceEnd,
+        };
+      }
+      return;
+    }
 
     if (triggerCharacter === '.') {
       const memberLikeKinds = new Set<ts.ScriptElementKind>([
@@ -243,7 +258,6 @@ export class LanguageService {
       };
     } else {
       const node = snippet.getDescendantAtPos(this.snippetEndPos);
-      const placeholderResult = this.getSnippetPlaceholderCompletions(snippet, pos, rawStart);
       if (!node) {
         if (placeholderResult?.entries.length) {
           return {
@@ -399,6 +413,7 @@ function getCallArgumentContext(
   snippet: tsm.SourceFile,
   pos: number,
 ): CallArgumentContext | undefined {
+  const snippetText = snippet.getText();
   const candidates = [
     Math.min(pos, snippet.getEnd()),
     Math.min(pos + 1, snippet.getEnd()),
@@ -452,6 +467,10 @@ function getCallArgumentContext(
     }
   }
 
+  if (snippetText[pos] === ',' && argIndex < args.length) {
+    argIndex = Math.min(argIndex + 1, args.length);
+  }
+
   const argNode = argIndex < args.length ? (args[argIndex] as tsm.Expression) : undefined;
 
   return {
@@ -467,24 +486,28 @@ function getFallbackCallContext(
   rawStart: number,
 ): FallbackCallContext | undefined {
   const snippetText = snippet.getText();
-  if (snippetText[pos] !== '(') return;
+  const openParenPos = findOpenParenForCall(snippetText, pos);
+  if (openParenPos === undefined || openParenPos < rawStart) return;
 
-  const nodeBefore = snippet.getDescendantAtPos(Math.max(0, pos - 1));
+  const nodeBefore = snippet.getDescendantAtPos(Math.max(0, openParenPos - 1));
   if (!nodeBefore) return;
 
-  const expressionNode = getCallTargetExpression(nodeBefore, pos);
+  const expressionNode = getCallTargetExpression(nodeBefore, openParenPos);
   if (!expressionNode) return;
 
   const signature = getSignatureFromType(expressionNode.getType(), false);
   if (!signature) return;
 
-  const replaceStart = Math.max(0, pos + 1 - rawStart);
-  const replaceEnd = replaceStart;
+  const argInfo = getFallbackArgumentInfo(snippetText, openParenPos, pos);
+  if (!argInfo) return;
+
+  const replaceStart = Math.max(0, argInfo.replaceStartAbs - rawStart);
+  const replaceEnd = Math.max(0, pos + 1 - rawStart);
 
   return {
     expressionNode,
     signature,
-    argIndex: 0,
+    argIndex: argInfo.argIndex,
     argNode: undefined,
     replaceRange: { replaceStart, replaceEnd },
   };
@@ -511,6 +534,82 @@ function getCallTargetExpression(node: tsm.Node, pos: number): tsm.Expression | 
     current = current.getParent();
   }
   return undefined;
+}
+
+function findOpenParenForCall(text: string, pos: number): number | undefined {
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  const stack: number[] = [];
+
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    const tokenStart = scanner.getTokenStart();
+    if (tokenStart > pos) break;
+    if (token === ts.SyntaxKind.OpenParenToken) {
+      stack.push(tokenStart);
+    } else if (token === ts.SyntaxKind.CloseParenToken) {
+      stack.pop();
+    }
+  }
+
+  return stack.length ? stack[stack.length - 1] : undefined;
+}
+
+function getFallbackArgumentInfo(
+  text: string,
+  openParenPos: number,
+  pos: number,
+): { argIndex: number; replaceStartAbs: number } | undefined {
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let commaCount = 0;
+  let lastComma = -1;
+
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    const tokenStart = scanner.getTokenStart();
+    if (tokenStart < openParenPos + 1) continue;
+    if (tokenStart > pos) break;
+
+    if (token === ts.SyntaxKind.OpenParenToken) {
+      if (tokenStart !== openParenPos) {
+        parenDepth++;
+      }
+      continue;
+    }
+    if (token === ts.SyntaxKind.CloseParenToken) {
+      if (parenDepth === 0) {
+        return undefined;
+      }
+      parenDepth--;
+      continue;
+    }
+    if (token === ts.SyntaxKind.OpenBracketToken) {
+      bracketDepth++;
+      continue;
+    }
+    if (token === ts.SyntaxKind.CloseBracketToken) {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      continue;
+    }
+    if (token === ts.SyntaxKind.OpenBraceToken) {
+      braceDepth++;
+      continue;
+    }
+    if (token === ts.SyntaxKind.CloseBraceToken) {
+      braceDepth = Math.max(0, braceDepth - 1);
+      continue;
+    }
+    if (token === ts.SyntaxKind.CommaToken) {
+      if (parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+        commaCount++;
+        lastComma = tokenStart;
+      }
+    }
+  }
+
+  const replaceStartAbs = lastComma >= 0 ? lastComma + 1 : openParenPos + 1;
+  return { argIndex: commaCount, replaceStartAbs };
 }
 
 function getResolvedSignature(
