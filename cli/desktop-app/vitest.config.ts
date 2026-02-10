@@ -41,5 +41,13 @@ export default defineConfig({
       find: "@",
       replacement: resolve(__dirname, "./src")
     }]
+  },
+  optimizeDeps: {
+    include: [
+      "@tauri-apps/api",
+      "@tauri-apps/api/core",
+      "@tauri-apps/api/event",
+      "@tauri-apps/api/path",
+    ]
   }
 });

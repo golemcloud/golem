@@ -17,7 +17,7 @@ Object.defineProperty(window, "matchMedia", {
 });
 
 // Mock Tauri API
-(global as unknown as { __TAURI__: unknown }).__TAURI__ = {
+(globalThis as unknown as { __TAURI__: unknown }).__TAURI__ = {
   invoke: vi.fn(),
   convertFileSrc: vi.fn(),
 };
@@ -62,12 +62,27 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 vi.mock("@tauri-apps/plugin-fs", () => ({
   readTextFile: vi.fn(),
   writeTextFile: vi.fn(),
+  writeFile: vi.fn(),
+  exists: vi.fn().mockResolvedValue(false),
+  readDir: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("@tauri-apps/plugin-store", () => ({
-  Store: vi.fn(() => ({
-    get: vi.fn(),
-    set: vi.fn(),
-    save: vi.fn(),
-  })),
-}));
+vi.mock("@tauri-apps/plugin-store", () => {
+  class Store {
+    private data: Map<string, unknown> = new Map();
+    async get(key: string): Promise<unknown> { return this.data.get(key) ?? null; }
+    async set(key: string, value: unknown): Promise<void> { this.data.set(key, value); }
+    async save(): Promise<void> {}
+    async delete(key: string): Promise<boolean> { return this.data.delete(key); }
+    async clear(): Promise<void> { this.data.clear(); }
+    async keys(): Promise<string[]> { return [...this.data.keys()]; }
+    async values(): Promise<unknown[]> { return [...this.data.values()]; }
+    async entries(): Promise<[string, unknown][]> { return [...this.data.entries()]; }
+    async length(): Promise<number> { return this.data.size; }
+    async has(key: string): Promise<boolean> { return this.data.has(key); }
+  }
+  return {
+    Store,
+    load: vi.fn().mockImplementation(() => Promise.resolve(new Store())),
+  };
+});
