@@ -59,6 +59,13 @@ export class Repl {
   }): repl.REPLServer {
     const output = options?.output ?? process.stdout;
     const terminal = options?.terminal ?? Boolean((output as any).isTTY);
+    const prompt = this.processArgs.script
+      ? ''
+      : `${pc.cyan('golem-ts-repl')}` +
+        `[${pc.bold(pc.green(this.clientConfig.application))}]` +
+        `[${pc.bold(pc.yellow(this.clientConfig.environment))}]` +
+        `${pc.bold(pc.green('>'))} `;
+
     return repl.start({
       input: options?.input ?? process.stdin,
       output,
@@ -67,11 +74,7 @@ export class Repl {
       useGlobal: true,
       preview: false,
       ignoreUndefined: true,
-      prompt:
-        `${pc.cyan('golem-ts-repl')}` +
-        `[${pc.bold(pc.green(this.clientConfig.application))}]` +
-        `[${pc.bold(pc.yellow(this.clientConfig.environment))}]` +
-        `${pc.bold(pc.green('>'))} `,
+      prompt,
     });
   }
 
