@@ -37,17 +37,21 @@ export class Repl {
   private readonly cli: CliReplInterop;
   private readonly processArgs: ProcessArgs;
   private languageService: LanguageService | undefined;
+  private overrideSnippetForNextEval: string | undefined;
 
   constructor(config: Config) {
     this.config = config;
     this.processArgs = loadProcessArgs();
     this.clientConfig = clientConfigFromEnv();
     this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
+    this.overrideSnippetForNextEval = undefined;
   }
 
   private getLanguageService(): LanguageService {
     if (!this.languageService) {
-      this.languageService = new LanguageService(this.config, this.processArgs);
+      this.languageService = new LanguageService(this.config, {
+        disableAutoImports: this.processArgs.disableAutoImports,
+      });
     }
     return this.languageService;
   }
@@ -78,13 +82,12 @@ export class Repl {
     });
   }
 
-  private async setupRepl(replServer: repl.REPLServer): Promise<repl.REPLEval> {
+  private async setupRepl(replServer: repl.REPLServer): Promise<void> {
     await this.setupReplHistory(replServer);
-    const tsxEval = this.setupReplEval(replServer);
+    this.setupReplEval(replServer);
     this.setupReplCompleter(replServer);
     this.setupReplContext(replServer);
     this.setupReplCommands(replServer);
-    return tsxEval;
   }
 
   private async setupReplHistory(replServer: repl.REPLServer) {
@@ -102,6 +105,7 @@ export class Repl {
   private setupReplEval(replServer: repl.REPLServer): repl.REPLEval {
     const tsxEval = replServer.eval;
     const languageService = this.getLanguageService();
+    const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
     const customEval: REPLEval = function (code, context, filename, callback) {
       const evalCode = (code: string) => {
@@ -113,7 +117,8 @@ export class Repl {
         });
       };
 
-      languageService.setSnippet(code);
+      const snippet = getOverrideSnippet() ?? code;
+      languageService.setSnippet(snippet);
       const typeCheckResult = languageService.typeCheckSnippet();
       if (typeCheckResult.ok) {
         const quickInfo = languageService.getSnippetQuickInfo();
@@ -161,7 +166,6 @@ export class Repl {
     const languageService = this.getLanguageService();
     const cli = this.cli;
     const customCompleter: AsyncCompleter = function (line, callback) {
-      // TODO: how to check for builtin ones
       if (line.trimStart().startsWith('.')) {
         cli
           .complete(line)
@@ -226,15 +230,15 @@ export class Repl {
         })
       : this.newBaseReplServer();
 
-    const tsxEval = await this.setupRepl(replServer);
+    await this.setupRepl(replServer);
 
     if (script) {
-      await this.runScript(tsxEval, replServer, script);
+      await this.runScript(replServer, script);
       replServer.close();
     }
   }
 
-  private async runScript(tsxEval: repl.REPLEval, replServer: repl.REPLServer, script: string) {
+  private async runScript(replServer: repl.REPLServer, script: string) {
     const previousSink = replMessageSink;
     replMessageSink = stderrMessageSink;
 
@@ -242,19 +246,14 @@ export class Repl {
     try {
       const preparedScript = prepareScriptForEval(script);
       const filename = this.processArgs.scriptPath ?? 'repl-script';
-      const evalFn = preparedScript.transformed ? tsxEval : replServer.eval;
+      this.overrideSnippetForNextEval = script;
       evalResult = await new Promise((resolve) => {
-        evalFn.call(
-          replServer,
-          preparedScript.script,
-          replServer.context,
-          filename,
-          (err, result) => {
-            resolve({ error: err as Error | null, result });
-          },
-        );
+        replServer.eval(preparedScript.script, replServer.context, filename, (err, result) => {
+          resolve({ error: err as Error | null, result });
+        });
       });
     } finally {
+      this.overrideSnippetForNextEval = undefined;
       replMessageSink = previousSink;
     }
 
