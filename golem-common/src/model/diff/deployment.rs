@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::HttpApiDeployment;
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
-use crate::model::diff::http_api_definition::HttpApiDefinition;
-use crate::model::diff::http_api_deployment::HttpApiDeploymentLegacy;
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
@@ -29,10 +28,7 @@ pub struct Deployment {
     pub components: BTreeMap<String, HashOf<Component>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
-    pub http_api_definitions: BTreeMap<String, HashOf<HttpApiDefinition>>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    #[serde(serialize_with = "serialize_with_mode")]
-    pub http_api_deployments: BTreeMap<String, HashOf<HttpApiDeploymentLegacy>>,
+    pub http_api_deployments: BTreeMap<String, HashOf<HttpApiDeployment>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -41,9 +37,7 @@ pub struct DeploymentDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMapDiff<String, HashOf<Component>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub http_api_definitions: BTreeMapDiff<String, HashOf<HttpApiDefinition>>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub http_api_deployments: BTreeMapDiff<String, HashOf<HttpApiDeploymentLegacy>>,
+    pub http_api_deployments: BTreeMapDiff<String, HashOf<HttpApiDeployment>>,
 }
 
 impl Diffable for Deployment {
@@ -51,18 +45,13 @@ impl Diffable for Deployment {
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
         let components = new.components.diff_with_current(&current.components);
-        let http_api_definitions = new
-            .http_api_definitions
-            .diff_with_current(&current.http_api_definitions);
         let http_api_deployments = new
             .http_api_deployments
             .diff_with_current(&current.http_api_deployments);
 
-        if components.is_some() || http_api_definitions.is_some() || http_api_deployments.is_some()
-        {
+        if components.is_some() || http_api_deployments.is_some() {
             Some(DeploymentDiff {
                 components: components.unwrap_or_default(),
-                http_api_definitions: http_api_definitions.unwrap_or_default(),
                 http_api_deployments: http_api_deployments.unwrap_or_default(),
             })
         } else {

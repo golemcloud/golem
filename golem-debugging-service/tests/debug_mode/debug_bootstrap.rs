@@ -12,13 +12,14 @@ use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+    AgentDeploymentsServiceConfig, GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -39,6 +40,7 @@ use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
 use golem_worker_executor::{Bootstrap, RunDetails};
+use golem_worker_executor_test_utils::agent_deployments_service::DisabledAgentDeploymentsService;
 use golem_worker_executor_test_utils::component_service::ComponentServiceLocalFileSystem;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
@@ -70,6 +72,14 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<DebugContext>> {
         Arc::new(ActiveWorkers::<DebugContext>::new(&golem_config.memory))
+    }
+
+    fn create_agent_deployments_service(
+        &self,
+        _config: &AgentDeploymentsServiceConfig,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn AgentDeploymentsService> {
+        Arc::new(DisabledAgentDeploymentsService)
     }
 
     fn create_component_service(
@@ -124,6 +134,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService::new(
@@ -183,6 +194,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -215,12 +227,14 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
             agent_types_service,
+            agent_deployments_service,
             engine,
             linker,
             runtime.clone(),

@@ -23,7 +23,7 @@ use crate::model::worker::WorkerName;
 use crate::model::NewInteractiveApp;
 use anyhow::bail;
 use colored::Colorize;
-use golem_client::model::{Account, HttpApiDefinitionCreation};
+use golem_client::model::Account;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
@@ -560,38 +560,6 @@ impl InteractiveHandler {
             target_component_source,
             dependency_type,
         )))
-    }
-
-    pub fn select_new_api_definition_version(
-        &self,
-        api_definition: &HttpApiDefinitionCreation,
-    ) -> anyhow::Result<Option<String>> {
-        Text::new("Please specify a new API definition version:")
-            .with_initial_value(&api_definition.version.0)
-            .with_validator({
-                let current_version = api_definition.version.clone();
-                move |value: &str| {
-                    if value == current_version.0 {
-                        return Ok(Validation::Invalid(ErrorMessage::Custom(
-                            "Please select a new version!".to_string(),
-                        )));
-                    }
-                    if value.contains(char::is_whitespace) {
-                        return Ok(Validation::Invalid(ErrorMessage::Custom(
-                            "Please specify a version without whitespaces!".to_string(),
-                        )));
-                    }
-                    if value.is_empty() {
-                        return Ok(Validation::Invalid(ErrorMessage::Custom(
-                            "Please specify a non-empty version!".to_string(),
-                        )));
-                    }
-
-                    Ok(Validation::Valid)
-                }
-            })
-            .prompt()
-            .none_if_not_interactive_logged()
     }
 
     pub fn select_new_app_name_and_components(&self) -> anyhow::Result<Option<NewInteractiveApp>> {

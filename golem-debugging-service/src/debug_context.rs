@@ -40,6 +40,7 @@ use golem_worker_executor::model::{
     ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
@@ -535,6 +536,7 @@ impl WorkerCtx for DebugContext {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
@@ -562,6 +564,7 @@ impl WorkerCtx for DebugContext {
             file_loader,
             worker_fork,
             agent_types_service,
+            agent_deployments_service,
             shard_service,
             pending_update,
             original_phantom_id,

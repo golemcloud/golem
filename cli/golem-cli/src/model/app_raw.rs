@@ -19,11 +19,12 @@ use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use anyhow::{anyhow, Context};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::http_api_definition::{GatewayBindingType, HttpApiDefinitionName};
+use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_templates::model::GuestLanguage;
 use golem_templates::APP_MANIFEST_JSON_SCHEMA;
 use indexmap::IndexMap;
@@ -232,83 +233,17 @@ pub struct Component {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApi {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub definitions: IndexMap<HttpApiDefinitionName, HttpApiDefinition>,
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub deployments: IndexMap<EnvironmentName, Vec<HttpApiDeployment>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpApiDefinition {
-    // TODO: atomic: drop?
-    pub version: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<HttpApiDefinitionRoute>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpApiDefinitionRoute {
-    pub method: String,
-    pub path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub security: Option<String>,
-    pub binding: HttpApiDefinitionBinding,
-}
-
-#[derive(Clone, Copy, Default, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum HttpApiDefinitionBindingType {
-    #[default]
-    Default,
-    CorsPreflight,
-    FileServer,
-    HttpHandler,
-    SwaggerUi,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpApiDefinitionBinding {
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub type_: Option<HttpApiDefinitionBindingType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idempotency_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invocation_context: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub response: Option<String>,
-}
-
-impl HttpApiDefinitionBinding {
-    pub fn to_diffable(&self) -> diff::HttpApiDefinitionBinding {
-        diff::HttpApiDefinitionBinding {
-            binding_type: match self.type_.unwrap_or_default() {
-                HttpApiDefinitionBindingType::Default => GatewayBindingType::Worker,
-                HttpApiDefinitionBindingType::CorsPreflight => GatewayBindingType::CorsPreflight,
-                HttpApiDefinitionBindingType::FileServer => GatewayBindingType::FileServer,
-                HttpApiDefinitionBindingType::HttpHandler => GatewayBindingType::HttpHandler,
-                HttpApiDefinitionBindingType::SwaggerUi => GatewayBindingType::SwaggerUi,
-            },
-            component_name: self.component_name.clone(),
-            worker_name: self.agent.clone(),
-            idempotency_key: self.idempotency_key.clone(),
-            invocation_context: self.invocation_context.clone(),
-            response: self.response.clone(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDeployment {
     pub domain: Domain,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub definitions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -483,6 +418,13 @@ pub struct ComponentLayerProperties {
     pub dependencies_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<Vec<Dependency>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpApiDeploymentAgentOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<SecuritySchemeName>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

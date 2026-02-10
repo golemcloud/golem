@@ -16,12 +16,11 @@ use crate::model::text::fmt::{
     format_main_id, format_message_highlight, log_table, FieldsBuilder, MessageWithFields, TextView,
 };
 use cli_table::Table;
-use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
-use itertools::Itertools;
+use golem_common::model::http_api_deployment::HttpApiDeployment;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpApiDeploymentGetView(pub LegacyHttpApiDeployment);
+pub struct HttpApiDeploymentGetView(pub HttpApiDeployment);
 
 impl MessageWithFields for HttpApiDeploymentGetView {
     fn message(&self) -> String {
@@ -36,7 +35,7 @@ impl MessageWithFields for HttpApiDeploymentGetView {
     }
 }
 
-fn http_api_deployment_fields(dep: &LegacyHttpApiDeployment) -> Vec<(String, String)> {
+fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
 
     fields
@@ -45,8 +44,16 @@ fn http_api_deployment_fields(dep: &LegacyHttpApiDeployment) -> Vec<(String, Str
         .fmt_field("Environment ID", &dep.environment_id, format_main_id)
         .fmt_field("Revision", &dep.revision, format_main_id)
         .fmt_field("Created at", &dep.created_at, |d| d.to_string())
-        .fmt_field("Definitions", &dep.api_definitions, |defs| {
-            defs.iter().map(|d| format!("- {}", d)).join("\n")
+        .fmt_field("Webhooks url", &dep.webhooks_url, |d| d.clone())
+        .fmt_field("Agents", &dep.agents, |agents| {
+            let mut result = String::new();
+            for (agent_name, agent_options) in agents {
+                result.push_str(&format!("- Agent name: {}", agent_name));
+                if let Some(security_scheme) = &agent_options.security_scheme {
+                    result.push_str(&format!("  Security scheme: {}", security_scheme));
+                }
+            }
+            result
         });
 
     fields.build()
@@ -64,8 +71,8 @@ struct HttpApiDeploymentTableView {
     pub revision: u64,
 }
 
-impl From<&LegacyHttpApiDeployment> for HttpApiDeploymentTableView {
-    fn from(value: &LegacyHttpApiDeployment) -> Self {
+impl From<&HttpApiDeployment> for HttpApiDeploymentTableView {
+    fn from(value: &HttpApiDeployment) -> Self {
         Self {
             domain: value.domain.to_string(),
             id: value.id.to_string(),
@@ -75,7 +82,7 @@ impl From<&LegacyHttpApiDeployment> for HttpApiDeploymentTableView {
     }
 }
 
-impl TextView for Vec<LegacyHttpApiDeployment> {
+impl TextView for Vec<HttpApiDeployment> {
     fn log(&self) {
         log_table::<_, HttpApiDeploymentTableView>(self);
     }

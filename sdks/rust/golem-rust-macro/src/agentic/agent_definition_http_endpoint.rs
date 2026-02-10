@@ -23,7 +23,9 @@ pub struct ParsedHttpEndpointDetails {
     pub cors_options: Vec<String>,
 }
 
-pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpointDetails> {
+pub fn extract_http_endpoints(
+    attrs: &[syn::Attribute],
+) -> syn::Result<Vec<ParsedHttpEndpointDetails>> {
     let mut endpoints = Vec::new();
 
     for attr in attrs {
@@ -32,7 +34,10 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
         }
 
         let syn::Meta::List(list) = &attr.meta else {
-            continue;
+            return Err(syn::Error::new_spanned(
+                attr,
+                "Expected #[endpoint(...)] attribute",
+            ));
         };
 
         let mut http_method: Option<String> = None;
@@ -43,9 +48,9 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
 
         let parser = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
 
-        let Ok(items) = parser.parse2(list.tokens.clone()) else {
-            continue;
-        };
+        let items = parser.parse2(list.tokens.clone()).map_err(|e| {
+            syn::Error::new_spanned(&list.tokens, format!("Failed to parse #[endpoint]: {}", e))
+        })?;
 
         for item in items {
             match item {
@@ -62,6 +67,11 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
                     {
                         http_method = Some(nv.path.get_ident().unwrap().to_string());
                         path_suffix = Some(s.value());
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            nv.value,
+                            "Expected string literal for HTTP path",
+                        ));
                     }
                 }
 
@@ -72,6 +82,11 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
                     }) = nv.value
                     {
                         auth_details = Some(b.value);
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            nv.value,
+                            "Expected boolean literal for auth",
+                        ));
                     }
                 }
 
@@ -84,18 +99,37 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
                             }) = elem
                             {
                                 cors_options.push(s.value());
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    elem,
+                                    "Expected string literal in CORS array",
+                                ));
                             }
                         }
+                    } else {
+                        return Err(syn::Error::new_spanned(nv.value, "Expected array for cors"));
                     }
                 }
 
                 syn::Meta::List(ml) if ml.path.is_ident("headers") => {
-                    let _ = Parser::parse2(
+                    Parser::parse2(
                         |input: syn::parse::ParseStream| {
                             while !input.is_empty() {
-                                let key: syn::LitStr = input.parse()?;
-                                input.parse::<syn::Token![=]>()?;
-                                let value: syn::LitStr = input.parse()?;
+                                let key: syn::LitStr = input.parse().map_err(|e| {
+                                    syn::Error::new(
+                                        input.span(),
+                                        format!("Invalid header key: {}", e),
+                                    )
+                                })?;
+                                input.parse::<syn::Token![=]>().map_err(|e| {
+                                    syn::Error::new(input.span(), format!("Expected '=': {}", e))
+                                })?;
+                                let value: syn::LitStr = input.parse().map_err(|e| {
+                                    syn::Error::new(
+                                        input.span(),
+                                        format!("Invalid header value: {}", e),
+                                    )
+                                })?;
                                 header_vars.push((key.value(), value.value()));
 
                                 let _ = input.parse::<syn::Token![,]>();
@@ -103,23 +137,36 @@ pub fn extract_http_endpoints(attrs: &[syn::Attribute]) -> Vec<ParsedHttpEndpoin
                             Ok(())
                         },
                         ml.tokens.clone(),
-                    );
+                    )?;
                 }
 
-                _ => {}
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        item,
+                        "Unexpected attribute item in #[endpoint]",
+                    ));
+                }
             }
         }
 
-        if let (Some(method), Some(path)) = (http_method, path_suffix) {
-            endpoints.push(ParsedHttpEndpointDetails {
-                http_method: method,
-                path_suffix: path,
-                header_vars,
-                auth_details,
-                cors_options,
-            });
-        }
+        let (method, path) = match (http_method, path_suffix) {
+            (Some(m), Some(p)) => (m, p),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    list,
+                    "Endpoint must specify HTTP method and path",
+                ))
+            }
+        };
+
+        endpoints.push(ParsedHttpEndpointDetails {
+            http_method: method,
+            path_suffix: path,
+            header_vars,
+            auth_details,
+            cors_options,
+        });
     }
 
-    endpoints
+    Ok(endpoints)
 }

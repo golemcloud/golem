@@ -18,7 +18,6 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
-use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
 use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
@@ -399,7 +398,6 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       if the need ever arises
 pub trait Handlers {
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
-    fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
     fn api_handler(&self) -> ApiCommandHandler;
     fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
@@ -424,10 +422,6 @@ pub trait Handlers {
 impl Handlers for Arc<Context> {
     fn api_domain_handler(&self) -> ApiDomainCommandHandler {
         ApiDomainCommandHandler::new(self.clone())
-    }
-
-    fn api_definition_handler(&self) -> ApiDefinitionCommandHandler {
-        ApiDefinitionCommandHandler::new(self.clone())
     }
 
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler {

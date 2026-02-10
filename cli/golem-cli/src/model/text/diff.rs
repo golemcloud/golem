@@ -111,39 +111,6 @@ impl TextView for DeploymentDiff {
             }
             logln("");
         }
-        if !self.http_api_definitions.is_empty() {
-            logln(
-                "HTTP API definition changes:"
-                    .log_color_help_group()
-                    .to_string(),
-            );
-            for (http_api_definition_name, http_api_definition_diff) in &self.http_api_definitions {
-                match http_api_definition_diff {
-                    BTreeMapDiffValue::Create => {
-                        logln(format!(
-                            "  - {} HTTP API definition {}",
-                            "create".green(),
-                            http_api_definition_name.log_color_highlight()
-                        ));
-                    }
-                    BTreeMapDiffValue::Delete => {
-                        logln(format!(
-                            "  - {} HTTP API definition {}",
-                            "delete".red(),
-                            http_api_definition_name.log_color_highlight()
-                        ));
-                    }
-                    BTreeMapDiffValue::Update(_) => {
-                        logln(format!(
-                            "  - {} HTTP API definition {}",
-                            "update".yellow(),
-                            http_api_definition_name.log_color_highlight()
-                        ));
-                    }
-                }
-            }
-            logln("");
-        }
         if !self.http_api_deployments.is_empty() {
             logln(
                 "HTTP API deployment changes:"
@@ -166,13 +133,54 @@ impl TextView for DeploymentDiff {
                             domain.log_color_highlight()
                         ));
                     }
-                    BTreeMapDiffValue::Update(_) => {
-                        logln(format!(
+                    BTreeMapDiffValue::Update(diff) => match diff {
+                        DiffForHashOf::HashDiff { .. } => logln(format!(
                             "  - {} HTTP API deployment {}",
                             "update".yellow(),
                             domain.log_color_highlight()
-                        ));
-                    }
+                        )),
+                        DiffForHashOf::ValueDiff { diff } => {
+                            logln(format!(
+                                "  - {} HTTP API deployment {}, changes:",
+                                "update".yellow(),
+                                domain.log_color_highlight()
+                            ));
+                            if diff.webhooks_url_changed {
+                                logln("    - webhooks_url");
+                            }
+                            if !diff.agents_changes.is_empty() {
+                                logln("    - agents");
+                                for (agent_name, agent_diff) in &diff.agents_changes {
+                                    match agent_diff {
+                                        BTreeMapDiffValue::Create => {
+                                            logln(format!(
+                                                "      - {} agent {}",
+                                                "create".green(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                        }
+                                        BTreeMapDiffValue::Delete => {
+                                            logln(format!(
+                                                "      - {} file {}",
+                                                "delete".red(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                        }
+                                        BTreeMapDiffValue::Update(diff) => {
+                                            logln(format!(
+                                                "      - {} agent {}, changes:",
+                                                "update".yellow(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                            if diff.security_scheme_changed {
+                                                logln("        - security_scheme");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
                 }
             }
             logln("");

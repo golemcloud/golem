@@ -1238,7 +1238,6 @@ pub mod worker {
 }
 
 pub mod api {
-    use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
     use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
@@ -1246,11 +1245,6 @@ pub mod api {
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
-        /// Manage API definitions
-        Definition {
-            #[clap(subcommand)]
-            subcommand: ApiDefinitionSubcommand,
-        },
         /// Manage API deployments
         Deployment {
             #[clap(subcommand)]
@@ -1266,51 +1260,6 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
         },
-    }
-
-    pub mod definition {
-        use crate::model::OpenApiDefinitionOutputFormat;
-        use clap::Subcommand;
-        use golem_common::model::deployment::DeploymentRevision;
-        use golem_common::model::http_api_definition::{
-            HttpApiDefinitionName, HttpApiDefinitionRevision,
-        };
-
-        #[derive(Debug, Subcommand)]
-        pub enum ApiDefinitionSubcommand {
-            /// Retrieves metadata about an existing API definition
-            Get {
-                /// HTTP API definition name to get
-                name: HttpApiDefinitionName,
-                /// Optional revision to get
-                revision: Option<HttpApiDefinitionRevision>,
-            },
-            /// Lists all HTPP API definitions
-            List,
-            /// Gets an HTTP API definition in OpenAPI format
-            OpenApi {
-                /// HTTP API definition name to export
-                name: HttpApiDefinitionName,
-                /// Optional deployment revision to get
-                deployment_revision: Option<DeploymentRevision>,
-                /// Output format (json or yaml)
-                #[arg(long = "def-format", default_value = "yaml", name = "def-format")]
-                format: OpenApiDefinitionOutputFormat,
-                /// Custom output file name (without extension)
-                #[arg(short, long)]
-                output_name: Option<String>,
-            },
-            /// Opens Swagger UI for an HTTP API definition
-            Swagger {
-                /// HTTP API definition name
-                name: HttpApiDefinitionName,
-                /// Optional deployment revision
-                revision: Option<DeploymentRevision>,
-                /// Port to open Swagger UI on (defaults to 9007)
-                #[arg(long, short, default_value_t = 9007)]
-                port: u16,
-            },
-        }
     }
 
     pub mod deployment {

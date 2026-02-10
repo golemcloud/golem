@@ -38,11 +38,13 @@ declare_structs! {
 
     pub struct HttpApiDeploymentCreation {
         pub domain: Domain,
+        pub webhooks_url: String,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>
     }
 
     pub struct HttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
+        pub webhook_url: Option<String>,
         pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
 
@@ -53,6 +55,13 @@ declare_structs! {
         pub domain: Domain,
         pub hash: diff::Hash,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
+        pub webhooks_url: String,
         pub created_at: DateTime<chrono::Utc>,
+    }
+}
+
+impl HttpApiDeploymentCreation {
+    pub fn default_webhooks_url() -> String {
+        "/webhooks/".to_string()
     }
 }

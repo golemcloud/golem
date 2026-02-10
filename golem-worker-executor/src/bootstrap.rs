@@ -15,6 +15,7 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::{golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_deployments::AgentDeploymentsService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
@@ -100,10 +101,11 @@ impl Bootstrap<Context> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits =
-            resource_limits::configured(&golem_config.resource_limits, registry_service);
+            resource_limits::configured(&golem_config.resource_limits, registry_service.clone());
 
         let additional_deps = NoAdditionalDeps {};
 
@@ -136,6 +138,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_type_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -168,12 +171,14 @@ impl Bootstrap<Context> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_type_service.clone(),
+            agent_deployments_service.clone(),
             additional_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
             agent_type_service,
+            agent_deployments_service,
             engine,
             linker,
             runtime.clone(),

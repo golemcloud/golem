@@ -59,8 +59,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::agent::JsonComponentModelValue",
             ),
             (
-                "RegisteredAgentType",
-                "golem_common::model::agent::RegisteredAgentType",
+                "DeployedRegisteredAgentType",
+                "golem_common::model::agent::DeployedRegisteredAgentType",
             ),
             (
                 "RegisteredAgentTypeImplementer",
@@ -282,19 +282,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PublicOplogEntryWithIndex",
                 "golem_common::model::oplog::PublicOplogEntryWithIndex",
             ),
-            // http_api_definition
-            (
-                "HttpApiDefinition",
-                "golem_common::model::http_api_definition::HttpApiDefinition",
-            ),
-            (
-                "HttpApiDefinitionCreation",
-                "golem_common::model::http_api_definition::HttpApiDefinitionCreation",
-            ),
-            (
-                "HttpApiDefinitionUpdate",
-                "golem_common::model::http_api_definition::HttpApiDefinitionUpdate",
-            ),
             // http_api_deployment
             (
                 "HttpApiDeployment",
@@ -330,20 +317,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_wasm::json::OptionallyValueAndTypeJson",
             ),
             ("ValueAndType", "golem_wasm::ValueAndType"),
-            // legacy
-            // Fixme: code-first routes
-            (
-                "LegacyHttpApiDeployment",
-                "golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment",
-            ),
-            (
-                "LegacyHttpApiDeploymentCreation",
-                "golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeploymentCreation",
-            ),
-            (
-                "LegacyHttpApiDeploymentUpdate",
-                "golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeploymentUpdate",
-            ),
         ],
         &["/v1/components/{component_id}/workers/{worker_name}/connect"],
     )

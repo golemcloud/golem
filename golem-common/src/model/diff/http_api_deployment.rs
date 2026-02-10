@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::BTreeMapDiff;
-use crate::model::diff::{hash_from_serialized_value, BTreeSetDiff, Diffable, Hash, Hashable};
+use crate::model::diff::{hash_from_serialized_value, Diffable, Hash, Hashable};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,7 +46,9 @@ impl Diffable for HttpApiDeploymentAgentOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HttpApiDeployment {
+    pub webhooks_url: String,
     pub agents: BTreeMap<String, HttpApiDeploymentAgentOptions>,
 }
 
@@ -56,29 +58,30 @@ impl Hashable for HttpApiDeployment {
     }
 }
 
-impl Diffable for HttpApiDeployment {
-    type DiffResult = BTreeMapDiff<String, HttpApiDeploymentAgentOptions>;
-
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        new.agents.diff_with_current(&current.agents)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct HttpApiDeploymentLegacy {
-    pub agent_types: BTreeSet<String>,
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDeploymentDiff {
+    pub webhooks_url_changed: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents_changes: BTreeMapDiff<String, HttpApiDeploymentAgentOptions>,
 }
 
-impl Hashable for HttpApiDeploymentLegacy {
-    fn hash(&self) -> Hash {
-        hash_from_serialized_value(self)
-    }
-}
-
-impl Diffable for HttpApiDeploymentLegacy {
-    type DiffResult = BTreeSetDiff<String>;
+impl Diffable for HttpApiDeployment {
+    type DiffResult = HttpApiDeploymentDiff;
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        new.agent_types.diff_with_current(&current.agent_types)
+        let webhooks_url_changed = new.webhooks_url != current.webhooks_url;
+        let agents_changes = new
+            .agents
+            .diff_with_current(&current.agents)
+            .unwrap_or_default();
+        if webhooks_url_changed || !agents_changes.is_empty() {
+            Some(Self::DiffResult {
+                webhooks_url_changed,
+                agents_changes,
+            })
+        } else {
+            None
+        }
     }
 }

@@ -21,7 +21,8 @@ use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRe
 use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentType, RegisteredAgentType, RegisteredAgentTypeImplementer};
+use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::{AgentType, RegisteredAgentTypeImplementer};
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -34,7 +35,6 @@ use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -191,8 +191,6 @@ impl DeploymentIdentity {
                 .into_iter()
                 .map(|c| c.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            // Fixme: code-first routes
-            http_api_definitions: Vec::new(),
             http_api_deployments: self
                 .http_api_deployments
                 .into_iter()
@@ -215,8 +213,6 @@ impl DeploymentIdentity {
                     )
                 })
                 .collect(),
-            // Fixme: code-first routes
-            http_api_definitions: BTreeMap::new(),
             http_api_deployments: self
                 .http_api_deployments
                 .iter()
@@ -248,8 +244,6 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .into_iter()
                 .map(|c| c.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            // Fixme: code-first routes
-            http_api_definitions: Vec::new(),
             http_api_deployments: value
                 .identity
                 .http_api_deployments
@@ -302,6 +296,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
 
     pub component_id: Uuid,
     pub component_revision_id: i64,
+    pub webhook_prefix_authority_and_path: Option<String>,
     pub agent_type: Blob<AgentType>,
 }
 
@@ -309,7 +304,7 @@ impl DeploymentRegisteredAgentTypeRecord {
     pub fn from_model(
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
-        registered_agent_type: RegisteredAgentType,
+        registered_agent_type: DeployedRegisteredAgentType,
     ) -> Self {
         Self {
             environment_id: environment_id.0,
@@ -321,20 +316,23 @@ impl DeploymentRegisteredAgentTypeRecord {
                 .implemented_by
                 .component_revision
                 .into(),
+            webhook_prefix_authority_and_path: registered_agent_type
+                .webhook_prefix_authority_and_path,
             agent_type: Blob::new(registered_agent_type.agent_type),
         }
     }
 }
 
-impl TryFrom<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
+impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentType {
     type Error = DeployRepoError;
     fn try_from(value: DeploymentRegisteredAgentTypeRecord) -> Result<Self, Self::Error> {
         Ok(Self {
+            agent_type: value.agent_type.into_value(),
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
             },
-            agent_type: value.agent_type.into_value(),
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })
     }
 }
@@ -361,7 +359,7 @@ impl DeploymentRevisionCreationRecord {
         components: Vec<Component>,
         http_api_deployments: Vec<HttpApiDeployment>,
         compiled_routes: Vec<UnboundCompiledRoute>,
-        registered_agent_types: Vec<RegisteredAgentType>,
+        registered_agent_types: Vec<DeployedRegisteredAgentType>,
     ) -> Self {
         Self {
             environment_id: environment_id.0,

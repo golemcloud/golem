@@ -21,16 +21,12 @@ use golem_client::model::DeploymentCreation;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{
-    DeploymentPlan, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
-    DeploymentPlanHttpApiDeploymentEntry, DeploymentRollback, DeploymentVersion,
+    DeploymentPlan, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
+    DeploymentRollback, DeploymentVersion,
 };
 use golem_common::model::diff::Hash;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
-use golem_common::model::http_api_definition::{
-    GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
-    HttpApiRoute, RouteMethod, WorkerGatewayBinding,
-};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
@@ -200,7 +196,6 @@ async fn get_component_version_from_previous_deployment(
 }
 
 #[test]
-#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -219,45 +214,19 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         )
         .await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
-
-    let http_api_definition_creation = HttpApiDefinitionCreation {
-        name: HttpApiDefinitionName("test-api".to_string()),
-        version: HttpApiDefinitionVersion("1".to_string()),
-        routes: vec![HttpApiRoute {
-            method: RouteMethod::Post,
-            path: "/{user-id}/test-path-1".to_string(),
-            binding: GatewayBinding::Worker(WorkerGatewayBinding {
-                component_name: ComponentName("shopping-cart".to_string()),
-                idempotency_key: None,
-                invocation_context: None,
-                response: r#"
-                    let user-id = request.path.user-id;
-                    let worker = "shopping-cart-${user-id}";
-                    let inst = instance(worker);
-                    let contents = inst.get-cart-contents();
-                    {
-                        headers: {ContentType: "json", userid: "foo"},
-                        body: contents,
-                        status: 201
-                    }
-                "#
-                .to_string(),
-            }),
-            security: None,
-        }],
-    };
-
-    let http_api_definition = client
-        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
+    let component = user
+        .component(&env.id, "golem_it_agent_http_routes_ts")
+        .name("golem-it:agent-http-routes-ts")
+        .store()
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
-            AgentTypeName("shopping-cart".to_string()),
+            AgentTypeName("http-agent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let http_api_deployment = client
@@ -265,7 +234,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let expected_hash =
-        Hash::from_str("087c869b4c364100347971e1e0042bab9b1e3d4d196ecfbf103ec61c922fb4cf")?;
+        Hash::from_str("a578db91bcc1305e81cf305ba68009b06e556235a74c65cc7bbf3715c0cd5c76")?;
 
     let expected_plan = DeploymentPlan {
         current_revision: None,
@@ -273,17 +242,9 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         components: vec![DeploymentPlanComponentEntry {
             id: component.id,
             revision: component.revision,
-            name: ComponentName("shopping-cart".to_string()),
+            name: ComponentName("golem-it:agent-http-routes-ts".to_string()),
             hash: Hash::from_str(
-                "14fce3c6af8fb02ea56e1c948d1232c5cef4b8c836b66b6dbc00d3ee6e72b333",
-            )?,
-        }],
-        http_api_definitions: vec![DeploymentPlanHttpApiDefintionEntry {
-            id: http_api_definition.id,
-            revision: http_api_definition.revision,
-            name: HttpApiDefinitionName("test-api".to_string()),
-            hash: Hash::from_str(
-                "ee3396fc64ad11ea4a927caf90c211e0608c194e7130bc3c3e8bab01e46ad0d9",
+                "23d4dda294f6394b762d20542797d68f890243315b149cdff1cd34beffca0b71",
             )?,
         }],
         http_api_deployments: vec![DeploymentPlanHttpApiDeploymentEntry {
@@ -291,7 +252,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             revision: http_api_deployment.revision,
             domain: domain.clone(),
             hash: Hash::from_str(
-                "f376d6d81bf72819175679739e3803cc918277fdb44ccd1976bec197e627677a",
+                "e56e7b639dd6373669c2f5a8c3f51ba13a15b3aa08dd737067a547fd52144f09",
             )?,
         }],
     };
@@ -320,7 +281,6 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
         assert!(deployment.deployment_hash == expected_hash);
         assert!(deployment.components == expected_plan.components);
-        assert!(deployment.http_api_definitions == expected_plan.http_api_definitions);
         assert!(deployment.http_api_deployments == expected_plan.http_api_deployments);
     }
 

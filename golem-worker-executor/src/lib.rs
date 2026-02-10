@@ -29,6 +29,8 @@ pub mod workerctx;
 #[cfg(test)]
 test_r::enable!();
 
+use self::services::agent_deployments::{AgentDeploymentsService, GrpcAgentDeploymentService};
+use self::services::golem_config::AgentDeploymentsServiceConfig;
 use self::services::promise::LazyPromiseService;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
@@ -116,6 +118,20 @@ pub struct RunDetails {
 pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
+
+    fn create_agent_deployments_service(
+        &self,
+        config: &AgentDeploymentsServiceConfig,
+        registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn AgentDeploymentsService> {
+        Arc::new(GrpcAgentDeploymentService::new(
+            registry_service,
+            config.cache_capacity,
+            config.cache_ttl,
+            config.cache_eviction_interval,
+            config.use_https_for_webhook_url,
+        ))
+    }
 
     async fn run_grpc_server(
         &self,
@@ -211,6 +227,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<Ctx>>;
 
@@ -429,6 +446,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         blob_storage.clone(),
     );
 
+    let agent_deployments_service = bootstrap.create_agent_deployments_service(
+        &golem_config.agent_deployments_service,
+        registry_service.clone(),
+    );
+
     let agent_type_service = services::agent_types::configured(
         &golem_config.agent_types_service,
         component_service.clone(),
@@ -583,6 +605,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             oplog_processor_plugin,
             agent_type_service,
+            agent_deployments_service,
             registry_service,
         )
         .await?;

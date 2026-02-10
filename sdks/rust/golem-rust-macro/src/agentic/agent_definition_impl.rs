@@ -14,7 +14,8 @@
 
 use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method, is_static_method};
 use crate::agentic::{
-    async_trait_in_agent_definition_error, generic_type_in_agent_method_error,
+    async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
+    endpoint_on_static_method_error, generic_type_in_agent_method_error,
     generic_type_in_agent_return_type_error, generic_type_in_constructor_error, get_remote_client,
     multiple_constructor_methods_error, no_constructor_method_error,
 };
@@ -167,6 +168,33 @@ fn get_agent_type_with_remote_client(
 
     let methods = agent_definition_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
+
+            let parsed_endpoint_details_result: syn::Result<Vec<ParsedHttpEndpointDetails>> =
+                extract_http_endpoints(&trait_fn.attrs);
+
+            let parsed_endpoint_details = match parsed_endpoint_details_result {
+                Ok(details) => details,
+                Err(err) => {
+                    return Some(err.to_compile_error());
+                }
+            };
+
+            if !parsed_endpoint_details.is_empty() && is_constructor_method(&trait_fn.sig, None) {
+                return Some(
+                    endpoint_on_constructor_method_error(
+                        trait_fn.sig.ident.span()
+                    )
+                );
+            }
+
+            if !parsed_endpoint_details.is_empty() && is_static_method(&trait_fn.sig) {
+                return Some(
+                    endpoint_on_static_method_error(
+                        trait_fn.sig.ident.span()
+                    )
+                );
+            }
+
             if is_constructor_method(&trait_fn.sig, None) {
                 return None;
             }
@@ -176,12 +204,12 @@ fn get_agent_type_with_remote_client(
             }
 
             let name = &trait_fn.sig.ident;
+
             let method_name = &name.to_string();
 
             let method_description = extract_description(&trait_fn.attrs).unwrap_or_default();
+
             let method_prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
-            let parsed_endpoint_details: Vec<ParsedHttpEndpointDetails> =
-                extract_http_endpoints(&trait_fn.attrs);
 
             let endpoint_details_tokens = parsed_endpoint_details.iter().map(|parsed| {
                 let method = &parsed.http_method;

@@ -17,7 +17,7 @@ use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsPreflightBehaviour, MethodParameter,
-    OriginPattern, QueryOrHeaderType,
+    OriginPattern, QueryOrHeaderType, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::agent::{AgentTypeName, HttpMethod};
@@ -161,26 +161,26 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
         use proto::golem::customapi::route_behaviour::Kind;
 
         match value.kind.ok_or("RouteBehaviour.kind missing")? {
-            Kind::CallAgent(agent) => Ok(RouteBehaviour::CallAgent(CallAgentBehaviour {
-                component_id: agent
+            Kind::CallAgent(call_agent) => Ok(RouteBehaviour::CallAgent(CallAgentBehaviour {
+                component_id: call_agent
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_revision: agent.component_revision.try_into()?,
-                agent_type: AgentTypeName(agent.agent_type),
-                constructor_parameters: agent
+                component_revision: call_agent.component_revision.try_into()?,
+                agent_type: AgentTypeName(call_agent.agent_type),
+                constructor_parameters: call_agent
                     .constructor_parameters
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<_, _>>()?,
-                phantom: agent.phantom,
-                method_name: agent.method_name,
-                method_parameters: agent
+                phantom: call_agent.phantom,
+                method_name: call_agent.method_name,
+                method_parameters: call_agent
                     .method_parameters
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<_, _>>()?,
-                expected_agent_response: agent
+                expected_agent_response: call_agent
                     .expected_agent_response
                     .ok_or("Missing expected_agent_response")?
                     .try_into()?,
@@ -197,6 +197,14 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                         .into_iter()
                         .map(HttpMethod::try_from)
                         .collect::<Result<BTreeSet<_>, _>>()?,
+                }))
+            }
+            Kind::WebhookCallback(webhook_callback) => {
+                Ok(RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
+                    component_id: webhook_callback
+                        .component_id
+                        .ok_or("Missing component_id")?
+                        .try_into()?,
                 }))
             }
         }
@@ -245,6 +253,13 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                             .into_iter()
                             .map(proto::golem::component::HttpMethod::from)
                             .collect(),
+                    },
+                )),
+            },
+            RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour { component_id }) => Self {
+                kind: Some(Kind::WebhookCallback(
+                    proto::golem::customapi::route_behaviour::WebhookCallback {
+                        component_id: Some(component_id.into()),
                     },
                 )),
             },
