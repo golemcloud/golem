@@ -315,27 +315,15 @@ export class LanguageService {
   ): { entries: string[]; replaceStart: number; replaceEnd: number } | undefined {
     if (pos < 0) return;
 
-    const callContext = getCallArgumentContext(snippet, pos);
     const checker = this.project.getTypeChecker();
-    const fallbackContext = !callContext
-      ? getFallbackCallContext(snippet, pos, rawStart)
-      : undefined;
-    if (!callContext && !fallbackContext) return;
+    const context = getCallContextForPlaceholders(snippet, pos, rawStart);
+    if (!context) return;
 
-    const callExpression = callContext?.callExpression;
-    const argIndex = callContext ? callContext.argIndex : fallbackContext!.argIndex;
-    const argNode = callContext ? callContext.argNode : fallbackContext!.argNode;
-
-    const signature = callContext
-      ? getResolvedSignature(callContext.callExpression)
-      : fallbackContext!.signature;
+    const { signature, argIndex, argNode, replaceRange, expressionNode } = context;
     if (!signature) return;
     if (signature.getParameters().length === 0) {
       const snippetText = snippet.getText();
       if (snippetText[pos + 1] === ')') return;
-      const replaceRange = callContext
-        ? getArgumentReplaceRange(callExpression!, argIndex, pos, rawStart)
-        : fallbackContext!.replaceRange;
       return {
         entries: [')'],
         replaceStart: replaceRange.replaceStart,
@@ -346,7 +334,7 @@ export class LanguageService {
       signature,
       argIndex,
       checker,
-      callContext ? callExpression! : fallbackContext!.expressionNode,
+      expressionNode,
     );
     if (!paramType) return;
 
@@ -361,14 +349,10 @@ export class LanguageService {
 
     if (!filtered.length) return;
 
-    const { replaceStart, replaceEnd } = callContext
-      ? getArgumentReplaceRange(callExpression!, argIndex, pos, rawStart)
-      : fallbackContext!.replaceRange;
-
     return {
       entries: filtered.slice(0, MAX_PLACEHOLDER_ENTRIES),
-      replaceStart,
-      replaceEnd,
+      replaceStart: replaceRange.replaceStart,
+      replaceEnd: replaceRange.replaceEnd,
     };
   }
 }
@@ -401,13 +385,42 @@ type CallArgumentContext = {
   argNode: tsm.Expression | undefined;
 };
 
-type FallbackCallContext = {
+type PlaceholderCallContext = {
   expressionNode: tsm.Expression;
   signature: tsm.Signature;
   argIndex: number;
   argNode: tsm.Expression | undefined;
   replaceRange: { replaceStart: number; replaceEnd: number };
 };
+
+function getCallContextForPlaceholders(
+  snippet: tsm.SourceFile,
+  pos: number,
+  rawStart: number,
+): PlaceholderCallContext | undefined {
+  const callContext = getCallArgumentContext(snippet, pos);
+  if (callContext) {
+    const signature = getResolvedSignature(callContext.callExpression);
+    if (!signature) return;
+    const replaceRange = getArgumentReplaceRange(
+      callContext.callExpression,
+      callContext.argIndex,
+      pos,
+      rawStart,
+    );
+    return {
+      expressionNode: callContext.callExpression.getExpression(),
+      signature,
+      argIndex: callContext.argIndex,
+      argNode: callContext.argNode,
+      replaceRange,
+    };
+  }
+
+  const fallbackContext = getFallbackCallContext(snippet, pos, rawStart);
+  if (!fallbackContext) return;
+  return fallbackContext;
+}
 
 function getCallArgumentContext(
   snippet: tsm.SourceFile,
@@ -484,7 +497,7 @@ function getFallbackCallContext(
   snippet: tsm.SourceFile,
   pos: number,
   rawStart: number,
-): FallbackCallContext | undefined {
+): PlaceholderCallContext | undefined {
   const snippetText = snippet.getText();
   const openParenPos = findOpenParenForCall(snippetText, pos);
   if (openParenPos === undefined || openParenPos < rawStart) return;
