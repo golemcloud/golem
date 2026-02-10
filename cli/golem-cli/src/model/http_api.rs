@@ -12,4 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: atomic: delete if empty
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug)]
+pub struct HttpApiDeploymentDeployProperties {
+    pub webhooks_url: String,
+    pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
+}

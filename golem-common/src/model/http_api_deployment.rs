@@ -16,6 +16,14 @@ use crate::model::diff;
 
 pub use crate::base_model::http_api_deployment::*;
 
+impl HttpApiDeploymentAgentOptions {
+    pub fn to_diffable(&self) -> diff::HttpApiDeploymentAgentOptions {
+        diff::HttpApiDeploymentAgentOptions {
+            security_scheme: self.security_scheme.as_ref().map(|v| v.0.clone()),
+        }
+    }
+}
+
 impl HttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
@@ -23,14 +31,7 @@ impl HttpApiDeployment {
             agents: self
                 .agents
                 .iter()
-                .map(|(k, v)| {
-                    (
-                        k.0.clone(),
-                        diff::HttpApiDeploymentAgentOptions {
-                            security_scheme: v.security_scheme.as_ref().map(|v| v.0.clone()),
-                        },
-                    )
-                })
+                .map(|(k, v)| (k.0.clone(), v.to_diffable()))
                 .collect(),
         }
     }

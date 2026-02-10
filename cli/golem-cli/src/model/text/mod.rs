@@ -20,7 +20,6 @@ pub mod diff;
 pub mod environment;
 pub mod fmt;
 pub mod help;
-pub mod http_api_definition;
 pub mod http_api_deployment;
 pub mod http_api_domain;
 pub mod http_api_security;

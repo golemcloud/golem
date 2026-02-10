@@ -646,25 +646,6 @@ impl ApplicationContext {
             }
         }
 
-        if config.api_definitions() {
-            if !self.application.http_api_definitions().is_empty() {
-                logln(format!(
-                    "{}",
-                    "Application API definitions:".log_color_help_group()
-                ));
-                for (name, def) in self.application.http_api_definitions() {
-                    logln(format!(
-                        "  {}@{}",
-                        name.as_str().log_color_highlight(),
-                        def.value.version.0.log_color_highlight(),
-                    ));
-                }
-                logln("");
-            } else {
-                logln("No API definitions found in the application.\n");
-            }
-        }
-
         if config.api_deployments() {
             let environment_name = self.application.environment_name();
             let http_api_deployments = self
@@ -681,10 +662,10 @@ impl ApplicationContext {
                         .log_color_help_group()
                     ));
 
-                    for (site, definitions) in http_api_deployments {
+                    for (site, deployment) in http_api_deployments {
                         logln(format!("  {}", site.to_string().log_color_highlight(),));
-                        for definition in definitions.iter().flat_map(|defs| defs.value.iter()) {
-                            logln(format!("    {}", definition.as_str().log_color_highlight(),));
+                        for (agent_name, _) in deployment.value.agents.iter() {
+                            logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
                         }
                     }
                     logln("");

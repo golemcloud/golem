@@ -62,9 +62,9 @@ pub mod service {
     use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_client::api::{
         AccountError, ApiDeploymentError, ApiDomainError, ApiSecurityError, ApplicationError,
-        ComponentError, EnvironmentError, HttpApiDefinitionError,
-        LoginCompleteOauth2DeviceFlowError, LoginCurrentLoginTokenError, LoginLoginOauth2Error,
-        LoginPollOauth2WebflowError, LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
+        ComponentError, EnvironmentError, LoginCompleteOauth2DeviceFlowError,
+        LoginCurrentLoginTokenError, LoginLoginOauth2Error, LoginPollOauth2WebflowError,
+        LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
         LoginSubmitOauth2WebflowCallbackError, PluginError, TokenError, WorkerError,
     };
     use golem_common::model::{PromiseId, WorkerId};
@@ -762,47 +762,6 @@ pub mod service {
                     message: error.error,
                 },
                 LoginPollOauth2WebflowError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
-    impl HasServiceName for HttpApiDefinitionError {
-        fn service_name() -> &'static str {
-            "API Definition"
-        }
-    }
-
-    impl From<HttpApiDefinitionError> for ServiceErrorResponse {
-        fn from(value: HttpApiDefinitionError) -> Self {
-            match value {
-                HttpApiDefinitionError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                HttpApiDefinitionError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                HttpApiDefinitionError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                HttpApiDefinitionError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                HttpApiDefinitionError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                HttpApiDefinitionError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                HttpApiDefinitionError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
                 },

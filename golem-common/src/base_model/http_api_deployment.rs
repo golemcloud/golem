@@ -38,13 +38,13 @@ declare_structs! {
 
     pub struct HttpApiDeploymentCreation {
         pub domain: Domain,
-        /// webhooks url to use for agents deployed to this domain. Defaults to `/webhooks/` if not provided.
-        pub webhooks_url: Option<String>,
+        pub webhooks_url: String,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>
     }
 
     pub struct HttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
+        pub webhook_url: Option<String>,
         pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
 

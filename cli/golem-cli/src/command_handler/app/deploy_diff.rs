@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app;
 use crate::model::component::{show_exported_agents, ComponentDeployProperties};
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::http_api::HttpApiDeploymentDeployProperties;
 use crate::model::text::component::is_sensitive_env_var_name;
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
-    CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
-    DeploymentPlanHttpApiDeploymentEntry,
+    CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
 };
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
-use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionName};
-use golem_common::model::http_api_deployment_legacy::LegacyHttpApiDeployment;
+use golem_common::model::http_api_deployment::HttpApiDeployment;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
@@ -38,9 +36,8 @@ use tracing::debug;
 pub struct DeployQuickDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
-    pub deployable_manifest_http_api_definitions:
-        BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>,
-    pub deployable_manifest_http_api_deployments: BTreeMap<Domain, Vec<HttpApiDefinitionName>>,
+    pub deployable_manifest_http_api_deployments:
+        BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
 }
@@ -77,8 +74,7 @@ pub enum DeployDiffKind {
 pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_components: BTreeMap<ComponentName, ComponentDeployProperties>,
-    pub deployable_http_api_definitions: BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>,
-    pub deployable_http_api_deployments: BTreeMap<Domain, Vec<HttpApiDefinitionName>>,
+    pub deployable_http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
     #[allow(unused)] // NOTE: for debug logs
@@ -216,24 +212,10 @@ impl DeployDiff {
             })
     }
 
-    pub fn deployable_manifest_http_api_definition(
-        &self,
-        http_api_definition_name: &HttpApiDefinitionName,
-    ) -> &app::HttpApiDefinition {
-        self.deployable_http_api_definitions
-            .get(http_api_definition_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API definition {} not found in deployable manifest",
-                    http_api_definition_name
-                )
-            })
-    }
-
     pub fn deployable_manifest_http_api_deployment(
         &self,
         domain: &Domain,
-    ) -> &Vec<HttpApiDefinitionName> {
+    ) -> &HttpApiDeploymentDeployProperties {
         self.deployable_http_api_deployments
             .get(domain)
             .unwrap_or_else(|| {
@@ -256,22 +238,6 @@ impl DeployDiff {
                 panic!(
                     "Expected component {} not found in staged deployment",
                     component_name
-                )
-            })
-    }
-
-    pub fn staged_http_api_definition_identity(
-        &self,
-        http_api_definition_name: &HttpApiDefinitionName,
-    ) -> &DeploymentPlanHttpApiDefintionEntry {
-        self.staged_deployment
-            .http_api_definitions
-            .iter()
-            .find(|def| &def.name == http_api_definition_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API definition {} not found in staged deployment",
-                    http_api_definition_name
                 )
             })
     }
@@ -315,29 +281,6 @@ impl DeployDiff {
             })
     }
 
-    pub fn current_http_api_definition_identity(
-        &self,
-        http_api_definition_name: &HttpApiDefinitionName,
-    ) -> &DeploymentPlanHttpApiDefintionEntry {
-        self.current_deployment
-            .as_ref()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API definition {} not found in current deployment, no deployment",
-                    http_api_definition_name
-                )
-            })
-            .http_api_definitions
-            .iter()
-            .find(|def| &def.name == http_api_definition_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API definition {} not found in current deployment",
-                    http_api_definition_name
-                )
-            })
-    }
-
     pub fn current_http_api_deployment_identity(
         &self,
         domain: &Domain,
@@ -372,21 +315,6 @@ impl DeployDiff {
         }
     }
 
-    pub fn http_api_definition_identity(
-        &self,
-        kind: DeployDiffKind,
-        http_api_definition_name: &HttpApiDefinitionName,
-    ) -> &DeploymentPlanHttpApiDefintionEntry {
-        match kind {
-            DeployDiffKind::Stage => {
-                self.staged_http_api_definition_identity(http_api_definition_name)
-            }
-            DeployDiffKind::Current => {
-                self.current_http_api_definition_identity(http_api_definition_name)
-            }
-        }
-    }
-
     pub fn http_api_deployment_identity(
         &self,
         kind: DeployDiffKind,
@@ -405,14 +333,6 @@ impl DeployDiff {
     ) -> anyhow::Result<()> {
         for (component_name, component) in details.component {
             self.add_component_details(kind, component_name, component);
-        }
-
-        for (http_api_definition_name, http_api_definition) in details.http_api_definition {
-            self.add_http_api_definition_details(
-                kind,
-                http_api_definition_name,
-                http_api_definition,
-            );
         }
 
         for (domain, http_api_deployment) in details.http_api_deployment {
@@ -465,35 +385,11 @@ impl DeployDiff {
         }
     }
 
-    fn add_http_api_definition_details(
-        &mut self,
-        kind: DeployDiffKind,
-        http_api_definition_name: HttpApiDefinitionName,
-        http_api_definition: HttpApiDefinition,
-    ) {
-        match &kind {
-            DeployDiffKind::Stage => {
-                self.diffable_staged_deployment.http_api_definitions.insert(
-                    http_api_definition_name.0,
-                    http_api_definition.to_diffable().into(),
-                );
-            }
-            DeployDiffKind::Current => {
-                self.diffable_current_deployment
-                    .http_api_definitions
-                    .insert(
-                        http_api_definition_name.0,
-                        http_api_definition.to_diffable().into(),
-                    );
-            }
-        }
-    }
-
     fn add_http_api_deployment_details(
         &mut self,
         kind: DeployDiffKind,
         domain: Domain,
-        http_api_deployment: LegacyHttpApiDeployment,
+        http_api_deployment: HttpApiDeployment,
     ) {
         match &kind {
             DeployDiffKind::Stage => {
@@ -521,8 +417,7 @@ impl DeployDiff {
 #[derive(Debug)]
 pub struct DeployDetails {
     pub component: Vec<(ComponentName, ComponentDto)>,
-    pub http_api_definition: Vec<(HttpApiDefinitionName, HttpApiDefinition)>,
-    pub http_api_deployment: Vec<(Domain, LegacyHttpApiDeployment)>,
+    pub http_api_deployment: Vec<(Domain, HttpApiDeployment)>,
 }
 
 #[derive(Debug)]
@@ -581,22 +476,6 @@ impl RollbackDiff {
             })
     }
 
-    pub fn current_http_api_definition_identity(
-        &self,
-        http_api_definition_name: &HttpApiDefinitionName,
-    ) -> &DeploymentPlanHttpApiDefintionEntry {
-        self.current_deployment
-            .http_api_definitions
-            .iter()
-            .find(|def| &def.name == http_api_definition_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API definition {} not found in current deployment",
-                    http_api_definition_name
-                )
-            })
-    }
-
     pub fn current_http_api_deployment_identity(
         &self,
         domain: &Domain,
@@ -625,22 +504,6 @@ impl RollbackDiff {
                 panic!(
                     "Expected component {} not found in target deployment",
                     component_name
-                )
-            })
-    }
-
-    pub fn target_http_api_definition_identity(
-        &self,
-        http_api_definition_name: &HttpApiDefinitionName,
-    ) -> &DeploymentPlanHttpApiDefintionEntry {
-        self.target_deployment
-            .http_api_definitions
-            .iter()
-            .find(|def| &def.name == http_api_definition_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API definition {} not found in target deployment",
-                    http_api_definition_name
                 )
             })
     }
@@ -687,32 +550,9 @@ impl RollbackDiff {
         }
     }
 
-    fn add_http_api_definition_details(
-        &mut self,
-        http_api_definition_details: RollbackEntityDetails<
-            HttpApiDefinitionName,
-            HttpApiDefinition,
-        >,
-    ) {
-        if let Some(http_api_definition) = http_api_definition_details.new {
-            self.diffable_target_deployment.http_api_definitions.insert(
-                http_api_definition_details.name.0.clone(),
-                http_api_definition.to_diffable().into(),
-            );
-        }
-        if let Some(http_api_definition) = http_api_definition_details.current {
-            self.diffable_current_deployment
-                .http_api_definitions
-                .insert(
-                    http_api_definition_details.name.0.clone(),
-                    http_api_definition.to_diffable().into(),
-                );
-        }
-    }
-
     fn add_http_api_deployment_details(
         &mut self,
-        http_api_deployment_details: RollbackEntityDetails<Domain, LegacyHttpApiDeployment>,
+        http_api_deployment_details: RollbackEntityDetails<Domain, HttpApiDeployment>,
     ) {
         if let Some(http_api_deployment) = http_api_deployment_details.new {
             self.diffable_target_deployment.http_api_deployments.insert(
@@ -733,10 +573,6 @@ impl RollbackDiff {
     pub fn add_details(&mut self, details: RollbackDetails) -> anyhow::Result<()> {
         for component_details in details.component {
             self.add_component_details(component_details);
-        }
-
-        for http_api_definition_details in details.http_api_definition {
-            self.add_http_api_definition_details(http_api_definition_details);
         }
 
         for http_api_deployment_details in details.http_api_deployment {
@@ -848,8 +684,7 @@ impl<'a, Name, Entity> RollbackEntityDetails<Name, &'a Entity> {
 #[derive(Debug)]
 pub struct RollbackDetails {
     pub component: Vec<RollbackEntityDetails<ComponentName, ComponentDto>>,
-    pub http_api_definition: Vec<RollbackEntityDetails<HttpApiDefinitionName, HttpApiDefinition>>,
-    pub http_api_deployment: Vec<RollbackEntityDetails<Domain, LegacyHttpApiDeployment>>,
+    pub http_api_deployment: Vec<RollbackEntityDetails<Domain, HttpApiDeployment>>,
 }
 
 #[derive(Debug)]
@@ -913,17 +748,6 @@ fn normalized_diff_deployment(
                     },
                 )
             })
-            .collect(),
-        http_api_definitions: deployment
-            .http_api_definitions
-            .iter()
-            .filter(|(http_api_definition_name, _)| {
-                diff.is_some_and(|diff| {
-                    diff.http_api_definitions
-                        .contains_key(*http_api_definition_name)
-                })
-            })
-            .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         http_api_deployments: deployment
             .http_api_deployments

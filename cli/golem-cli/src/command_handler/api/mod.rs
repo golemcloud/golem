@@ -17,7 +17,6 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use std::sync::Arc;
 
-pub mod definition;
 pub mod deployment;
 pub mod domain;
 pub mod security_scheme;
@@ -33,12 +32,6 @@ impl ApiCommandHandler {
 
     pub async fn handle_command(&self, command: ApiSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiSubcommand::Definition { subcommand } => {
-                self.ctx
-                    .api_definition_handler()
-                    .handle_command(subcommand)
-                    .await
-            }
             ApiSubcommand::Deployment { subcommand } => {
                 self.ctx
                     .api_deployment_handler()

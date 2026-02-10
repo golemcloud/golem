@@ -71,7 +71,7 @@ pub async fn test_context_internal(
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     client

@@ -31,6 +31,9 @@ componentTemplates:
         linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
         clean:
         - src/bindings.rs
+        customCommands:
+          copy:
+            - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../..
       release:
         build:
         - command: cargo component build --release
@@ -52,6 +55,9 @@ componentTemplates:
         linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
         clean:
         - src/bindings.rs
+        customCommands:
+          copy:
+            - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm ../../..
 customCommands:
   cargo-clean:
   - command: cargo clean

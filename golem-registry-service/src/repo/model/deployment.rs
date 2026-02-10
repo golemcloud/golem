@@ -35,7 +35,6 @@ use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -192,8 +191,6 @@ impl DeploymentIdentity {
                 .into_iter()
                 .map(|c| c.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            // Fixme: code-first routes
-            http_api_definitions: Vec::new(),
             http_api_deployments: self
                 .http_api_deployments
                 .into_iter()
@@ -216,8 +213,6 @@ impl DeploymentIdentity {
                     )
                 })
                 .collect(),
-            // Fixme: code-first routes
-            http_api_definitions: BTreeMap::new(),
             http_api_deployments: self
                 .http_api_deployments
                 .iter()
@@ -249,8 +244,6 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .into_iter()
                 .map(|c| c.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            // Fixme: code-first routes
-            http_api_definitions: Vec::new(),
             http_api_deployments: value
                 .identity
                 .http_api_deployments

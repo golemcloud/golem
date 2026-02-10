@@ -21,7 +21,6 @@ mod domain_registration;
 mod environment;
 mod environment_plugin_grants;
 mod environment_share;
-mod http_api_definition;
 mod http_api_deployment;
 mod plugin_registration;
 mod reports;

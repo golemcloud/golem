@@ -20,12 +20,7 @@ use golem_client::api::{
     RegistryServiceUpdateHttpApiDeploymentError,
 };
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::ComponentName;
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::http_api_definition::{
-    GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
-    HttpApiRoute, RouteMethod, WorkerGatewayBinding,
-};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation, HttpApiDeploymentUpdate,
 };
@@ -52,7 +47,7 @@ async fn create_http_api_deployment_for_nonexitant_domain(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let result = client
@@ -83,7 +78,7 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let http_api_deployment = client
@@ -131,7 +126,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let http_api_deployment = client
@@ -150,6 +145,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ])),
+        webhook_url: Some("/webhooks2/".to_string()),
     };
 
     let updated_http_api_deployment = client
@@ -158,6 +154,9 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     assert!(updated_http_api_deployment.id == http_api_deployment.id);
     assert!(updated_http_api_deployment.revision == http_api_deployment.revision.next()?);
+    assert!(
+        updated_http_api_deployment.webhooks_url == http_api_deployment_update.webhook_url.unwrap()
+    );
     assert!(updated_http_api_deployment.agents == http_api_deployment_update.agents.unwrap());
 
     {
@@ -219,7 +218,7 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let http_api_deployment = client
@@ -282,7 +281,7 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     client
@@ -319,7 +318,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let http_api_deployment = client
@@ -328,6 +327,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
         current_revision: http_api_deployment.revision.next()?,
+        webhook_url: None,
         agents: Some(BTreeMap::from_iter([
             (
                 AgentTypeName("test-api".to_string()),
@@ -368,7 +368,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let http_api_deployment_1 = client
@@ -400,7 +400,6 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
 }
 
 #[test]
-#[ignore = "disabled until code-first routes"]
 #[tracing::instrument]
 async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -409,49 +408,18 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 
     let client = deps.registry_service().client(&user.token).await;
 
-    user.component(&env.id, "golem_it_constructor_parameter_echo")
-        .name("golem-it:constructor-parameter-echo")
+    user.component(&env.id, "golem_it_agent_http_routes_ts")
+        .name("golem-it:agent-http-routes-ts")
         .store()
-        .await?;
-
-    let http_api_definition_creation = HttpApiDefinitionCreation {
-        name: HttpApiDefinitionName("echo-api".to_string()),
-        version: HttpApiDefinitionVersion("1".to_string()),
-        routes: vec![HttpApiRoute {
-            method: RouteMethod::Post,
-            path: "/echo/{param}".to_string(),
-            binding: GatewayBinding::Worker(WorkerGatewayBinding {
-                component_name: ComponentName("golem-it:constructor-parameter-echo".to_string()),
-                idempotency_key: None,
-                invocation_context: None,
-                response: r#"
-                    let param = request.path.param;
-                    let agent = ephemeral-echo-agent("${param}");
-                    let result = agent.change-and-get();
-                    {
-                        body: {
-                            result: result
-                        },
-                        status: 200
-                    }
-                "#
-                .to_string(),
-            }),
-            security: None,
-        }],
-    };
-
-    client
-        .create_http_api_definition_legacy(&env.id.0, &http_api_definition_creation)
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
-            AgentTypeName("ephemeral-echo-agent".to_string()),
+            AgentTypeName("http-agent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let http_api_deployment = client
@@ -494,7 +462,7 @@ async fn cannot_access_http_api_deployment_from_another_user(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let deployment = client_a
@@ -533,7 +501,7 @@ async fn cannot_delete_http_api_deployment_from_another_user(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let deployment = client_a
@@ -569,7 +537,7 @@ async fn delete_with_wrong_revision_is_rejected(
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let deployment = client
@@ -606,7 +574,7 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
             AgentTypeName("test-api".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: None,
+        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 
     let deployment = client
