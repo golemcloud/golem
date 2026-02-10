@@ -389,103 +389,83 @@ function prepareScriptForEval(script: string): { script: string; transformed: bo
     ts.ScriptKind.TS,
   );
 
-  let transformed = false;
-  const statements: ts.Statement[] = [];
+  const edits: { start: number; end: number; replacement: string }[] = [];
 
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) {
-      statements.push(statement);
       continue;
     }
 
-    const importClause = statement.importClause;
-    transformed = true;
-    if (importClause?.isTypeOnly) {
-      continue;
-    }
-    const importCall = ts.factory.createCallExpression(
-      ts.factory.createToken(ts.SyntaxKind.ImportKeyword) as ts.Expression,
-      undefined,
-      [statement.moduleSpecifier],
-    );
-    const awaitedImport = ts.factory.createAwaitExpression(importCall);
-
-    if (!importClause) {
-      statements.push(ts.factory.createExpressionStatement(awaitedImport));
-      continue;
-    }
-
-    if (importClause.namedBindings && ts.isNamespaceImport(importClause.namedBindings)) {
-      const namespaceDecl = ts.factory.createVariableDeclaration(
-        importClause.namedBindings.name,
-        undefined,
-        undefined,
-        awaitedImport,
-      );
-      statements.push(
-        ts.factory.createVariableStatement(
-          undefined,
-          ts.factory.createVariableDeclarationList([namespaceDecl], ts.NodeFlags.Const),
-        ),
-      );
-      continue;
-    }
-
-    const bindings: ts.BindingElement[] = [];
-    if (importClause.name) {
-      bindings.push(
-        ts.factory.createBindingElement(
-          undefined,
-          ts.factory.createIdentifier('default'),
-          importClause.name,
-          undefined,
-        ),
-      );
-    }
-
-    if (importClause.namedBindings && ts.isNamedImports(importClause.namedBindings)) {
-      for (const element of importClause.namedBindings.elements) {
-        if (element.isTypeOnly) {
-          continue;
-        }
-        bindings.push(
-          ts.factory.createBindingElement(
-            undefined,
-            element.propertyName ?? element.name,
-            element.name,
-            undefined,
-          ),
-        );
-      }
-    }
-
-    if (bindings.length === 0) {
-      statements.push(ts.factory.createExpressionStatement(awaitedImport));
-      continue;
-    }
-
-    const objectBinding = ts.factory.createObjectBindingPattern(bindings);
-    const importDecl = ts.factory.createVariableDeclaration(
-      objectBinding,
-      undefined,
-      undefined,
-      awaitedImport,
-    );
-    statements.push(
-      ts.factory.createVariableStatement(
-        undefined,
-        ts.factory.createVariableDeclarationList([importDecl], ts.NodeFlags.Const),
-      ),
-    );
+    const replacement = rewriteImportToDynamic(statement, sourceFile);
+    const start = statement.getStart(sourceFile, false);
+    const end = statement.getEnd();
+    edits.push({ start, end, replacement });
   }
 
-  if (!transformed) {
+  if (edits.length === 0) {
     return { script, transformed: false };
   }
 
-  const updated = ts.factory.updateSourceFile(sourceFile, statements);
-  const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
-  const transformedScript = printer.printFile(updated);
+  let updated = script;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    const original = updated.slice(edit.start, edit.end);
+    const originalLines = countNewlines(original);
+    const replacementLines = countNewlines(edit.replacement);
+    let replacement = edit.replacement;
+    if (replacementLines < originalLines) {
+      replacement += '\n'.repeat(originalLines - replacementLines);
+    }
+    updated = updated.slice(0, edit.start) + replacement + updated.slice(edit.end);
+  }
 
-  return { script: transformedScript, transformed: true };
+  return { script: updated, transformed: true };
+}
+
+function rewriteImportToDynamic(statement: ts.ImportDeclaration, sourceFile: ts.SourceFile): string {
+  const importClause = statement.importClause;
+  const moduleText = statement.moduleSpecifier.getText(sourceFile);
+
+  if (!importClause) {
+    return `await import(${moduleText});`;
+  }
+
+  if (importClause.isTypeOnly) {
+    return 'void 0;';
+  }
+
+  if (importClause.namedBindings && ts.isNamespaceImport(importClause.namedBindings)) {
+    return `const ${importClause.namedBindings.name.text} = await import(${moduleText});`;
+  }
+
+  const bindings: string[] = [];
+  if (importClause.name) {
+    bindings.push(`default: ${importClause.name.text}`);
+  }
+
+  if (importClause.namedBindings && ts.isNamedImports(importClause.namedBindings)) {
+    for (const element of importClause.namedBindings.elements) {
+      if (element.isTypeOnly) {
+        continue;
+      }
+      const importName = (element.propertyName ?? element.name).getText(sourceFile);
+      const localName = element.name.getText(sourceFile);
+      bindings.push(importName === localName ? localName : `${importName}: ${localName}`);
+    }
+  }
+
+  if (bindings.length === 0) {
+    return 'void 0;';
+  }
+
+  return `const { ${bindings.join(', ')} } = await import(${moduleText});`;
+}
+
+function countNewlines(value: string): number {
+  let count = 0;
+  for (const char of value) {
+    if (char === '\n') {
+      count += 1;
+    }
+  }
+  return count;
 }
