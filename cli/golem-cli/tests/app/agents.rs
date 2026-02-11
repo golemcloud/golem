@@ -2,6 +2,7 @@ use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
 use crate::stubgen::test_data_path;
 use crate::Tracing;
 use anyhow::Context;
+use assert2::assert;
 use goldenfile::Mint;
 use golem_cli::fs;
 use golem_templates::model::GuestLanguage;
@@ -819,7 +820,7 @@ async fn test_common_dep_plugs_errors() {
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(!outputs.success());
-    assert2::assert!(outputs.stderr_contains_ordered(
+    assert!(outputs.stdout_contains_ordered(
         [
             "error: an error occurred when building the composition graph: multiple plugs found for export golem:web-search/types@1.0.0, only use one of them:",
             "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm",
