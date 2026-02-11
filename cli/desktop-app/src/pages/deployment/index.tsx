@@ -153,9 +153,7 @@ export default function Deployments() {
         const uniqueDeployments = deploymentResponse.reduce(
           (acc: Deployment[], current) => {
             if (
-              !acc.find(
-                (item: Deployment) => item.site.host === current.site.host,
-              )
+              !acc.find((item: Deployment) => item.domain === current.domain)
             ) {
               acc.push(current);
             }
@@ -183,7 +181,7 @@ export default function Deployments() {
         selectedDeploymentHost,
       );
       setDeployments(prev =>
-        prev.filter(d => d.site.host !== selectedDeploymentHost),
+        prev.filter(d => d.domain !== selectedDeploymentHost),
       );
     } catch (error) {
       console.error("Error deleting deployment:", error);
@@ -228,7 +226,7 @@ export default function Deployments() {
             <div className="grid gap-4 overflow-auto max-h-[calc(100vh-200px)]">
               {deployments.map(deployment => (
                 <Card
-                  key={deployment.site.host}
+                  key={deployment.domain}
                   className="border-2 hover:border-primary/50 transition-all duration-200"
                 >
                   <div className="p-6 space-y-6">
@@ -240,12 +238,7 @@ export default function Deployments() {
                         </div>
                         <div>
                           <h2 className="text-lg font-semibold flex items-center gap-2">
-                            {deployment.site.host}
-                            {deployment.site.subdomain && (
-                              <Badge variant="outline" className="text-xs">
-                                {deployment.site.subdomain}
-                              </Badge>
-                            )}
+                            {deployment.domain}
                           </h2>
                           <p className="text-sm text-muted-foreground">
                             {deployment.apiDefinitions.length} API
@@ -258,11 +251,11 @@ export default function Deployments() {
                       </div>
 
                       <Dialog
-                        open={dialogOpenForHost === deployment.site.host}
+                        open={dialogOpenForHost === deployment.domain}
                         onOpenChange={isOpen => {
                           if (isOpen) {
-                            setSelectedDeploymentHost(deployment.site.host);
-                            setDialogOpenForHost(deployment.site.host);
+                            setSelectedDeploymentHost(deployment.domain);
+                            setDialogOpenForHost(deployment.domain);
                           } else {
                             setDialogOpenForHost(null);
                           }
@@ -275,8 +268,8 @@ export default function Deployments() {
                             className="text-destructive hover:text-destructive hover:bg-destructive/10"
                             onClick={e => {
                               e.stopPropagation();
-                              setSelectedDeploymentHost(deployment.site.host);
-                              setDialogOpenForHost(deployment.site.host);
+                              setSelectedDeploymentHost(deployment.domain);
+                              setDialogOpenForHost(deployment.domain);
                             }}
                           >
                             <Trash className="h-4 w-4" />
@@ -315,80 +308,85 @@ export default function Deployments() {
 
                     {/* API Definitions List */}
                     <div className="space-y-3">
-                      {deployment.apiDefinitions.map(api => (
-                        <div
-                          key={`${api.id}-${api.version}`}
-                          className="space-y-2"
-                        >
-                          <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
-                            <div className="flex items-center gap-3 flex-1">
-                              <Badge variant="secondary" className="font-mono">
-                                {api.id}
-                              </Badge>
-                              <Badge
-                                variant="outline"
-                                className="font-mono text-xs"
-                              >
-                                v{api.version}
-                              </Badge>
-                              <span className="text-xs text-muted-foreground">
-                                {apiList.find(
-                                  a =>
-                                    a.id === api.id &&
-                                    a.version === api.version,
-                                )?.routes?.length || 0}{" "}
-                                route
-                                {(apiList.find(
-                                  a =>
-                                    a.id === api.id &&
-                                    a.version === api.version,
-                                )?.routes?.length || 0) !== 1
-                                  ? "s"
-                                  : ""}
-                              </span>
+                      {deployment.apiDefinitions.map(apiDefString => {
+                        // Parse "id@version" format
+                        const [apiId = "", apiVersion = ""] =
+                          apiDefString.split("@");
+                        return (
+                          <div key={apiDefString} className="space-y-2">
+                            <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
+                              <div className="flex items-center gap-3 flex-1">
+                                <Badge
+                                  variant="secondary"
+                                  className="font-mono"
+                                >
+                                  {apiId}
+                                </Badge>
+                                <Badge
+                                  variant="outline"
+                                  className="font-mono text-xs"
+                                >
+                                  v{apiVersion}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {apiList.find(
+                                    a =>
+                                      a.id === apiId &&
+                                      a.version === apiVersion,
+                                  )?.routes?.length || 0}{" "}
+                                  route
+                                  {(apiList.find(
+                                    a =>
+                                      a.id === apiId &&
+                                      a.version === apiVersion,
+                                  )?.routes?.length || 0) !== 1
+                                    ? "s"
+                                    : ""}
+                                </span>
+                              </div>
+
+                              {(apiList.find(
+                                a => a.id === apiId && a.version === apiVersion,
+                              )?.routes?.length || 0) > 0 && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    toggleExpanded(
+                                      deployment.domain,
+                                      apiId,
+                                      apiVersion,
+                                    )
+                                  }
+                                  className="h-8 w-8 p-0"
+                                >
+                                  <ChevronRight
+                                    className={cn(
+                                      "h-4 w-4 transition-transform duration-200",
+                                      expandedDeployment.includes(
+                                        `${deployment.domain}.${apiId}.${apiVersion}`,
+                                      ) && "rotate-90",
+                                    )}
+                                  />
+                                </Button>
+                              )}
                             </div>
 
-                            {(apiList.find(
-                              a => a.id === api.id && a.version === api.version,
-                            )?.routes?.length || 0) > 0 && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  toggleExpanded(
-                                    deployment.site.host,
-                                    api.id,
-                                    api.version,
-                                  )
-                                }
-                                className="h-8 w-8 p-0"
-                              >
-                                <ChevronRight
-                                  className={cn(
-                                    "h-4 w-4 transition-transform duration-200",
-                                    expandedDeployment.includes(
-                                      `${deployment.site.host}.${api.id}.${api.version}`,
-                                    ) && "rotate-90",
-                                  )}
+                            {expandedDeployment.includes(
+                              `${deployment.domain}.${apiId}.${apiVersion}`,
+                            ) && (
+                              <div className="pl-4">
+                                <RoutesCard
+                                  apiId={apiId}
+                                  version={apiVersion}
+                                  apiList={apiList}
+                                  host={deployment.domain}
                                 />
-                              </Button>
+                              </div>
                             )}
                           </div>
-
-                          {expandedDeployment.includes(
-                            `${deployment.site.host}.${api.id}.${api.version}`,
-                          ) && (
-                            <div className="pl-4">
-                              <RoutesCard
-                                apiId={api.id}
-                                version={api.version}
-                                apiList={apiList}
-                                host={deployment.site.host}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </Card>

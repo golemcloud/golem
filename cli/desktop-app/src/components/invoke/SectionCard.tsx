@@ -47,6 +47,25 @@ export function SectionCard({
   exportName = "",
 }: SectionCardProps) {
   const { resolvedTheme } = useTheme();
+
+  const lightJsonTheme = {
+    base00: "#ffffff",
+    base01: "#f5f5f5",
+    base02: "#d0d0d0",
+    base03: "#b0b0b0",
+    base04: "#505050",
+    base05: "#303030",
+    base06: "#303030",
+    base07: "#000000",
+    base08: "#c41a16",
+    base09: "#b45309",
+    base0A: "#7b6c04",
+    base0B: "#4a7c0f",
+    base0C: "#1a7a6d",
+    base0D: "#2e7bb3",
+    base0E: "#9b3dab",
+    base0F: "#be643c",
+  };
   const [copied, setCopied] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -166,7 +185,7 @@ export function SectionCard({
             <ReactJson
               src={JSON.parse(value || "{}")}
               name={null}
-              theme={resolvedTheme == "dark" ? "brewer" : "bright:inverted"}
+              theme={resolvedTheme == "dark" ? "brewer" : lightJsonTheme}
               collapsed={false}
               enableClipboard={false}
               displayDataTypes={false}

@@ -6,6 +6,7 @@ import { PluginService } from "./client/plugin-service";
 import { DeploymentService } from "./client/deployment-service";
 import { AppService } from "./client/app-service";
 import { ManifestService } from "./client/manifest-service";
+import { EnvironmentService } from "./client/environment-service";
 
 export class Service {
   public cliService: CLIService;
@@ -16,6 +17,7 @@ export class Service {
   public deploymentService: DeploymentService;
   public appService: AppService;
   public manifestService: ManifestService;
+  public environmentService: EnvironmentService;
 
   constructor() {
     // Initialize services in the correct order to handle dependencies
@@ -36,6 +38,7 @@ export class Service {
       this.cliService,
       this.manifestService,
     );
+    this.environmentService = new EnvironmentService(this.manifestService);
     this.appService = new AppService(this.cliService);
   }
 }

@@ -104,7 +104,7 @@ export default function Exports() {
   useEffect(() => {
     if (!component.versions?.length) return;
     const componentDetails = component.versions.find(
-      data => data.componentVersion === versionChange,
+      data => data.componentRevision === versionChange,
     );
     if (!componentDetails) {
       setResult([]);
@@ -149,7 +149,7 @@ export default function Exports() {
               </div>
               {versionList.length > 0 && (
                 <Select
-                  defaultValue={versionChange.toString()}
+                  defaultValue={(versionChange || 0).toString()}
                   onValueChange={version => handleVersionChange(+version)}
                 >
                   <SelectTrigger className="w-[80px]">

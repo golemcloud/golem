@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { User, Terminal } from "lucide-react";
+import { User, Terminal, ArrowLeft } from "lucide-react";
 import { Outlet } from "react-router-dom";
 
 const settingsNavigation = [
@@ -27,7 +27,12 @@ export const SettingsLayout = () => {
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8">
         <div className="flex flex-col space-y-8 max-w-7xl mx-auto">
-          <h1 className="text-3xl font-bold">Settings</h1>
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+            <h1 className="text-3xl font-bold">Settings</h1>
+          </div>
 
           <div className="flex gap-8">
             {/* Sidebar */}

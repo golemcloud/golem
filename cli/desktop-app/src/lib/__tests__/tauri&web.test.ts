@@ -14,18 +14,6 @@ vi.mock("@tauri-apps/plugin-http", () => ({
   fetch: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/plugin-websocket", () => ({
-  default: {
-    connect: vi.fn(() =>
-      Promise.resolve({
-        send: vi.fn(),
-        disconnect: vi.fn(),
-        addListener: vi.fn(),
-      }),
-    ),
-  },
-}));
-
 // Mock the BaseDirectory enum
 vi.mock("@tauri-apps/api/path", () => ({
   BaseDirectory: {
@@ -36,7 +24,6 @@ vi.mock("@tauri-apps/api/path", () => ({
 describe("tauri&web utilities", () => {
   let mockMatchMedia: ReturnType<typeof vi.fn>;
   let mockGlobalFetch: ReturnType<typeof vi.fn>;
-  let mockWebSocket: ReturnType<typeof vi.fn>;
   let mockCreateElement: ReturnType<typeof vi.fn>;
   let mockAppendChild: ReturnType<typeof vi.fn>;
   let mockRemoveChild: ReturnType<typeof vi.fn>;
@@ -60,7 +47,6 @@ describe("tauri&web utilities", () => {
       removeEventListener: vi.fn(),
     }));
     mockGlobalFetch = vi.fn();
-    mockWebSocket = vi.fn(() => ({ send: vi.fn(), close: vi.fn() }));
 
     // Mock DOM methods
     mockCreateElement = vi.fn(() => ({
@@ -75,7 +61,6 @@ describe("tauri&web utilities", () => {
 
     // Set up global mocks
     global.fetch = mockGlobalFetch;
-    global.WebSocket = mockWebSocket as unknown as typeof WebSocket;
 
     // Mock document
     Object.defineProperty(global, "document", {
@@ -246,45 +231,6 @@ describe("tauri&web utilities", () => {
         "http://test.com",
         undefined,
       );
-    });
-  });
-
-  describe("UniversalWebSocket", () => {
-    it("creates Tauri WebSocket when __TAURI__ is available", async () => {
-      // Set up Tauri environment
-      Object.defineProperty(global, "window", {
-        value: { matchMedia: mockMatchMedia, __TAURI__: true },
-        writable: true,
-        configurable: true,
-      });
-
-      // Re-import the module
-      vi.resetModules();
-      const { UniversalWebSocket } = await import("../tauri&web");
-      const TauriWebSocket = (await import("@tauri-apps/plugin-websocket"))
-        .default;
-      const mockConnect = vi.mocked(TauriWebSocket.connect);
-
-      await UniversalWebSocket.connect("ws://test");
-
-      expect(mockConnect).toHaveBeenCalledWith("ws://test");
-    });
-
-    it("creates browser WebSocket when __TAURI__ is not available", async () => {
-      // Set up browser environment (no __TAURI__)
-      Object.defineProperty(global, "window", {
-        value: { matchMedia: mockMatchMedia },
-        writable: true,
-        configurable: true,
-      });
-
-      // Clear module cache and re-import
-      vi.resetModules();
-      const { UniversalWebSocket } = await import("../tauri&web");
-
-      await UniversalWebSocket.connect("ws://test");
-
-      expect(mockWebSocket).toHaveBeenCalledWith("ws://test");
     });
   });
 });

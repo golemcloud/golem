@@ -67,6 +67,10 @@ jobs:
       run: npm install
       working-directory: ./cli/desktop-app
 
+    - name: Install Playwright browsers
+      run: npx playwright install chromium
+      working-directory: ./cli/desktop-app
+
     - name: Run frontend tests
       run: npm test
       working-directory: ./cli/desktop-app

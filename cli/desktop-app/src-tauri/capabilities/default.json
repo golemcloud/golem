@@ -40,24 +40,6 @@
       "deny": []
     },
     {
-      "identifier": "websocket:default",
-      "allow": [
-        {
-          "url": "http://*"
-        },
-        {
-          "url": "https://*"
-        },
-        {
-          "url": "http://*:*"
-        },
-        {
-          "url": "https://*:*"
-        }
-      ],
-      "deny": []
-    },
-    {
       "identifier": "fs:allow-download-write-recursive",
       "allow": [
         {

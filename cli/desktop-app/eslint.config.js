@@ -1,3 +1,6 @@
+// For more info, see https://github.com/storybookjs/eslint-plugin-storybook#configuration-flat-config-format
+import storybook from "eslint-plugin-storybook";
+
 import globals from "globals";
 import pluginJs from "@eslint/js";
 import tseslint from "typescript-eslint";
@@ -50,6 +53,7 @@ export default [
         { ignore: ["cmdk-input-wrapper"] },
       ],
       "no-useless-escape": "off",
+      "no-console": ["error", { allow: ["warn", "error"] }],
     },
     settings: {
       react: {
@@ -126,6 +130,7 @@ export default [
       "no-constant-binary-expression": "off",
       "no-unreachable": "off",
       "no-import-assign": "off",
+      "no-console": ["error", { allow: ["warn", "error"] }],
     },
     settings: {
       react: {
@@ -165,9 +170,18 @@ export default [
       "no-constant-binary-expression": "off",
       "no-unreachable": "off",
       "no-import-assign": "off",
+      "no-console": ["error", { allow: ["warn", "error"] }],
     },
   },
   {
-    ignores: ["dist/", "node_modules/", "src-tauri/"],
+    ignores: [
+      "dist/",
+      "node_modules/",
+      "src-tauri/",
+      "storybook-static/",
+      ".storybook/",
+      "vitest.shims.d.ts",
+    ],
   },
+  ...storybook.configs["flat/recommended"],
 ];

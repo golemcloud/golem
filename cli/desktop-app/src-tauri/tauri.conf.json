@@ -13,9 +13,9 @@
     "windows": [
       {
         "title": "Golem",
-        "width": 800,
-        "height": 600,
-        "fullscreen": true,
+        "width": 1280,
+        "height": 800,
+        "fullscreen": false,
         "dragDropEnabled": false
       }
     ],

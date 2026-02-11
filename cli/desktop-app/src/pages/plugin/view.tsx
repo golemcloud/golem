@@ -176,50 +176,50 @@ export function PluginView() {
                           {currentVersion.oplogProcessorComponentId}
                         </Badge>
                       )}
-                      {currentVersion.oplogProcessorComponentVersion !==
+                      {currentVersion.oplogProcessorComponentRevision !==
                         undefined && (
                         <Badge variant="outline">
                           Component Version:{" "}
-                          {currentVersion.oplogProcessorComponentVersion}
+                          {currentVersion.oplogProcessorComponentRevision}
                         </Badge>
                       )}
                     </>
                   )}
-                  {currentVersion.specs?.type === "ComponentTransformer" &&
-                    currentVersion.specs.jsonSchema && (
+                  {currentVersion.spec?.type === "ComponentTransformer" &&
+                    currentVersion.spec.jsonSchema && (
                       <div>
                         <h4 className="text-sm font-medium mt-2">
                           JSON Schema:
                         </h4>
                         <pre className="bg-gray-100 p-2 rounded-md overflow-x-auto text-sm">
-                          {currentVersion.specs.jsonSchema}
+                          {currentVersion.spec.jsonSchema}
                         </pre>
                       </div>
                     )}
                 </div>
               </div>
             )}
-            {currentVersion.scope && (
+            {currentVersion.type && (
               <div>
-                <h3 className="font-semibold mb-2">Scope</h3>
+                <h3 className="font-semibold mb-2">Type</h3>
                 <Badge
                   variant="outline"
                   className="flex items-center text-sm w-fit"
                 >
-                  {currentVersion.scope.toLowerCase() === "global" ? (
+                  {currentVersion.type.toLowerCase() === "global" ? (
                     <Globe className="w-4 h-4 mr-2" />
                   ) : (
                     <Component className="w-4 h-4 mr-2" />
                   )}
-                  {currentVersion.scope}
+                  {currentVersion.type}
                 </Badge>
               </div>
             )}
           </CardContent>
           <CardFooter className="flex justify-end space-x-4">
-            {currentVersion.specs?.validateUrl && (
+            {currentVersion.spec?.validateUrl && (
               <a
-                href={currentVersion.specs.validateUrl}
+                href={currentVersion.spec.validateUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-4 py-2 text-blue-500 hover:underline"
@@ -227,9 +227,9 @@ export function PluginView() {
                 Validate
               </a>
             )}
-            {currentVersion.specs?.transformUrl && (
+            {currentVersion.spec?.transformUrl && (
               <a
-                href={currentVersion.specs.transformUrl}
+                href={currentVersion.spec.transformUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-4 py-2 bg-gray-500 text-white rounded-md shadow hover:bg-gray-600"

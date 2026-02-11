@@ -73,6 +73,7 @@ const FileTreeItem = ({
               handleToggle();
             }}
             className="mr-1 p-0.5 hover:bg-muted rounded"
+            aria-label={isExpanded ? "Collapse folder" : "Expand folder"}
           >
             {isExpanded ? (
               <ChevronDown className="h-3 w-3" />

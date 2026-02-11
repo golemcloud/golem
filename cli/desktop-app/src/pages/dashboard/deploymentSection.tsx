@@ -56,7 +56,7 @@ export function DeploymentSection() {
                   navigate(`/app/${appId}/deployments`);
                 }}
               >
-                <p className="text-sm font-medium">{deployment.site.host}</p>
+                <p className="text-sm font-medium">{deployment.domain}</p>
               </div>
             ))
           ) : (

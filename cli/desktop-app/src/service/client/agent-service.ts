@@ -45,11 +45,12 @@ export class AgentService {
     );
     const params = [
       "list",
+      "--component-name",
       component.componentName!,
       `--max-count=${param.count}`,
     ];
     if (param.precise) {
-      params.push(`--precise`);
+      params.push("--precise");
     }
     return (await this.cliService.callCLI(appId, "agent", params)) as Promise<{
       workers: Agent[];
@@ -223,12 +224,17 @@ export class AgentService {
     functionName: string,
     payload: { params?: unknown[] } | unknown[] | undefined,
   ): Promise<InvokeResponse> => {
-    // Get component name for ephemeral agent identification
+    // Get component name for proper identification
     const component = await this.componentService.getComponentById(
       appId,
       componentId,
     );
-    const ephemeralAgentName = `${component?.componentName}/-`;
+
+    // Extract agent type from function name (e.g. "pack:ts/human-agent.{fn}" -> "human-agent")
+    const interfacePart = functionName.split(".{")[0] || "";
+    const agentType = interfacePart.split("/").pop() || "";
+    const ephemeralId = `desktop-app-${crypto.randomUUID()}`;
+    const ephemeralAgentName = `${component?.componentName}/${agentType}("${ephemeralId}")`;
 
     // Convert payload to individual WAVE-formatted arguments using enhanced converter
     let waveArgs: string[];
@@ -284,10 +290,12 @@ export class AgentService {
     appId: string,
     componentId: string,
   ): Promise<AgentTypeSchema[]> {
-    // golem-cli app list-agent-types --format=json
-    const result = (await this.cliService.callCLI(appId, "app", [
+    // golem-cli list-agent-types --format=json (v1.4.2: moved to root level)
+    const result = (await this.cliService.callCLI(
+      appId,
       "list-agent-types",
-    ])) as AgentTypeSchema[];
-    return result.filter(spec => spec.implementedBy == componentId);
+      [],
+    )) as AgentTypeSchema[];
+    return result.filter(spec => spec.implementedBy.componentId == componentId);
   }
 }

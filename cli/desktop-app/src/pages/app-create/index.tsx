@@ -29,7 +29,10 @@ import {
 } from "@/components/ui/tooltip";
 import { FolderOpen, Info, ArrowLeft, Sparkles } from "lucide-react";
 
-const LANGUAGE_OPTIONS = [{ value: "ts", label: "TypeScript" }];
+const LANGUAGE_OPTIONS = [
+  { value: "rust", label: "Rust" },
+  { value: "ts", label: "TypeScript" },
+];
 
 export const CreateApplication = () => {
   const navigate = useNavigate();
@@ -111,8 +114,9 @@ export const CreateApplication = () => {
     setIsCreating(true);
     try {
       // Call the Rust function to create the application
+      // v1.4.2: 'new' is now a root-level command
       const result = await invoke("call_golem_command", {
-        command: "app",
+        command: "root",
         subcommands: ["new", formData.appName, formData.language],
         folderPath: formData.folderPath,
       });

@@ -20,10 +20,6 @@ vi.mock("../navLink", () => ({
   ),
 }));
 
-vi.mock("../server-status", () => ({
-  ServerStatus: () => <div data-testid="server-status">Server Status</div>,
-}));
-
 // Mock lucide-react
 vi.mock("lucide-react", () => ({
   Settings: () => <div data-testid="settings-icon">Settings</div>,
@@ -62,7 +58,6 @@ describe("Navbar", () => {
     renderNavbar();
 
     expect(screen.getByTestId("logo")).toBeInTheDocument();
-    expect(screen.getByTestId("server-status")).toBeInTheDocument();
     expect(screen.getByTestId("mode-toggle")).toBeInTheDocument();
     expect(screen.getByTestId("settings-icon")).toBeInTheDocument();
   });

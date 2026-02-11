@@ -293,7 +293,6 @@ describe("Application Workflow Integration Tests", () => {
         componentService: {
           getComponentById: vi.fn().mockRejectedValue(new Error("API Error")),
         },
-        checkHealth: vi.fn().mockResolvedValue(true),
       };
       vi.mocked(Service).mockImplementation(
         () => mockService as unknown as InstanceType<typeof Service>,
