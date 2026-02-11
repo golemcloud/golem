@@ -183,6 +183,7 @@ export class Repl {
         languageService.setSnippet(line);
         const completions = languageService.getSnippetCompletions();
         if (completions && completions.entries.length) {
+          completions.entries = completions.entries.slice(0, MAX_COMPLETION_ENTRIES);
           const replaceStart = completions.replaceStart ?? 0;
           const replaceEnd = completions.replaceEnd ?? line.length;
           const completeOn = line.slice(replaceStart, replaceEnd);
@@ -397,7 +398,7 @@ export function formatAsTable(
   return lines.join('\n');
 }
 
-const MAX_COMPLETION_ENTRIES = 20;
+const MAX_COMPLETION_ENTRIES = 50;
 
 let terminalWidth = process.stdout.isTTY ? process.stdout.columns : 80;
 
