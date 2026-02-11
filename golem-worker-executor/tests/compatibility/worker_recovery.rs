@@ -61,33 +61,6 @@ async fn recover_shopping_cart_example(
 #[test]
 #[tracing::instrument]
 #[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_shopping_cart_resource_example(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id = restore_from_recovery_golden_file(
-        &executor,
-        &context,
-        "shopping_cart_resource_example",
-        &["shopping-cart-resource"],
-    )
-    .await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor.resume(&worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_environment_example(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
