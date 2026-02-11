@@ -12,52 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::AgentTypeName;
-use golem_service_base::custom_api::{CompiledRoute, RouteBehaviour};
+use golem_service_base::custom_api::{OpenApiSpecPerAgent};
 use std::collections::HashMap;
+use golem_service_base::custom_api::openapi::RouteWithAgentType;
 
 pub struct OpenApiHandler;
 
 impl OpenApiHandler {
     pub async fn generate_spec(
-        agent_type_name: &AgentTypeName,
-        routes: &[CompiledRoute],
+        spec_details: &Vec<OpenApiSpecPerAgent>,
     ) -> Result<String, String> {
-        // Filter routes for this agent type
-        let agent_routes: Vec<_> = routes
-            .iter()
-            .filter(|route| {
-                if let RouteBehaviour::CallAgent(call_agent) = &route.behavior {
-                    call_agent.agent_type == *agent_type_name
-                } else {
-                    false
-                }
+        let routes = spec_details.iter().map(|r| {
+            r.routes.iter().map(|route| RouteWithAgentType {
+                agent_type: r.agent_type.clone(),
+                details: route.clone()
             })
-            .collect();
-
-        if agent_routes.is_empty() {
-            return Err(format!(
-                "No HTTP endpoints found for agent type: {}",
-                agent_type_name.0
-            ));
-        }
-
-        // Use the better openapiv3 based implementation from golem-service-base
-        let name = golem_common::model::http_api_definition::HttpApiDefinitionName(
-            agent_type_name.0.clone(),
-        );
-        let version = golem_common::model::http_api_definition::HttpApiDefinitionVersion(
-            "1.0.0".to_string(),
-        );
-        let security_schemes = HashMap::new();
+        }).collect::<Vec<_>>().into_iter().flatten().collect::<Vec<_>>();
 
         let spec = golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec::from_routes(
-            &name,
-            &version,
-            agent_routes.iter().map(|r| *r),
+            routes,
             &HashMap::new(),
         )
-        .await?;
+            .await?;
 
         serde_yaml::to_string(&spec.0).map_err(|e| e.to_string())
     }

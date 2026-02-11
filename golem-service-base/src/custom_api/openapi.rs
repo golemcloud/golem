@@ -26,6 +26,8 @@ const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
 
 /// Trait that any route type must implement to be used for OpenAPI generation
 pub trait HttpApiRoute {
+    fn agent_type(&self) -> &AgentType;
+
     fn security_scheme_missing(&self) -> bool;
     fn security_scheme(&self) -> Option<&SecuritySchemeName>;
     fn method(&self) -> &HttpMethod;
@@ -40,6 +42,10 @@ pub struct RouteWithAgentType {
 
 
 impl HttpApiRoute for RouteWithAgentType {
+    fn agent_type(&self) -> &AgentType {
+        &self.agent_type
+    }
+
     fn security_scheme_missing(&self) -> bool {
         false
     }

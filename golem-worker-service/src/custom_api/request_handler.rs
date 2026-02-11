@@ -130,7 +130,7 @@ impl RequestHandler {
                     .await
                 {
                     Ok(routes) => {
-                        match OpenApiHandler::generate_spec(agent_type, &routes).await {
+                        match OpenApiHandler::generate_spec(open_api_spec).await {
                             Ok(yaml) => {
                                 Ok(RouteExecutionResult {
                                     status: StatusCode::OK,
