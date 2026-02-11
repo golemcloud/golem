@@ -78,7 +78,7 @@ impl SafeDisplay for RequestHandlerError {
             Self::UnknownOidcState => self.to_string(),
             Self::OidcTokenExchangeFailed => self.to_string(),
             Self::OpenApiSpecGenerationFailed { .. } => self.to_string(),
-            
+
             Self::InvariantViolated { .. } => "internal error".to_string(),
 
             Self::ResolvingRouteFailed(inner) => {

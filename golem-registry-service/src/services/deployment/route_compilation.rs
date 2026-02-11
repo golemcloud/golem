@@ -17,6 +17,7 @@ use super::http_parameter_conversion::build_http_agent_method_parameters;
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::write::DeployValidationError;
+use golem_common::base_model::component::ComponentId;
 use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
@@ -25,11 +26,14 @@ use golem_common::model::agent::{
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
-use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, HttpRouteDetails, OpenApiSpecBehaviour, RoutesWithAgentType, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour};
+use golem_service_base::custom_api::{
+    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
+    HttpRouteDetails, OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema,
+    RouteBehaviour, RoutesWithAgentType, WebhookCallbackBehaviour,
+};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
-use golem_common::base_model::component::ComponentId;
 
 pub fn add_agent_method_http_routes(
     deployment: &HttpApiDeployment,
@@ -277,12 +281,11 @@ pub fn add_webhook_callback_routes(
     }
 }
 
-
 // this is done for open api spec
 fn to_http_route_details(route: &UnboundCompiledRoute, agent_type: &AgentType) -> HttpRouteDetails {
     HttpRouteDetails {
         agent_type: agent_type.clone(),
-        route_id: route.route_id
+        route_id: route.route_id,
     }
 }
 
@@ -307,31 +310,23 @@ fn build_openapi_spec_for_component(
         }
 
         if !routes.is_empty() {
-            result.push(RoutesWithAgentType {
-                routes,
-            });
+            result.push(RoutesWithAgentType { routes });
         }
     }
 
     result
 }
 
-
 // We need a route for each component rather than for each agent type,
 
 pub fn add_openapi_spec_routes(
     deployment: &HttpApiDeployment,
-    registered_agent_types: &HashMap<
-        AgentTypeName,
-        InProgressDeployedRegisteredAgentType,
-    >,
+    registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
     current_route_id: &mut i32,
     compiled_routes: &mut HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
 ) {
-    let mut component_agents: BTreeMap<
-        ComponentId,
-        Vec<&InProgressDeployedRegisteredAgentType>,
-    > = BTreeMap::new();
+    let mut component_agents: BTreeMap<ComponentId, Vec<&InProgressDeployedRegisteredAgentType>> =
+        BTreeMap::new();
 
     for agent_type_name in deployment.agents.keys() {
         let Some(agent) = registered_agent_types.get(agent_type_name) else {
@@ -345,16 +340,13 @@ pub fn add_openapi_spec_routes(
     }
 
     for (component_id, agents) in component_agents {
-        let open_api_spec = build_openapi_spec_for_component(
-            &component_id,
-            &agents,
-            compiled_routes,
-        );
+        let open_api_spec =
+            build_openapi_spec_for_component(&component_id, &agents, compiled_routes);
 
         if open_api_spec.is_empty() {
             continue;
         }
-        
+
         // It's per deployment
         let path = vec![
             PathSegment::Literal {
@@ -377,16 +369,14 @@ pub fn add_openapi_spec_routes(
 
         compiled_routes.insert(
             key,
-             // This is still pre-stage, and final stage conversion to be done at worker service.
+            // This is still pre-stage, and final stage conversion to be done at worker service.
             UnboundCompiledRoute {
                 route_id,
                 domain: deployment.domain.clone(),
                 method,
                 path,
                 body: RequestBodySchema::Unused,
-                behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                    open_api_spec,
-                }),
+                behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }),
                 security_scheme: None,
                 cors: CorsOptions {
                     allowed_patterns: Vec::new(),
@@ -395,7 +385,6 @@ pub fn add_openapi_spec_routes(
         );
     }
 }
-
 
 pub fn build_agent_http_api_deployment_details(
     agent_type_name: &AgentTypeName,

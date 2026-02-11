@@ -10,16 +10,19 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
+use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
+use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema};
+use golem_common::model::agent::DataSchema;
 use golem_common::model::security_scheme::SecuritySchemeId;
+use golem_service_base::custom_api::{
+    MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
+    RouteBehaviour, SecuritySchemeDetails,
+};
+use golem_service_base::model::SafeIndex;
 use golem_wasm::analysis::{AnalysedType, NameTypePair};
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema};
-use golem_common::model::agent::DataSchema;
-use golem_service_base::custom_api::{MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, RouteBehaviour, SecuritySchemeDetails};
-use golem_service_base::model::SafeIndex;
-use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 
 const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
 
@@ -67,7 +70,10 @@ impl HttpApiRoute for RouteWithAgentType {
         match &self.details.behavior {
             RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
                 let method_name = &call_agent_behaviour.method_name;
-                self.agent_type.methods.iter().find(|m| m.name == *method_name)
+                self.agent_type
+                    .methods
+                    .iter()
+                    .find(|m| m.name == *method_name)
             }
             _ => None,
         }
@@ -158,21 +164,14 @@ fn get_query_variable_and_types(
             params
                 .iter()
                 .filter_map(|p| match p {
-                    MethodParameter::Query { query_parameter_name, parameter_type } => {
-                        Some((query_parameter_name.clone(), parameter_type))
-                    }
-                    MethodParameter::Path { .. } => {
-                        None
-                    }
-                    MethodParameter::Header { .. } => {
-                        None
-                    }
-                    MethodParameter::JsonObjectBodyField { .. } => {
-                        None
-                    }
-                    MethodParameter::UnstructuredBinaryBody => {
-                        None
-                    }
+                    MethodParameter::Query {
+                        query_parameter_name,
+                        parameter_type,
+                    } => Some((query_parameter_name.clone(), parameter_type)),
+                    MethodParameter::Path { .. } => None,
+                    MethodParameter::Header { .. } => None,
+                    MethodParameter::JsonObjectBodyField { .. } => None,
+                    MethodParameter::UnstructuredBinaryBody => None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -187,21 +186,14 @@ fn get_header_variable_and_types(
             params
                 .iter()
                 .filter_map(|p| match p {
-                    MethodParameter::Header { header_name, parameter_type } => {
-                        Some((header_name.clone(), parameter_type))
-                    }
-                    MethodParameter::Path { .. } => {
-                        None
-                    }
-                    MethodParameter::Query { .. } => {
-                        None
-                    }
-                    MethodParameter::JsonObjectBodyField { .. } => {
-                        None
-                    }
-                    MethodParameter::UnstructuredBinaryBody => {
-                        None
-                    }
+                    MethodParameter::Header {
+                        header_name,
+                        parameter_type,
+                    } => Some((header_name.clone(), parameter_type)),
+                    MethodParameter::Path { .. } => None,
+                    MethodParameter::Query { .. } => None,
+                    MethodParameter::JsonObjectBodyField { .. } => None,
+                    MethodParameter::UnstructuredBinaryBody => None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -214,28 +206,28 @@ fn get_full_path_and_variables(
     method_params: Option<&Vec<MethodParameter>>,
 ) -> (String, Vec<(String, PathSegmentType)>) {
     if (agent_method.is_none()) {
-        return (path_segments.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("/"), Vec::new());
+        return (
+            path_segments
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join("/"),
+            Vec::new(),
+        );
     }
     let method_path_indices_vec: Vec<(SafeIndex, &PathSegmentType)> = method_params
         .map(|params| {
             params
                 .iter()
                 .filter_map(|p| match p {
-                    MethodParameter::Path { path_segment_index, parameter_type } => {
-                        Some((*path_segment_index, parameter_type))
-                    }
-                    MethodParameter::Query { .. } => {
-                        None
-                    }
-                    MethodParameter::Header { .. } => {
-                        None
-                    }
-                    MethodParameter::JsonObjectBodyField { .. } => {
-                        None
-                    }
-                    MethodParameter::UnstructuredBinaryBody => {
-                        None
-                    }
+                    MethodParameter::Path {
+                        path_segment_index,
+                        parameter_type,
+                    } => Some((*path_segment_index, parameter_type)),
+                    MethodParameter::Query { .. } => None,
+                    MethodParameter::Header { .. } => None,
+                    MethodParameter::JsonObjectBodyField { .. } => None,
+                    MethodParameter::UnstructuredBinaryBody => None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -245,18 +237,16 @@ fn get_full_path_and_variables(
         method_path_indices_vec.into_iter().collect();
 
     let input_parameter_names: Option<Vec<String>> =
-        agent_method.and_then(|x| {
-            match &x.input_schema {
-                DataSchema::Tuple(named_element_schemas) => Some(
-                    named_element_schemas
-                        .elements
-                        .iter()
-                        .map(|e| e.name.clone())
-                        .collect(),
-                ),
+        agent_method.and_then(|x| match &x.input_schema {
+            DataSchema::Tuple(named_element_schemas) => Some(
+                named_element_schemas
+                    .elements
+                    .iter()
+                    .map(|e| e.name.clone())
+                    .collect(),
+            ),
 
-                DataSchema::Multimodal(_) => None,
-            }
+            DataSchema::Multimodal(_) => None,
         });
 
     let mut path_params_and_types: Vec<(String, PathSegmentType)> = Vec::new();
@@ -300,7 +290,14 @@ fn get_full_path_and_variables(
         }
     }
 
-    (path_segment_string.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("/"), path_params_and_types)
+    (
+        path_segment_string
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+        path_params_and_types,
+    )
 }
 
 async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
@@ -308,28 +305,18 @@ async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     paths: &mut BTreeMap<String, openapiv3::PathItem>,
     security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
 ) -> Result<(), String> {
-
     let agent_method = route.associated_agent_method();
     let method_params = match route.binding() {
         RouteBehaviour::CallAgent(call_agent_behaviour) => {
             Some(&call_agent_behaviour.method_parameters)
         }
-        RouteBehaviour::CorsPreflight(_) => {
-            None
-        }
-        RouteBehaviour::WebhookCallback(_) => {
-            None
-        }
-        RouteBehaviour::OpenApiSpec(_) => {
-            None
-        }
+        RouteBehaviour::CorsPreflight(_) => None,
+        RouteBehaviour::WebhookCallback(_) => None,
+        RouteBehaviour::OpenApiSpec(_) => None,
     };
 
-    let (path_str, path_params_raw) = get_full_path_and_variables(
-        agent_method,
-        route.path(),
-        method_params
-    );
+    let (path_str, path_params_raw) =
+        get_full_path_and_variables(agent_method, route.path(), method_params);
 
     let path_item = paths.entry(path_str.clone()).or_default();
 
@@ -339,7 +326,12 @@ async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
 
     let header_params_raw = get_header_variable_and_types(method_params);
 
-    add_parameters(&mut operation, path_params_raw, query_params_raw, header_params_raw);
+    add_parameters(
+        &mut operation,
+        path_params_raw,
+        query_params_raw,
+        header_params_raw,
+    );
     add_request_body(&mut operation, route.request_body_schema());
     add_responses(&mut operation, route);
     add_security(&mut operation, route);
@@ -383,15 +375,13 @@ fn add_parameters(
     }
 }
 
-fn create_schema_from_path_segment_type(
-    path_segment_type: PathSegmentType
-) -> openapiv3::Schema {
+fn create_schema_from_path_segment_type(path_segment_type: PathSegmentType) -> openapiv3::Schema {
     let analysed_type = AnalysedType::from(path_segment_type);
     create_schema_from_analysed_type(&analysed_type)
 }
 
 fn create_schema_from_query_or_header_type(
-    query_or_header_type: &QueryOrHeaderType
+    query_or_header_type: &QueryOrHeaderType,
 ) -> openapiv3::Schema {
     let analysed_type = AnalysedType::from(query_or_header_type.clone());
     create_schema_from_analysed_type(&analysed_type)
@@ -488,7 +478,6 @@ fn create_header_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::
 }
 
 fn add_request_body(operation: &mut openapiv3::Operation, request_body_schema: &RequestBodySchema) {
-
     let request_body = create_request_body(request_body_schema);
 
     if let Some(rb) = request_body {
@@ -499,7 +488,7 @@ fn add_request_body(operation: &mut openapiv3::Operation, request_body_schema: &
 fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openapiv3::RequestBody> {
     match request_body_schema {
         RequestBodySchema::Unused => None,
-        RequestBodySchema::JsonBody {expected_type } => {
+        RequestBodySchema::JsonBody { expected_type } => {
             let schema = create_schema_from_analysed_type(expected_type);
             Some(openapiv3::RequestBody {
                 description: Some("JSON body".to_string()),
@@ -519,27 +508,23 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openap
             })
         }
 
-        RequestBodySchema::UnrestrictedBinary => {
-            Some(openapiv3::RequestBody {
-                description: Some("Unrestricted binary body".to_string()),
-                content: {
-                    let mut content = IndexMap::new();
-                    content.insert(
-                        "*/*".to_string(),
-                        openapiv3::MediaType {
-                            ..Default::default()
-                        },
-                    );
-                    content
-                },
-                required: true,
-                extensions: Default::default(),
-            })
-        }
+        RequestBodySchema::UnrestrictedBinary => Some(openapiv3::RequestBody {
+            description: Some("Unrestricted binary body".to_string()),
+            content: {
+                let mut content = IndexMap::new();
+                content.insert(
+                    "*/*".to_string(),
+                    openapiv3::MediaType {
+                        ..Default::default()
+                    },
+                );
+                content
+            },
+            required: true,
+            extensions: Default::default(),
+        }),
 
-        RequestBodySchema::RestrictedBinary {
-            allowed_mime_types,
-        } => {
+        RequestBodySchema::RestrictedBinary { allowed_mime_types } => {
             let mut content = IndexMap::new();
             for mime in allowed_mime_types {
                 content.insert(
@@ -558,7 +543,6 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openap
         }
     }
 }
-
 
 fn add_responses<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
     let (response_schema, headers, explicit_status) =
@@ -651,7 +635,7 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
     Option<u16>, // status code
 ) {
     match route.binding() {
-        RouteBehaviour::CallAgent(call_agent_behaviour) =>  {
+        RouteBehaviour::CallAgent(call_agent_behaviour) => {
             let response = &call_agent_behaviour.expected_agent_response;
 
             match response {
@@ -663,18 +647,24 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
                             let schema = &element_schema.schema;
 
                             match schema {
-                                ElementSchema::ComponentModel(inner) =>  {
-                                    let schema = create_schema_from_analysed_type(&inner.element_type);
-                                    (DeterminedResponseBodySchema::Known { schema: Box::new(schema), content_type: "application/json".to_string() }, None, Some(200))
+                                ElementSchema::ComponentModel(inner) => {
+                                    let schema =
+                                        create_schema_from_analysed_type(&inner.element_type);
+                                    (
+                                        DeterminedResponseBodySchema::Known {
+                                            schema: Box::new(schema),
+                                            content_type: "application/json".to_string(),
+                                        },
+                                        None,
+                                        Some(200),
+                                    )
                                 }
 
                                 _ => {
                                     todo!()
                                 }
-
-
                             }
-                        },
+                        }
                         _ => (DeterminedResponseBodySchema::Unknown, None, Some(200)),
                     }
                 }
@@ -698,10 +688,20 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
                 )),
             };
 
-            headers.insert("Access-Control-Allow-Origin".to_string(), string_schema.clone());
-            headers.insert("Access-Control-Allow-Headers".to_string(), string_schema.clone());
+            headers.insert(
+                "Access-Control-Allow-Origin".to_string(),
+                string_schema.clone(),
+            );
+            headers.insert(
+                "Access-Control-Allow-Headers".to_string(),
+                string_schema.clone(),
+            );
 
-            (DeterminedResponseBodySchema::NoBody, Some(headers), Some(200))
+            (
+                DeterminedResponseBodySchema::NoBody,
+                Some(headers),
+                Some(200),
+            )
         }
 
         RouteBehaviour::OpenApiSpec(openapi_spec_behaviour) => {
@@ -719,19 +719,12 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
         }
 
         RouteBehaviour::WebhookCallback(_) => {
-            (
-                DeterminedResponseBodySchema::NoBody,
-                None,
-                Some(200),
-            )
+            (DeterminedResponseBodySchema::NoBody, None, Some(200))
         }
     }
 }
 
-fn add_security<T: HttpApiRoute + ?Sized>(
-    operation: &mut openapiv3::Operation,
-    route: &T,
-) {
+fn add_security<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
     if route.security_scheme_missing() {
         operation.extensions.insert(
             GOLEM_DISABLED_EXTENSION.to_string(),
@@ -741,7 +734,11 @@ fn add_security<T: HttpApiRoute + ?Sized>(
     }
 
     if let Some(security_schema_details) = route.security_scheme() {
-        let scopes_vec: Vec<String> = security_schema_details.scopes.iter().map(|s| s.to_string()).collect();
+        let scopes_vec: Vec<String> = security_schema_details
+            .scopes
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         let mut requirement: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
         requirement.insert(security_schema_details.name.0.clone(), scopes_vec);

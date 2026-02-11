@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::iter::Map;
-use std::slice::Iter;
 use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
@@ -26,14 +23,17 @@ use super::webhoooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RichCompiledRoute, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
+use golem_common::base_model::agent::AgentType;
 use golem_service_base::custom_api::CorsPreflightBehaviour;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use poem::{Request, Response};
-use std::sync::Arc;
 use http::StatusCode;
+use poem::{Request, Response};
+use std::collections::HashMap;
+use std::iter::Map;
+use std::slice::Iter;
+use std::sync::Arc;
 use tracing::{Instrument, debug};
-use golem_common::base_model::agent::AgentType;
 
 pub struct RequestHandler {
     route_resolver: Arc<RouteResolver>,
@@ -130,33 +130,33 @@ impl RequestHandler {
                     .await
                 {
                     Ok(routes) => {
-                        let result: Vec<(AgentType, RichCompiledRoute)> =
-                            routes
-                                .iter()
-                                .filter_map(|rich_compiled_route| {
-                                    open_api_spec
-                                        .iter()
-                                        .flat_map(|r| r.routes.iter())
-                                        .find(|route| route.route_id == rich_compiled_route.route_id)
-                                        .map(|route| (route.agent_type.clone(), rich_compiled_route.clone()))
-                                })
-                                .collect();
-
+                        let result: Vec<(AgentType, RichCompiledRoute)> = routes
+                            .iter()
+                            .filter_map(|rich_compiled_route| {
+                                open_api_spec
+                                    .iter()
+                                    .flat_map(|r| r.routes.iter())
+                                    .find(|route| route.route_id == rich_compiled_route.route_id)
+                                    .map(|route| {
+                                        (route.agent_type.clone(), rich_compiled_route.clone())
+                                    })
+                            })
+                            .collect();
 
                         match OpenApiHandler::generate_spec(result, &HashMap::new()).await {
-                            Ok(yaml) => {
-                                Ok(RouteExecutionResult {
-                                    status: StatusCode::OK,
-                                    headers: HashMap::new(),
-                                    body: ResponseBody::PlainText {
-                                        body: yaml
-                                    },
-                                })
+                            Ok(yaml) => Ok(RouteExecutionResult {
+                                status: StatusCode::OK,
+                                headers: HashMap::new(),
+                                body: ResponseBody::PlainText { body: yaml },
+                            }),
+                            Err(e) => {
+                                Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: e })
                             }
-                            Err(e) => Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: e }),
                         }
                     }
-                    Err(_) => Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: "Failed to retrieve routes for domain".to_string() }),
+                    Err(_) => Err(RequestHandlerError::OpenApiSpecGenerationFailed {
+                        error: "Failed to retrieve routes for domain".to_string(),
+                    }),
                 }
             }
 

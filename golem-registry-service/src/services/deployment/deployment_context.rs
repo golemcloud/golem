@@ -145,8 +145,6 @@ impl DeploymentContext {
     // So for open-api routes, we need to create routes for all component-ids
     // HashMap<(Domain, ComponentId), Vec<UnboundCompiledRoute>>
 
-
-
     pub fn compile_http_api_routes(
         &self,
         registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,

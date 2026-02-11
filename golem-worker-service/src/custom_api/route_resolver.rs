@@ -21,7 +21,9 @@ use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
-use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema};
+use golem_service_base::custom_api::{
+    CompiledRoute, CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
@@ -125,7 +127,7 @@ impl RouteResolver {
             .await
             .map_err(|_| RouteResolverError::CouldNotBuildRouter)
     }
-    
+
     pub async fn get_enriched_routes_for_domain(
         &self,
         domain: &Domain,
@@ -141,12 +143,10 @@ impl RouteResolver {
             }
         };
 
-        Self::finalize_routes(compiled_routes)
-            .await
-            .map_err(|err| {
-                tracing::warn!("Failed to finalize routes for domain {domain}: {err:?}");
-                RouteResolverError::CouldNotBuildRouter
-            })
+        Self::finalize_routes(compiled_routes).await.map_err(|err| {
+            tracing::warn!("Failed to finalize routes for domain {domain}: {err:?}");
+            RouteResolverError::CouldNotBuildRouter
+        })
     }
 
     async fn build_router_for_domain(
@@ -160,7 +160,7 @@ impl RouteResolver {
                 return Err(());
             }
         };
-        
+
         Ok(Router::build_router(finalized_routes))
     }
 

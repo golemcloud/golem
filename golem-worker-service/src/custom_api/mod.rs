@@ -16,8 +16,9 @@ pub mod api_definition_lookup;
 pub mod call_agent;
 mod cors;
 pub mod error;
-mod openapi_handler;
 pub mod model;
+mod openapi;
+mod openapi_handler;
 pub mod poem_endpoint;
 pub mod request_handler;
 mod rich_request;
@@ -25,7 +26,6 @@ pub mod route_resolver;
 pub mod router;
 pub mod security;
 pub mod webhoooks;
-mod openapi;
 
 use self::poem_endpoint::CustomApiPoemEndpoint;
 use crate::bootstrap::Services;

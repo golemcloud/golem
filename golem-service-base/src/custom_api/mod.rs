@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod openapi;
 mod protobuf;
 
 use crate::model::SafeIndex;
@@ -248,7 +247,6 @@ pub enum RouteBehaviour {
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
 }
-
 
 // OpenAPI spec behaviour is more per component for now
 // `open_api_spec` can also represent agent types across the deployment.
