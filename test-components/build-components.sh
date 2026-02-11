@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
-"option-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking"
+"option-service" "http-client-2" "failing-component" "key-value-service" "blob-store-service" "runtime-service" "networking"
 "update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests" "update-test-env-var")
 rust_test_apps=("host-api-tests" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2")
 c_test_components=("large-initial-memory" "large-dynamic-memory")

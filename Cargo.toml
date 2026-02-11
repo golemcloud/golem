@@ -65,7 +65,6 @@ exclude = [
     "test-components/update-test-v3-sdk",
     "test-components/update-test-v4",
     "test-components/update-test-env-var",
-    "test-components/variant-service",
     "test-components/wasi-config",
     "test-components/write-stderr",
     "test-components/write-stdout",

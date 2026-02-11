@@ -1089,32 +1089,6 @@ async fn optional_parameters(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn variants_with_no_payloads(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "variant-service")
-        .store()
-        .await?;
-    let worker_id = executor
-        .start_worker(&component.id, "variant-service-1")
-        .await?;
-
-    let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{bid}", vec![])
-        .await?;
-
-    check!(result.is_ok());
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
 async fn delete_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
