@@ -218,7 +218,9 @@ impl TypeScriptRepl {
             "skipLibCheck": true,
             "sourceMap": true,
             "strict": true,
-            "target": "ES2022"
+            "target": "ES2022",
+            "types": ["node"],
+            "lib": ["ES2022"]
           },
           "include": [
             "repl.ts",
