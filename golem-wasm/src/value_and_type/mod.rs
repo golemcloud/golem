@@ -21,6 +21,7 @@ mod tests;
 
 use crate::analysis::AnalysedType;
 use crate::Value;
+use uuid::Uuid;
 
 #[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValue;
@@ -96,3 +97,21 @@ impl From<ValueAndType> for crate::WitType {
 
 /// Helper for dynamically creating record ValueAndType values with String keys
 pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
+
+/// Wrapped Uuid, matching the schema provided by the Golem Rust SDK
+#[derive(Clone, Debug)]
+pub struct UuidRecord {
+    pub value: Uuid,
+}
+
+impl From<Uuid> for UuidRecord {
+    fn from(uuid: Uuid) -> Self {
+        Self { value: uuid }
+    }
+}
+
+impl From<UuidRecord> for Uuid {
+    fn from(uuid_record: UuidRecord) -> Self {
+        uuid_record.value
+    }
+}

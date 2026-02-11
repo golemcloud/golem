@@ -55,8 +55,6 @@ use uuid::Uuid;
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
-    type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
-
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis.clone()
     }

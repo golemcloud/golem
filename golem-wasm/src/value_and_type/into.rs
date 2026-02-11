@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::analysis::analysed_type::{
-    bool, case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case,
-    unit_result, variant,
+    bool, case, field, list, option, record, result, result_err, result_ok, str, tuple, u32,
+    unit_case, unit_result, variant,
 };
 use crate::analysis::{analysed_type, AnalysedType, NameTypePair};
-use crate::{Value, ValueAndType};
+use crate::{UuidRecord, Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{Datelike, Offset, Timelike};
@@ -377,6 +377,16 @@ impl IntoValue for Uuid {
 
     fn get_type() -> AnalysedType {
         analysed_type::str()
+    }
+}
+
+impl IntoValue for UuidRecord {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.value.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("value", Uuid::get_type())])
     }
 }
 

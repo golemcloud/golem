@@ -15,7 +15,8 @@
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
-    build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended, WorkerLogEventStream,
+    build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended,
+    WorkerInvocationResult, WorkerLogEventStream,
 };
 use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
@@ -84,8 +85,6 @@ impl<Deps> TestUserContext<Deps> {
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
-    type WorkerInvocationResult<T> = anyhow::Result<T>;
-
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis()
     }
@@ -267,7 +266,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         name: &str,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId> {
+    ) -> WorkerInvocationResult<WorkerId> {
         let client = self
             .deps
             .worker_service()
@@ -285,7 +284,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             )
             .await?;
 
-        Ok(response.worker_id)
+        Ok(Ok(response.worker_id))
     }
 
     async fn start_worker_with(
@@ -295,8 +294,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
-        self.try_start_worker_with(component_id, name, env, wasi_config_vars)
-            .await
+        let result = self
+            .try_start_worker_with(component_id, name, env, wasi_config_vars)
+            .await?;
+        Ok(result?)
     }
 
     async fn invoke_with_key(
@@ -305,7 +306,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<()> {
+    ) -> WorkerInvocationResult<()> {
         let client = self
             .deps
             .worker_service()
@@ -326,7 +327,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 },
             )
             .await?;
-        Ok(())
+        Ok(Ok(()))
     }
 
     async fn invoke_and_await_with_key(
@@ -335,13 +336,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Vec<Value>> {
+    ) -> WorkerInvocationResult<Vec<Value>> {
         Ok(self
             .invoke_and_await_typed_with_key(worker_id, idempotency_key, function_name, params)
             .await?
-            .into_iter()
-            .map(|v| v.value)
-            .collect())
+            .map(|v| v.into_iter().map(|v| v.value).collect()))
     }
 
     async fn invoke_and_await_typed_with_key(
@@ -350,7 +349,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Option<ValueAndType>> {
+    ) -> WorkerInvocationResult<Option<ValueAndType>> {
         let client = self
             .deps
             .worker_service()
@@ -371,7 +370,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 },
             )
             .await?;
-        Ok(result.result)
+        Ok(Ok(result.result))
     }
 
     async fn invoke_and_await_json_with_key(
@@ -380,7 +379,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<serde_json::Value>,
-    ) -> anyhow::Result<Option<ValueAndType>> {
+    ) -> WorkerInvocationResult<Option<ValueAndType>> {
         let client = self
             .deps
             .worker_service()
@@ -400,7 +399,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 },
             )
             .await?;
-        Ok(result.result)
+        Ok(Ok(result.result))
     }
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {

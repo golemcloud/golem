@@ -426,3 +426,88 @@ macro_rules! error_forwarding {
         )*
     };
 }
+
+/// Create a DataValue::Tuple from component model values.
+///
+/// Each argument is converted to ValueAndType via `.into_value_and_type()` and
+/// wrapped in ElementValue::ComponentModel. This is useful for creating
+/// agent parameter tuples.
+///
+/// # Example
+/// ```ignore
+/// let value = data_value!(42_i32, "hello", 3.14_f64);
+/// // Creates DataValue::Tuple with three ElementValue::ComponentModel elements
+/// ```
+#[macro_export]
+macro_rules! data_value {
+    ($($element:expr),* $(,)?) => {
+        $crate::model::agent::DataValue::Tuple(
+            $crate::model::agent::ElementValues {
+                elements: vec![
+                    $($crate::model::agent::ElementValue::ComponentModel(
+                        $element.into_value_and_type()
+                    )),*
+                ],
+            }
+        )
+    };
+}
+
+/// Create an AgentId with the given agent type name and parameters.
+///
+/// The first argument is the agent type name (as a string expression), followed by
+/// optional component model values. Expands to:
+/// `AgentId::new(AgentTypeName("NAME".to_string()), data_value!(...params), None)`
+///
+/// # Example
+/// ```ignore
+/// let id = agent_id!("my-agent");
+/// let id = agent_id!("my-agent", 42u32, "hello");
+/// ```
+#[macro_export]
+macro_rules! agent_id {
+    ($name:expr) => {
+        $crate::base_model::agent::AgentId::new(
+            $crate::base_model::agent::AgentTypeName($name.to_string()),
+            $crate::data_value!(),
+            None
+        )
+    };
+    ($name:expr, $($element:expr),+ $(,)?) => {
+        $crate::base_model::agent::AgentId::new(
+            $crate::base_model::agent::AgentTypeName($name.to_string()),
+            $crate::data_value!($($element),+),
+            None
+        )
+    };
+}
+
+/// Create an AgentId with a phantom UUID.
+///
+/// The first argument is the agent type name (as a string expression), the second is
+/// a UUID, followed by optional component model values. Expands to:
+/// `AgentId::new(AgentTypeName("NAME".to_string()), data_value!(...params), Some(uuid))`
+///
+/// # Example
+/// ```ignore
+/// let uuid = Uuid::now_v7();
+/// let id = phantom_agent_id!("my-agent", uuid);
+/// let id = phantom_agent_id!("my-agent", uuid, 42u32, "hello");
+/// ```
+#[macro_export]
+macro_rules! phantom_agent_id {
+    ($name:expr, $phantom_id:expr) => {
+        $crate::base_model::agent::AgentId::new(
+            $crate::base_model::agent::AgentTypeName($name.to_string()),
+            $crate::data_value!(),
+            Some($phantom_id)
+        )
+    };
+    ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
+        $crate::base_model::agent::AgentId::new(
+            $crate::base_model::agent::AgentTypeName($name.to_string()),
+            $crate::data_value!($($element),+),
+            Some($phantom_id)
+        )
+    };
+}

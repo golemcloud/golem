@@ -1,0 +1,74 @@
+use golem_rust::{agent_definition, agent_implementation, Schema, Uuid};
+
+#[derive(Debug, Clone, Schema)]
+pub enum State {
+    Initial,
+    Ongoing,
+}
+
+#[derive(Debug, Clone, Schema)]
+pub struct Payload {
+    pub field1: String,
+    pub field2: Uuid,
+    pub field3: State,
+}
+
+#[agent_definition]
+pub trait RustParent {
+    fn new(name: String) -> Self;
+
+    async fn spawn_child(&self, data: String) -> Uuid;
+}
+
+struct RustParentImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl RustParent for RustParentImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    async fn spawn_child(&self, data: String) -> Uuid {
+        let uuid = Uuid::new_v4();
+        let payload = Payload {
+            field1: data,
+            field2: uuid,
+            field3: State::Initial,
+        };
+        let mut child = RustChildClient::get_(uuid.clone());
+        child.set(payload).await;
+        uuid
+    }
+}
+
+#[agent_definition]
+pub trait RustChild {
+    fn new(id: Uuid) -> Self;
+    fn set(&mut self, payload: Payload);
+    fn get(&self) -> Option<Payload>;
+}
+
+struct RustChildImpl {
+    _id: Uuid,
+    payload: Option<Payload>,
+}
+
+#[agent_implementation]
+impl RustChild for RustChildImpl {
+    fn new(id: Uuid) -> Self {
+        Self {
+            _id: id,
+            payload: None,
+        }
+    }
+
+    fn set(&mut self, payload: Payload) {
+        self.payload = Some(payload);
+    }
+
+    fn get(&self) -> Option<Payload> {
+        self.payload.clone()
+    }
+}
