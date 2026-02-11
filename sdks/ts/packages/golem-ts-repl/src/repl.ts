@@ -213,19 +213,20 @@ export class Repl {
   }
 
   private setupReplCommands(replServer: repl.REPLServer) {
-    this.cli.defineCommands(replServer);
     replServer.defineCommand('reload', {
       help: 'Reload the REPL',
-      action() {
-        CliReplInterop.exitWithReloadCode();
+      async action() {
+        await CliReplInterop.exitWithReloadCode();
       },
     });
-    replServer.defineCommand('agentInfo', {
+    replServer.defineCommand('agentTypeInfo', {
       help: 'Show auto-imported agent client info',
       action: () => {
         this.showAutoImportClientInfo(replServer, true);
       },
     });
+
+    this.cli.defineCommands(replServer);
   }
 
   private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
@@ -253,7 +254,7 @@ export class Repl {
     }
 
     if (!manual) {
-      lines.push(pc.dim('To see this message again, use .agentInfo!'));
+      lines.push(pc.dim('To see this message again, use the `.agentTypeInfo` command!'));
       replServer.output.write('\n');
     }
     logSnippetInfo(lines);

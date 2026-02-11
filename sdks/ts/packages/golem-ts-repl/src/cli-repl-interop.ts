@@ -22,19 +22,23 @@ export class CliReplInterop {
   private readonly commands: ReplCliCommand[];
   private readonly commandsByName: Map<string, ReplCliCommand>;
   private readonly cli: GolemCli;
+  private builtinCommands: string[];
 
   constructor(config: CliCommandsConfig) {
     this.config = config;
     this.commands = collectReplCliCommands(this.config.commandMetadata);
     this.commandsByName = new Map(this.commands.map((command) => [command.replCommand, command]));
     this.cli = new GolemCli({
-      binary: 'golem', // TODO: from config
+      binary: config.binary,
       cwd: this.config.appMainDir,
       clientConfig: this.config.clientConfig,
     });
+    this.builtinCommands = [];
   }
 
   defineCommands(replServer: repl.REPLServer) {
+    this.builtinCommands = Object.keys(replServer.commands);
+
     const interop = this;
     for (const command of this.commands) {
       replServer.defineCommand(command.replCommand, {
@@ -59,6 +63,14 @@ export class CliReplInterop {
 
     const endsWithSpace = /\s$/.test(line);
     const tokens = parseRawArgs(startTrimmed);
+
+    const builtinCompletions =
+      tokens.length === 1
+        ? this.builtinCommands
+            .filter((command) => command.startsWith(tokens[0]))
+            .map((command) => `.${command}`)
+        : [];
+
     const lastToken = tokens.length > 0 ? tokens[tokens.length - 1] : '';
     const endsWithSeparator = endsWithSpace && !/\s$/.test(lastToken);
 
@@ -75,8 +87,9 @@ export class CliReplInterop {
         [...this.commandsByName.keys()].map((name) => `.${name}`),
         prefix,
       );
-      if (completions.length === 0) return;
-      return [completions, prefix];
+      const allCompletions = [...builtinCompletions, ...completions];
+      if (allCompletions.length === 0) return;
+      return [allCompletions, prefix];
     }
 
     const commandName = consumedTokens[0];
@@ -133,7 +146,7 @@ export class CliReplInterop {
     let result = await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit' });
 
     if (hook) {
-      hook.handleResult(command.commandPath.concat(args), result);
+      await hook.handleResult(command.commandPath.concat(args), result);
     }
 
     return result;
@@ -170,16 +183,16 @@ export class CliReplInterop {
 type CommandHookId = string;
 type CommandHook = {
   adaptArgs: (args: string[]) => string[];
-  handleResult: (args: string[], result: { ok: boolean; code: number | null }) => void;
+  handleResult: (args: string[], result: { ok: boolean; code: number | null }) => Promise<void>;
 };
 
 const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
   deploy: {
     adaptArgs: (args) => ['--repl-bridge-sdk-target', 'ts', ...args],
-    handleResult: (args, result) => {
+    handleResult: async (args, result) => {
       if (args.includes('--plan') || args.includes('stage')) return;
       if (!result.ok) return;
-      CliReplInterop.exitWithReloadCode();
+      await CliReplInterop.exitWithReloadCode();
     },
   },
 };
