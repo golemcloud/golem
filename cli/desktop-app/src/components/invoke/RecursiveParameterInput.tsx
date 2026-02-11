@@ -24,7 +24,7 @@ interface RecursiveParameterInputProps {
 }
 
 const TypeBadge = ({ type }: { type: string }) => (
-  <span className="px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-400 font-mono">
+  <span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-mono">
     {type}
   </span>
 );
@@ -191,7 +191,7 @@ export const RecursiveParameterInput: React.FC<
                 }
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label={`Select ${name} variant`}>
                 <SelectValue placeholder="Select variant..." />
               </SelectTrigger>
               <SelectContent>
@@ -266,6 +266,7 @@ export const RecursiveParameterInput: React.FC<
                       type="button"
                       variant="ghost"
                       size="sm"
+                      aria-label="Remove item"
                       onClick={() => {
                         const newArray = (value as unknown[]).filter(
                           (_, i) => i !== index,
@@ -306,6 +307,7 @@ export const RecursiveParameterInput: React.FC<
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
+                id={`${currentPath}-optional`}
                 checked={value !== null && value !== undefined}
                 onChange={e =>
                   handleValueChange(
@@ -314,9 +316,12 @@ export const RecursiveParameterInput: React.FC<
                 }
                 className="rounded border-border/20"
               />
-              <span className="text-sm text-muted-foreground">
+              <label
+                htmlFor={`${currentPath}-optional`}
+                className="text-sm text-muted-foreground"
+              >
                 Optional value
-              </span>
+              </label>
             </div>
             {value !== null && value !== undefined && (
               <RecursiveParameterInput
@@ -364,7 +369,7 @@ export const RecursiveParameterInput: React.FC<
             value={(value as string) || ""}
             onValueChange={selectedValue => handleValueChange(selectedValue)}
           >
-            <SelectTrigger>
+            <SelectTrigger aria-label={`Select ${name}`}>
               <SelectValue placeholder="Select an option" />
             </SelectTrigger>
             <SelectContent>

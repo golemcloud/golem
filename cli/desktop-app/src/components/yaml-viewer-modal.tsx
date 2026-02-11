@@ -271,6 +271,9 @@ export function YamlViewerModal({
     return (
       <Dialog open={isOpen} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-6xl w-[95vw] h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Application Manifests</DialogTitle>
+          </DialogHeader>
           <div className="flex items-center justify-center flex-1">
             <div className="text-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
@@ -286,6 +289,9 @@ export function YamlViewerModal({
     return (
       <Dialog open={isOpen} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-6xl w-[95vw] h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Application Manifests</DialogTitle>
+          </DialogHeader>
           <div className="flex items-center justify-center flex-1">
             <div className="text-center">
               <p className="text-muted-foreground">No YAML files found.</p>

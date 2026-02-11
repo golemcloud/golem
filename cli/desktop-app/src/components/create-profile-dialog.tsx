@@ -168,7 +168,7 @@ export const CreateProfileDialog = ({
                   setFormData(prev => ({ ...prev, kind: value }))
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger aria-label="Profile type">
                   <SelectValue placeholder="Select type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -187,7 +187,7 @@ export const CreateProfileDialog = ({
                 setFormData(prev => ({ ...prev, defaultFormat: value }))
               }
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label="Default output format">
                 <SelectValue placeholder="Select format" />
               </SelectTrigger>
               <SelectContent>

@@ -24,4 +24,5 @@ dist-ssr
 *.sw?
 # Test coverage
 coverage
+*storybook.log
 storybook-static

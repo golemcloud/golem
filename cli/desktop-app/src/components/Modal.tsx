@@ -17,10 +17,11 @@ const Modal = ({ isOpen, onClose, children }: ModalProps) => {
           className="fixed inset-0 bg-black bg-opacity-25"
           onClick={onClose}
         />
-        <div className="relative bg-white rounded-lg shadow-xl max-w-3xl w-full">
+        <div className="relative bg-background text-foreground rounded-lg shadow-xl max-w-3xl w-full border border-border">
           <button
             onClick={onClose}
-            className="absolute right-4 top-4 text-gray-400 hover:text-gray-600"
+            className="absolute right-4 top-4 text-muted-foreground hover:text-foreground"
+            aria-label="Close"
           >
             <X className="h-5 w-5" />
           </button>
