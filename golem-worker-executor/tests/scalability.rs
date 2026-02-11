@@ -157,8 +157,8 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn worker_name(n: i32) -> String {
-        format!("sleeping-suspending-worker-{n}")
+    fn agent_id(n: i32) -> AgentId {
+        agent_id!("clocks", format!("sleeping-suspending-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -173,21 +173,27 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(&context.default_environment_id, "clocks")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
+    let warmup_agent_id = agent_id(0);
     let warmup_worker = executor
-        .start_worker(&component.id, &worker_name(0))
+        .start_agent(&component.id, warmup_agent_id.clone())
         .await?;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
         executor_clone
-            .invoke_and_await(
-                &warmup_worker,
-                "sleep-for",
-                vec![15.0f64.into_value_and_type()],
+            .invoke_and_await_agent(
+                &component.id,
+                &warmup_agent_id,
+                "sleep_for",
+                data_value!(15.0),
             )
             .await
     })
@@ -207,21 +213,23 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         .map(|(n, component_id, executor_clone)| {
             spawn(
                 async move {
-                    let worker = executor_clone
-                        .start_worker(&component_id, &worker_name(n))
+                    let agent_id = agent_id(n);
+                    let _agent = executor_clone
+                        .start_agent(&component_id, agent_id.clone())
                         .await?;
 
                     let (result, duration) = timed(async move {
                         executor_clone
-                            .invoke_and_await(
-                                &worker,
-                                "sleep-for",
-                                vec![15.0f64.into_value_and_type()],
+                            .invoke_and_await_agent(
+                                &component_id,
+                                &agent_id,
+                                "sleep_for",
+                                data_value!(15.0),
                             )
                             .await
                     })
                     .await;
-                    Ok::<_, anyhow::Error>((result??, duration))
+                    Ok::<_, anyhow::Error>((result?, duration))
                 }
                 .in_current_span(),
             )
@@ -241,7 +249,11 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         .iter()
         .map(|r| match r {
             Ok(Ok((r, _))) => {
-                let Value::F64(seconds) = r[0] else {
+                let Value::F64(seconds) = r
+                    .clone()
+                    .into_return_value()
+                    .expect("Expected single return value")
+                else {
                     panic!("Unexpected result")
                 };
                 (seconds * 1000.0) as u64

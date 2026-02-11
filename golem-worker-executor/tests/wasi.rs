@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use anyhow::anyhow;
 use assert2::{assert, check};
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -162,23 +163,33 @@ async fn clocks(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clocks")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let worker_id = executor.start_worker(&component.id, "clocks-1").await?;
+    let agent_id = agent_id!("clocks", "clocks-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "use_std_time_apis", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result.len() == 1);
-    let Value::Tuple(tuple) = &result[0] else {
+    let Value::Tuple(tuple) = &result else {
         panic!("expected tuple")
     };
     check!(tuple.len() == 3);
