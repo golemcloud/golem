@@ -35,6 +35,7 @@ use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, M
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValue, ValueAndType};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::debug;
 use uuid::Uuid;
@@ -260,7 +261,12 @@ impl CallAgentHandler {
                     golem_wasm::protobuf::Val::from(method_params_data_value.into_value()),
                     golem_wasm::protobuf::Val::from(principal.into_value()),
                 ],
-                None,
+                Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                    parent: None,
+                    env: Default::default(),
+                    wasi_config_vars: Some(BTreeMap::new().into()),
+                    tracing: Some(request.invocation_context().into()),
+                }),
                 resolved_route.route.environment_id,
                 resolved_route.route.account_id,
                 AuthCtx::impersonated_user(resolved_route.route.account_id),
