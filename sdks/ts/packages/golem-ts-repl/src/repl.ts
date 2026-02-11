@@ -30,6 +30,7 @@ import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
+import { flushStdIO } from './process';
 
 export class Repl {
   private readonly config: Config;
@@ -277,6 +278,7 @@ export class Repl {
 
     if (script) {
       await this.runScript(replServer, script);
+      await flushStdIO();
       replServer.close();
     }
   }
@@ -301,13 +303,13 @@ export class Repl {
     }
 
     if (evalResult.error) {
-      process.stderr.write(formatEvalError(evalResult.error));
+      process.stderr.write(formatEvalError(evalResult.error) + '\n');
       return;
     }
 
     const jsonResult = tryJsonStringify(evalResult.result);
     if (jsonResult !== undefined) {
-      process.stdout.write(jsonResult);
+      process.stdout.write(jsonResult + '\n');
       return;
     }
 
@@ -317,7 +319,7 @@ export class Repl {
   private printReplResult(replServer: repl.REPLServer, result: unknown) {
     if (result === undefined && replServer.ignoreUndefined) return;
     const rendered = replServer.writer(result);
-    process.stdout.write(rendered);
+    process.stdout.write(rendered + '\n');
   }
 }
 

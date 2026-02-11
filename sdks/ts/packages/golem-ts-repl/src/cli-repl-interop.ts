@@ -15,6 +15,7 @@
 import childProcess from 'node:child_process';
 import repl from 'node:repl';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig, ClientConfig } from './config';
+import { flushStdIO } from './process';
 
 export class CliReplInterop {
   private readonly config: CliCommandsConfig;
@@ -109,7 +110,8 @@ export class CliReplInterop {
     return [completions, currentToken];
   }
 
-  static exitWithReloadCode() {
+  static async exitWithReloadCode() {
+    await flushStdIO();
     process.exit(75);
   }
 
