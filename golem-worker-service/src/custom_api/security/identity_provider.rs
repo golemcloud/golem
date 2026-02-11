@@ -23,7 +23,9 @@ use openidconnect::core::{
     CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
     CoreTokenResponse,
 };
-use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope};
+use openidconnect::{
+    AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse, Scope,
+};
 use tracing::debug;
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +40,8 @@ pub enum IdentityProviderError {
     FailedToExchangeCodeForTokens(String),
     #[error("ID token verification error: {0}")]
     IdTokenVerificationError(String),
+    #[error("ID token exchange for code failed")]
+    OidcTokenExchangeFailed,
 }
 
 impl IntoAnyhow for IdentityProviderError {
@@ -48,44 +52,26 @@ impl IntoAnyhow for IdentityProviderError {
 
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
-    async fn get_provider_metadata(
-        &self,
-        provider: &Provider,
-    ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError>;
-
-    async fn exchange_code_for_tokens(
-        &self,
-        client: &OpenIdClient,
-        code: &AuthorizationCode,
-    ) -> Result<CoreTokenResponse, IdentityProviderError>;
-
-    async fn get_client(
+    // exchange code for token + get claims
+    async fn exchange_code_for_scopes_and_claims(
         &self,
         security_scheme: &SecuritySchemeDetails,
-    ) -> Result<OpenIdClient, IdentityProviderError>;
-
-    fn get_id_token_verifier<'a>(&self, client: &'a OpenIdClient) -> CoreIdTokenVerifier<'a>;
-
-    fn get_claims(
-        &self,
-        client: &CoreIdTokenVerifier,
-        core_token_response: &CoreTokenResponse,
+        code: &AuthorizationCode,
         nonce: &Nonce,
-    ) -> Result<CoreIdTokenClaims, IdentityProviderError>;
+    ) -> Result<(Vec<Scope>, CoreIdTokenClaims), IdentityProviderError>;
 
-    fn get_authorization_url(
+    async fn get_authorization_url(
         &self,
-        client: &OpenIdClient,
+        security_scheme: &SecuritySchemeDetails,
         scopes: Vec<Scope>,
-        state: Option<CsrfToken>,
-        nonce: Option<Nonce>,
-    ) -> AuthorizationUrl;
+        state: CsrfToken,
+        nonce: Nonce,
+    ) -> Result<AuthorizationUrl, IdentityProviderError>;
 }
 
 pub struct DefaultIdentityProvider;
 
-#[async_trait]
-impl IdentityProvider for DefaultIdentityProvider {
+impl DefaultIdentityProvider {
     async fn get_provider_metadata(
         &self,
         provider: &Provider,
@@ -159,21 +145,47 @@ impl IdentityProvider for DefaultIdentityProvider {
 
         Ok(id_token_claims.clone())
     }
+}
 
-    fn get_authorization_url(
+#[async_trait]
+impl IdentityProvider for DefaultIdentityProvider {
+    async fn exchange_code_for_scopes_and_claims(
         &self,
-        client: &OpenIdClient,
+        security_scheme: &SecuritySchemeDetails,
+        code: &AuthorizationCode,
+        nonce: &Nonce,
+    ) -> Result<(Vec<Scope>, CoreIdTokenClaims), IdentityProviderError> {
+        let client = self.get_client(security_scheme).await?;
+
+        let token_response = self
+            .exchange_code_for_tokens(&client, code)
+            .await
+            .map_err(|err| {
+                tracing::warn!("OIDC token exchange failed: {err}");
+                IdentityProviderError::OidcTokenExchangeFailed
+            })?;
+
+        let id_token_scopes = token_response.scopes().cloned().unwrap_or_default();
+
+        let id_token_verifier = self.get_id_token_verifier(&client);
+        let id_token_claims = self.get_claims(&id_token_verifier, &token_response, nonce)?;
+
+        Ok((id_token_scopes, id_token_claims))
+    }
+
+    async fn get_authorization_url(
+        &self,
+        security_scheme: &SecuritySchemeDetails,
         scopes: Vec<Scope>,
-        state: Option<CsrfToken>,
-        nonce: Option<Nonce>,
-    ) -> AuthorizationUrl {
-        let state = || state.unwrap_or_else(CsrfToken::new_random);
-        let nonce = || nonce.unwrap_or_else(Nonce::new_random);
+        state: CsrfToken,
+        nonce: Nonce,
+    ) -> Result<AuthorizationUrl, IdentityProviderError> {
+        let client = self.get_client(security_scheme).await?;
 
         let builder = client.client.authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            state,
-            nonce,
+            || state,
+            || nonce,
         );
 
         let builder = scopes
@@ -182,10 +194,10 @@ impl IdentityProvider for DefaultIdentityProvider {
 
         let (auth_url, csrf_state, nonce) = builder.url();
 
-        AuthorizationUrl {
+        Ok(AuthorizationUrl {
             url: auth_url,
             csrf_state,
             nonce,
-        }
+        })
     }
 }

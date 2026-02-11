@@ -19,5 +19,9 @@ pub mod model;
 mod open_id_client;
 pub mod session_store;
 
+use chrono::Duration;
 pub use identity_provider::*;
 pub use open_id_client::*;
+
+// FIXME: make this configurable as part of security scheme
+const OIDC_SESSION_EXPIRY: Duration = Duration::hours(8);
