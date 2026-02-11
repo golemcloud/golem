@@ -949,11 +949,13 @@ async fn test_component_env_var_substitution() {
     assert!(outputs.stdout_contains_ordered([
         "key:       COMPOSED",
         "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "Failed to substitute environment variable(s) (VERY_CUSTOM_ENV_VAR_SECRET_1, VERY_CUSTOM_ENV_VAR_SECRET_3) for COMPOSED",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_1",
         "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}",
+        "Failed to substitute environment variable(s) (VERY_CUSTOM_ENV_VAR_SECRET_1) for VERY_CUSTOM_ENV_VAR_SECRET_1",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_2",
         "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
-        "Failed to prepare environment variables for component: app:weather-agent",
+        "Failed to substitute environment variable(s) (VERY_CUSTOM_ENV_VAR_SECRET_3) for VERY_CUSTOM_ENV_VAR_SECRET_2"
     ]));
 
     // After providing the missing env vars, deploy should work
