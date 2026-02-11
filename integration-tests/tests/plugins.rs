@@ -31,7 +31,7 @@ use golem_common::model::plugin_registration::{
 };
 use golem_common::model::{Empty, ScanCursor};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm::{IntoValueAndType, Record, Value};
@@ -161,7 +161,8 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     let mut rx = user.capture_output(&worker).await?;
 
     user.invoke_and_await(&worker, "golem:it/api.{some-random-entries}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     let mut events = vec![];
     rx.recv_many(&mut events, 100).await;
@@ -319,7 +320,8 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies) -> anyhow::Resu
             "it:app-and-library-app/app-api.{app-function}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     assert_eq!(response, vec![Value::U64(2)]);
 
@@ -420,7 +422,8 @@ async fn component_transformer_env_var(deps: &EnvBasedTestDependencies) -> anyho
 
     let response = user
         .invoke_and_await(&worker, "golem:it/api.{get-environment}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     let response_map = {
         assert_eq!(response.len(), 1);
@@ -555,7 +558,8 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies) -> anyhow::R
             "golem:it/api.{read-file}",
             vec!["/files/foo.txt".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     assert_eq!(
         result_foo,
@@ -570,7 +574,8 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies) -> anyhow::R
             "golem:it/api.{read-file}",
             vec!["/files/bar.txt".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     assert_eq!(
         result_bar,
@@ -702,7 +707,8 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         "golem:it/api.{initialize-cart}",
         vec!["test-user-1".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -715,7 +721,8 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -728,7 +735,8 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -741,21 +749,24 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
         "golem:it/api.{update-item-quantity}",
         vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
         "golem:it/api.{force-commit}",
         vec![10u8.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let mut plugin_worker_id = None;
     let mut cursor = ScanCursor::default();
@@ -793,7 +804,8 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 "golem:component/api.{get-invoked-functions}",
                 vec![],
             )
-            .await?;
+            .await
+            .collapse()?;
 
         if let Value::List(items) = &response[0] {
             invocations.extend(items.iter().filter_map(|item| {
@@ -876,7 +888,8 @@ async fn library_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
             "it:app-and-library-app/app-api.{app-function}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     assert!(response == vec![Value::U64(2)]);
     Ok(())
@@ -930,7 +943,8 @@ async fn app_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
             "it:app-and-library-app/app-api.{app-function}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     assert!(response == vec![Value::U64(2)]);
     Ok(())
@@ -1002,7 +1016,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     user_1
         .invoke_and_await(
@@ -1016,7 +1031,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
             ])
             .into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     user_1
         .invoke_and_await(
@@ -1030,7 +1046,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
             ])
             .into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     user_1
         .invoke_and_await(
@@ -1044,7 +1061,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
             ])
             .into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     user_1
         .invoke_and_await(
@@ -1052,7 +1070,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
             "golem:it/api.{update-item-quantity}",
             vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     user_1
         .invoke_and_await(
@@ -1060,7 +1079,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
             "golem:it/api.{force-commit}",
             vec![10u8.into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let mut plugin_worker_id = None;
     let mut cursor = ScanCursor::default();
@@ -1098,7 +1118,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
                 "golem:component/api.{get-invoked-functions}",
                 vec![],
             )
-            .await?;
+            .await
+            .collapse()?;
 
         if let Value::List(items) = &response[0] {
             invocations.extend(items.iter().filter_map(|item| {

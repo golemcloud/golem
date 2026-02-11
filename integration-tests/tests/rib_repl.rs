@@ -25,7 +25,7 @@ use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
 use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
@@ -368,7 +368,8 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         let result = self
             .test_dsl
             .invoke_and_await_typed(&worker_id, function_name, args)
-            .await;
+            .await
+            .collapse();
 
         Ok(result.map_err(|err| {
             tracing::error!("Failed to invoke function: {:?}", err);

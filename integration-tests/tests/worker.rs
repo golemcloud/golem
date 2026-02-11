@@ -35,20 +35,23 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
     WorkerFilter, WorkerId, WorkerResourceDescription, WorkerStatus,
 };
+use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{update_counts, TestDsl, TestDslExtended, WorkerLogEventStream};
+use golem_test_framework::dsl::{
+    update_counts, TestDsl, TestDslExtended, WorkerInvocationResultOps, WorkerLogEventStream,
+};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{IntoValue, IntoValueAndType, Record, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use tracing::{info, warn, Instrument};
@@ -77,11 +80,13 @@ async fn dynamic_worker_creation(
 
     let args = user
         .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     let env = user
         .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     check!(args == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
     check!(
@@ -127,7 +132,8 @@ async fn counter_resource_test_1(
             "rpc:counters-exports/api.{[constructor]counter}",
             vec!["counter1".into_value_and_type()],
         )
-        .await?
+        .await
+        .collapse()?
         .unwrap();
 
     user.invoke_and_await(
@@ -135,7 +141,8 @@ async fn counter_resource_test_1(
         "rpc:counters-exports/api.{[method]counter.inc-by}",
         vec![counter1.clone(), 5u64.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let result1 = user
         .invoke_and_await(
@@ -143,7 +150,8 @@ async fn counter_resource_test_1(
             "rpc:counters-exports/api.{[method]counter.get-value}",
             vec![counter1.clone()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let metadata1 = user.get_worker_metadata(&worker_id).await?;
 
@@ -152,7 +160,8 @@ async fn counter_resource_test_1(
         "rpc:counters-exports/api.{[drop]counter}",
         vec![counter1.clone()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let result2 = user
         .invoke_and_await(
@@ -160,7 +169,8 @@ async fn counter_resource_test_1(
             "rpc:counters-exports/api.{get-all-dropped}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let metadata2 = user.get_worker_metadata(&worker_id).await?;
 
@@ -235,7 +245,8 @@ async fn counter_resource_test_1_json(
             "rpc:counters-exports/api.{[constructor]counter}",
             vec![json!("counter1")],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let counter1 = counter1
         .unwrap()
@@ -249,7 +260,8 @@ async fn counter_resource_test_1_json(
         "rpc:counters-exports/api.{[method]counter.inc-by}",
         vec![counter1.clone(), json!(5)],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let result1 = user
         .invoke_and_await_json(
@@ -257,7 +269,8 @@ async fn counter_resource_test_1_json(
             "rpc:counters-exports/api.{[method]counter.get-value}",
             vec![counter1.clone()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let metadata1 = user.get_worker_metadata(&worker_id).await?;
 
@@ -266,7 +279,8 @@ async fn counter_resource_test_1_json(
         "rpc:counters-exports/api.{[drop]counter}",
         vec![counter1.clone()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let result2 = user
         .invoke_and_await_json(
@@ -274,12 +288,16 @@ async fn counter_resource_test_1_json(
             "rpc:counters-exports/api.{get-all-dropped}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let metadata2 = user.get_worker_metadata(&worker_id).await?;
 
-    assert2::assert!(result1 == Some(5u64.into_value_and_type()));
-    assert2::assert!(result2 == Some(vec![("counter1".to_string(), 5u64)].into_value_and_type()));
+    assert_eq!(result1, Some(5u64.into_value_and_type()));
+    assert_eq!(
+        result2,
+        Some(vec![("counter1".to_string(), 5u64)].into_value_and_type())
+    );
 
     let ts = Timestamp::now_utc();
     let mut resources1 = metadata1
@@ -345,7 +363,8 @@ async fn shopping_cart_example(
         "golem:it/api.{initialize-cart}",
         vec!["test-user-1".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -358,7 +377,8 @@ async fn shopping_cart_example(
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -371,7 +391,8 @@ async fn shopping_cart_example(
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -384,21 +405,25 @@ async fn shopping_cart_example(
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
         "golem:it/api.{update-item-quantity}",
         vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let contents = user
         .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     user.invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     check!(
         contents
@@ -430,67 +455,61 @@ async fn shopping_cart_example(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn auction_example_1(
+async fn rust_rpc_with_payload(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let registry_component = user
-        .component(&env.id, "auction_registry_composed")
+
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
-    let auction_component = user.component(&env.id, "auction").store().await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "AUCTION_COMPONENT_ID".to_string(),
-        auction_component.id.to_string(),
-    );
-
-    let registry_worker_id = user
-        .start_worker_with(&registry_component.id, "auction-registry-1", env, vec![])
+    let parent_agent_id = agent_id!("rust-parent", "rust_rpc_with_payload");
+    let parent = user
+        .start_agent(&component.id, parent_agent_id.clone())
         .await?;
 
-    user.log_output(&registry_worker_id).await?;
+    user.log_output(&parent).await?;
 
-    let expiration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let mut create_results = vec![];
-
-    for _ in 1..100 {
-        let create_auction_result = user
-            .invoke_and_await(
-                &registry_worker_id,
-                "auction:registry-exports/api.{create-auction}",
-                vec![
-                    "test-auction".into_value_and_type(),
-                    "this is a test".into_value_and_type(),
-                    100.0f32.into_value_and_type(),
-                    (expiration + 600).into_value_and_type(),
-                ],
-            )
-            .await;
-
-        create_results.push(create_auction_result);
-    }
-
-    let get_auctions_result = user
-        .invoke_and_await(
-            &registry_worker_id,
-            "auction:registry-exports/api.{get-auctions}",
-            vec![],
+    let spawn_result = user
+        .invoke_and_await_agent(
+            &component.id,
+            &parent_agent_id,
+            "spawn_child",
+            data_value!("hello world"),
         )
         .await?;
 
-    info!("result: {create_results:?}");
-    info!("result: {get_auctions_result:?}");
+    let uuid_as_value = spawn_result
+        .into_return_value()
+        .expect("Expected a single return value");
 
-    check!(create_results.iter().all(|r| r.is_ok()));
+    let uuid = UuidRecord::from_value(uuid_as_value.clone()).expect("UUID expected");
 
+    let child_agent_id = agent_id!("rust-child", uuid);
+
+    let get_result = user
+        .invoke_and_await_agent(&component.id, &child_agent_id, "get", data_value!())
+        .await?;
+
+    let option_payload_as_value = get_result
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    user.check_oplog_is_queryable(&parent).await?;
+
+    assert_eq!(
+        option_payload_as_value,
+        Value::Option(Some(Box::new(Value::Record(vec![
+            Value::String("hello world".to_string()),
+            uuid_as_value.clone(),
+            Value::Enum(0)
+        ]))))
+    );
     Ok(())
 }
 
@@ -523,7 +542,8 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
         let (cursor, values) = user
             .get_workers_metadata(
@@ -670,7 +690,8 @@ async fn get_running_workers(
             "golem:it/api.{start-polling}",
             vec!["stop".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
         user.wait_for_status(worker_id, WorkerStatus::Running, Duration::from_secs(10))
             .await?;
@@ -808,7 +829,8 @@ async fn auto_update_on_idle(
 
     let result = user
         .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     info!("result: {result:?}");
     let metadata = user.get_worker_metadata(&worker_id).await?;
@@ -884,11 +906,13 @@ async fn auto_update_on_idle_via_host_function(
             },
         ],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let result = user
         .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     let metadata = user.get_worker_metadata(&worker_id).await?;
 
@@ -921,7 +945,8 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
         "golem:it/api.{generate-idempotency-keys}",
         vec![],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await_with_key(
         &worker_id,
@@ -929,7 +954,8 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
         "golem:it/api.{generate-idempotency-keys}",
         vec![],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await_with_key(
         &worker_id,
@@ -937,7 +963,8 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
         "golem:it/api.{generate-idempotency-keys}",
         vec![],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let oplog = user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
@@ -977,7 +1004,8 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
         "golem:it/api.{initialize-cart}",
         vec!["test-user-1".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -990,7 +1018,8 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -1003,7 +1032,8 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
@@ -1016,20 +1046,24 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &worker_id,
         "golem:it/api.{update-item-quantity}",
         vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     user.invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
@@ -1068,7 +1102,8 @@ async fn worker_recreation(
             "rpc:counters-exports/api.{[constructor]counter}",
             vec!["counter1".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let counter1 = ValueAndType::new(
         counter1[0].clone(),
@@ -1087,7 +1122,8 @@ async fn worker_recreation(
             "rpc:counters-exports/api.{[method]counter.inc-by}",
             vec![counter1.clone(), 1u64.into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
     }
 
     let result1 = user
@@ -1096,7 +1132,8 @@ async fn worker_recreation(
             "rpc:counters-exports/api.{[method]counter.get-value}",
             vec![counter1.clone()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -1109,7 +1146,8 @@ async fn worker_recreation(
             "rpc:counters-exports/api.{[constructor]counter}",
             vec!["counter1".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let counter1 = ValueAndType::new(
         counter1[0].clone(),
@@ -1126,7 +1164,8 @@ async fn worker_recreation(
         "rpc:counters-exports/api.{[method]counter.inc-by}",
         vec![counter1.clone(), 1u64.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let result2 = user
         .invoke_and_await(
@@ -1134,7 +1173,8 @@ async fn worker_recreation(
             "rpc:counters-exports/api.{[method]counter.get-value}",
             vec![counter1.clone()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     user.delete_worker(&worker_id).await?;
 
@@ -1149,7 +1189,8 @@ async fn worker_recreation(
             "rpc:counters-exports/api.{[constructor]counter}",
             vec!["counter1".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let counter1 = ValueAndType::new(
         counter1[0].clone(),
@@ -1167,7 +1208,8 @@ async fn worker_recreation(
             "rpc:counters-exports/api.{[method]counter.get-value}",
             vec![counter1.clone()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     check!(result1 == vec![Value::U64(1200)]);
     check!(result2 == vec![Value::U64(1)]);
@@ -1210,7 +1252,10 @@ async fn worker_use_initial_files(
         .start_worker_with(&component.id, "initial-file-read-write-1", env, vec![])
         .await?;
 
-    let result = user.invoke_and_await(&worker_id, "run", vec![]).await?;
+    let result = user
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .collapse()?;
 
     user.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1390,7 +1435,9 @@ async fn worker_read_files(
         .await?;
 
     // run the worker so it can update the files.
-    user.invoke_and_await(&worker_id, "run", vec![]).await?;
+    user.invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .collapse()?;
 
     let result1 = user.get_file_contents(&worker_id, "/foo.txt").await?;
     let result1 = std::str::from_utf8(&result1).unwrap();
@@ -1438,7 +1485,9 @@ async fn worker_initial_files_after_automatic_worker_update(
         .await?;
 
     // run the worker so it can update the files.
-    user.invoke_and_await(&worker_id, "run", vec![]).await?;
+    user.invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .collapse()?;
 
     let updated_component = user
         .update_component_with_files(
@@ -1514,7 +1563,8 @@ async fn resolve_components_from_name(
             "golem:it/component-resolve-api.{run}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     check!(result.len() == 1);
 
@@ -1566,9 +1616,9 @@ async fn agent_promise_await(
             vec![],
         )
         .await
-        .unwrap();
+        .collapse()?;
 
-    assert!(result.len() == 1);
+    assert_eq!(result.len(), 1);
 
     let promise_id = ValueAndType::new(result.swap_remove(0), PromiseId::get_type());
 
@@ -1601,7 +1651,7 @@ async fn agent_promise_await(
     user.complete_promise(&promise_id, b"hello".to_vec())
         .await?;
 
-    let result = task.await??;
+    let result = task.await?.collapse()?;
     check!(result == vec![Value::String("hello".to_string())]);
 
     Ok(())
@@ -1645,7 +1695,7 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
     );
 
     let (found_log_entry, result) = (output_consumer, result_future).join().await;
-    result?;
+    result.collapse()?;
 
     assert!(found_log_entry);
 
@@ -1718,6 +1768,7 @@ async fn worker_suspends_when_running_out_of_fuel(
             loop {
                 user.invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
                     .await
+                    .collapse()
                     .unwrap();
             }
         }
@@ -1768,7 +1819,8 @@ async fn agent_await_parallel_rpc_calls(
         "golem-it:agent-rpc/test-agent.{run}",
         vec![20f64.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     Ok(())
 }
@@ -1793,7 +1845,8 @@ async fn agent_update_constructor_signature(
         .await?;
     let result1a = user
         .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
-        .await?;
+        .await
+        .collapse()?;
     assert_eq!(result1a, vec![Value::U32(1)]);
 
     let old_singleton = user.start_worker(&component.id, "caller()").await?;
@@ -1805,7 +1858,8 @@ async fn agent_update_constructor_signature(
             "it:agent-update/caller.{call}",
             vec!["agent1".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
     assert_eq!(result1b, vec![Value::U32(2)]);
 
     user.update_component(&component.id, "it_agent_update_v2_release")
@@ -1816,7 +1870,8 @@ async fn agent_update_constructor_signature(
         .await?;
     let result2a = user
         .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
-        .await?;
+        .await
+        .collapse()?;
     assert_eq!(result2a, vec![Value::U32(1)]);
 
     let new_singleton = user.start_worker(&component.id, "new-caller()").await?;
@@ -1826,17 +1881,20 @@ async fn agent_update_constructor_signature(
             "it:agent-update/new-caller.{call}",
             vec![123u64.into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
     assert_eq!(result2b, vec![Value::U32(2)]);
 
     // Still able to call both agents
     let result3a = user
         .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     let result4a = user
         .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     assert_eq!(result3a, vec![Value::U32(3)]);
     assert_eq!(result4a, vec![Value::U32(3)]);
@@ -1848,7 +1906,8 @@ async fn agent_update_constructor_signature(
             "it:agent-update/caller.{call}",
             vec!["agent1".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
     assert_eq!(result3b, vec![Value::U32(4)]);
 
     let result4b = user
@@ -1857,7 +1916,8 @@ async fn agent_update_constructor_signature(
             "it:agent-update/new-caller.{call}",
             vec![123u64.into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
     assert_eq!(result4b, vec![Value::U32(4)]);
 
     // Enumerate agents

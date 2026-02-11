@@ -73,6 +73,20 @@ class ChildAgent extends BaseAgent {
     }
 }
 
+@agent()
+class SimpleChildAgent extends BaseAgent {
+    private readonly name: string;
+
+    constructor(name: string) {
+        super();
+        this.name = name;
+    }
+
+    async value(): Promise<number> {
+        return 1;
+    }
+}
+
 function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }

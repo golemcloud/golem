@@ -20,7 +20,7 @@ use axum::{Json, Router};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
 use golem_wasm::{IntoValueAndType, Record, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -71,7 +71,8 @@ async fn fork_interrupted_worker(
         "golem:it/api.{start-polling}",
         vec!["first".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await?;
@@ -131,7 +132,8 @@ async fn fork_running_worker_1(
         "golem:it/api.{initialize-cart}",
         vec!["test-user-1".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &source_worker_id,
@@ -144,7 +146,8 @@ async fn fork_running_worker_1(
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
@@ -228,7 +231,8 @@ async fn fork_running_worker_2(
         "golem:it/api.{start-polling}",
         vec!["first".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.wait_for_status(
         &source_worker_id,
@@ -303,7 +307,8 @@ async fn fork_idle_worker(
         "golem:it/api.{initialize-cart}",
         vec!["test-user-1".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &source_worker_id,
@@ -316,7 +321,8 @@ async fn fork_idle_worker(
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &source_worker_id,
@@ -329,7 +335,8 @@ async fn fork_idle_worker(
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
@@ -370,14 +377,16 @@ async fn fork_idle_worker(
         ])
         .into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     user.invoke_and_await(
         &target_worker_id,
         "golem:it/api.{update-item-quantity}",
         vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let original_contents = user
         .invoke_and_await(
@@ -385,7 +394,8 @@ async fn fork_idle_worker(
             "golem:it/api.{get-cart-contents}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let forked_contents = user
         .invoke_and_await(
@@ -393,7 +403,8 @@ async fn fork_idle_worker(
             "golem:it/api.{get-cart-contents}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let result1 = user
         .search_oplog(&target_worker_id, "G1002 AND NOT pending")
@@ -483,7 +494,8 @@ async fn fork_worker_when_target_already_exists(
         "golem:it/api.{initialize-cart}",
         vec!["test-user-1".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let second_call_oplogs = user
         .search_oplog(&source_worker_id, "initialize-cart")
@@ -528,7 +540,8 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
         "golem:it/api.{initialize-cart}",
         vec!["test-user-1".into_value_and_type()],
     )
-    .await?;
+    .await
+    .collapse()?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
@@ -601,7 +614,8 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     };
 
     user.invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
-        .await?;
+        .await
+        .collapse()?;
 
     // The worker name is foo
     let expected = Value::Result(Ok(Some(Box::new(Value::List(vec![
@@ -748,7 +762,8 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
             "golem:it/api.{fork-test}",
             vec!["hello".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     let forked_phantom_id = fork_phantom_id_rx.await.unwrap();
 
@@ -763,7 +778,8 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
             "golem:it/api.{fork-test}",
             vec!["hello".into_value_and_type()],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     http_server.abort();
 
@@ -808,7 +824,8 @@ async fn fork_and_sync_with_promise(
             "golem-it:agent-promise/promise-agent.{fork-and-sync-with-promise}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     assert_eq!(
         result1,
@@ -821,7 +838,8 @@ async fn fork_and_sync_with_promise(
             "golem-it:agent-promise/promise-agent.{fork-and-sync-with-promise}",
             vec![],
         )
-        .await?;
+        .await
+        .collapse()?;
 
     assert_eq!(
         result2,

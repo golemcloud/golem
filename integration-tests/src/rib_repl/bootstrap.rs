@@ -110,6 +110,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
             .await
             .invoke_and_await_typed(&worker_id, function_name, args)
             .await
+            .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))?
             .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))
     }
 }

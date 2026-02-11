@@ -16,6 +16,8 @@ use crate::Tracing;
 use assert2::check;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use golem_common::model::agent::AgentId;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
 use golem_worker_executor_test_utils::{
@@ -40,8 +42,8 @@ async fn spawning_many_workers_that_sleep(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn worker_name(n: i32) -> String {
-        format!("sleeping-worker-{n}")
+    fn agent_id(n: i32) -> AgentId {
+        agent_id!("clocks", format!("sleeping-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -56,18 +58,28 @@ async fn spawning_many_workers_that_sleep(
 
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(&context.default_environment_id, "clocks")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
+    let warmup_agent_id = agent_id(0);
     let warmup_worker = executor
-        .start_worker(&component.id, &worker_name(0))
+        .start_agent(&component.id, warmup_agent_id.clone())
         .await?;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
         executor_clone
-            .invoke_and_await(&warmup_worker, "run", vec![])
+            .invoke_and_await_agent(
+                &component.id,
+                &warmup_agent_id,
+                "use_std_time_apis",
+                data_value!(),
+            )
             .await
             .unwrap()
     })
@@ -87,18 +99,24 @@ async fn spawning_many_workers_that_sleep(
         .map(|(n, component_id, executor_clone)| {
             {
                 spawn(async move {
-                    let worker = executor_clone
-                        .start_worker(&component_id, &worker_name(n))
+                    let agent_id = agent_id(n);
+                    let worker_id = executor_clone
+                        .start_agent(&component_id, agent_id.clone())
                         .await?;
 
                     let (result, duration) = timed(async move {
                         executor_clone
-                            .invoke_and_await(&worker, "run", vec![])
+                            .invoke_and_await_agent(
+                                &component.id,
+                                &agent_id,
+                                "use_std_time_apis",
+                                data_value!(),
+                            )
                             .await
                     })
                     .await;
 
-                    Ok::<_, anyhow::Error>((result??, duration))
+                    Ok::<_, anyhow::Error>((result?, duration))
                 })
             }
             .in_current_span()

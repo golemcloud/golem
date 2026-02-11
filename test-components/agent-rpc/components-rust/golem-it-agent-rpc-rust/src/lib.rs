@@ -18,6 +18,7 @@ pub trait RustParent {
     fn new(name: String) -> Self;
 
     async fn spawn_child(&self, data: String) -> Uuid;
+    async fn call_ts_agent(&self, name: String) -> f64;
 }
 
 struct RustParentImpl {
@@ -40,6 +41,11 @@ impl RustParent for RustParentImpl {
         let mut child = RustChildClient::get_(uuid.clone());
         child.set(payload).await;
         uuid
+    }
+
+    async fn call_ts_agent(&self, name: String) -> f64 {
+        let client = SimpleChildAgentClient::get(name);
+        client.value().await
     }
 }
 
@@ -72,3 +78,10 @@ impl RustChild for RustChildImpl {
         self.payload.clone()
     }
 }
+
+#[agent_definition]
+pub trait SimpleChildAgent {
+    fn new(name: String) -> Self;
+    fn value(&self) -> f64;
+}
+// implemented in `golem-it-agent-rpc`

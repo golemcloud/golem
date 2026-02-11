@@ -16,7 +16,7 @@ use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::BenchmarkTestDependencies;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, WorkerInvocationResultOps};
 use golem_wasm::{Value, ValueAndType};
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, Request};
@@ -98,7 +98,8 @@ pub async fn invoke_and_await(
             TIMEOUT,
             user.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
         )
-        .await;
+        .await
+        .map(|r| r.collapse());
         let duration = start.elapsed().expect("SystemTime elapsed failed");
 
         match result {

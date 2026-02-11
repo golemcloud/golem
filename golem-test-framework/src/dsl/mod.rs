@@ -74,6 +74,16 @@ pub struct EnvironmentOptions {
 
 pub type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
 
+pub trait WorkerInvocationResultOps<T> {
+    fn collapse(self) -> anyhow::Result<T>;
+}
+
+impl<T> WorkerInvocationResultOps<T> for WorkerInvocationResult<T> {
+    fn collapse(self) -> anyhow::Result<T> {
+        self?.map_err(|err| err.into())
+    }
+}
+
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
