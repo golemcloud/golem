@@ -946,7 +946,7 @@ async fn test_component_env_var_substitution() {
         .await;
     assert!(!outputs.success());
 
-    assert!(outputs.stderr_contains_ordered([
+    assert!(outputs.stdout_contains_ordered([
         "key:       COMPOSED",
         "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_1",
