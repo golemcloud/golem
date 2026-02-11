@@ -25,7 +25,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
-use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, HttpRouteDetails, OpenApiSpecBehaviour, RoutesPerAgent, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour};
+use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, HttpRouteDetails, OpenApiSpecBehaviour, RoutesWithAgentType, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
@@ -279,14 +279,10 @@ pub fn add_webhook_callback_routes(
 
 
 // this is done for open api spec
-fn to_http_route_details(route: &UnboundCompiledRoute) -> HttpRouteDetails {
+fn to_http_route_details(route: &UnboundCompiledRoute, agent_type: &AgentType) -> HttpRouteDetails {
     HttpRouteDetails {
-        method: route.method.clone(),
-        path: route.path.clone(),
-        body: route.body.clone(),
-        behaviour: route.behaviour.clone(),
-        security_scheme: route.security_scheme.clone(),
-        cors: route.cors.clone(),
+        agent_type: agent_type.clone(),
+        route_id: route.route_id
     }
 }
 
@@ -294,7 +290,7 @@ fn build_openapi_spec_for_component(
     component_id: &ComponentId,
     agents: &[&InProgressDeployedRegisteredAgentType],
     compiled_routes: &HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
-) -> Vec<RoutesPerAgent> {
+) -> Vec<RoutesWithAgentType> {
     let mut result = Vec::new();
 
     for agent in agents {
@@ -305,14 +301,13 @@ fn build_openapi_spec_for_component(
                 if call.component_id == *component_id
                     && call.agent_type == agent.agent_type.type_name
                 {
-                    routes.push(to_http_route_details(route));
+                    routes.push(to_http_route_details(route, &agent.agent_type));
                 }
             }
         }
 
         if !routes.is_empty() {
-            result.push(RoutesPerAgent {
-                agent_type: agent.agent_type.clone(),
+            result.push(RoutesWithAgentType {
                 routes,
             });
         }
