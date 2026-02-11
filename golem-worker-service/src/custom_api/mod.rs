@@ -24,6 +24,7 @@ mod rich_request;
 pub mod route_resolver;
 pub mod router;
 pub mod security;
+pub mod webhoooks;
 mod openapi;
 
 use self::poem_endpoint::CustomApiPoemEndpoint;

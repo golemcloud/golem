@@ -10,7 +10,6 @@ ttl = "8h"
 [agent_deployments_service]
 cache_capacity = 1000
 cache_eviction_interval = "1m"
-use_https_for_webhook_url = true
 
 [agent_deployments_service.cache_ttl]
 nanos = 0
@@ -21,6 +20,10 @@ type = "Grpc"
 
 [agent_types_service.config]
 cache_time_to_idle = "1m"
+
+[agent_webhooks_service]
+hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+use_https_for_webhook_url = true
 
 [blob_storage]
 type = "LocalFileSystem"
@@ -255,7 +258,6 @@ without_time = false
 # [agent_deployments_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
-# use_https_for_webhook_url = true
 # 
 # [agent_deployments_service.cache_ttl]
 # nanos = 0
@@ -266,6 +268,10 @@ without_time = false
 # 
 # [agent_types_service.config]
 # cache_time_to_idle = "1m"
+# 
+# [agent_webhooks_service]
+# hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+# use_https_for_webhook_url = true
 # 
 # [blob_storage]
 # type = "S3"
@@ -492,7 +498,6 @@ without_time = false
 # [agent_deployments_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
-# use_https_for_webhook_url = true
 # 
 # [agent_deployments_service.cache_ttl]
 # nanos = 0
@@ -503,6 +508,10 @@ without_time = false
 # 
 # [agent_types_service.config]
 # cache_time_to_idle = "1m"
+# 
+# [agent_webhooks_service]
+# hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+# use_https_for_webhook_url = true
 # 
 # [blob_storage]
 # type = "InMemory"

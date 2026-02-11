@@ -17,7 +17,12 @@ use super::{OidcSession, ParsedRequestBody};
 use super::error::RequestHandlerError;
 use anyhow::anyhow;
 use golem_common::model::agent::{BinarySource, BinaryType};
+use golem_common::model::invocation_context::{
+    InvocationContextSpan, InvocationContextStack, TraceId,
+};
+use golem_common::model::{IdempotencyKey, invocation_context};
 use golem_service_base::custom_api::RequestBodySchema;
+use golem_service_base::headers::TraceContextHeaders;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use http::HeaderMap;
@@ -140,7 +145,6 @@ impl RichRequest {
             }
 
             RequestBodySchema::UnrestrictedBinary => self.parse_binary_body(None).await,
-
             RequestBodySchema::RestrictedBinary { allowed_mime_types } => {
                 self.parse_binary_body(Some(allowed_mime_types)).await
             }
@@ -183,6 +187,69 @@ impl RichRequest {
             binary_type: BinaryType { mime_type },
         })))
     }
+
+    pub fn idempotency_key(&self) -> IdempotencyKey {
+        self.underlying
+            .headers()
+            .get("idempotency-key")
+            .and_then(|h| h.to_str().ok())
+            .map(|value| IdempotencyKey::new(value.to_string()))
+            .unwrap_or_else(IdempotencyKey::fresh)
+    }
+
+    pub fn invocation_context(&self) -> InvocationContextStack {
+        let trace_context_headers = TraceContextHeaders::parse(self.underlying.headers());
+        let request_attributes = extract_request_attributes(&self.underlying);
+
+        match trace_context_headers {
+            Some(ctx) => {
+                // Trace context found in headers, starting a new span
+                let mut ctx = InvocationContextStack::new(
+                    ctx.trace_id,
+                    InvocationContextSpan::external_parent(ctx.parent_id),
+                    ctx.trace_states,
+                );
+                ctx.push(
+                    InvocationContextSpan::local()
+                        .with_attributes(request_attributes)
+                        .with_parent(ctx.spans.first().clone())
+                        .build(),
+                );
+                ctx
+            }
+            None => {
+                // No trace context in headers, starting a new trace
+                InvocationContextStack::new(
+                    TraceId::generate(),
+                    InvocationContextSpan::local()
+                        .with_attributes(request_attributes)
+                        .build(),
+                    Vec::new(),
+                )
+            }
+        }
+    }
+}
+
+fn extract_request_attributes(
+    request: &poem::Request,
+) -> HashMap<String, invocation_context::AttributeValue> {
+    let mut result = HashMap::new();
+
+    result.insert(
+        "request.method".to_string(),
+        invocation_context::AttributeValue::String(request.method().to_string()),
+    );
+    result.insert(
+        "request.uri".to_string(),
+        invocation_context::AttributeValue::String(request.uri().to_string()),
+    );
+    result.insert(
+        "request.remote_addr".to_string(),
+        invocation_context::AttributeValue::String(request.remote_addr().to_string()),
+    );
+
+    result
 }
 
 #[cfg(test)]

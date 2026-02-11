@@ -46,6 +46,7 @@ figment = { workspace = true }
 futures = { workspace = true }
 headers = { workspace = true }
 hex = { workspace = true }
+hmac.workspace = true
 http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }

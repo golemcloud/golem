@@ -17,6 +17,7 @@ use golem_common::config::DbSqliteConfig;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
+use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
@@ -43,6 +44,7 @@ pub struct WorkerServiceConfig {
     pub route_resolver: RouteResolverConfig,
     pub component_service: ComponentServiceConfig,
     pub auth_service: AuthServiceConfig,
+    pub webhook_callback_handler: WebhookCallbackHandlerConfig,
 }
 
 impl WorkerServiceConfig {
@@ -113,6 +115,13 @@ impl SafeDisplay for WorkerServiceConfig {
             self.auth_service.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "webhook callback handler:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.webhook_callback_handler.to_safe_string_indented()
+        );
+
         result
     }
 }
@@ -134,6 +143,7 @@ impl Default for WorkerServiceConfig {
             route_resolver: RouteResolverConfig::default(),
             component_service: ComponentServiceConfig::default(),
             auth_service: AuthServiceConfig::default(),
+            webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
         }
     }
 }
@@ -423,6 +433,31 @@ impl SafeDisplay for WorkerExecutorClientConfig {
         let _ = writeln!(&mut result, "{}", self.client.to_safe_string());
 
         result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebhookCallbackHandlerConfig {
+    pub hmac_key: Base64,
+}
+
+impl SafeDisplay for WebhookCallbackHandlerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "hmac_key: *******");
+        result
+    }
+}
+
+impl Default for WebhookCallbackHandlerConfig {
+    fn default() -> Self {
+        Self {
+            hmac_key: Base64(vec![
+                0x2b, 0x7e, 0x02, 0xa3, 0x8a, 0x51, 0x30, 0x39, 0x7b, 0x74, 0x1d, 0xdc, 0x60, 0x1f,
+                0xb5, 0xfc, 0xdd, 0x09, 0xde, 0xd3, 0x33, 0x25, 0x62, 0x38, 0x17, 0x23, 0xcd, 0x3a,
+                0xc9, 0x86, 0x1e, 0x41,
+            ]),
+        }
     }
 }
 

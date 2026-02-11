@@ -144,6 +144,7 @@ script_runner = "@duckscript"
 script = """
 components = array
 array_push ${components} agent-counters/.wit
+array_push ${components} agent-invocation-context/.wit
 array_push ${components} agent-updates-v1/.wit
 array_push ${components} agent-updates-v2/.wit
 array_push ${components} benchmarks

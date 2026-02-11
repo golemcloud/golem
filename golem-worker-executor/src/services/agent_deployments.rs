@@ -17,7 +17,6 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::RegistryService;
-use golem_service_base::custom_api::AgentWebhookId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use std::collections::HashMap;
@@ -33,13 +32,6 @@ pub trait AgentDeploymentsService: Send + Sync {
         environment: EnvironmentId,
         agent_type: &AgentTypeName,
     ) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError>;
-
-    async fn get_agent_webhook_url(
-        &self,
-        environment: EnvironmentId,
-        agent_type: &AgentTypeName,
-        webhook_id: &AgentWebhookId,
-    ) -> Result<Option<String>, WorkerExecutorError>;
 }
 
 pub struct GrpcAgentDeploymentService {
@@ -50,7 +42,6 @@ pub struct GrpcAgentDeploymentService {
         HashMap<AgentTypeName, AgentDeploymentDetails>,
         WorkerExecutorError,
     >,
-    use_https_for_webhook_url: bool,
 }
 
 impl GrpcAgentDeploymentService {
@@ -59,7 +50,6 @@ impl GrpcAgentDeploymentService {
         cache_capacity: usize,
         cache_ttl: Duration,
         cache_eviction_interval: Duration,
-        use_https_for_webhook_url: bool,
     ) -> Self {
         Self {
             client: registry_service,
@@ -72,7 +62,6 @@ impl GrpcAgentDeploymentService {
                 },
                 "gprc_agent_deployed_domains_service",
             ),
-            use_https_for_webhook_url,
         }
     }
 
@@ -107,30 +96,5 @@ impl AgentDeploymentsService for GrpcAgentDeploymentService {
         let environment_agent_deployments =
             self.get_environment_agent_deployments(environment).await?;
         Ok(environment_agent_deployments.get(agent_type).cloned())
-    }
-
-    async fn get_agent_webhook_url(
-        &self,
-        environment: EnvironmentId,
-        agent_type: &AgentTypeName,
-        webhook_id: &AgentWebhookId,
-    ) -> Result<Option<String>, WorkerExecutorError> {
-        let Some(webhook_prefix_authority_and_path) = self
-            .get_agent_deployment(environment, agent_type)
-            .await?
-            .and_then(|ad| ad.webhook_prefix_authority_and_path)
-        else {
-            return Ok(None);
-        };
-        let encoded_webhook_id = webhook_id.to_base64_url();
-        let protocol = if self.use_https_for_webhook_url {
-            "https"
-        } else {
-            "http"
-        };
-        Ok(Some(format!(
-            "{}://{}/{}",
-            protocol, webhook_prefix_authority_and_path, encoded_webhook_id
-        )))
     }
 }

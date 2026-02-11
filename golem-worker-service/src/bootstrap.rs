@@ -24,6 +24,7 @@ use crate::custom_api::security::handler::OidcHandler;
 use crate::custom_api::security::session_store::{
     RedisSessionStore, SessionStore, SqliteSessionStore,
 };
+use crate::custom_api::webhoooks::WebhookCallbackHandler;
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
@@ -140,11 +141,16 @@ impl Services {
             identity_provider.clone(),
         ));
 
+        let webhook_callback_handler = Arc::new(WebhookCallbackHandler::new(
+            worker_service.clone(),
+            config.webhook_callback_handler.hmac_key.0.clone(),
+        ));
+
         let request_handler = Arc::new(RequestHandler::new(
             route_resolver.clone(),
             call_agent_handler.clone(),
             oidc_handler.clone(),
-            worker_service.clone(),
+            webhook_callback_handler.clone(),
         ));
 
         let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new(
