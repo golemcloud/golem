@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// pub mod openapi;
+pub mod openapi;
 mod protobuf;
 
 use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod};
+use golem_common::model::agent::{AgentType, AgentTypeName, DataSchema, HttpMethod};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -38,7 +38,6 @@ pub type RouteId = i32;
 pub enum PathSegment {
     Literal { value: String },
     Variable,
-    // Invariant: may only occur as the last element
     CatchAll,
 }
 
@@ -179,7 +178,7 @@ impl TryFrom<AnalysedType> for QueryOrHeaderType {
     }
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum RequestBodySchema {
     Unused,
@@ -239,7 +238,7 @@ pub struct CompiledRoute {
     pub cors: CorsOptions,
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub enum RouteBehaviour {
     CallAgent(CallAgentBehaviour),
@@ -248,13 +247,37 @@ pub enum RouteBehaviour {
     OpenApiSpec(OpenApiSpecBehaviour),
 }
 
+
+// OpenAPI spec behaviour is more per component for now
+// `open_api_spec` can also represent agent types across the deployment.
+// However, it should still be keyed by agent-type since it decides the mount path
+// and the structure enables us to have more fine-grained versions of open api spec.
 #[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct OpenApiSpecBehaviour {
-    pub agent_type: AgentTypeName,
+    pub open_api_spec: Vec<OpenApiSpecPerAgent>,
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
+pub struct OpenApiSpecPerAgent {
+    pub agent_type: AgentType,
+    pub routes: Vec<HttpRouteDetails>,
+}
+
+// TODO; remove comment
+// Anything that is in HttpRouteDetails can be correlated back to AgentType
+// The following details can be extracted back from UnboundCompiledRoute
+#[derive(Debug, Clone, BinaryCodec)]
+pub struct HttpRouteDetails {
+    pub method: HttpMethod,
+    pub path: Vec<PathSegment>,
+    pub body: RequestBodySchema,
+    pub behaviour: RouteBehaviour,
+    pub security_scheme: Option<SecuritySchemeName>,
+    pub cors: CorsOptions,
+}
+
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct CallAgentBehaviour {
     pub component_id: ComponentId,
@@ -267,14 +290,14 @@ pub struct CallAgentBehaviour {
     pub expected_agent_response: DataSchema,
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct CorsPreflightBehaviour {
     pub allowed_origins: BTreeSet<OriginPattern>,
     pub allowed_methods: BTreeSet<HttpMethod>,
 }
 
-#[derive(Debug, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct WebhookCallbackBehaviour {
     pub component_id: ComponentId,

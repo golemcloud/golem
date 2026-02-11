@@ -10,17 +10,16 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use super::RouteBehaviour;
-use super::path_pattern::AllPathPatterns;
+use super::{HttpRouteDetails, PathSegment, RouteBehaviour};
 use super::{CompiledRoute, SecuritySchemeDetails};
-use golem_common::model::http_api_definition::{
-    HttpApiDefinitionName, HttpApiDefinitionVersion, RouteMethod,
-};
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_wasm::analysis::{AnalysedType, NameTypePair};
 use indexmap::IndexMap;
 use rib::RibInputTypeInfo;
 use std::collections::{BTreeMap, HashMap};
+use golem_common::base_model::agent::{AgentType, ElementSchema, HttpMethod};
+use golem_common::base_model::security_scheme::SecuritySchemeName;
+use golem_common::model::agent::DataSchema;
 
 // Constants for OpenAPI extensions
 const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
@@ -28,27 +27,34 @@ const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
 /// Trait that any route type must implement to be used for OpenAPI generation
 pub trait HttpApiRoute {
     fn security_scheme_missing(&self) -> bool;
-    fn security_scheme(&self) -> Option<SecuritySchemeId>;
-    fn method(&self) -> &RouteMethod;
-    fn path(&self) -> &AllPathPatterns;
+    fn security_scheme(&self) -> Option<&SecuritySchemeName>;
+    fn method(&self) -> &HttpMethod;
+    fn path(&self) -> &Vec<PathSegment>;
     fn binding(&self) -> &RouteBehaviour;
 }
 
-impl HttpApiRoute for CompiledRoute {
+pub struct RouteWithAgentType {
+    pub agent_type: AgentType,
+    pub details: HttpRouteDetails,
+}
+
+
+impl HttpApiRoute for RouteWithAgentType {
     fn security_scheme_missing(&self) -> bool {
         false
     }
-    fn security_scheme(&self) -> Option<SecuritySchemeId> {
-        self.security_scheme
+    fn security_scheme(&self) -> Option<&SecuritySchemeName> {
+        let sec= &self.details.security_scheme;
+        sec.as_ref()
     }
-    fn method(&self) -> &RouteMethod {
-        &self.method
+    fn method(&self) -> &HttpMethod {
+        &self.details.method
     }
-    fn path(&self) -> &AllPathPatterns {
-        &self.path
+    fn path(&self) -> &Vec<PathSegment> {
+        &self.details.path
     }
     fn binding(&self) -> &RouteBehaviour {
-        &self.binding
+        &self.details.behaviour
     }
 }
 
@@ -57,8 +63,6 @@ pub struct HttpApiDefinitionOpenApiSpec(pub openapiv3::OpenAPI);
 
 impl HttpApiDefinitionOpenApiSpec {
     pub async fn from_routes<'a, T, I>(
-        http_api_definition_name: &HttpApiDefinitionName,
-        http_api_definition_version: &HttpApiDefinitionVersion,
         routes: I,
         security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
     ) -> Result<Self, String>
@@ -67,8 +71,8 @@ impl HttpApiDefinitionOpenApiSpec {
         I: IntoIterator<Item = &'a T>,
     {
         let mut open_api = create_base_openapi(
-            http_api_definition_name,
-            http_api_definition_version,
+            "foo",
+            "bar",
             security_schemes,
         );
 
@@ -89,19 +93,19 @@ impl HttpApiDefinitionOpenApiSpec {
 // --------------------- Base OpenAPI structure ---------------------
 
 fn create_base_openapi(
-    http_api_definition_name: &HttpApiDefinitionName,
-    http_api_definition_version: &HttpApiDefinitionVersion,
+    http_api_definition_name: &str,
+    http_api_definition_version: &str,
     security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
 ) -> openapiv3::OpenAPI {
     let mut open_api = openapiv3::OpenAPI {
         openapi: "3.0.0".to_string(),
         info: openapiv3::Info {
-            title: http_api_definition_name.0.to_string(),
+            title: http_api_definition_name.to_string(),
             description: None,
             terms_of_service: None,
             contact: None,
             license: None,
-            version: http_api_definition_version.0.to_string(),
+            version: http_api_definition_version.to_string(),
             extensions: Default::default(),
         },
         ..Default::default()
@@ -134,14 +138,13 @@ fn create_base_openapi(
     open_api
 }
 
-// --------------------- Process routes ---------------------
 
 async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     route: &T,
     paths: &mut BTreeMap<String, openapiv3::PathItem>,
     security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
 ) -> Result<(), String> {
-    let path_str = route.path().to_string();
+    let path_str = route.path().iter().map(|x| x.to_string()).collect::<Vec<String>>().join("/");
     let path_item = paths.entry(path_str.clone()).or_default();
 
     let mut operation = openapiv3::Operation::default();
@@ -155,8 +158,6 @@ async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
 
     Ok(())
 }
-
-// --------------------- Parameters ---------------------
 
 type ParameterTuple = (String, openapiv3::Schema);
 
@@ -185,6 +186,8 @@ fn add_parameters<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation
             )));
     }
 }
+
+
 
 fn get_parameters<T: HttpApiRoute + ?Sized>(
     route: &T,
@@ -232,65 +235,7 @@ fn get_parameters<T: HttpApiRoute + ?Sized>(
                 );
             }
         }
-        RouteBehaviour::FileServer(file_server) => {
-            if let Some(request) = file_server
-                .worker_name_compiled
-                .rib_input
-                .types
-                .get("request")
-            {
-                extract_parameters_from_record(
-                    request,
-                    &mut path_params,
-                    &mut query_params,
-                    &mut header_params,
-                );
-            }
-            if let Some(request) = file_server.response_compiled.rib_input.types.get("request") {
-                extract_parameters_from_record(
-                    request,
-                    &mut path_params,
-                    &mut query_params,
-                    &mut header_params,
-                );
-            }
-        }
-        RouteBehaviour::HttpHandler(handler) => {
-            if let Some(request) = handler.worker_name_compiled.rib_input.types.get("request") {
-                extract_parameters_from_record(
-                    request,
-                    &mut path_params,
-                    &mut query_params,
-                    &mut header_params,
-                );
-            }
-            if let Some(request) = handler
-                .idempotency_key_compiled
-                .as_ref()
-                .and_then(|c| c.rib_input.types.get("request"))
-            {
-                extract_parameters_from_record(
-                    request,
-                    &mut path_params,
-                    &mut query_params,
-                    &mut header_params,
-                );
-            }
-            if let Some(request) = handler
-                .invocation_context_compiled
-                .as_ref()
-                .and_then(|c| c.rib_input.types.get("request"))
-            {
-                extract_parameters_from_record(
-                    request,
-                    &mut path_params,
-                    &mut query_params,
-                    &mut header_params,
-                );
-            }
-        }
-        RouteBehaviour::HttpCorsPreflight(_) => {}
-        RouteBehaviour::SwaggerUi(_) => {}
+        _ => todo!("parameter extraction for non CallAgent behaviour not implemented yet"),
     }
 
     (path_params, query_params, header_params)
@@ -433,6 +378,7 @@ fn determine_request_body_schema(rib: &RibInputTypeInfo) -> Option<openapiv3::Sc
 // --------------------- Responses ---------------------
 
 fn add_responses<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
+    // Is there any headers from the response? May be for cors preflight
     let (response_schema, headers, explicit_status) =
         determine_response_schema_content_type_headers(route);
 
@@ -520,49 +466,42 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
 ) -> (
     DeterminedResponseBodySchema,
     Option<IndexMap<String, openapiv3::Schema>>,
-    Option<u16>,
+    Option<u16>, // status code
 ) {
     match route.binding() {
-        RouteBehaviour::Worker(worker) => {
-            if let Some(output_info) = &worker.response_compiled.rib_output
-                && let AnalysedType::Record(record) = &output_info.analysed_type
-            {
-                let (headers, body) = extract_response_header_and_body_types(&record.fields);
-                let headers_schema = headers.map(|h| {
-                    let mut map = IndexMap::new();
-                    if let AnalysedType::Record(r) = h {
-                        for f in &r.fields {
-                            map.insert(f.name.clone(), create_schema_from_analysed_type(&f.typ));
-                        }
+        RouteBehaviour::CallAgent(call_agent_behaviour) =>  {
+            let response = &call_agent_behaviour.expected_agent_response;
+
+            match response {
+                DataSchema::Tuple(named_element_schemas) => {
+                    match named_element_schemas.elements.len() {
+                        0 => (DeterminedResponseBodySchema::NoBody, None, Some(204)),
+                        1 => {
+                            let element_schema = &named_element_schemas.elements[0];
+                            let schema = &element_schema.schema;
+
+                            match schema {
+                                ElementSchema::ComponentModel(inner) =>  {
+                                    let schema = create_schema_from_analysed_type(&inner.element_type);
+                                    (DeterminedResponseBodySchema::Known { schema: Box::new(schema), content_type: "application/json".to_string() }, None, Some(200))
+                                }
+
+                                _ => {
+                                    todo!()
+                                }
+
+
+                            }
+                        },
+                        _ => (DeterminedResponseBodySchema::Unknown, None, Some(200)),
                     }
-                    map
-                });
+                }
 
-                let response_schema = body
-                    .map(|b| DeterminedResponseBodySchema::Known {
-                        schema: Box::new(create_schema_from_analysed_type(&b)),
-                        content_type: "application/json".to_string(),
-                    })
-                    .unwrap_or(DeterminedResponseBodySchema::NoBody);
-
-                return (response_schema, headers_schema, None);
+                _ => todo!("response schema other than tuple not supported yet"),
             }
-            (DeterminedResponseBodySchema::Unknown, None, None)
         }
-        RouteBehaviour::SwaggerUi(_) => {
-            let schema = create_schema_from_analysed_type(&AnalysedType::Str(
-                golem_wasm::analysis::TypeStr {},
-            ));
-            (
-                DeterminedResponseBodySchema::Known {
-                    schema: Box::new(schema),
-                    content_type: "text/html".to_string(),
-                },
-                None,
-                Some(200),
-            )
-        }
-        RouteBehaviour::HttpCorsPreflight(_) => {
+
+        RouteBehaviour::CorsPreflight(cors_preflight_behaviour) => {
             let mut headers = IndexMap::new();
             let string_schema = openapiv3::Schema {
                 schema_data: Default::default(),
@@ -576,20 +515,34 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
                     },
                 )),
             };
-            for h in [
-                "Access-Control-Allow-Origin",
-                "Access-Control-Allow-Headers",
-                "Access-Control-Allow-Methods",
-            ] {
-                headers.insert(h.to_string(), string_schema.clone());
-            }
+
+            headers.insert("Access-Control-Allow-Origin".to_string(), string_schema.clone());
+            headers.insert("Access-Control-Allow-Headers".to_string(), string_schema.clone());
+
+            (DeterminedResponseBodySchema::NoBody, Some(headers), Some(200))
+        }
+
+        RouteBehaviour::OpenApiSpec(openapi_spec_behaviour) => {
+            let schema = create_schema_from_analysed_type(&AnalysedType::Str(
+                golem_wasm::analysis::TypeStr {},
+            ));
             (
-                DeterminedResponseBodySchema::NoBody,
-                Some(headers),
+                DeterminedResponseBodySchema::Known {
+                    schema: Box::new(schema),
+                    content_type: "text/html".to_string(),
+                },
+                None,
                 Some(200),
             )
         }
-        _ => (DeterminedResponseBodySchema::Unknown, None, None),
+
+        RouteBehaviour::WebhookCallback(_) => {
+            (
+                DeterminedResponseBodySchema::NoBody,
+                None,
+                Some(200),
+            )
+        }
     }
 }
 

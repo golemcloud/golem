@@ -123,36 +123,27 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { agent_type }) => {
-                // Get all routes for this domain and generate OpenAPI spec
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }) => {
                 match self
                     .route_resolver
                     .get_routes_for_domain(&resolved_route.domain)
                     .await
                 {
                     Ok(routes) => {
-                        match OpenApiHandler::generate_spec(agent_type, &routes) {
+                        match OpenApiHandler::generate_spec(agent_type, &routes).await {
                             Ok(yaml) => {
-                                let response = Response::builder()
-                                    .content_type("application/yaml; charset=utf-8")
-                                    .body(yaml);
                                 Ok(RouteExecutionResult {
                                     status: StatusCode::OK,
                                     headers: HashMap::new(),
-                                    body: ResponseBody::PlainText(
-                                        response.finish().into_string().ok(),
-                                    ),
+                                    body: ResponseBody::PlainText {
+                                        body: yaml
+                                    },
                                 })
                             }
-                            Err(e) => Err(RequestHandlerError::InvalidRequest(format!(
-                                "Failed to generate OpenAPI spec: {}",
-                                e
-                            ))),
+                            Err(e) => Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: e }),
                         }
                     }
-                    Err(_) => Err(RequestHandlerError::InvalidRequest(
-                        "Failed to fetch routes for OpenAPI spec generation".to_string(),
-                    )),
+                    Err(_) => Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: "Failed to retrieve routes for domain".to_string() }),
                 }
             }
 
@@ -228,5 +219,7 @@ fn route_execution_result_to_response(
         ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
+        
+        ResponseBody::PlainText(body) => Ok(response_builder.body(body)),
     }
 }

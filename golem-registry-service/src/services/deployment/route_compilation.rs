@@ -25,13 +25,11 @@ use golem_common::model::agent::{
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
-use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
-    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
-};
+use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, HttpRouteDetails, OpenApiSpecBehaviour, OpenApiSpecPerAgent, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
+use golem_common::base_model::component::ComponentId;
 
 pub fn add_agent_method_http_routes(
     deployment: &HttpApiDeployment,
@@ -279,45 +277,134 @@ pub fn add_webhook_callback_routes(
     }
 }
 
+
+// this is done for open api spec
+fn to_http_route_details(route: &UnboundCompiledRoute) -> HttpRouteDetails {
+    HttpRouteDetails {
+        method: route.method.clone(),
+        path: route.path.clone(),
+        body: route.body.clone(),
+        behaviour: route.behaviour.clone(),
+        security_scheme: route.security_scheme.clone(),
+        cors: route.cors.clone(),
+    }
+}
+
+fn build_openapi_spec_for_component(
+    component_id: &ComponentId,
+    agents: &[&InProgressDeployedRegisteredAgentType],
+    compiled_routes: &HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
+) -> Vec<OpenApiSpecPerAgent> {
+    let mut result = Vec::new();
+
+    for agent in agents {
+        let mut routes = Vec::new();
+
+        for route in compiled_routes.values() {
+            if let RouteBehaviour::CallAgent(call) = &route.behaviour {
+                if call.component_id == *component_id
+                    && call.agent_type == agent.agent_type.type_name
+                {
+                    routes.push(to_http_route_details(route));
+                }
+            }
+        }
+
+        if !routes.is_empty() {
+            result.push(OpenApiSpecPerAgent {
+                agent_type: agent.agent_type.clone(),
+                routes,
+            });
+        }
+    }
+
+    result
+}
+
+
+// We need a route for each component rather than for each agent type,
+
 pub fn add_openapi_spec_routes(
     deployment: &HttpApiDeployment,
-    registered_agent_types: &std::collections::HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
+    registered_agent_types: &HashMap<
+        AgentTypeName,
+        InProgressDeployedRegisteredAgentType,
+    >,
     current_route_id: &mut i32,
     compiled_routes: &mut HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
 ) {
+    let mut component_agents: BTreeMap<
+        ComponentId,
+        Vec<&InProgressDeployedRegisteredAgentType>,
+    > = BTreeMap::new();
+
     for agent_type_name in deployment.agents.keys() {
-        if let Some(agent_type_record) = registered_agent_types.get(agent_type_name) {
-            // Create synthetic route: /agents/{agent_type}/.well-known/openapi.yaml
-            let route_id = *current_route_id;
-            *current_route_id = current_route_id.checked_add(1).unwrap();
+        let Some(agent) = registered_agent_types.get(agent_type_name) else {
+            continue;
+        };
 
-            // Path: /agents/{agent_type_name}/.well-known/openapi.yaml
-            let path = vec![
-                PathSegment::Literal { value: "agents".to_string() },
-                PathSegment::Literal { value: agent_type_name.0.clone() },
-                PathSegment::Literal { value: ".well-known".to_string() },
-                PathSegment::Literal { value: "openapi.yaml".to_string() },
-            ];
+        component_agents
+            .entry(agent.implemented_by.component_id)
+            .or_default()
+            .push(agent);
+    }
 
-            let compiled = UnboundCompiledRoute {
+    for (component_id, agents) in component_agents {
+        let open_api_spec = build_openapi_spec_for_component(
+            &component_id,
+            &agents,
+            compiled_routes,
+        );
+
+        if open_api_spec.is_empty() {
+            continue;
+        }
+
+        let path = vec![
+            PathSegment::Literal {
+                value: "components".to_string(),
+            },
+            PathSegment::Literal {
+                value: component_id.to_string(),
+            },
+            PathSegment::Literal {
+                value: ".well-known".to_string(),
+            },
+            PathSegment::Literal {
+                value: "openapi.yaml".to_string(),
+            },
+        ];
+
+        let method = HttpMethod::Get(Empty {});
+        let key = (method.clone(), path.clone());
+
+        if compiled_routes.contains_key(&key) {
+            continue;
+        }
+
+        let route_id = *current_route_id;
+        *current_route_id = current_route_id.checked_add(1).unwrap();
+
+        compiled_routes.insert(
+            key,
+            UnboundCompiledRoute {
                 route_id,
                 domain: deployment.domain.clone(),
-                method: HttpMethod::Get(Empty {}),
-                path: path.clone(),
+                method,
+                path,
                 body: RequestBodySchema::Unused,
                 behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                    agent_type: agent_type_name.clone(),
+                    open_api_spec,
                 }),
                 security_scheme: None,
                 cors: CorsOptions {
                     allowed_patterns: Vec::new(),
                 },
-            };
-
-            compiled_routes.insert((compiled.method.clone(), compiled.path.clone()), compiled);
-        }
+            },
+        );
     }
 }
+
 
 pub fn build_agent_http_api_deployment_details(
     agent_type_name: &AgentTypeName,

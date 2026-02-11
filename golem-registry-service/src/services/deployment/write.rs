@@ -237,6 +237,8 @@ impl DeploymentWriteService {
 
         tracing::info!("Creating deployment for environment: {environment_id}");
 
+        // This is orthogonal for no need I guess?
+        // I was simply expecting Vec<(Component HttpApiDeployment)> ?
         let (components, http_api_deployments) = tokio::try_join!(
             self.component_service
                 .list_staged_components_for_environment(&environment, auth)
