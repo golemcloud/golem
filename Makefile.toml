@@ -164,7 +164,6 @@ array_push ${components} promise
 array_push ${components} rdbms-service
 array_push ${components} rpc
 array_push ${components} runtime-service
-array_push ${components} rust-service/rpc
 array_push ${components} scheduled-invocation
 array_push ${components} shopping-cart
 array_push ${components} update-test-env-var
@@ -173,9 +172,6 @@ array_push ${components} update-test-v3-11
 array_push ${components} update-test-v3-sdk
 array_push ${components} update-test-v4
 array_push ${components} wasi-config
-array_push ${components} wasi-http-incoming-request-handler
-array_push ${components} wasi-http-incoming-request-handler-echo
-array_push ${components} wasi-http-incoming-request-handler-state
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"
