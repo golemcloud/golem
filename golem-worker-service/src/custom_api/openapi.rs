@@ -10,26 +10,24 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use super::{HttpRouteDetails, MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, RouteBehaviour};
-use super::{SecuritySchemeDetails};
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_wasm::analysis::{AnalysedType, NameTypePair};
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, HashMap};
-use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema, HttpMethod};
-use golem_common::base_model::security_scheme::SecuritySchemeName;
+use std::sync::Arc;
+use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema};
 use golem_common::model::agent::DataSchema;
-use crate::model::SafeIndex;
+use golem_service_base::custom_api::{MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, RouteBehaviour, SecuritySchemeDetails};
+use golem_service_base::model::SafeIndex;
+use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 
-// Constants for OpenAPI extensions
 const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
 
-/// Trait that any route type must implement to be used for OpenAPI generation
 pub trait HttpApiRoute {
     fn agent_type(&self) -> &AgentType;
     fn security_scheme_missing(&self) -> bool;
-    fn security_scheme(&self) -> Option<&SecuritySchemeName>;
-    fn method(&self) -> &HttpMethod;
+    fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>>;
+    fn method(&self) -> &String;
     fn path(&self) -> &Vec<PathSegment>;
     fn binding(&self) -> &RouteBehaviour;
     fn request_body_schema(&self) -> &RequestBodySchema;
@@ -38,10 +36,8 @@ pub trait HttpApiRoute {
 
 pub struct RouteWithAgentType {
     pub agent_type: AgentType,
-    // Use RichCompiledRoute
-    pub details: HttpRouteDetails,
+    pub details: RichCompiledRoute,
 }
-
 
 impl HttpApiRoute for RouteWithAgentType {
     fn agent_type(&self) -> &AgentType {
@@ -51,26 +47,25 @@ impl HttpApiRoute for RouteWithAgentType {
     fn security_scheme_missing(&self) -> bool {
         false
     }
-    fn security_scheme(&self) -> Option<&SecuritySchemeName> {
-        let sec= &self.details.security_scheme;
-        sec.as_ref()
+    fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>> {
+        &self.details.security_scheme
     }
-    fn method(&self) -> &HttpMethod {
-        &self.details.method
+    fn method(&self) -> &String {
+        &self.details.method.to_string()
     }
     fn path(&self) -> &Vec<PathSegment> {
         &self.details.path
     }
-    fn binding(&self) -> &RouteBehaviour {
-        &self.details.behaviour
+    fn binding(&self) -> &RichRouteBehaviour {
+        &self.details.behavior
     }
     fn request_body_schema(&self) -> &RequestBodySchema {
         &self.details.body
     }
 
     fn associated_agent_method(&self) -> Option<&AgentMethod> {
-        match &self.details.behaviour {
-            RouteBehaviour::CallAgent(call_agent_behaviour) => {
+        match &self.details.behavior {
+            RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
                 let method_name = &call_agent_behaviour.method_name;
                 self.agent_type.methods.iter().find(|m| m.name == *method_name)
             }
@@ -79,7 +74,6 @@ impl HttpApiRoute for RouteWithAgentType {
     }
 }
 
-/// Main wrapper type
 pub struct HttpApiDefinitionOpenApiSpec(pub openapiv3::OpenAPI);
 
 impl HttpApiDefinitionOpenApiSpec {
@@ -92,8 +86,8 @@ impl HttpApiDefinitionOpenApiSpec {
         I: IntoIterator<Item = &'a T>,
     {
         let mut open_api = create_base_openapi(
-            "foo",
-            "bar",
+            "foo", // TODO;
+            "bar", // TODO;
             security_schemes,
         );
 
@@ -130,8 +124,7 @@ fn create_base_openapi(
         ..Default::default()
     };
 
-    let components = openapiv3::Components::default();
-    let mut spec_security_schemes = components.security_schemes;
+    let mut components = openapiv3::Components::default();
     for security_scheme in security_schemes.values() {
         let openid_config_url = format!(
             "{}/.well-known/openid-configuration",
@@ -147,7 +140,7 @@ fn create_base_openapi(
             extensions: Default::default(),
         };
 
-        spec_security_schemes.insert(
+        components.security_schemes.insert(
             security_scheme.name.0.clone(),
             openapiv3::ReferenceOr::Item(scheme),
         );
@@ -349,7 +342,7 @@ async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     add_parameters(&mut operation, path_params_raw, query_params_raw, header_params_raw);
     add_request_body(&mut operation, route.request_body_schema());
     add_responses(&mut operation, route);
-   // add_security(&mut operation, route, security_schemes);
+    add_security(&mut operation, route);
 
     add_operation_to_path_item(path_item, route.method(), operation)?;
 
@@ -498,9 +491,9 @@ fn add_request_body(operation: &mut openapiv3::Operation, request_body_schema: &
 
     let request_body = create_request_body(request_body_schema);
 
-        if let Some(rb) = request_body {
-            operation.request_body = Some(openapiv3::ReferenceOr::Item(rb));
-        }
+    if let Some(rb) = request_body {
+        operation.request_body = Some(openapiv3::ReferenceOr::Item(rb));
+    }
 }
 
 fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openapiv3::RequestBody> {
@@ -568,7 +561,6 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openap
 
 
 fn add_responses<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
-    // Is there any headers from the response? May be for cors preflight
     let (response_schema, headers, explicit_status) =
         determine_response_schema_content_type_headers(route);
 
@@ -736,51 +728,42 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
     }
 }
 
-// --------------------- Security ---------------------
-//
-// fn add_security<T: HttpApiRoute + ?Sized>(
-//     operation: &mut openapiv3::Operation,
-//     route: &T,
-//     security_schemes_map: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
-// ) {
-//     if route.security_scheme_missing() {
-//         operation.extensions.insert(
-//             GOLEM_DISABLED_EXTENSION.to_string(),
-//             serde_json::json!({ "reason": "security_scheme_missing" }),
-//         );
-//         return;
-//     }
-//
-//     // If the route references a scheme
-//     if let Some(security_scheme_id) = route.security_scheme() {
-//         let details = security_schemes_map
-//             .get(&security_scheme_id)
-//             .expect("Failed to find security scheme even though it's not marked as missing");
-//         let scopes_vec: Vec<String> = details.scopes.iter().map(|s| s.to_string()).collect();
-//
-//         let mut requirement: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
-//         requirement.insert(details.name.0.clone(), scopes_vec);
-//
-//         operation.security = Some(vec![requirement]);
-//     }
-// }
+fn add_security<T: HttpApiRoute + ?Sized>(
+    operation: &mut openapiv3::Operation,
+    route: &T,
+) {
+    if route.security_scheme_missing() {
+        operation.extensions.insert(
+            GOLEM_DISABLED_EXTENSION.to_string(),
+            serde_json::json!({ "reason": "security_scheme_missing" }),
+        );
+        return;
+    }
 
-// --------------------- Helpers ---------------------
+    if let Some(security_schema_details) = route.security_scheme() {
+        let scopes_vec: Vec<String> = security_schema_details.scopes.iter().map(|s| s.to_string()).collect();
+
+        let mut requirement: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
+        requirement.insert(security_schema_details.name.0.clone(), scopes_vec);
+
+        operation.security = Some(vec![requirement]);
+    }
+}
 
 fn add_operation_to_path_item(
     path_item: &mut openapiv3::PathItem,
-    method: &HttpMethod,
+    method: &String,
     operation: openapiv3::Operation,
 ) -> Result<(), String> {
-    match method {
-        HttpMethod::Get(_) => path_item.get = Some(operation),
-        HttpMethod::Post(_) => path_item.post = Some(operation),
-        HttpMethod::Put(_) => path_item.put = Some(operation),
-        HttpMethod::Delete(_) => path_item.delete = Some(operation),
-        HttpMethod::Patch(_) => path_item.patch = Some(operation),
-        HttpMethod::Options(_) => path_item.options = Some(operation),
-        HttpMethod::Head(_) => path_item.head = Some(operation),
-        HttpMethod::Trace(_) => path_item.trace = Some(operation),
+    match method.as_str() {
+        "GET" => path_item.get = Some(operation),
+        "POST" => path_item.post = Some(operation),
+        "PUT" => path_item.put = Some(operation),
+        "DELETE" => path_item.delete = Some(operation),
+        "PATCH" => path_item.patch = Some(operation),
+        "OPTIONS" => path_item.options = Some(operation),
+        "HEAD" => path_item.head = Some(operation),
+        "TRACE" => path_item.trace = Some(operation),
         _ => return Err(format!("Unsupported HTTP method: {:?}", method)), // Well, I don't know what to do here
     }
     Ok(())

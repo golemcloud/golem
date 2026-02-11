@@ -24,6 +24,7 @@ mod rich_request;
 pub mod route_resolver;
 pub mod router;
 pub mod security;
+mod openapi;
 
 use self::poem_endpoint::CustomApiPoemEndpoint;
 use crate::bootstrap::Services;

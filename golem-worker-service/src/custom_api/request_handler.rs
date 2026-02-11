@@ -126,11 +126,12 @@ impl RequestHandler {
             RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }) => {
                 match self
                     .route_resolver
-                    .get_routes_for_domain(&resolved_route.domain)
+                    .get_enriched_routes_for_domain(&resolved_route.domain)
                     .await
                 {
                     Ok(routes) => {
-                        match OpenApiHandler::generate_spec(open_api_spec).await {
+                        let agent_type
+                        match OpenApiHandler::generate_spec(routes).await {
                             Ok(yaml) => {
                                 Ok(RouteExecutionResult {
                                     status: StatusCode::OK,

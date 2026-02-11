@@ -255,11 +255,11 @@ pub enum RouteBehaviour {
 #[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct OpenApiSpecBehaviour {
-    pub open_api_spec: Vec<OpenApiSpecPerAgent>,
+    pub open_api_spec: Vec<RoutesPerAgent>,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
-pub struct OpenApiSpecPerAgent {
+pub struct RoutesPerAgent {
     pub agent_type: AgentType,
     pub routes: Vec<HttpRouteDetails>,
 }
@@ -269,6 +269,7 @@ pub struct OpenApiSpecPerAgent {
 // The following details can be extracted back from UnboundCompiledRoute
 #[derive(Debug, Clone, BinaryCodec)]
 pub struct HttpRouteDetails {
+    pub route_id: RouteId,
     pub method: HttpMethod,
     pub path: Vec<PathSegment>,
     pub body: RequestBodySchema,

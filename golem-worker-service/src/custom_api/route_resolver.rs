@@ -125,34 +125,46 @@ impl RouteResolver {
             .await
             .map_err(|_| RouteResolverError::CouldNotBuildRouter)
     }
+    
+    pub async fn get_enriched_routes_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<Vec<RichCompiledRoute>, RouteResolverError> {
+        let compiled_routes = self.api_definition_lookup.get(domain).await;
+
+        let compiled_routes = match compiled_routes {
+            Ok(value) => value,
+            Err(ApiDefinitionLookupError::UnknownSite(_)) => return Ok(Vec::new()),
+            Err(ApiDefinitionLookupError::InternalError(err)) => {
+                tracing::warn!("Failed to get compiled routes for domain {domain}: {err:?}");
+                return Err(RouteResolverError::CouldNotBuildRouter);
+            }
+        };
+
+        Self::finalize_routes(compiled_routes)
+            .await
+            .map_err(|err| {
+                tracing::warn!("Failed to finalize routes for domain {domain}: {err:?}");
+                RouteResolverError::CouldNotBuildRouter
+            })
+    }
 
     async fn build_router_for_domain(
         &self,
         domain: &Domain,
     ) -> Result<Router<Arc<RichCompiledRoute>>, ()> {
-        let compiled_routes = self.api_definition_lookup.get(domain).await;
-
-        let compiled_routes = match compiled_routes {
-            Ok(value) => value,
-            Err(ApiDefinitionLookupError::UnknownSite(_)) => return Ok(Router::new()),
-            Err(ApiDefinitionLookupError::InternalError(err)) => {
-                tracing::warn!("Failed to build router for domain {domain}: {err:?}");
-                return Err(());
-            }
-        };
-
-        let finalized_routes = match Self::finalize_routes(compiled_routes).await {
+        let finalized_routes = match self.get_enriched_routes_for_domain(domain).await {
             Ok(value) => value,
             Err(err) => {
-                tracing::warn!("Failed to finalize routes for domain {domain}: {err:?}");
+                tracing::warn!("Failed to get enriched routes for domain {domain}: {err:?}");
                 return Err(());
             }
         };
-
+        
         Ok(Router::build_router(finalized_routes))
     }
 
-    async fn finalize_routes(
+    pub async fn finalize_routes(
         compiled_routes: CompiledRoutes,
     ) -> Result<Vec<RichCompiledRoute>, String> {
         let security_schemes: HashMap<_, _> = compiled_routes

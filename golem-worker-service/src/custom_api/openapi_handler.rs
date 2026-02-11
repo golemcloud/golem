@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::custom_api::{OpenApiSpecPerAgent};
+use golem_service_base::custom_api::{CompiledRoute, RoutesPerAgent};
 use std::collections::HashMap;
-use golem_service_base::custom_api::openapi::RouteWithAgentType;
+use crate::custom_api::openapi::{HttpApiDefinitionOpenApiSpec, RouteWithAgentType};
+use crate::custom_api::RichCompiledRoute;
 
 pub struct OpenApiHandler;
 
 impl OpenApiHandler {
     pub async fn generate_spec(
-        spec_details: &Vec<OpenApiSpecPerAgent>,
+        spec_details: &Vec<RichCompiledRoute>,
+        security_scheme_details: &HashMap<String, String>,
     ) -> Result<String, String> {
         let routes = spec_details.iter().map(|r| {
             r.routes.iter().map(|route| RouteWithAgentType {
@@ -29,7 +31,7 @@ impl OpenApiHandler {
             })
         }).collect::<Vec<_>>().into_iter().flatten().collect::<Vec<_>>();
 
-        let spec = golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec::from_routes(
+        let spec = HttpApiDefinitionOpenApiSpec::from_routes(
             routes,
             &HashMap::new(),
         )

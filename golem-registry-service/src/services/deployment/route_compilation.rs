@@ -25,7 +25,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
-use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, HttpRouteDetails, OpenApiSpecBehaviour, OpenApiSpecPerAgent, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour};
+use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, HttpRouteDetails, OpenApiSpecBehaviour, RoutesPerAgent, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
@@ -294,7 +294,7 @@ fn build_openapi_spec_for_component(
     component_id: &ComponentId,
     agents: &[&InProgressDeployedRegisteredAgentType],
     compiled_routes: &HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
-) -> Vec<OpenApiSpecPerAgent> {
+) -> Vec<RoutesPerAgent> {
     let mut result = Vec::new();
 
     for agent in agents {
@@ -311,7 +311,7 @@ fn build_openapi_spec_for_component(
         }
 
         if !routes.is_empty() {
-            result.push(OpenApiSpecPerAgent {
+            result.push(RoutesPerAgent {
                 agent_type: agent.agent_type.clone(),
                 routes,
             });
