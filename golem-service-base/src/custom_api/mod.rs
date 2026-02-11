@@ -27,7 +27,9 @@ use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecurityS
 use golem_common::model::{OplogIndex, PromiseId, WorkerId};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::{AnalysedType, TypeList, TypeOption};
+use hmac::{Hmac, Mac};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
+use sha2::Sha256;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
@@ -309,14 +311,33 @@ impl OriginPattern {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
-/// PromiseId (-component-id) to be base64-url encoded and used as the final segment in a webhook callback
+#[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+/// PromiseId (-component-id) to be base64-url encoded and used as the final segment in a webhook callback.
+/// Includes a checksum that can be used to verify that the webhook was indeed created by the worker executor and
+/// for the correct component_id.
 pub struct AgentWebhookId {
     pub worker_name: String,
     pub oplog_idx: OplogIndex,
+    pub checksum: [u8; 32],
 }
 
 impl AgentWebhookId {
+    pub fn from_promise_id(promise_id: &PromiseId, hmac_key: &[u8]) -> Self {
+        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
+
+        mac.update(b"agent-webhook-id:v1");
+        let promise_id_bytes = desert_rust::serialize_to_byte_vec(&promise_id)
+            .expect("PromiseId serialization must not fail");
+        mac.update(&promise_id_bytes);
+
+        let checksum = mac.finalize().into_bytes().into();
+        Self {
+            worker_name: promise_id.worker_id.worker_name.clone(),
+            oplog_idx: promise_id.oplog_idx,
+            checksum,
+        }
+    }
+
     pub fn into_promise_id(self, component_id: ComponentId) -> PromiseId {
         PromiseId {
             worker_id: WorkerId {
@@ -327,14 +348,34 @@ impl AgentWebhookId {
         }
     }
 
+    pub fn verify_checksum(&self, component_id: ComponentId, hmac_key: &[u8]) -> bool {
+        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
+
+        mac.update(b"agent-webhook-id:v1");
+        let promise_id = PromiseId {
+            worker_id: WorkerId {
+                component_id,
+                worker_name: self.worker_name.clone(),
+            },
+            oplog_idx: self.oplog_idx,
+        };
+        let promise_id_bytes = desert_rust::serialize_to_byte_vec(&promise_id)
+            .expect("PromiseId serialization must not fail");
+        mac.update(&promise_id_bytes);
+
+        mac.verify_slice(&self.checksum).is_ok()
+    }
+
     pub fn to_base64_url(&self) -> String {
-        let bytes = serde_json::to_vec(self).expect("AgentWebhookId serialization must not fail");
+        let bytes = desert_rust::serialize_to_byte_vec(self)
+            .expect("AgentWebhookId serialization must not fail");
+        // FIXME: base62 would be better as this is used in urls
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
     }
 
     pub fn from_base64_url(s: &str) -> anyhow::Result<Self> {
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s)?;
-        Ok(serde_json::from_slice(&bytes)?)
+        Ok(desert_rust::deserialize(&bytes)?)
     }
 }
 

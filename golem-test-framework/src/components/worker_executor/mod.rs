@@ -117,7 +117,7 @@ async fn env_vars(
         .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
         .with_str("GOLEM__AGENT_DEPLOYMENTS_SERVICE__CACHE_CAPACITY", "0")
         .with_str(
-            "GOLEM__AGENT_DEPLOYMENTS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
+            "GOLEM__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
             "false",
         )
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())

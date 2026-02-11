@@ -16,8 +16,8 @@ pub mod default;
 
 use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
-use crate::services::agent_deployments::AgentDeploymentsService;
 use crate::services::agent_types::AgentTypesService;
+use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
@@ -140,7 +140,7 @@ pub trait WorkerCtx:
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,

@@ -23,6 +23,7 @@ mod rich_request;
 pub mod route_resolver;
 pub mod router;
 pub mod security;
+pub mod webhoooks;
 
 use self::poem_endpoint::CustomApiPoemEndpoint;
 use crate::bootstrap::Services;

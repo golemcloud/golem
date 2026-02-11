@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent_webhooks::AgentWebhooksService;
 use super::file_loader::FileLoader;
-use super::{agent_deployments, HasAgentDeploymentsService};
+use super::HasAgentWebhooksService;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
@@ -343,7 +344,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
-    agent_deployments_service: Arc<dyn agent_deployments::AgentDeploymentsService>,
+    agent_webhooks_service: Arc<AgentWebhooksService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -375,7 +376,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             agent_types_service: self.agent_types_service.clone(),
-            agent_deployments_service: self.agent_deployments_service.clone(),
+            agent_webhooks_service: self.agent_webhooks_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -399,9 +400,9 @@ impl<Ctx: WorkerCtx> HasAgentTypesService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasAgentDeploymentsService for DirectWorkerInvocationRpc<Ctx> {
-    fn agent_deployments(&self) -> Arc<dyn agent_deployments::AgentDeploymentsService> {
-        self.agent_deployments_service.clone()
+impl<Ctx: WorkerCtx> HasAgentWebhooksService for DirectWorkerInvocationRpc<Ctx> {
+    fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
+        self.agent_webhooks_service.clone()
     }
 }
 
@@ -578,7 +579,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
-        agent_deployments_service: Arc<dyn agent_deployments::AgentDeploymentsService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -607,7 +608,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin,
             resource_limits,
             agent_types_service,
-            agent_deployments_service,
+            agent_webhooks_service,
             extra_deps,
         }
     }

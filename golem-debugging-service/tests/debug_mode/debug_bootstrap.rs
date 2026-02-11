@@ -14,6 +14,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
+use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
@@ -134,7 +135,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService::new(
@@ -194,7 +195,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
-            agent_deployments_service.clone(),
+            agent_webhooks_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -227,14 +228,14 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
-            agent_deployments_service.clone(),
+            agent_webhooks_service.clone(),
             additional_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
             agent_types_service,
-            agent_deployments_service,
+            agent_webhooks_service,
             engine,
             linker,
             runtime.clone(),

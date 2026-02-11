@@ -78,6 +78,7 @@ use golem_worker_executor::preview2::golem_api_1_x;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
+use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
@@ -689,7 +690,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -723,7 +724,7 @@ impl WorkerCtx for TestWorkerCtx {
             file_loader,
             worker_fork,
             agent_types_service,
-            agent_deployments_service,
+            agent_webhooks_service,
             shard_service,
             pending_update,
             original_phantom_id,
@@ -1053,7 +1054,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits =
@@ -1092,7 +1093,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
-            agent_deployments_service.clone(),
+            agent_webhooks_service.clone(),
             extra_deps.clone(),
         ));
 
@@ -1125,13 +1126,13 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
-            agent_deployments_service.clone(),
+            agent_webhooks_service.clone(),
             extra_deps.clone(),
         ));
         Ok(All::new(
             active_workers,
             agent_types_service,
-            agent_deployments_service,
+            agent_webhooks_service,
             engine,
             linker,
             runtime,

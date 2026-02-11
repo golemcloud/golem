@@ -30,6 +30,7 @@ pub mod workerctx;
 test_r::enable!();
 
 use self::services::agent_deployments::{AgentDeploymentsService, GrpcAgentDeploymentService};
+use self::services::agent_webhooks::AgentWebhooksService;
 use self::services::golem_config::AgentDeploymentsServiceConfig;
 use self::services::promise::LazyPromiseService;
 use crate::grpc::WorkerExecutorImpl;
@@ -129,7 +130,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             config.cache_capacity,
             config.cache_ttl,
             config.cache_eviction_interval,
-            config.use_https_for_webhook_url,
         ))
     }
 
@@ -227,7 +227,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
-        agent_deployments_service: Arc<dyn AgentDeploymentsService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<Ctx>>;
 
@@ -451,6 +451,14 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         registry_service.clone(),
     );
 
+    let agent_webhooks_service = Arc::new(AgentWebhooksService::new(
+        agent_deployments_service.clone(),
+        golem_config
+            .agent_webhooks_service
+            .use_https_for_webhook_url,
+        golem_config.agent_webhooks_service.hmac_key.0.clone(),
+    ));
+
     let agent_type_service = services::agent_types::configured(
         &golem_config.agent_types_service,
         component_service.clone(),
@@ -605,7 +613,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             oplog_processor_plugin,
             agent_type_service,
-            agent_deployments_service,
+            agent_webhooks_service,
             registry_service,
         )
         .await?;
