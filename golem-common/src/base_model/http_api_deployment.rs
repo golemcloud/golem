@@ -33,7 +33,7 @@ declare_structs! {
         /// Security scheme to use for all agent methods that require auth.
         /// Failure to provide a security scheme for an agent that requires one will lead to a deployment failure.
         /// If the requested security scheme does not exist in the environment, the route will be disabled at runtime.
-        pub security_scheme: Option<SecuritySchemeName>
+        pub security_scheme: Option<SecuritySchemeName>,
     }
 
     pub struct HttpApiDeploymentCreation {

@@ -38,6 +38,7 @@ pub trait HttpApiRoute {
 
 pub struct RouteWithAgentType {
     pub agent_type: AgentType,
+    // Use RichCompiledRoute
     pub details: HttpRouteDetails,
 }
 
@@ -733,23 +734,6 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
             )
         }
     }
-}
-
-fn extract_response_header_and_body_types(
-    fields: &[NameTypePair],
-) -> (Option<AnalysedType>, Option<AnalysedType>) {
-    let mut headers = None;
-    let mut body = None;
-
-    for f in fields {
-        match f.name.as_str() {
-            "headers" => headers = Some(f.typ.clone()),
-            "body" => body = Some(f.typ.clone()),
-            _ => {}
-        }
-    }
-
-    (headers, body)
 }
 
 // --------------------- Security ---------------------

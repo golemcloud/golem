@@ -273,7 +273,7 @@ pub struct HttpRouteDetails {
     pub path: Vec<PathSegment>,
     pub body: RequestBodySchema,
     pub behaviour: RouteBehaviour,
-    pub security_scheme: Option<SecuritySchemeName>,
+    pub security_scheme: Option<SecuritySchemeName>, // This is fully available in RichCompiledRoute
     pub cors: CorsOptions,
 }
 
