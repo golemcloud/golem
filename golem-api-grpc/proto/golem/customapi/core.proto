@@ -171,6 +171,20 @@ message RouteBehaviour {
     CallAgent call_agent = 1;
     CorsPreflight cors_preflight = 2;
     WebhookCallback webhook_callback = 3;
+    OpenApiSpec open_api_spec = 4;
+  }
+
+  message OpenApiSpec {
+    repeated RoutesWithAgentType routes_with_agent_type = 1;
+  }
+
+  message RoutesWithAgentType {
+    repeated AgentTypeWithRouteId route_with_agent_type = 1;
+  }
+
+  message AgentTypeWithRouteId {
+    golem.component.AgentType agent_type = 1;
+    int32 route_id = 2;
   }
 
   message CallAgent {

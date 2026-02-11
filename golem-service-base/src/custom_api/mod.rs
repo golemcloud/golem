@@ -260,13 +260,7 @@ pub struct OpenApiSpecBehaviour {
 
 #[derive(Debug, Clone, BinaryCodec)]
 pub struct RoutesWithAgentType {
-    pub routes: Vec<HttpRouteDetails>,
-}
-
-#[derive(Debug, Clone, BinaryCodec)]
-pub struct HttpRouteDetails {
-    pub agent_type: AgentType,
-    pub route_id: RouteId,
+    pub routes: Vec<(AgentType, RouteId)>,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]

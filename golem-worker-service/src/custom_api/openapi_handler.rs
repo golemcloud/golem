@@ -31,9 +31,6 @@ impl OpenApiHandler {
                 agent_type: agent_type.clone(),
                 details: rich_route.clone(),
             })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .flatten()
             .collect::<Vec<_>>();
 
         let spec =

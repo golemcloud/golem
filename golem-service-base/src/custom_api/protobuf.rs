@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour};
+use super::{CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteId, RoutesWithAgentType};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
@@ -26,6 +26,7 @@ use golem_wasm::analysis::TypeEnum;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
+use golem_common::base_model::agent::AgentType;
 
 impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeDetails {
     type Error = String;
@@ -209,7 +210,11 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
             }
             Kind::OpenApiSpec(openapi_spec) => {
                 Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                    agent_type: AgentTypeName(openapi_spec.agent_type),
+                    open_api_spec: RoutesWithAgentType {
+                        routes: openapi_spec.route_with_agent_type.iter().map(|agent_type_with_route_id| {
+                            (AgentType::try_from(agent_type_with_route_id.agent_type.unwrap()).unwrap(), agent_type_with_route_id.route_id)
+                        }).collect::<Vec<_>>()
+                    }
                 }))
             }
         }
