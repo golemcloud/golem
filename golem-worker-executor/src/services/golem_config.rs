@@ -18,6 +18,7 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
+use golem_common::model::base64::Base64;
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::{grpc_uri, SafeDisplay};
@@ -56,6 +57,7 @@ pub struct GolemConfig {
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
     pub agent_deployments_service: AgentDeploymentsServiceConfig,
+    pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
     pub grpc: GrpcApiConfig,
@@ -158,11 +160,18 @@ impl SafeDisplay for GolemConfig {
             self.agent_types_service.to_safe_string_indented()
         );
 
-        let _ = writeln!(&mut result, "agent domains service:");
+        let _ = writeln!(&mut result, "agent deployments service:");
         let _ = writeln!(
             &mut result,
             "{}",
             self.agent_deployments_service.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "agent webhooks service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.agent_webhooks_service.to_safe_string_indented()
         );
 
         let _ = writeln!(&mut result, "engine:");
@@ -201,6 +210,7 @@ impl Default for GolemConfig {
             component_cache: ComponentCacheConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
             agent_deployments_service: AgentDeploymentsServiceConfig::default(),
+            agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             registry_service: GrpcRegistryServiceConfig::default(),
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
@@ -917,7 +927,6 @@ pub struct AgentDeploymentsServiceConfig {
     pub cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub cache_eviction_interval: Duration,
-    pub use_https_for_webhook_url: bool,
 }
 
 impl Default for AgentDeploymentsServiceConfig {
@@ -926,7 +935,6 @@ impl Default for AgentDeploymentsServiceConfig {
             cache_capacity: 1000,
             cache_ttl: Duration::from_mins(5),
             cache_eviction_interval: Duration::from_mins(1),
-            use_https_for_webhook_url: true,
         }
     }
 }
@@ -941,11 +949,38 @@ impl SafeDisplay for AgentDeploymentsServiceConfig {
             "cache_eviction_interval: {:?}",
             self.cache_eviction_interval
         );
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentWebhooksServiceConfig {
+    pub use_https_for_webhook_url: bool,
+    pub hmac_key: Base64,
+}
+
+impl Default for AgentWebhooksServiceConfig {
+    fn default() -> Self {
+        Self {
+            use_https_for_webhook_url: true,
+            hmac_key: Base64(vec![
+                0x2b, 0x7e, 0x02, 0xa3, 0x8a, 0x51, 0x30, 0x39, 0x7b, 0x74, 0x1d, 0xdc, 0x60, 0x1f,
+                0xb5, 0xfc, 0xdd, 0x09, 0xde, 0xd3, 0x33, 0x25, 0x62, 0x38, 0x17, 0x23, 0xcd, 0x3a,
+                0xc9, 0x86, 0x1e, 0x41,
+            ]),
+        }
+    }
+}
+
+impl SafeDisplay for AgentWebhooksServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
         let _ = writeln!(
             &mut result,
             "use_https_for_webhook_url: {:?}",
             self.use_https_for_webhook_url
         );
+        let _ = writeln!(&mut result, "hmac_key: *******");
         result
     }
 }
