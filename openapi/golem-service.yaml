@@ -135,6 +135,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -204,6 +210,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -295,6 +307,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -360,6 +378,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -452,6 +476,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -550,6 +580,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -625,6 +661,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -708,6 +750,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -801,6 +849,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -866,6 +920,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -942,6 +1002,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1048,6 +1114,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -1121,6 +1193,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1200,6 +1278,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1288,6 +1372,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -1371,6 +1461,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -1448,6 +1544,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -1520,6 +1622,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1604,6 +1712,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -1670,6 +1784,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -1727,6 +1847,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
