@@ -164,7 +164,7 @@ impl RouteResolver {
         Ok(Router::build_router(finalized_routes))
     }
 
-    pub async fn finalize_routes(
+    async fn finalize_routes(
         compiled_routes: CompiledRoutes,
     ) -> Result<Vec<RichCompiledRoute>, String> {
         let security_schemes: HashMap<_, _> = compiled_routes

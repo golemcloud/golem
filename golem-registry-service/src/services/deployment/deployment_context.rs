@@ -50,9 +50,6 @@ impl From<InProgressDeployedRegisteredAgentType> for DeployedRegisteredAgentType
     }
 }
 
-// The data structure talk about multiple components
-// but the http deployment never talks about which component the agent type belongs to
-// and this can hurt us long run.
 #[derive(Debug)]
 pub struct DeploymentContext {
     pub components: BTreeMap<ComponentName, Component>,
@@ -141,9 +138,6 @@ impl DeploymentContext {
         }
         Ok(agent_types)
     }
-
-    // So for open-api routes, we need to create routes for all component-ids
-    // HashMap<(Domain, ComponentId), Vec<UnboundCompiledRoute>>
 
     pub fn compile_http_api_routes(
         &self,
@@ -241,8 +235,6 @@ impl DeploymentContext {
                 );
             }
         }
-
-        // Add OpenAPI spec routes
 
         // Fixme: code-first routes
         // * SwaggerUi routes

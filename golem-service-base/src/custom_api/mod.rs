@@ -263,9 +263,6 @@ pub struct RoutesWithAgentType {
     pub routes: Vec<HttpRouteDetails>,
 }
 
-// TODO; remove comment
-// Anything that is in HttpRouteDetails can be correlated back to AgentType
-// The following details can be extracted back from UnboundCompiledRoute
 #[derive(Debug, Clone, BinaryCodec)]
 pub struct HttpRouteDetails {
     pub agent_type: AgentType,

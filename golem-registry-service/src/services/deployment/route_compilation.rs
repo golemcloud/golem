@@ -317,8 +317,6 @@ fn build_openapi_spec_for_component(
     result
 }
 
-// We need a route for each component rather than for each agent type,
-
 pub fn add_openapi_spec_routes(
     deployment: &HttpApiDeployment,
     registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
