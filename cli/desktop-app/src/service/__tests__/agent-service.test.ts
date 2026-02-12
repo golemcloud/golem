@@ -1,4 +1,11 @@
-import { describe, it, expect, vi, beforeEach, type MockedFunction } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  type MockedFunction,
+} from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -53,15 +60,6 @@ describe("AgentService CLI commands", () => {
       .mockResolvedValueOnce(result);
   }
 
-  // For methods that call getComponentById twice (findAgent calls it, then the agent call)
-  function mockComponentOnly(componentName: string) {
-    mockedInvoke.mockResolvedValueOnce(
-      JSON.stringify([
-        { componentId: "comp-id", componentName: componentName },
-      ]),
-    );
-  }
-
   describe("upgradeAgent", () => {
     it("sends correct command", async () => {
       mockedInvoke.mockResolvedValue("true");
@@ -99,12 +97,7 @@ describe("AgentService CLI commands", () => {
       });
       expect(invoke).toHaveBeenCalledWith("call_golem_command", {
         command: "agent",
-        subcommands: [
-          "list",
-          "--component-name",
-          "comp",
-          "--max-count=50",
-        ],
+        subcommands: ["list", "--component-name", "comp", "--max-count=50"],
         folderPath: "/test/app",
       });
     });
@@ -177,7 +170,8 @@ describe("AgentService CLI commands", () => {
       });
       // Verify the agent name includes parentheses with params
       const call = mockedInvoke.mock.calls.find(
-        (c) => (c[1] as { command: string }).command === "agent" &&
+        c =>
+          (c[1] as { command: string }).command === "agent" &&
           (c[1] as { subcommands: string[] }).subcommands[0] === "new",
       );
       expect(call).toBeDefined();
@@ -187,9 +181,17 @@ describe("AgentService CLI commands", () => {
 
     it("sends correct command with env vars", async () => {
       mockComponentThenResult("comp");
-      await service.createAgent("app-1", "comp-id", "agent", [], undefined, undefined, {
-        KEY: "VAL",
-      });
+      await service.createAgent(
+        "app-1",
+        "comp-id",
+        "agent",
+        [],
+        undefined,
+        undefined,
+        {
+          KEY: "VAL",
+        },
+      );
       expect(invoke).toHaveBeenCalledWith("call_golem_command", {
         command: "agent",
         subcommands: ["new", "comp/agent()", "-e", "KEY=VAL"],
@@ -199,14 +201,10 @@ describe("AgentService CLI commands", () => {
 
     it("sends correct command with positional args", async () => {
       mockComponentThenResult("comp");
-      await service.createAgent(
-        "app-1",
-        "comp-id",
-        "agent",
-        [],
-        undefined,
-        ["arg1", "arg2"],
-      );
+      await service.createAgent("app-1", "comp-id", "agent", [], undefined, [
+        "arg1",
+        "arg2",
+      ]);
       expect(invoke).toHaveBeenCalledWith("call_golem_command", {
         command: "agent",
         subcommands: ["new", "comp/agent()", "arg1", "arg2"],
@@ -281,7 +279,8 @@ describe("AgentService CLI commands", () => {
       );
       // Should call agent invoke with the function name and wave args
       const agentCall = mockedInvoke.mock.calls.find(
-        (c) => (c[1] as { command: string }).command === "agent" &&
+        c =>
+          (c[1] as { command: string }).command === "agent" &&
           (c[1] as { subcommands: string[] }).subcommands[0] === "invoke",
       );
       expect(agentCall).toBeDefined();
@@ -303,7 +302,8 @@ describe("AgentService CLI commands", () => {
         ["hello", 42],
       );
       const agentCall = mockedInvoke.mock.calls.find(
-        (c) => (c[1] as { command: string }).command === "agent" &&
+        c =>
+          (c[1] as { command: string }).command === "agent" &&
           (c[1] as { subcommands: string[] }).subcommands[0] === "invoke",
       );
       expect(agentCall).toBeDefined();
@@ -324,7 +324,8 @@ describe("AgentService CLI commands", () => {
         undefined,
       );
       const agentCall = mockedInvoke.mock.calls.find(
-        (c) => (c[1] as { command: string }).command === "agent" &&
+        c =>
+          (c[1] as { command: string }).command === "agent" &&
           (c[1] as { subcommands: string[] }).subcommands[0] === "invoke",
       );
       expect(agentCall).toBeDefined();
@@ -340,15 +341,12 @@ describe("AgentService CLI commands", () => {
       vi.stubGlobal("crypto", { randomUUID: () => mockUUID });
     });
 
-    it("sends correct command with constructor params (agent type has params)", async () => {
-      // First call: getComponentById (component list)
-      // Second call: getAgentTypesForComponent (list-agent-types)
-      // Third call: the actual invoke
+    it("matches PascalCase constructor name against kebab-case agent type", async () => {
+      // CLI returns PascalCase constructor names (e.g. "HumanAgent")
+      // but function names use kebab-case (e.g. "human-agent")
       mockedInvoke
         .mockResolvedValueOnce(
-          JSON.stringify([
-            { componentId: "comp-id", componentName: "comp" },
-          ]),
+          JSON.stringify([{ componentId: "comp-id", componentName: "comp" }]),
         )
         .mockResolvedValueOnce(
           JSON.stringify([
@@ -356,7 +354,7 @@ describe("AgentService CLI commands", () => {
               implementedBy: { componentId: "comp-id" },
               agentType: {
                 constructor: {
-                  name: "human-agent",
+                  name: "HumanAgent",
                   inputSchema: { elements: [{ type: "Str" }] },
                 },
               },
@@ -368,12 +366,13 @@ describe("AgentService CLI commands", () => {
       await service.invokeEphemeralAwait(
         "app-1",
         "comp-id",
-        "pack:ts/human-agent.{fn}",
+        "pack:ts/human-agent.{request-approval}",
         undefined,
       );
 
       const agentCall = mockedInvoke.mock.calls.find(
-        (c) => (c[1] as { command: string }).command === "agent" &&
+        c =>
+          (c[1] as { command: string }).command === "agent" &&
           (c[1] as { subcommands: string[] }).subcommands[0] === "invoke",
       );
       expect(agentCall).toBeDefined();
@@ -384,9 +383,7 @@ describe("AgentService CLI commands", () => {
     it("sends correct command without constructor params", async () => {
       mockedInvoke
         .mockResolvedValueOnce(
-          JSON.stringify([
-            { componentId: "comp-id", componentName: "comp" },
-          ]),
+          JSON.stringify([{ componentId: "comp-id", componentName: "comp" }]),
         )
         .mockResolvedValueOnce(
           JSON.stringify([
@@ -394,7 +391,7 @@ describe("AgentService CLI commands", () => {
               implementedBy: { componentId: "comp-id" },
               agentType: {
                 constructor: {
-                  name: "simple-agent",
+                  name: "SimpleAgent",
                   inputSchema: { elements: [] },
                 },
               },
@@ -411,7 +408,8 @@ describe("AgentService CLI commands", () => {
       );
 
       const agentCall = mockedInvoke.mock.calls.find(
-        (c) => (c[1] as { command: string }).command === "agent" &&
+        c =>
+          (c[1] as { command: string }).command === "agent" &&
           (c[1] as { subcommands: string[] }).subcommands[0] === "invoke",
       );
       expect(agentCall).toBeDefined();

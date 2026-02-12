@@ -1,4 +1,11 @@
-import { describe, it, expect, vi, beforeEach, type MockedFunction } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  type MockedFunction,
+} from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -45,9 +52,7 @@ describe("ProfileService CLI commands", () => {
 
   describe("getProfileDetails", () => {
     it("sends correct command without name", async () => {
-      mockedInvoke.mockResolvedValueOnce(
-        JSON.stringify({ name: "local" }),
-      );
+      mockedInvoke.mockResolvedValueOnce(JSON.stringify({ name: "local" }));
       await service.getProfileDetails();
       expect(invoke).toHaveBeenCalledWith("call_golem_command", {
         command: "profile",

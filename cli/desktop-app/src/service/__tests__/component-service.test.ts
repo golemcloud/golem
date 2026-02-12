@@ -1,4 +1,11 @@
-import { describe, it, expect, vi, beforeEach, type MockedFunction } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  type MockedFunction,
+} from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -14,9 +21,16 @@ vi.mock("@/lib/settings", () => ({
 }));
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
 vi.mock("@tauri-apps/plugin-fs", () => ({
-  readDir: vi.fn().mockResolvedValue([
-    { name: "components-ts", isDirectory: true, isFile: false, isSymlink: false },
-  ]),
+  readDir: vi
+    .fn()
+    .mockResolvedValue([
+      {
+        name: "components-ts",
+        isDirectory: true,
+        isFile: false,
+        isSymlink: false,
+      },
+    ]),
 }));
 vi.mock("@tauri-apps/api/path", () => ({
   join: vi.fn((...args: string[]) => Promise.resolve(args.join("/"))),
@@ -44,10 +58,20 @@ describe("ComponentService CLI commands", () => {
       const { readDir } = await import("@tauri-apps/plugin-fs");
       (readDir as MockedFunction<typeof readDir>)
         .mockResolvedValueOnce([
-          { name: "components-ts", isDirectory: true, isFile: false, isSymlink: false },
+          {
+            name: "components-ts",
+            isDirectory: true,
+            isFile: false,
+            isSymlink: false,
+          },
         ])
         .mockResolvedValueOnce([
-          { name: "my-comp", isDirectory: true, isFile: false, isSymlink: false },
+          {
+            name: "my-comp",
+            isDirectory: true,
+            isFile: false,
+            isSymlink: false,
+          },
         ]);
 
       await service.getComponents("app-1");
@@ -62,9 +86,7 @@ describe("ComponentService CLI commands", () => {
   describe("getComponentById", () => {
     it("calls component list", async () => {
       mockedInvoke.mockResolvedValueOnce(
-        JSON.stringify([
-          { componentId: "comp-1", componentName: "my-comp" },
-        ]),
+        JSON.stringify([{ componentId: "comp-1", componentName: "my-comp" }]),
       );
       const result = await service.getComponentById("app-1", "comp-1");
       expect(invoke).toHaveBeenCalledWith("call_golem_command", {
@@ -80,7 +102,11 @@ describe("ComponentService CLI commands", () => {
     it("calls component list", async () => {
       mockedInvoke.mockResolvedValueOnce(
         JSON.stringify([
-          { componentId: "comp-1", componentName: "my-comp", componentRevision: 1 },
+          {
+            componentId: "comp-1",
+            componentName: "my-comp",
+            componentRevision: 1,
+          },
         ]),
       );
       await service.getComponentByIdAndVersion("app-1", "comp-1", 1);

@@ -1,4 +1,11 @@
-import { describe, it, expect, vi, beforeEach, type MockedFunction } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  type MockedFunction,
+} from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -56,14 +63,14 @@ describe("DeploymentService CLI commands", () => {
   describe("createDeployment", () => {
     it("sends correct deploy command", async () => {
       // First call: getActiveProfileName → profile get
-      mockedInvoke.mockResolvedValueOnce(
-        JSON.stringify({ name: "local" }),
-      );
+      mockedInvoke.mockResolvedValueOnce(JSON.stringify({ name: "local" }));
       // Second call: deploy
       mockedInvoke.mockResolvedValueOnce("true");
 
       // Mock the manifest service methods used internally
-      const manifestGetAppYamlPath = vi.fn().mockResolvedValue("/test/app/golem.yaml");
+      const manifestGetAppYamlPath = vi
+        .fn()
+        .mockResolvedValue("/test/app/golem.yaml");
       const manifestSaveAppManifest = vi.fn().mockResolvedValue(undefined);
       Object.defineProperty(service, "manifestService", {
         value: {

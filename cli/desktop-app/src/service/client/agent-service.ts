@@ -236,9 +236,14 @@ export class AgentService {
 
     // Look up the constructor signature to determine if it accepts parameters
     const agentTypes = await this.getAgentTypesForComponent(appId, componentId);
+
+    // Constructor names from CLI are PascalCase (e.g. "HumanAgent") while
+    // function names use kebab-case (e.g. "human-agent"), so normalize both
+    const normalize = (s: string) => s.toLowerCase().replace(/-/g, "");
     const matchingType = agentTypes.find(
-      t => t.agentType.constructor.name === agentType,
+      t => normalize(t.agentType.constructor.name) === normalize(agentType),
     );
+
     const constructorParamCount =
       matchingType?.agentType.constructor.inputSchema.elements.length ?? 0;
 
@@ -310,6 +315,7 @@ export class AgentService {
       "list-agent-types",
       [],
     )) as AgentTypeSchema[];
+
     return result.filter(spec => spec.implementedBy.componentId == componentId);
   }
 }
