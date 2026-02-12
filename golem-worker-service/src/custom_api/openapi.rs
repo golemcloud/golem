@@ -147,7 +147,7 @@ fn create_base_openapi(
 
 fn get_query_variable_and_types(
     method_params: Option<&Vec<MethodParameter>>,
-) -> Vec<(String, &QueryOrHeaderType)> {
+) -> Vec<(&str, &QueryOrHeaderType)> {
     method_params
         .map(|params| {
             params
@@ -156,7 +156,7 @@ fn get_query_variable_and_types(
                     MethodParameter::Query {
                         query_parameter_name,
                         parameter_type,
-                    } => Some((query_parameter_name.clone(), parameter_type)),
+                    } => Some((query_parameter_name.as_str(), parameter_type)),
                     MethodParameter::Path { .. } => None,
                     MethodParameter::Header { .. } => None,
                     MethodParameter::JsonObjectBodyField { .. } => None,
@@ -169,7 +169,7 @@ fn get_query_variable_and_types(
 
 fn get_header_variable_and_types(
     method_params: Option<&Vec<MethodParameter>>,
-) -> Vec<(String, &QueryOrHeaderType)> {
+) -> Vec<(&str, &QueryOrHeaderType)> {
     method_params
         .map(|params| {
             params
@@ -178,7 +178,7 @@ fn get_header_variable_and_types(
                     MethodParameter::Header {
                         header_name,
                         parameter_type,
-                    } => Some((header_name.clone(), parameter_type)),
+                    } => Some((header_name.as_str(), parameter_type)),
                     MethodParameter::Path { .. } => None,
                     MethodParameter::Query { .. } => None,
                     MethodParameter::JsonObjectBodyField { .. } => None,
@@ -189,11 +189,11 @@ fn get_header_variable_and_types(
         .unwrap_or_default()
 }
 
-fn get_full_path_and_variables(
-    agent_method: Option<&AgentMethod>,
-    path_segments: &[PathSegment],
-    method_params: Option<&Vec<MethodParameter>>,
-) -> (String, Vec<(String, PathSegmentType)>) {
+fn get_full_path_and_variables<'a>(
+    agent_method: Option<&'a AgentMethod>,
+    path_segments: &'a [PathSegment],
+    method_params: Option<&'a Vec<MethodParameter>>,
+) -> (String, Vec<(&'a str, &'a PathSegmentType)>) {
     if agent_method.is_none() {
         return (
             path_segments
@@ -204,7 +204,8 @@ fn get_full_path_and_variables(
             Vec::new(),
         );
     }
-    let method_path_indices_vec: Vec<(SafeIndex, &PathSegmentType)> = method_params
+
+    let method_path_indices: HashMap<SafeIndex, &'a PathSegmentType> = method_params
         .map(|params| {
             params
                 .iter()
@@ -213,67 +214,35 @@ fn get_full_path_and_variables(
                         path_segment_index,
                         parameter_type,
                     } => Some((*path_segment_index, parameter_type)),
-                    MethodParameter::Query { .. } => None,
-                    MethodParameter::Header { .. } => None,
-                    MethodParameter::JsonObjectBodyField { .. } => None,
-                    MethodParameter::UnstructuredBinaryBody => None,
+                    _ => None,
                 })
-                .collect::<Vec<_>>()
+                .collect()
         })
         .unwrap_or_default();
 
-    let method_path_indices: HashMap<SafeIndex, &PathSegmentType> =
-        method_path_indices_vec.into_iter().collect();
+    let input_parameter_names = agent_method.and_then(|x| match &x.input_schema {
+        DataSchema::Tuple(named_element_schemas) => Some(&named_element_schemas.elements),
+        DataSchema::Multimodal(_) => None,
+    });
 
-    let input_parameter_names: Option<Vec<String>> =
-        agent_method.and_then(|x| match &x.input_schema {
-            DataSchema::Tuple(named_element_schemas) => Some(
-                named_element_schemas
-                    .elements
-                    .iter()
-                    .map(|e| e.name.clone())
-                    .collect(),
-            ),
-
-            DataSchema::Multimodal(_) => None,
-        });
-
-    let mut path_params_and_types: Vec<(String, PathSegmentType)> = Vec::new();
-
+    let mut path_params_and_types: Vec<(&'a str, &'a PathSegmentType)> = Vec::new();
     let mut path_segment_string: Vec<String> = Vec::new();
 
     for (idx, segment) in path_segments.iter().enumerate() {
         match segment {
             PathSegment::Literal { value } => {
                 path_segment_string.push(value.to_string());
-                // No parameter to extract, just a literal segment
-            }
-            PathSegment::Variable => {
-                // This segment is a parameter, we need to find its type
-                if let Some(param_type) = method_path_indices.get(&SafeIndex::new(idx as u32)) {
-                    let name = if let Some(input_names) = &input_parameter_names {
-                        input_names.get(idx).cloned().unwrap()
-                    } else {
-                        panic!("Variable segment must have a parameter name in the input schema");
-                    };
-
-                    path_segment_string.push(name.clone());
-
-                    path_params_and_types.push((name, (*param_type).clone()));
-                }
             }
 
-            PathSegment::CatchAll => {
+            PathSegment::Variable | PathSegment::CatchAll => {
                 if let Some(param_type) = method_path_indices.get(&SafeIndex::new(idx as u32)) {
-                    let name = if let Some(input_names) = &input_parameter_names {
-                        input_names.get(idx).cloned().unwrap()
-                    } else {
-                        panic!("Catch-all segment must have a parameter name in the input schema");
-                    };
+                    let name = input_parameter_names
+                        .and_then(|elements| elements.get(idx))
+                        .map(|e| e.name.as_str())
+                        .expect("Path segment must have parameter name");
 
-                    path_segment_string.push(name.clone());
-
-                    path_params_and_types.push((name, (*param_type).clone()));
+                    path_segment_string.push(name.to_string());
+                    path_params_and_types.push((name, *param_type));
                 }
             }
         }
@@ -328,9 +297,9 @@ type ParameterTuple = (String, openapiv3::Schema);
 
 fn add_parameters(
     operation: &mut openapiv3::Operation,
-    path_params_raw: Vec<(String, PathSegmentType)>,
-    query_params_raw: Vec<(String, &QueryOrHeaderType)>,
-    header_params_raw: Vec<(String, &QueryOrHeaderType)>,
+    path_params_raw: Vec<(&str, &PathSegmentType)>,
+    query_params_raw: Vec<(&str, &QueryOrHeaderType)>,
+    header_params_raw: Vec<(&str, &QueryOrHeaderType)>,
 ) {
     let (path_params, query_params, header_params) =
         get_parameters(path_params_raw, query_params_raw, header_params_raw);
@@ -358,7 +327,7 @@ fn add_parameters(
     }
 }
 
-fn create_schema_from_path_segment_type(path_segment_type: PathSegmentType) -> openapiv3::Schema {
+fn create_schema_from_path_segment_type(path_segment_type: &PathSegmentType) -> openapiv3::Schema {
     let analysed_type = AnalysedType::from(path_segment_type);
     create_schema_from_analysed_type(&analysed_type)
 }
@@ -371,9 +340,9 @@ fn create_schema_from_query_or_header_type(
 }
 
 fn get_parameters(
-    path_params_raw: Vec<(String, PathSegmentType)>,
-    query_params_raw: Vec<(String, &QueryOrHeaderType)>,
-    header_params_raw: Vec<(String, &QueryOrHeaderType)>,
+    path_params_raw: Vec<(&str, &PathSegmentType)>,
+    query_params_raw: Vec<(&str, &QueryOrHeaderType)>,
+    header_params_raw: Vec<(&str, &QueryOrHeaderType)>,
 ) -> (
     Vec<ParameterTuple>,
     Vec<ParameterTuple>,
@@ -384,18 +353,18 @@ fn get_parameters(
     let mut header_params = Vec::new();
 
     for (name, path_segment_type) in path_params_raw {
-        let schema = create_schema_from_path_segment_type(path_segment_type.clone());
-        path_params.push((name, schema));
+        let schema = create_schema_from_path_segment_type(&path_segment_type);
+        path_params.push((name.to_string(), schema));
     }
 
     for (name, query_or_header_type) in query_params_raw {
         let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        query_params.push((name, schema));
+        query_params.push((name.to_string(), schema));
     }
 
     for (name, query_or_header_type) in header_params_raw {
         let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        header_params.push((name, schema));
+        header_params.push((name.to_string(), schema));
     }
 
     (path_params, query_params, header_params)

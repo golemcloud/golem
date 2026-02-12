@@ -72,8 +72,8 @@ pub enum PathSegmentType {
     Enum(golem_wasm::analysis::TypeEnum),
 }
 
-impl From<PathSegmentType> for AnalysedType {
-    fn from(value: PathSegmentType) -> Self {
+impl From<&PathSegmentType> for AnalysedType {
+    fn from(value: &PathSegmentType) -> Self {
         match value {
             PathSegmentType::Str => analysed_type::str(),
             PathSegmentType::Chr => analysed_type::chr(),
@@ -88,7 +88,7 @@ impl From<PathSegmentType> for AnalysedType {
             PathSegmentType::U8 => analysed_type::u8(),
             PathSegmentType::S8 => analysed_type::s8(),
             PathSegmentType::Bool => analysed_type::bool(),
-            PathSegmentType::Enum(inner) => AnalysedType::Enum(inner),
+            PathSegmentType::Enum(inner) => AnalysedType::Enum(inner.clone()),
         }
     }
 }
@@ -141,16 +141,16 @@ pub enum QueryOrHeaderType {
 impl From<QueryOrHeaderType> for AnalysedType {
     fn from(value: QueryOrHeaderType) -> Self {
         match value {
-            QueryOrHeaderType::Primitive(inner) => inner.into(),
+            QueryOrHeaderType::Primitive(inner) => (&inner).into(),
             QueryOrHeaderType::Option { name, owner, inner } => AnalysedType::Option(TypeOption {
                 name,
                 owner,
-                inner: Box::new(AnalysedType::from(*inner)),
+                inner: Box::new(AnalysedType::from(&*inner)),
             }),
             QueryOrHeaderType::List { name, owner, inner } => AnalysedType::List(TypeList {
                 name,
                 owner,
-                inner: Box::new(AnalysedType::from(*inner)),
+                inner: Box::new(AnalysedType::from(&*inner)),
             }),
         }
     }
