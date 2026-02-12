@@ -94,7 +94,9 @@ impl Guest for Component {
 impl LoadSnapshotGuest for Component {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn load(snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot) -> Result<(), String> {
+    fn load(
+        snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
+    ) -> Result<(), String> {
         let bytes = snapshot.data;
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);

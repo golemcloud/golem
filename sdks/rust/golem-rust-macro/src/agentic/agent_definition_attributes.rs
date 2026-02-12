@@ -260,9 +260,15 @@ fn parse_snapshotting_value(lit: &syn::LitStr) -> Result<TokenStream, Error> {
             )
         }),
         other => {
-            if let Some(inner) = other.strip_prefix("periodic(").and_then(|s| s.strip_suffix(')')) {
+            if let Some(inner) = other
+                .strip_prefix("periodic(")
+                .and_then(|s| s.strip_suffix(')'))
+            {
                 let duration = inner.parse::<humantime::Duration>().map_err(|e| {
-                    Error::new_spanned(lit, format!("invalid duration in periodic(`{}`): {}", inner, e))
+                    Error::new_spanned(
+                        lit,
+                        format!("invalid duration in periodic(`{}`): {}", inner, e),
+                    )
                 })?;
                 let nanos: u64 = duration.as_nanos() as u64;
                 Ok(quote! {
@@ -270,9 +276,15 @@ fn parse_snapshotting_value(lit: &syn::LitStr) -> Result<TokenStream, Error> {
                         golem_rust::golem_agentic::golem::agent::common::SnapshottingConfig::Periodic(#nanos)
                     )
                 })
-            } else if let Some(inner) = other.strip_prefix("every(").and_then(|s| s.strip_suffix(')')) {
+            } else if let Some(inner) = other
+                .strip_prefix("every(")
+                .and_then(|s| s.strip_suffix(')'))
+            {
                 let count: u16 = inner.parse().map_err(|_| {
-                    Error::new_spanned(lit, format!("invalid count in every(`{}`), expected a u16 value", inner))
+                    Error::new_spanned(
+                        lit,
+                        format!("invalid count in every(`{}`), expected a u16 value", inner),
+                    )
                 })?;
                 Ok(quote! {
                     golem_rust::golem_agentic::golem::agent::common::Snapshotting::Enabled(
