@@ -20,6 +20,7 @@ use crate::model::api_definition::{
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::Empty;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
     HttpMethod, HttpMountDetails, NamedElementSchemas, RegisteredAgentTypeImplementer,
@@ -232,6 +233,7 @@ pub fn add_webhook_callback_routes(
             .cloned()
             .map(|value| PathSegment::Literal { value })
             .collect();
+
         // final segment for promise id
         typed_segments.push(PathSegment::Variable);
 
@@ -291,10 +293,18 @@ pub fn build_agent_http_api_deployment_details(
 
     let agent_webhook_prefix: Vec<PathSegment> =
         parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_url);
-    let agent_webhook_suffix = agent_http_mount
+
+    let mut agent_webhook_suffix: Vec<PathSegment> = agent_http_mount
         .webhook_suffix
         .iter()
-        .map(|s| compile_agent_path_segment(agent_type, implementer, s));
+        .map(|s| compile_agent_path_segment(agent_type, implementer, s))
+        .collect();
+
+    if agent_webhook_suffix.is_empty() {
+        agent_webhook_suffix.push(PathSegment::Literal {
+            value: agent_type_name.to_wit_naming().0,
+        });
+    }
 
     let agent_webhook = agent_webhook_prefix
         .into_iter()

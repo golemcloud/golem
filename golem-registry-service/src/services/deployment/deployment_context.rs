@@ -229,13 +229,13 @@ impl DeploymentContext {
                     &mut current_route_id,
                     &mut deployment_routes,
                 );
-
-                add_cors_preflight_http_routes(
-                    deployment,
-                    &mut current_route_id,
-                    &mut deployment_routes,
-                );
             }
+
+            add_cors_preflight_http_routes(
+                deployment,
+                &mut current_route_id,
+                &mut deployment_routes,
+            );
 
             validate_final_router(&deployment.domain, &deployment_routes, &mut errors);
 
