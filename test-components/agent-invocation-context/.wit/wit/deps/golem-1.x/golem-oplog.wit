@@ -5,7 +5,7 @@ interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:rpc/types@0.2.2.{value-and-type, account-id};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id};
+    use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
     use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
@@ -151,7 +151,7 @@ interface oplog {
         /// Automatic update by replaying the oplog on the new version
         auto-update,
         /// Custom update by loading a given snapshot on the new version
-        snapshot-based(list<u8>)
+        snapshot-based(snapshot)
     }
 
     record pending-update-parameters {

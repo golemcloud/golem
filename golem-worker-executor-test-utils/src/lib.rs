@@ -87,7 +87,7 @@ use golem_worker_executor::services::golem_config::{
     AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
     EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -328,7 +328,15 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None).await
+    start_customized(deps, context, None, None, None).await
+}
+
+pub async fn start_with_snapshot_policy(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    snapshot_policy: SnapshotPolicy,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(deps, context, None, None, Some(snapshot_policy)).await
 }
 
 pub async fn start_customized(
@@ -336,6 +344,7 @@ pub async fn start_customized(
     context: &TestContext,
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
+    snapshot_policy_override: Option<SnapshotPolicy>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
@@ -378,6 +387,9 @@ pub async fn start_customized(
     };
     if let Some(retry) = retry_override {
         config.retry = retry;
+    }
+    if let Some(snapshot_policy) = snapshot_policy_override {
+        config.oplog.default_snapshotting = snapshot_policy;
     }
 
     let handle = Handle::current();

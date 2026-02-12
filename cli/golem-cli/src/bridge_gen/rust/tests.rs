@@ -23,8 +23,9 @@ use camino::Utf8Path;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-    NamedElementSchemas,
+    NamedElementSchemas, Snapshotting,
 };
+use golem_common::model::Empty;
 use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{f64, str};
 use tempfile::TempDir;
@@ -128,6 +129,7 @@ fn rust_counter_agent() -> GeneratedPackage {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     };
 
     GeneratedPackage::new(agent_type)

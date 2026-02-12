@@ -765,8 +765,9 @@ mod tests {
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-        NamedElementSchemas, TextDescriptor,
+        NamedElementSchemas, Snapshotting, TextDescriptor,
     };
+    use golem_common::model::Empty;
     use golem_common::model::component::ComponentName;
     use golem_templates::model::GuestLanguage;
     use golem_wasm::analysis::analysed_type::{
@@ -949,6 +950,7 @@ mod tests {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         }];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()

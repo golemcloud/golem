@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::agent::Snapshotting;
+use crate::base_model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
@@ -506,6 +508,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-2".to_string()),
@@ -527,6 +530,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-3".to_string()),
@@ -560,6 +564,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-4".to_string()),
@@ -589,6 +594,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-5".to_string()),
@@ -618,6 +624,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-6".to_string()),
@@ -653,6 +660,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-7".to_string()),
@@ -674,6 +682,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("non-kebab-agent".to_string()),
@@ -713,6 +722,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
     ];
 

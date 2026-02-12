@@ -1,3 +1,5 @@
+mod snapshot_test;
+
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
 #[agent_definition]

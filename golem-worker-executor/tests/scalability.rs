@@ -263,7 +263,7 @@ async fn initial_large_memory_allocation(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None, None).await?;
     let component = executor
         .component(&context.default_environment_id, "large-initial-memory")
         .store()
@@ -313,7 +313,7 @@ async fn dynamic_large_memory_allocation(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None, None).await?;
     let component = executor
         .component(&context.default_environment_id, "large-dynamic-memory")
         .store()
