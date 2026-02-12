@@ -15,10 +15,8 @@
 pub mod tree;
 
 use self::tree::RadixNode;
-use super::RichCompiledRoute;
-use golem_service_base::custom_api::PathSegment;
+use super::PathSegment;
 use http::Method;
-use std::sync::Arc;
 
 #[derive(Clone, Debug, Default)]
 pub struct Router<T> {
@@ -51,26 +49,10 @@ impl<T> Router<T> {
     }
 }
 
-impl Router<Arc<RichCompiledRoute>> {
-    pub fn build_router(routes: Vec<RichCompiledRoute>) -> Self {
-        let mut router = Self::new();
-
-        for route in routes {
-            let route_id = route.route_id;
-
-            if !router.add_route(route.method.clone(), route.path.clone(), Arc::new(route)) {
-                tracing::warn!("Failed to add route with route_id {route_id}");
-            }
-        }
-
-        router
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::Router;
-    use golem_service_base::custom_api::PathSegment;
+    use crate::custom_api::PathSegment;
     use http::Method;
     use test_r::test;
 

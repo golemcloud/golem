@@ -150,11 +150,13 @@ impl DeploymentContext {
         registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
     ) -> Result<Vec<UnboundCompiledRoute>, DeploymentWriteError> {
         let mut current_route_id: i32 = 0;
-        let mut compiled_routes = HashMap::new();
+        let mut all_routes = Vec::new();
         let mut seen_agent_types = HashSet::new();
         let mut errors = Vec::new();
 
         for deployment in self.http_api_deployments.values() {
+            let mut deployment_routes = Vec::new();
+
             for (agent_type, agent_options) in &deployment.agents {
                 let registered_agent_type = ok_or_continue!(
                     registered_agent_types.get(agent_type).ok_or(
@@ -217,7 +219,7 @@ impl DeploymentContext {
                     constructor_parameters,
                     agent_options,
                     &mut current_route_id,
-                    &mut compiled_routes,
+                    &mut deployment_routes,
                     &mut errors,
                 );
 
@@ -225,25 +227,55 @@ impl DeploymentContext {
                     deployment,
                     registered_agent_type,
                     &mut current_route_id,
-                    &mut compiled_routes,
+                    &mut deployment_routes,
                 );
 
                 add_cors_preflight_http_routes(
                     deployment,
                     &mut current_route_id,
-                    &mut compiled_routes,
+                    &mut deployment_routes,
                 );
             }
+
+            validate_final_router(&deployment.domain, &deployment_routes, &mut errors);
+
+            all_routes.append(&mut deployment_routes);
         }
 
         // Fixme: code-first routes
         // * SwaggerUi routes
-        // * Validation of final router
 
         if !errors.is_empty() {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         };
 
-        Ok(compiled_routes.into_values().collect())
+        Ok(all_routes)
+    }
+}
+
+fn validate_final_router(
+    domain: &Domain,
+    compiled_routes: &[UnboundCompiledRoute],
+    errors: &mut Vec<DeployValidationError>,
+) {
+    let mut router = golem_service_base::custom_api::router::Router::new();
+
+    for compiled_route in compiled_routes {
+        let method: http::Method = ok_or_continue!(
+            compiled_route.method.clone().try_into().map_err(|_| {
+                DeployValidationError::InvalidHttpMethod {
+                    method: compiled_route.method.clone(),
+                }
+            }),
+            errors
+        );
+
+        if !router.add_route(method, compiled_route.path.clone(), ()) {
+            errors.push(DeployValidationError::RouteIsAmbiguous {
+                domain: domain.clone(),
+                method: compiled_route.method.clone(),
+                path: compiled_route.path.clone(),
+            })
+        }
     }
 }
