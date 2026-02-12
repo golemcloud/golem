@@ -99,7 +99,7 @@ pub fn parse_agent_definition_attributes(
                         lit: Lit::Str(lit), ..
                     }) = &*assign.right
                     {
-                        snapshotting = parse_snapshotting_value(&lit)?;
+                        snapshotting = parse_snapshotting_value(lit)?;
                         continue;
                     } else {
                         return Err(Error::new_spanned(

@@ -130,7 +130,7 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
   view.setUint8(0, 1); // version
   fullSnapshot.set(agentSnapshot, 1);
 
-  return { data: fullSnapshot, mimeType: "application/octet-stream" };
+  return { data: fullSnapshot, mimeType: 'application/octet-stream' };
 }
 
 async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
