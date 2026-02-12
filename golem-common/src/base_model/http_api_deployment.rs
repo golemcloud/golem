@@ -66,6 +66,12 @@ declare_structs! {
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>
     }
 
+    pub struct HttpApiDeploymentUpdate {
+        pub current_revision: HttpApiDeploymentRevision,
+        pub webhook_url: Option<String>,
+        pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
+    }
+
     pub struct HttpApiDeployment {
         pub id: HttpApiDeploymentId,
         pub revision: HttpApiDeploymentRevision,

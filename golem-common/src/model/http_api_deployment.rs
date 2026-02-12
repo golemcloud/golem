@@ -13,10 +13,7 @@
 // limitations under the License.
 
 pub use crate::base_model::http_api_deployment::*;
-use crate::declare_structs;
-use crate::model::agent::AgentTypeName;
 use crate::model::diff;
-use std::collections::BTreeMap;
 
 impl HttpApiDeploymentAgentOptions {
     pub fn to_diffable(&self) -> diff::HttpApiDeploymentAgentOptions {
@@ -50,13 +47,5 @@ impl HttpApiDeployment {
                 .map(|(k, v)| (k.0.clone(), v.to_diffable()))
                 .collect(),
         }
-    }
-}
-
-declare_structs! {
-    pub struct HttpApiDeploymentUpdate {
-        pub current_revision: HttpApiDeploymentRevision,
-        pub webhook_url: Option<String>,
-        pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
 }
