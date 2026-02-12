@@ -206,7 +206,10 @@ fn get_full_path_and_variables<'a>(
     path_segments: &'a [PathSegment],
     method_params: Option<&'a Vec<MethodParameter>>,
 ) -> (String, Vec<(&'a str, &'a PathSegmentType)>) {
-    if agent_method.is_none() {
+    if path_segments
+        .iter()
+        .all(|segment| matches!(segment, PathSegment::Literal { .. }))
+    {
         return (
             path_segments
                 .iter()
@@ -290,7 +293,6 @@ fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     add_request_body(&mut operation, route.request_body_schema());
     add_responses(&mut operation, route);
     add_security(&mut operation, route);
-
     add_operation_to_path_item(path_item, route.method(), operation)?;
 
     Ok(())
