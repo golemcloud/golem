@@ -22,6 +22,7 @@ use self::status::{
 use crate::durable_host::recover_stderr_logs;
 use crate::model::{ExecutionStatus, LookupResult, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::events::{Event, EventsSubscription};
+use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -33,7 +34,6 @@ use crate::services::{
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
     UsesAllDeps,
 };
-use crate::services::golem_config::SnapshotPolicy;
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;

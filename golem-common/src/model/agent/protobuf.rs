@@ -1264,9 +1264,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::SnapshottingConfig> for Sn
             Value::PeriodicNanos(nanos) => Ok(Self::Periodic(SnapshottingPeriodic {
                 duration_nanos: nanos,
             })),
-            Value::EveryNInvocation(n) => Ok(Self::EveryNInvocation(SnapshottingEveryNInvocation {
-                count: n as u16,
-            })),
+            Value::EveryNInvocation(n) => {
+                Ok(Self::EveryNInvocation(SnapshottingEveryNInvocation {
+                    count: n as u16,
+                }))
+            }
         }
     }
 }

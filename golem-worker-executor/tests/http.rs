@@ -427,7 +427,8 @@ async fn http_response_request_chaining(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, None, Some(RetryConfig::no_retries()), None).await?;
+    let executor =
+        start_customized(deps, &context, None, Some(RetryConfig::no_retries()), None).await?;
 
     let component = executor
         .component(&context.default_environment_id, "fetch")

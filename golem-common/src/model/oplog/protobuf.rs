@@ -606,10 +606,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     }),
                 };
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
-                    timestamp: snapshot
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
+                    timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
                     data,
                 }))
             }

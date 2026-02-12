@@ -24,10 +24,9 @@ use golem_client::model::ValueAndType;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,
-    ElementSchema, JsonComponentModelValue, NamedElementSchema, NamedElementSchemas,
-    Snapshotting, TextReference, TextReferenceValue, TextSource, UntypedJsonDataValue,
-    UntypedJsonElementValue, UntypedJsonElementValues, UntypedJsonNamedElementValue,
-    UntypedJsonNamedElementValues,
+    ElementSchema, JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, Snapshotting,
+    TextReference, TextReferenceValue, TextSource, UntypedJsonDataValue, UntypedJsonElementValue,
+    UntypedJsonElementValues, UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
 };
 use golem_common::model::Empty;
 use golem_templates::model::GuestLanguage;

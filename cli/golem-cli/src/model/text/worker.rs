@@ -855,7 +855,8 @@ impl TextView for PublicOplogEntry {
                     PublicSnapshotData::Json(json) => {
                         logln(format!(
                             "{pad}data:              {}",
-                            serde_json::to_string_pretty(&json.data).unwrap_or_else(|_| format!("{:?}", json.data))
+                            serde_json::to_string_pretty(&json.data)
+                                .unwrap_or_else(|_| format!("{:?}", json.data))
                         ));
                     }
                 }

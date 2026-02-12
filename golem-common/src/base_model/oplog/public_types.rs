@@ -356,10 +356,12 @@ impl golem_wasm::IntoValue for JsonSnapshotData {
     }
 
     fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::record(vec![golem_wasm::analysis::analysed_type::field(
-            "data",
-            golem_wasm::analysis::analysed_type::str(),
-        )])
+        golem_wasm::analysis::analysed_type::record(vec![
+            golem_wasm::analysis::analysed_type::field(
+                "data",
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+        ])
     }
 }
 
@@ -389,14 +391,8 @@ impl golem_wasm::IntoValue for PublicSnapshotData {
 
     fn get_type() -> golem_wasm::analysis::AnalysedType {
         golem_wasm::analysis::analysed_type::variant(vec![
-            golem_wasm::analysis::analysed_type::case(
-                "Raw",
-                RawSnapshotData::get_type(),
-            ),
-            golem_wasm::analysis::analysed_type::case(
-                "Json",
-                JsonSnapshotData::get_type(),
-            ),
+            golem_wasm::analysis::analysed_type::case("Raw", RawSnapshotData::get_type()),
+            golem_wasm::analysis::analysed_type::case("Json", JsonSnapshotData::get_type()),
         ])
     }
 }

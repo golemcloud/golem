@@ -767,8 +767,8 @@ mod tests {
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
         NamedElementSchemas, Snapshotting, TextDescriptor,
     };
-    use golem_common::model::Empty;
     use golem_common::model::component::ComponentName;
+    use golem_common::model::Empty;
     use golem_templates::model::GuestLanguage;
     use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,

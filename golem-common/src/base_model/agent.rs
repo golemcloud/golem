@@ -944,7 +944,7 @@ pub struct QueryVariable {
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
 )]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "value")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum Snapshotting {
     #[unit_case]

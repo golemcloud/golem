@@ -14,10 +14,10 @@
 
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
+use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
-use crate::services::golem_config::SnapshotPolicy;
 use crate::worker::{
     interpret_function_result, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker,
     WorkerCommand,
@@ -469,9 +469,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::SaveSnapshot => {
-                self.save_snapshot().await
-            }
+            QueuedWorkerInvocation::SaveSnapshot => self.save_snapshot().await,
         }
     }
 
@@ -1094,25 +1092,28 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             let serialized = golem_common::serialization::serialize(&bytes);
                             match serialized {
                                 Ok(serialized_bytes) => {
-                                    match oplog
-                                        .upload_raw_payload(serialized_bytes)
-                                        .await
-                                    {
+                                    match oplog.upload_raw_payload(serialized_bytes).await {
                                         Ok(raw_payload) => {
                                             match raw_payload.into_payload::<Vec<u8>>() {
                                                 Ok(payload) => {
                                                     oplog
-                                                        .add_and_commit(OplogEntry::snapshot(payload, mime_type))
+                                                        .add_and_commit(OplogEntry::snapshot(
+                                                            payload, mime_type,
+                                                        ))
                                                         .await;
                                                     debug!("Periodic snapshot saved successfully");
                                                 }
                                                 Err(err) => {
-                                                    warn!("Failed to convert snapshot payload: {err}");
+                                                    warn!(
+                                                        "Failed to convert snapshot payload: {err}"
+                                                    );
                                                 }
                                             }
                                         }
                                         Err(err) => {
-                                            warn!("Failed to upload periodic snapshot payload: {err}");
+                                            warn!(
+                                                "Failed to upload periodic snapshot payload: {err}"
+                                            );
                                         }
                                     }
                                 }
