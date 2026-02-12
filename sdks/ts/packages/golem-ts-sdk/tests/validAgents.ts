@@ -571,6 +571,50 @@ class WebhookAgent extends BaseAgent {
   }
 }
 
+@agent({ snapshotting: 'disabled' })
+class SnapshottingDisabledAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({ snapshotting: 'enabled' })
+class SnapshottingEnabledAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({ snapshotting: { periodic: '5s' } })
+class SnapshottingPeriodicAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({ snapshotting: { every: 10 } })
+class SnapshottingEveryNAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
 // If this class is decorated with agent, it will fail
 // This is kept here to ensure that any internal user class is not part of metadata generation.
 // See package.json for metadata generation command.

@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentConstructor, AgentMode, Principal } from 'golem:agent/common';
+import {
+  AgentType,
+  DataValue,
+  AgentConstructor,
+  AgentMode,
+  Principal,
+  Snapshotting,
+} from 'golem:agent/common';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -34,6 +41,9 @@ import { getHttpMountDetails } from '../internal/http/mount';
 import { validateHttpMount } from '../internal/http/validation';
 import { getAgentConstructorSchema } from '../internal/schema/constructor';
 import { getAgentMethodSchema } from '../internal/schema/method';
+import ms from 'ms';
+
+export type SnapshottingOption = 'disabled' | 'enabled' | { periodic: string } | { every: number };
 
 export type AgentDecoratorOptions = {
   name?: string;
@@ -42,7 +52,34 @@ export type AgentDecoratorOptions = {
   cors?: string[];
   auth?: boolean;
   webhookSuffix?: string;
+  snapshotting?: SnapshottingOption;
 };
+
+function parseDurationToNanoseconds(duration: string): bigint {
+  const milliseconds = ms(duration as ms.StringValue);
+  if (milliseconds === undefined) {
+    throw new Error(
+      `Invalid duration string: '${duration}'. Use formats like '5s', '10m', '1h', '2 days', etc.`,
+    );
+  }
+  return BigInt(milliseconds) * 1_000_000n;
+}
+
+function resolveSnapshotting(option?: SnapshottingOption): Snapshotting {
+  if (option === undefined || option === 'disabled') {
+    return { tag: 'disabled' };
+  }
+  if (option === 'enabled') {
+    return { tag: 'enabled', val: { tag: 'default' } };
+  }
+  if ('periodic' in option) {
+    return {
+      tag: 'enabled',
+      val: { tag: 'periodic', val: parseDurationToNanoseconds(option.periodic) },
+    };
+  }
+  return { tag: 'enabled', val: { tag: 'every-n-invocation', val: option.every } };
+}
 
 /**
  *
@@ -251,6 +288,7 @@ export function agent(options?: AgentDecoratorOptions) {
       dependencies: [],
       mode: options?.mode ?? 'durable',
       httpMount,
+      snapshotting: resolveSnapshotting(options?.snapshotting),
     };
 
     AgentTypeRegistry.register(agentClassName, agentType);

@@ -1,11 +1,13 @@
 declare module 'golem:agent/common' {
   import * as golemRpc022Types from 'golem:rpc/types@0.2.2';
+  import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
   export type ValueAndType = golemRpc022Types.ValueAndType;
   export type WitType = golemRpc022Types.WitType;
   export type WitValue = golemRpc022Types.WitValue;
   export type AgentId = golemRpc022Types.AgentId;
   export type AccountId = golemRpc022Types.AccountId;
   export type ComponentId = golemRpc022Types.ComponentId;
+  export type Duration = wasiClocks023MonotonicClock.Duration;
   export type Url = string;
   export type AgentMode = "durable" | "ephemeral";
   export type CorsOptions = {
@@ -194,22 +196,6 @@ declare module 'golem:agent/common' {
     constructor: AgentConstructor;
     methods: AgentMethod[];
   };
-  export type AgentType = {
-    typeName: string;
-    description: string;
-    constructor: AgentConstructor;
-    methods: AgentMethod[];
-    dependencies: AgentDependency[];
-    mode: AgentMode;
-    httpMount?: HttpMountDetails;
-  };
-  /**
-   * Associates an agent type with a component that implements it
-   */
-  export type RegisteredAgentType = {
-    agentType: AgentType;
-    implementedBy: ComponentId;
-  };
   export type BinarySource = {
     data: Uint8Array;
     binaryType: BinaryType;
@@ -270,5 +256,43 @@ declare module 'golem:agent/common' {
   {
     tag: 'custom-error'
     val: ValueAndType
+  };
+  export type SnapshottingConfig = 
+  {
+    tag: 'default'
+  } |
+  /** current default in the server */
+  {
+    tag: 'periodic'
+    val: Duration
+  } |
+  {
+    tag: 'every-n-invocation'
+    val: number
+  };
+  export type Snapshotting = 
+  {
+    tag: 'disabled'
+  } |
+  {
+    tag: 'enabled'
+    val: SnapshottingConfig
+  };
+  export type AgentType = {
+    typeName: string;
+    description: string;
+    constructor: AgentConstructor;
+    methods: AgentMethod[];
+    dependencies: AgentDependency[];
+    mode: AgentMode;
+    httpMount?: HttpMountDetails;
+    snapshotting: Snapshotting;
+  };
+  /**
+   * Associates an agent type with a component that implements it
+   */
+  export type RegisteredAgentType = {
+    agentType: AgentType;
+    implementedBy: ComponentId;
   };
 }

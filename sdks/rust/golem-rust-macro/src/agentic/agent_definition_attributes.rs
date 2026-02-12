@@ -21,6 +21,7 @@ use syn::{Error, Expr, ExprArray, ExprLit, Lit, Token};
 pub struct AgentDefinitionAttributes {
     pub agent_mode: TokenStream,
     pub http_mount: Option<TokenStream>,
+    pub snapshotting: TokenStream,
 }
 
 pub fn parse_agent_definition_attributes(
@@ -28,6 +29,9 @@ pub fn parse_agent_definition_attributes(
 ) -> Result<AgentDefinitionAttributes, Error> {
     let mut mode = quote! {
         golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+    };
+    let mut snapshotting = quote! {
+        golem_rust::golem_agentic::golem::agent::common::Snapshotting::Disabled
     };
     let mut http = ParsedHttpMount {
         mount: None,
@@ -41,6 +45,7 @@ pub fn parse_agent_definition_attributes(
         return Ok(AgentDefinitionAttributes {
             agent_mode: mode,
             http_mount: None,
+            snapshotting,
         });
     }
 
@@ -88,6 +93,21 @@ pub fn parse_agent_definition_attributes(
                         ));
                     }
                 }
+
+                if left.path.is_ident("snapshotting") {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(lit), ..
+                    }) = &*assign.right
+                    {
+                        snapshotting = parse_snapshotting_value(&lit)?;
+                        continue;
+                    } else {
+                        return Err(Error::new_spanned(
+                            &assign.right,
+                            "snapshotting must be a string literal",
+                        ));
+                    }
+                }
             }
         }
 
@@ -120,6 +140,7 @@ pub fn parse_agent_definition_attributes(
     Ok(AgentDefinitionAttributes {
         agent_mode: mode,
         http_mount: http_tokens,
+        snapshotting,
     })
 }
 
@@ -223,6 +244,47 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter. Valid parameters are: mode, mount, auth, phantom-agent, cors, webhook-suffix",
+        "Unknown agent_definition parameter. Valid parameters are: mode, snapshotting, mount, auth, phantom-agent, cors, webhook-suffix",
     ))
+}
+
+fn parse_snapshotting_value(lit: &syn::LitStr) -> Result<TokenStream, Error> {
+    let value = lit.value();
+    match value.as_str() {
+        "disabled" => Ok(quote! {
+            golem_rust::golem_agentic::golem::agent::common::Snapshotting::Disabled
+        }),
+        "enabled" => Ok(quote! {
+            golem_rust::golem_agentic::golem::agent::common::Snapshotting::Enabled(
+                golem_rust::golem_agentic::golem::agent::common::SnapshottingConfig::Default
+            )
+        }),
+        other => {
+            if let Some(inner) = other.strip_prefix("periodic(").and_then(|s| s.strip_suffix(')')) {
+                let duration = inner.parse::<humantime::Duration>().map_err(|e| {
+                    Error::new_spanned(lit, format!("invalid duration in periodic(`{}`): {}", inner, e))
+                })?;
+                let nanos: u64 = duration.as_nanos() as u64;
+                Ok(quote! {
+                    golem_rust::golem_agentic::golem::agent::common::Snapshotting::Enabled(
+                        golem_rust::golem_agentic::golem::agent::common::SnapshottingConfig::Periodic(#nanos)
+                    )
+                })
+            } else if let Some(inner) = other.strip_prefix("every(").and_then(|s| s.strip_suffix(')')) {
+                let count: u16 = inner.parse().map_err(|_| {
+                    Error::new_spanned(lit, format!("invalid count in every(`{}`), expected a u16 value", inner))
+                })?;
+                Ok(quote! {
+                    golem_rust::golem_agentic::golem::agent::common::Snapshotting::Enabled(
+                        golem_rust::golem_agentic::golem::agent::common::SnapshottingConfig::EveryNInvocation(#count)
+                    )
+                })
+            } else {
+                Err(Error::new_spanned(
+                    lit,
+                    format!("invalid snapshotting value `{}`. Valid values are: disabled, enabled, periodic(<duration>), every(<count>)", other),
+                ))
+            }
+        }
+    }
 }

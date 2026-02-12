@@ -38,6 +38,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     let AgentDefinitionAttributes {
         agent_mode,
         http_mount,
+        snapshotting,
     } = match parse_agent_definition_attributes(attrs) {
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
@@ -59,6 +60,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         &agent_definition_trait,
         agent_mode,
         http_mount,
+        snapshotting,
         &type_parameters,
     ) {
         Ok(agent_type_with_remote_client) => {
@@ -141,6 +143,7 @@ fn get_agent_type_with_remote_client(
     agent_definition_trait: &ItemTrait,
     mode_value: proc_macro2::TokenStream,
     http_options: Option<proc_macro2::TokenStream>,
+    snapshotting_value: proc_macro2::TokenStream,
     type_parameters: &[String],
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
     let agent_def_trait_ident = &agent_definition_trait.ident;
@@ -527,6 +530,7 @@ fn get_agent_type_with_remote_client(
                 constructor: #agent_constructor,
                 mode: #mode_value,
                 http_mount: #http_options,
+                snapshotting: #snapshotting_value,
             }
         },
         remote_client,

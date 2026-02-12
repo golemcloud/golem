@@ -24,7 +24,7 @@ import { AgentInitiator } from './internal/agentInitiator';
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { description } from './decorators/description';
-export { agent, AgentDecoratorOptions } from './decorators/agent';
+export { agent, AgentDecoratorOptions, SnapshottingOption } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 
