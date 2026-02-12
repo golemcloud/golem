@@ -16,6 +16,7 @@ use crate::evcxr_repl::repl::Repl;
 use crate::log::log_anyhow_error;
 use std::process::ExitCode;
 
+mod cli_repl_interop;
 mod config;
 mod repl;
 

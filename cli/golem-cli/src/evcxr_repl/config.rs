@@ -14,6 +14,7 @@
 
 use crate::model::cli_command_metadata::CliCommandMetadata;
 use clap::Parser;
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -24,25 +25,10 @@ pub struct ReplConfig {
     pub history_file: String,
     pub cli_commands_metadata_json_path: Option<String>,
     pub cli_command_metadata: Option<CliCommandMetadata>,
-    pub client_config: Option<ClientConfig>,
+    pub client_config: ClientConfig,
     pub script: Option<String>,
     pub script_path: Option<String>,
     pub disable_auto_imports: bool,
-}
-
-impl Default for ReplConfig {
-    fn default() -> Self {
-        Self {
-            prompt: "golem> ".to_string(),
-            history_file: "evcxr_history".to_string(),
-            cli_commands_metadata_json_path: None,
-            cli_command_metadata: None,
-            client_config: None,
-            script: None,
-            script_path: None,
-            disable_auto_imports: false,
-        }
-    }
 }
 
 impl ReplConfig {
@@ -76,6 +62,22 @@ impl ReplConfig {
         let history_dir = base_dir.join("golem");
         std::fs::create_dir_all(&history_dir)?;
         Ok(Some(history_dir.join(&self.history_file)))
+    }
+
+    pub fn prompt_string(&self) -> String {
+        if self.script.is_some() {
+            return String::new();
+        }
+
+        if let Some(client_config) = self.client_config.as_ref() {
+            let name = "golem-rust-repl".cyan();
+            let app = format!("[{}]", client_config.application.green().bold());
+            let env = format!("[{}]", client_config.environment.yellow().bold());
+            let arrow = ">".green().bold();
+            return format!("{name}{app}{env}{arrow} ");
+        }
+
+        self.prompt.clone()
     }
 
     fn load_base_config() -> anyhow::Result<Self> {
@@ -130,19 +132,12 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
-    pub fn from_env() -> anyhow::Result<Option<Self>> {
-        let has_env = std::env::var("GOLEM_REPL_SERVER_KIND").is_ok()
-            || std::env::var("GOLEM_REPL_APPLICATION").is_ok()
-            || std::env::var("GOLEM_REPL_ENVIRONMENT").is_ok();
-        if !has_env {
-            return Ok(None);
-        }
-
-        Ok(Some(Self {
+    pub fn from_env() -> anyhow::Result<Self> {
+        Ok(Self {
             server: GolemServer::from_env()?,
             application: required_env_var("GOLEM_REPL_APPLICATION")?,
             environment: required_env_var("GOLEM_REPL_ENVIRONMENT")?,
-        }))
+        })
     }
 }
 
@@ -187,4 +182,11 @@ struct CliArgs {
 fn required_env_var(name: &str) -> anyhow::Result<String> {
     std::env::var(name)
         .map_err(|_| anyhow::anyhow!("Missing required environment variable: {name}"))
+}
+
+pub struct CliCommandsConfig {
+    pub binary: String,
+    pub app_main_dir: PathBuf,
+    pub client_config: ClientConfig,
+    pub command_metadata: CliCommandMetadata,
 }
