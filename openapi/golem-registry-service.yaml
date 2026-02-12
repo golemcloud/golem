@@ -6273,6 +6273,7 @@ components:
       - methods
       - dependencies
       - mode
+      - snapshotting
       properties:
         typeName:
           type: string
@@ -6292,6 +6293,8 @@ components:
           $ref: '#/components/schemas/AgentMode'
         httpMount:
           $ref: '#/components/schemas/HttpMountDetails'
+        snapshotting:
+          $ref: '#/components/schemas/Snapshotting'
     AnalysedExport:
       type: object
       oneOf:
@@ -8538,6 +8541,106 @@ components:
           type: array
           items:
             type: string
+    Snapshotting:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/Snapshotting_Empty'
+      - $ref: '#/components/schemas/Snapshotting_SnapshottingConfig'
+      discriminator:
+        propertyName: type
+        mapping:
+          Disabled: '#/components/schemas/Snapshotting_Empty'
+          Enabled: '#/components/schemas/Snapshotting_SnapshottingConfig'
+    SnapshottingConfig:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SnapshottingConfig_Empty'
+      - $ref: '#/components/schemas/SnapshottingConfig_SnapshottingPeriodic'
+      - $ref: '#/components/schemas/SnapshottingConfig_SnapshottingEveryNInvocation'
+      discriminator:
+        propertyName: configType
+        mapping:
+          Default: '#/components/schemas/SnapshottingConfig_Empty'
+          Periodic: '#/components/schemas/SnapshottingConfig_SnapshottingPeriodic'
+          EveryNInvocation: '#/components/schemas/SnapshottingConfig_SnapshottingEveryNInvocation'
+    SnapshottingConfig_Empty:
+      allOf:
+      - type: object
+        required:
+        - configType
+        properties:
+          configType:
+            type: string
+            enum:
+            - Default
+            example: Default
+      - $ref: '#/components/schemas/Empty'
+    SnapshottingConfig_SnapshottingEveryNInvocation:
+      allOf:
+      - type: object
+        required:
+        - configType
+        properties:
+          configType:
+            type: string
+            enum:
+            - EveryNInvocation
+            example: EveryNInvocation
+      - $ref: '#/components/schemas/SnapshottingEveryNInvocation'
+    SnapshottingConfig_SnapshottingPeriodic:
+      allOf:
+      - type: object
+        required:
+        - configType
+        properties:
+          configType:
+            type: string
+            enum:
+            - Periodic
+            example: Periodic
+      - $ref: '#/components/schemas/SnapshottingPeriodic'
+    SnapshottingEveryNInvocation:
+      type: object
+      title: SnapshottingEveryNInvocation
+      required:
+      - count
+      properties:
+        count:
+          type: integer
+          format: uint16
+    SnapshottingPeriodic:
+      type: object
+      title: SnapshottingPeriodic
+      required:
+      - durationNanos
+      properties:
+        durationNanos:
+          type: integer
+          format: uint64
+    Snapshotting_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Disabled
+            example: Disabled
+      - $ref: '#/components/schemas/Empty'
+    Snapshotting_SnapshottingConfig:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Enabled
+            example: Enabled
+      - $ref: '#/components/schemas/SnapshottingConfig'
     SystemVariable:
       type: string
       enum:

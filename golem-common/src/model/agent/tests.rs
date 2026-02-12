@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent::Snapshotting;
+use crate::base_model::agent::{
+    SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic, Snapshotting,
+};
 use crate::base_model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
@@ -431,6 +433,48 @@ fn untyped_data_value_serde_poem_roundtrip() {
     println!("{}", poem_serialized);
     let serde_deserialized: UntypedJsonDataValue = serde_json::from_str(&poem_serialized).unwrap();
     assert_eq!(original, serde_deserialized);
+}
+
+fn snapshotting_serde_poem_roundtrip(original: Snapshotting) {
+    let poem_serialized = original.to_json_string();
+    let serde_serialized = serde_json::to_string(&original).unwrap();
+
+    let poem_json: serde_json::Value = serde_json::from_str(&poem_serialized).unwrap();
+    let serde_json: serde_json::Value = serde_json::from_str(&serde_serialized).unwrap();
+    assert_eq!(poem_json, serde_json);
+
+    let from_poem: Snapshotting = serde_json::from_str(&poem_serialized).unwrap();
+    let from_serde: Snapshotting = serde_json::from_str(&serde_serialized).unwrap();
+    assert_eq!(original, from_poem);
+    assert_eq!(original, from_serde);
+}
+
+#[test]
+fn snapshotting_disabled_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Disabled(Empty {}));
+}
+
+#[test]
+fn snapshotting_enabled_default_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::Default(
+        Empty {},
+    )));
+}
+
+#[test]
+fn snapshotting_enabled_periodic_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::Periodic(
+        SnapshottingPeriodic {
+            duration_nanos: 2_000_000_000,
+        },
+    )));
+}
+
+#[test]
+fn snapshotting_enabled_every_n_invocation_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(
+        SnapshottingConfig::EveryNInvocation(SnapshottingEveryNInvocation { count: 5 }),
+    ));
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
