@@ -12,14 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem::command_handler::ServerCommandHandler;
-use golem_cli::command_handler::CommandHandler;
-use golem_cli::main_wrapper;
+use crate::log::log_anyhow_error;
+use evcxr::CommandContext;
 use std::process::ExitCode;
-use std::sync::Arc;
 
-fn main() -> ExitCode {
-    main_wrapper(|| {
-        CommandHandler::handle_args(std::env::args_os(), Arc::new(ServerCommandHandler {}))
-    })
+mod repl;
+
+pub fn main() -> ExitCode {
+    match run_repl() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            log_anyhow_error(&err);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_repl() -> anyhow::Result<()> {
+    evcxr::runtime_hook();
+    let (mut context, outputs) = CommandContext::new()?;
+    Ok(())
 }

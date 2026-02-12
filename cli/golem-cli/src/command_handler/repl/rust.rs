@@ -14,7 +14,10 @@
 
 use crate::context::Context;
 use crate::model::repl::BridgeReplArgs;
+use crate::process::ExitStatusExt;
+use crate::{binary_path_to_string, GOLEM_EVCXR_REPL};
 use std::sync::Arc;
+use tokio::process::Command;
 
 pub struct RustRepl {
     _ctx: Arc<Context>,
@@ -25,7 +28,14 @@ impl RustRepl {
         Self { _ctx: ctx }
     }
 
-    pub async fn run(&self, _args: BridgeReplArgs) -> anyhow::Result<()> {
-        todo!("Rust REPL not implemented")
+    pub async fn run(&self, args: BridgeReplArgs) -> anyhow::Result<()> {
+        let result = Command::new(binary_path_to_string()?)
+            .current_dir(args.repl_root_dir)
+            .env(GOLEM_EVCXR_REPL, "1")
+            .spawn()?
+            .wait()
+            .await?;
+
+        result.check_exit_status()
     }
 }

@@ -34,7 +34,7 @@ golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }
-golem-wasm = { workspace = true , default-features = true }
+golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 # External deps
@@ -58,6 +58,7 @@ cli-table = { workspace = true }
 colored = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
+evcxr = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }

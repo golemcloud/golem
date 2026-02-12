@@ -23,7 +23,7 @@ use crate::log::{log_action, log_skipping_up_to_date, logln, set_log_output, Log
 use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::process::{CommandExt, ExitStatusExt};
-use crate::{command_name, fs};
+use crate::{binary_path_to_string, fs};
 use golem_templates::model::GuestLanguage;
 use heck::ToLowerCamelCase;
 use indoc::formatdoc;
@@ -286,7 +286,7 @@ impl TypeScriptRepl {
 
                 void repl.run();
             ",
-            binary = js_string_literal(command_name())?,
+            binary = js_string_literal(binary_path_to_string()?)?,
             app_main_dir = js_string_literal(args.app_main_dir.display().to_string())?,
             stream = args.stream_logs.to_string(),
             repl_history_file_path = js_string_literal(args.repl_history_file_path.display().to_string())?,

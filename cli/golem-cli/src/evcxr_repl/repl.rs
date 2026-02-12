@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem::command_handler::ServerCommandHandler;
-use golem_cli::command_handler::CommandHandler;
-use golem_cli::main_wrapper;
-use std::process::ExitCode;
-use std::sync::Arc;
+use evcxr::CommandContext;
 
-fn main() -> ExitCode {
-    main_wrapper(|| {
-        CommandHandler::handle_args(std::env::args_os(), Arc::new(ServerCommandHandler {}))
-    })
+pub fn run_repl() -> anyhow::Result<()> {
+    evcxr::runtime_hook();
+    let (mut context, outputs) = CommandContext::new()?;
+    context.eval("let mut s = String::new();")?;
+    context.eval(r#"s.push_str("Hello, ");"#)?;
+    context.eval(r#"s.push_str("World!");"#)?;
+    context.eval(r#"println!("{}", s);"#)?;
+
+    if let Ok(line) = outputs.stdout.recv() {
+        println!("{line}");
+    }
+
+    Ok(())
 }
