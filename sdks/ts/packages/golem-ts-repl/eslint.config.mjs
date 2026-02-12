@@ -20,7 +20,8 @@ export default [
     },
     plugins: { '@typescript-eslint': pluginTs },
     rules: {
-      'no-unused-vars': 'warn',
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': 'error',
       'no-unreachable': 'error',
       'no-dupe-keys': 'error',
       'no-duplicate-case': 'error',

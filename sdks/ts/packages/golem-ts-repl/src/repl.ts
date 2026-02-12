@@ -12,58 +12,78 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { ClientConfiguration, clientConfigurationFromEnv, Config, ConfigureClient } from './config';
+import {
+  cliCommandsConfigFromBaseConfig,
+  ClientConfig,
+  clientConfigFromEnv,
+  Config,
+  ConfigureClient,
+  loadProcessArgs,
+  ProcessArgs,
+} from './config';
+import { CliReplInterop } from './cli-repl-interop';
 import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
 import process from 'node:process';
-import shellQuote from 'shell-quote';
-import childProcess from 'node:child_process';
 import util from 'node:util';
 import { AsyncCompleter } from 'readline';
+import { PassThrough } from 'node:stream';
+import { ts } from 'ts-morph';
+import { flushStdIO } from './process';
 
 export class Repl {
   private readonly config: Config;
-  private readonly clientConfig: ClientConfiguration;
+  private readonly clientConfig: ClientConfig;
+  private readonly cli: CliReplInterop;
+  private readonly processArgs: ProcessArgs;
   private languageService: LanguageService | undefined;
-  private replServer: repl.REPLServer | undefined;
+  private overrideSnippetForNextEval: string | undefined;
 
   constructor(config: Config) {
     this.config = config;
-    this.clientConfig = clientConfigurationFromEnv();
+    this.processArgs = loadProcessArgs();
+    this.clientConfig = clientConfigFromEnv();
+    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
+    this.overrideSnippetForNextEval = undefined;
   }
 
   private getLanguageService(): LanguageService {
     if (!this.languageService) {
-      this.languageService = new LanguageService(this.config);
+      this.languageService = new LanguageService(this.config, {
+        disableAutoImports: this.processArgs.disableAutoImports,
+      });
     }
     return this.languageService;
   }
 
-  private async getReplServer(): Promise<repl.REPLServer> {
-    if (!this.replServer) {
-      const replServer = this.newBaseReplServer();
-      await this.setupRepl(replServer);
-      this.replServer = replServer;
-    }
-    return this.replServer!;
-  }
+  private newBaseReplServer(options?: {
+    input?: NodeJS.ReadableStream;
+    output?: NodeJS.WritableStream;
+    terminal?: boolean;
+  }): repl.REPLServer {
+    const output = options?.output ?? process.stdout;
+    const terminal = options?.terminal ?? Boolean((output as any).isTTY);
+    const prompt = this.processArgs.script
+      ? ''
+      : `${pc.cyan('golem-ts-repl')}` +
+        `[${pc.bold(pc.green(this.clientConfig.application))}]` +
+        `[${pc.bold(pc.yellow(this.clientConfig.environment))}]` +
+        `${pc.bold(pc.green('>'))} `;
 
-  private newBaseReplServer(): repl.REPLServer {
     return repl.start({
+      input: options?.input ?? process.stdin,
+      output,
+      terminal,
       useColors: pc.isColorSupported,
       useGlobal: true,
       preview: false,
       ignoreUndefined: true,
-      prompt:
-        `${pc.cyan('golem-ts-repl')}` +
-        `[${pc.bold(pc.green(this.clientConfig.application))}]` +
-        `[${pc.bold(pc.yellow(this.clientConfig.environment))}]` +
-        `${pc.bold(pc.green('>'))} `,
+      prompt,
     });
   }
 
-  private async setupRepl(replServer: repl.REPLServer) {
+  private async setupRepl(replServer: repl.REPLServer): Promise<void> {
     await this.setupReplHistory(replServer);
     this.setupReplEval(replServer);
     this.setupReplCompleter(replServer);
@@ -83,9 +103,10 @@ export class Repl {
     });
   }
 
-  private setupReplEval(replServer: repl.REPLServer) {
+  private setupReplEval(replServer: repl.REPLServer): repl.REPLEval {
     const tsxEval = replServer.eval;
     const languageService = this.getLanguageService();
+    const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
     const customEval: REPLEval = function (code, context, filename, callback) {
       const evalCode = (code: string) => {
@@ -97,7 +118,8 @@ export class Repl {
         });
       };
 
-      languageService.setSnippet(code);
+      const snippet = getOverrideSnippet() ?? code;
+      languageService.setSnippet(snippet);
       const typeCheckResult = languageService.typeCheckSnippet();
       if (typeCheckResult.ok) {
         const quickInfo = languageService.getSnippetQuickInfo();
@@ -130,24 +152,39 @@ export class Repl {
           );
         }
 
-        console.log(typeCheckResult.formattedErrors);
+        replMessageSink.writeText(typeCheckResult.formattedErrors);
 
         callback(null, undefined);
       }
     };
     (replServer.eval as any) = customEval;
+
+    return tsxEval;
   }
 
   private setupReplCompleter(replServer: repl.REPLServer) {
     const nodeCompleter = replServer.completer;
     const languageService = this.getLanguageService();
+    const cli = this.cli;
     const customCompleter: AsyncCompleter = function (line, callback) {
       if (line.trimStart().startsWith('.')) {
-        nodeCompleter(line, callback);
+        cli
+          .complete(line)
+          .then((result) => {
+            if (result) {
+              callback(null, result);
+            } else {
+              nodeCompleter(line, callback);
+            }
+          })
+          .catch(() => {
+            nodeCompleter(line, callback);
+          });
       } else {
         languageService.setSnippet(line);
         const completions = languageService.getSnippetCompletions();
         if (completions && completions.entries.length) {
+          completions.entries = completions.entries.slice(0, MAX_COMPLETION_ENTRIES);
           const replaceStart = completions.replaceStart ?? 0;
           const replaceEnd = completions.replaceEnd ?? line.length;
           const completeOn = line.slice(replaceStart, replaceEnd);
@@ -161,6 +198,10 @@ export class Repl {
   }
 
   private setupReplContext(replServer: repl.REPLServer) {
+    if (this.processArgs.disableAutoImports) {
+      return;
+    }
+
     const context = replServer.context;
     for (let agentTypeName in this.config.agents) {
       const agentConfig = this.config.agents[agentTypeName];
@@ -172,75 +213,148 @@ export class Repl {
   }
 
   private setupReplCommands(replServer: repl.REPLServer) {
-    const clientConfig = this.clientConfig;
-    replServer.defineCommand('deploy', {
-      help: 'Deploy the current Golem Application',
-      async action(raw_args: string) {
-        this.pause();
-
-        const parsed_args = shellQuote.parse((raw_args ?? '').trim());
-
-        let args = parsed_args.filter((t): t is string => typeof t === 'string' && t.length > 0);
-        args = [
-          'deploy',
-          '--environment',
-          clientConfig.environment,
-          '--repl-bridge-sdk-target',
-          'ts',
-          ...args,
-        ];
-
-        const child = childProcess.spawn('golem', args, { stdio: 'inherit' });
-        let result: {
-          code: number | null;
-          signal: NodeJS.Signals | null;
-        } = await new Promise((resolve) =>
-          child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-            resolve({ code, signal });
-          }),
-        );
-
-        if (result.code === 0) {
-          reload();
-        }
-
-        this.resume();
-        this.displayPrompt();
-        this.clearBufferedCommand();
-      },
-    });
-
     replServer.defineCommand('reload', {
       help: 'Reload the REPL',
-      action() {
-        reload();
+      async action() {
+        await CliReplInterop.exitWithReloadCode();
       },
     });
+    replServer.defineCommand('agentTypeInfo', {
+      help: 'Show auto-imported agent client info',
+      action: () => {
+        this.showAutoImportClientInfo(replServer, true);
+      },
+    });
+
+    this.cli.defineCommands(replServer);
+  }
+
+  private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
+    if (this.processArgs.disableAutoImports) return;
+
+    const agentNames = Object.keys(this.config.agents).sort((a, b) => a.localeCompare(b));
+    if (agentNames.length === 0) return;
+
+    const languageService = this.getLanguageService();
+    const lines: string[] = [];
+    lines.push('');
+    lines.push(pc.bold('Available agents:'));
+
+    for (const agentTypeName of agentNames) {
+      const methods = languageService.getClientMethodSignatures(agentTypeName);
+      if (!methods?.length) {
+        lines.push('');
+        continue;
+      }
+      lines.push(`  ${pc.bold(agentTypeName)}`);
+      for (const method of methods) {
+        lines.push(`    ${pc.green(method.name)}: ${method.signature}`);
+      }
+      lines.push('');
+    }
+
+    if (!manual) {
+      lines.push(pc.dim('To see this message again, use the `.agentTypeInfo` command!'));
+      replServer.output.write('\n');
+    }
+    logSnippetInfo(lines);
+    replServer.displayPrompt();
   }
 
   async run() {
-    await this.getReplServer();
-  }
-}
+    const script = this.processArgs.script;
+    const replServer = script
+      ? this.newBaseReplServer({
+          input: new PassThrough(),
+          output: process.stdout,
+          terminal: false,
+        })
+      : this.newBaseReplServer();
 
-function reload() {
-  process.exit(75);
+    await this.setupRepl(replServer);
+
+    if (!script) {
+      this.showAutoImportClientInfo(replServer, false);
+    }
+
+    if (script) {
+      await this.runScript(replServer, script);
+      await flushStdIO();
+      replServer.close();
+    }
+  }
+
+  private async runScript(replServer: repl.REPLServer, script: string) {
+    const previousSink = replMessageSink;
+    replMessageSink = stderrMessageSink;
+
+    let evalResult: { error: Error | null; result: unknown };
+    try {
+      const preparedScript = prepareScriptForEval(script);
+      const filename = this.processArgs.scriptPath ?? 'repl-script';
+      this.overrideSnippetForNextEval = script;
+      evalResult = await new Promise((resolve) => {
+        replServer.eval(preparedScript.script, replServer.context, filename, (err, result) => {
+          resolve({ error: err as Error | null, result });
+        });
+      });
+    } finally {
+      this.overrideSnippetForNextEval = undefined;
+      replMessageSink = previousSink;
+    }
+
+    if (evalResult.error) {
+      process.stderr.write(formatEvalError(evalResult.error) + '\n');
+      return;
+    }
+
+    const jsonResult = tryJsonStringify(evalResult.result);
+    if (jsonResult !== undefined) {
+      process.stdout.write(jsonResult + '\n');
+      return;
+    }
+
+    this.printReplResult(replServer, evalResult.result);
+  }
+
+  private printReplResult(replServer: repl.REPLServer, result: unknown) {
+    if (result === undefined && replServer.ignoreUndefined) return;
+    const rendered = replServer.writer(result);
+    process.stdout.write(rendered + '\n');
+  }
 }
 
 const INFO_PREFIX = pc.bold(pc.red('>'));
 const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
 
-function logSnippetInfo(message: string) {
-  if (!message) return;
+type ReplMessageSink = {
+  writeText: (text: string) => void;
+};
+
+let replMessageSink: ReplMessageSink = {
+  writeText: (text: string) => {
+    console.log(text);
+  },
+};
+
+const stderrMessageSink: ReplMessageSink = {
+  writeText: (text: string) => {
+    process.stderr.write(text + '\n');
+  },
+};
+
+function logSnippetInfo(message: string | string[]) {
+  let lines = Array.isArray(message) ? message : message.split('\n');
+  if (lines.length === 0) return;
 
   let maxLineLength = 0;
-  message.split('\n').forEach((line) => {
+  lines.forEach((line) => {
     maxLineLength = Math.max(maxLineLength, util.stripVTControlCharacters(line).length);
-    console.log(INFO_PREFIX, line);
+    replMessageSink.writeText(`${INFO_PREFIX} ${line}`);
   });
 
   if (maxLineLength > 0) {
-    console.log(pc.dim('~'.repeat(Math.min(maxLineLength + INFO_PREFIX_LENGTH, terminalWidth))));
+    replMessageSink.writeText(pc.dim('~'.repeat(terminalWidth)));
   }
 }
 
@@ -287,7 +401,7 @@ export function formatAsTable(
   return lines.join('\n');
 }
 
-const MAX_COMPLETION_ENTRIES = 20;
+const MAX_COMPLETION_ENTRIES = 50;
 
 let terminalWidth = process.stdout.isTTY ? process.stdout.columns : 80;
 
@@ -295,4 +409,113 @@ if (process.stdout.isTTY) {
   process.stdout.on('resize', () => {
     terminalWidth = process.stdout.columns;
   });
+}
+
+function formatEvalError(error: unknown) {
+  if (error instanceof Error) {
+    return error.stack ?? error.message;
+  }
+  return String(error);
+}
+
+function tryJsonStringify(value: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? undefined : json;
+  } catch {
+    return undefined;
+  }
+}
+
+function prepareScriptForEval(script: string): { script: string; transformed: boolean } {
+  const sourceFile = ts.createSourceFile(
+    'repl-script.ts',
+    script,
+    ts.ScriptTarget.ES2020,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  const edits: { start: number; end: number; replacement: string }[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) {
+      continue;
+    }
+
+    const replacement = rewriteImportToDynamic(statement, sourceFile);
+    const start = statement.getStart(sourceFile, false);
+    const end = statement.getEnd();
+    edits.push({ start, end, replacement });
+  }
+
+  if (edits.length === 0) {
+    return { script, transformed: false };
+  }
+
+  let updated = script;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    const original = updated.slice(edit.start, edit.end);
+    const originalLines = countNewlines(original);
+    const replacementLines = countNewlines(edit.replacement);
+    let replacement = edit.replacement;
+    if (replacementLines < originalLines) {
+      replacement += '\n'.repeat(originalLines - replacementLines);
+    }
+    updated = updated.slice(0, edit.start) + replacement + updated.slice(edit.end);
+  }
+
+  return { script: updated, transformed: true };
+}
+
+function rewriteImportToDynamic(
+  statement: ts.ImportDeclaration,
+  sourceFile: ts.SourceFile,
+): string {
+  const importClause = statement.importClause;
+  const moduleText = statement.moduleSpecifier.getText(sourceFile);
+
+  if (!importClause) {
+    return `await import(${moduleText});`;
+  }
+
+  if (importClause.isTypeOnly) {
+    return 'void 0;';
+  }
+
+  if (importClause.namedBindings && ts.isNamespaceImport(importClause.namedBindings)) {
+    return `const ${importClause.namedBindings.name.text} = await import(${moduleText});`;
+  }
+
+  const bindings: string[] = [];
+  if (importClause.name) {
+    bindings.push(`default: ${importClause.name.text}`);
+  }
+
+  if (importClause.namedBindings && ts.isNamedImports(importClause.namedBindings)) {
+    for (const element of importClause.namedBindings.elements) {
+      if (element.isTypeOnly) {
+        continue;
+      }
+      const importName = (element.propertyName ?? element.name).getText(sourceFile);
+      const localName = element.name.getText(sourceFile);
+      bindings.push(importName === localName ? localName : `${importName}: ${localName}`);
+    }
+  }
+
+  if (bindings.length === 0) {
+    return 'void 0;';
+  }
+
+  return `const { ${bindings.join(', ')} } = await import(${moduleText});`;
+}
+
+function countNewlines(value: string): number {
+  let count = 0;
+  for (const char of value) {
+    if (char === '\n') {
+      count += 1;
+    }
+  }
+  return count;
 }

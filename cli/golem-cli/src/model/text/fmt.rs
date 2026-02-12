@@ -395,18 +395,6 @@ pub fn log_text_view<View: TextView>(view: &View) {
     view.log();
 }
 
-pub fn log_error<S: AsRef<str>>(message: S) {
-    logln(format!(
-        "{} {}",
-        "error:".log_color_error(),
-        message.as_ref()
-    ));
-}
-
-pub fn log_warn<S: AsRef<str>>(message: S) {
-    logln(format!("{} {}", "warn:".log_color_warn(), message.as_ref()));
-}
-
 pub fn log_fuzzy_matches(matches: &[Match]) {
     for m in matches {
         if !m.exact_match {

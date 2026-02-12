@@ -19,11 +19,11 @@ use crate::bridge_gen::bridge_client_directory_name;
 use crate::command_handler::repl::load_repl_metadata;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, logln, set_log_output, LogIndent, Output};
 use crate::model::app::BuildConfig;
-use crate::model::repl::{BridgeReplArgs, ReplMetadata};
+use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::process::{CommandExt, ExitStatusExt};
+use crate::{command_name, fs};
 use golem_templates::model::GuestLanguage;
 use heck::ToLowerCamelCase;
 use indoc::formatdoc;
@@ -51,9 +51,28 @@ impl TypeScriptRepl {
             self.generate_repl_package(&args).await?;
         }
 
+        let mut npx_args = vec!["tsx".to_string(), "repl.ts".to_string()];
+
+        if args.disable_auto_imports {
+            npx_args.push("--disable-auto-imports".to_string());
+        }
+
+        if let Some(script) = &args.script {
+            match script {
+                ReplScriptSource::Inline(script) => {
+                    npx_args.push("--script".to_string());
+                    npx_args.push(script.clone());
+                }
+                ReplScriptSource::FromFile(path) => {
+                    npx_args.push("--script-file".to_string());
+                    npx_args.push(fs::path_to_str(path)?.to_string());
+                }
+            }
+        }
+
         loop {
             let result = Command::new("npx")
-                .args(["tsx", "repl.ts"])
+                .args(&npx_args)
                 .current_dir(&args.repl_root_dir)
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())
@@ -63,14 +82,21 @@ impl TypeScriptRepl {
                 .wait()
                 .await?;
 
+            if args.script.is_some() {
+                set_log_output(Output::TracingDebug);
+                return result.pipe_exit_status();
+            }
+
             if result.code() != Some(75) {
                 return result.check_exit_status();
             }
 
             {
+                logln("");
                 log_action("Reloading", "TypeScript REPL");
                 let _indent = LogIndent::new();
                 self.generate_repl_package(&args).await?;
+                logln("");
             }
         }
     }
@@ -80,7 +106,6 @@ impl TypeScriptRepl {
         let app_ctx = app_ctx.some_or_err()?;
 
         let repl_metadata = load_repl_metadata(app_ctx, GuestLanguage::TypeScript).await?;
-
         let package_json_path = args.repl_root_dir.join("package.json");
         let tsconfig_json_path = args.repl_root_dir.join("tsconfig.json");
         let repl_ts_path = args.repl_root_dir.join("repl.ts");
@@ -116,11 +141,7 @@ impl TypeScriptRepl {
                         &relative_bridge_sdk_unix_path,
                         &tsconfig_json_path,
                     )?;
-                    self.generate_repl_ts(
-                        &repl_metadata,
-                        &repl_ts_path,
-                        &args.repl_history_file_path,
-                    )?;
+                    self.generate_repl_ts(args, &repl_metadata, &repl_ts_path)?;
 
                     Command::new("npm")
                         .arg("install")
@@ -197,7 +218,9 @@ impl TypeScriptRepl {
             "skipLibCheck": true,
             "sourceMap": true,
             "strict": true,
-            "target": "ES2022"
+            "target": "ES2022",
+            "types": ["node"],
+            "lib": ["ES2022"]
           },
           "include": [
             "repl.ts",
@@ -213,9 +236,9 @@ impl TypeScriptRepl {
 
     fn generate_repl_ts(
         &self,
+        args: &BridgeReplArgs,
         repl_metadata: &ReplMetadata,
         repl_ts_path: &Path,
-        repl_history_file_path: &Path,
     ) -> anyhow::Result<()> {
         let agents_config = repl_metadata
             .agents
@@ -251,15 +274,22 @@ impl TypeScriptRepl {
                 const {{ Repl }} = await import('@golem/golem-ts-repl');
 
                 const repl = new Repl({{
+                  binary: {binary},
+                  appMainDir: {app_main_dir},
                   agents: {{
                   {agents_config}
                   }},
                   historyFile: {repl_history_file_path},
+                  cliCommandsMetadataJsonPath: {repl_cli_commands_metadata_json_path},
                 }});
 
-                await repl.run();
+                void repl.run();
             ",
-            repl_history_file_path = js_string_literal(repl_history_file_path.display().to_string())?,
+            binary = js_string_literal(command_name())?,
+            app_main_dir = js_string_literal(args.app_main_dir.display().to_string())?,
+            repl_history_file_path = js_string_literal(args.repl_history_file_path.display().to_string())?,
+            repl_cli_commands_metadata_json_path =
+                js_string_literal(args.repl_cli_commands_metadata_json_path.display().to_string())?,
         };
 
         fs::write_str(repl_ts_path, repl_ts)
