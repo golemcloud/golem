@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::evcxr_repl::repl::Repl;
 use crate::log::log_anyhow_error;
-use evcxr::CommandContext;
 use std::process::ExitCode;
 
+mod config;
 mod repl;
 
-pub fn main() -> ExitCode {
-    match run_repl() {
+pub async fn main() -> ExitCode {
+    let result = match Repl::new() {
+        Ok(repl) => repl.run().await,
+        Err(err) => Err(err),
+    };
+
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             log_anyhow_error(&err);
             ExitCode::FAILURE
         }
     }
-}
-
-fn run_repl() -> anyhow::Result<()> {
-    evcxr::runtime_hook();
-    let (mut context, outputs) = CommandContext::new()?;
-    Ok(())
 }

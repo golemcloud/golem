@@ -120,14 +120,15 @@ pub fn main_wrapper<F>(golem_main: impl FnOnce() -> F) -> ExitCode
 where
     F: Future<Output = ExitCode>,
 {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime");
+
     if is_golem_evcxr_repl_set() {
-        evcxr_repl::main()
+        runtime.block_on(evcxr_repl::main())
     } else {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to build tokio runtime")
-            .block_on(golem_main())
+        runtime.block_on(golem_main())
     }
 }
 

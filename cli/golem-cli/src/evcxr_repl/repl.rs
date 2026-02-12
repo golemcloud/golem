@@ -12,19 +12,169 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use evcxr::CommandContext;
+use crate::evcxr_repl::config::ReplConfig;
+use evcxr::{CommandContext, EvalContextOutputs};
+use rustyline::completion::{Completer, Pair};
+use rustyline::config::Builder;
+use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::DefaultHistory;
+use rustyline::validate::Validator;
+use rustyline::{CompletionType, Editor, ExternalPrinter, Helper};
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
-pub fn run_repl() -> anyhow::Result<()> {
-    evcxr::runtime_hook();
-    let (mut context, outputs) = CommandContext::new()?;
-    context.eval("let mut s = String::new();")?;
-    context.eval(r#"s.push_str("Hello, ");"#)?;
-    context.eval(r#"s.push_str("World!");"#)?;
-    context.eval(r#"println!("{}", s);"#)?;
+pub struct Repl {
+    context: Rc<RefCell<CommandContext>>,
+    outputs: EvalContextOutputs,
+    editor: Editor<ReplHelper, DefaultHistory>,
+    history_path: Option<PathBuf>,
+    config: ReplConfig,
+}
 
-    if let Ok(line) = outputs.stdout.recv() {
-        println!("{line}");
+impl Repl {
+    pub fn new() -> anyhow::Result<Self> {
+        evcxr::runtime_hook();
+        let (context, outputs) = CommandContext::new()?;
+        let context = Rc::new(RefCell::new(context));
+
+        let config = ReplConfig::load()?;
+
+        let mut config_builder = Builder::new().history_ignore_space(true);
+        config_builder = config_builder.history_ignore_dups(true)?;
+        let editor_config = config_builder
+            .completion_type(CompletionType::List)
+            .auto_add_history(true)
+            .build();
+        let mut editor = Editor::<ReplHelper, DefaultHistory>::with_config(editor_config)?;
+        editor.set_helper(Some(ReplHelper::new(Rc::clone(&context))));
+
+        let history_path = config.history_path()?;
+        if let Some(path) = history_path.as_ref() {
+            let _ = editor.load_history(path);
+        }
+
+        Ok(Self {
+            context,
+            outputs,
+            editor,
+            history_path,
+            config,
+        })
     }
 
-    Ok(())
+    pub async fn run(mut self) -> anyhow::Result<()> {
+        let printer = self.editor.create_external_printer().ok().map(|printer| {
+            Arc::new(Mutex::new(
+                Box::new(printer) as Box<dyn ExternalPrinter + Send>
+            ))
+        });
+        let stdout_handle = spawn_output_task(self.outputs.stdout, printer.clone(), false);
+        let stderr_handle = spawn_output_task(self.outputs.stderr, printer.clone(), true);
+
+        loop {
+            let prompt = self.config.prompt.clone();
+            let line = tokio::task::block_in_place(|| self.editor.readline(&prompt));
+            match line {
+                Ok(line) => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if let Err(err) = self.context.borrow_mut().execute(&line) {
+                        eprintln!("{err}");
+                    }
+                }
+                Err(ReadlineError::Interrupted) => continue,
+                Err(ReadlineError::Eof) => break,
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        if let Some(path) = self.history_path.as_ref() {
+            let _ = self.editor.save_history(path);
+        }
+
+        drop(self.context);
+        let _ = stdout_handle.await;
+        let _ = stderr_handle.await;
+
+        Ok(())
+    }
+}
+
+struct ReplHelper {
+    context: Rc<RefCell<CommandContext>>,
+}
+
+impl ReplHelper {
+    fn new(context: Rc<RefCell<CommandContext>>) -> Self {
+        Self { context }
+    }
+}
+
+impl Helper for ReplHelper {}
+
+impl Hinter for ReplHelper {
+    type Hint = String;
+
+    fn hint(&self, _line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+        None
+    }
+}
+
+impl Highlighter for ReplHelper {}
+
+impl Validator for ReplHelper {}
+
+impl Completer for ReplHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let completions = match self.context.borrow_mut().completions(line, pos) {
+            Ok(completions) => completions,
+            Err(_) => return Ok((pos, Vec::new())),
+        };
+
+        let mut candidates = Vec::with_capacity(completions.completions.len());
+        for completion in completions.completions {
+            candidates.push(Pair {
+                display: completion.code.clone(),
+                replacement: completion.code,
+            });
+        }
+
+        Ok((completions.start_offset, candidates))
+    }
+}
+
+fn spawn_output_task(
+    receiver: crossbeam_channel::Receiver<String>,
+    printer: Option<Arc<Mutex<Box<dyn ExternalPrinter + Send>>>>,
+    is_stderr: bool,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        for msg in receiver.iter() {
+            if let Some(printer) = printer.as_ref() {
+                if let Ok(mut printer) = printer.lock() {
+                    if printer.print(msg.clone()).is_ok() {
+                        continue;
+                    }
+                }
+            }
+
+            if is_stderr {
+                eprint!("{msg}");
+            } else {
+                print!("{msg}");
+            }
+        }
+    })
 }
