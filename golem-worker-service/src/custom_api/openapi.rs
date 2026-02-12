@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
-use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema};
+use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema, HttpMethod};
 use golem_common::model::agent::DataSchema;
 use golem_service_base::custom_api::{
     MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
@@ -74,24 +74,24 @@ impl<'a> HttpApiRoute for RichCompiledRouteWithAgentType<'a> {
     }
 }
 
-pub struct HttpApiDefinitionOpenApiSpec(pub openapiv3::OpenAPI);
+pub struct HttpApiOpenApiSpec(pub openapiv3::OpenAPI);
 
-impl HttpApiDefinitionOpenApiSpec {
-    pub async fn from_routes<'a, T, I>(routes: I) -> Result<Self, String>
+impl HttpApiOpenApiSpec {
+    pub fn from_routes<'a, T, I>(routes: I) -> Result<Self, String>
     where
         T: 'a + HttpApiRoute + ?Sized,
         I: IntoIterator<Item = &'a T>,
     {
         let routes_vec: Vec<&T> = routes.into_iter().collect();
 
-        let security_schemes = get_security_scheme_details(&routes_vec);
+        let security_scheme_details = get_security_scheme_details(&routes_vec);
 
-        let mut open_api = create_base_openapi(&security_schemes);
+        let mut open_api = create_base_openapi(&security_scheme_details);
 
         let mut paths = BTreeMap::new();
 
         for route in &routes_vec {
-            add_route_to_paths(*route, &mut paths).await?;
+            add_route_to_paths(*route, &mut paths)?;
         }
 
         open_api.paths.paths = paths
@@ -99,11 +99,11 @@ impl HttpApiDefinitionOpenApiSpec {
             .map(|(k, v)| (k, openapiv3::ReferenceOr::Item(v)))
             .collect();
 
-        Ok(HttpApiDefinitionOpenApiSpec(open_api))
+        Ok(HttpApiOpenApiSpec(open_api))
     }
 }
 
-pub fn get_security_scheme_details<T>(routes: &[&T]) -> Vec<Arc<SecuritySchemeDetails>>
+fn get_security_scheme_details<T>(routes: &[&T]) -> Vec<Arc<SecuritySchemeDetails>>
 where
     T: HttpApiRoute + ?Sized,
 {
@@ -155,7 +155,7 @@ fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> op
         );
     }
 
-    open_api.components = Some(openapiv3::Components::default());
+    open_api.components = Some(components);
     open_api
 }
 
@@ -163,44 +163,42 @@ fn get_query_variable_and_types(
     method_params: Option<&Vec<MethodParameter>>,
 ) -> Vec<(&str, &QueryOrHeaderType)> {
     method_params
-        .map(|params| {
-            params
-                .iter()
-                .filter_map(|p| match p {
-                    MethodParameter::Query {
-                        query_parameter_name,
-                        parameter_type,
-                    } => Some((query_parameter_name.as_str(), parameter_type)),
-                    MethodParameter::Path { .. } => None,
-                    MethodParameter::Header { .. } => None,
-                    MethodParameter::JsonObjectBodyField { .. } => None,
-                    MethodParameter::UnstructuredBinaryBody => None,
-                })
-                .collect::<Vec<_>>()
+        .into_iter()
+        .flat_map(|params| {
+            params.iter().filter_map(|p| {
+                if let MethodParameter::Query {
+                    query_parameter_name,
+                    parameter_type,
+                } = p
+                {
+                    Some((query_parameter_name.as_str(), parameter_type))
+                } else {
+                    None
+                }
+            })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 fn get_header_variable_and_types(
     method_params: Option<&Vec<MethodParameter>>,
 ) -> Vec<(&str, &QueryOrHeaderType)> {
     method_params
-        .map(|params| {
-            params
-                .iter()
-                .filter_map(|p| match p {
-                    MethodParameter::Header {
-                        header_name,
-                        parameter_type,
-                    } => Some((header_name.as_str(), parameter_type)),
-                    MethodParameter::Path { .. } => None,
-                    MethodParameter::Query { .. } => None,
-                    MethodParameter::JsonObjectBodyField { .. } => None,
-                    MethodParameter::UnstructuredBinaryBody => None,
-                })
-                .collect::<Vec<_>>()
+        .into_iter()
+        .flat_map(|params| {
+            params.iter().filter_map(|p| {
+                if let MethodParameter::Header {
+                    header_name,
+                    parameter_type,
+                } = p
+                {
+                    Some((header_name.as_str(), parameter_type))
+                } else {
+                    None
+                }
+            })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 fn get_full_path_and_variables<'a>(
@@ -255,7 +253,7 @@ fn get_full_path_and_variables<'a>(
                         .map(|e| e.name.as_str())
                         .expect("Path segment must have parameter name");
 
-                    path_segment_string.push(name.to_string());
+                    path_segment_string.push(format!("{{{}}}", name));
                     path_params_and_types.push((name, *param_type));
                 }
             }
@@ -265,30 +263,22 @@ fn get_full_path_and_variables<'a>(
     (path_segment_string.join("/"), path_params_and_types)
 }
 
-async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
+fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     route: &T,
     paths: &mut BTreeMap<String, openapiv3::PathItem>,
 ) -> Result<(), String> {
-    let agent_method = route.associated_agent_method();
     let method_params = match route.binding() {
-        RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
-            Some(&call_agent_behaviour.method_parameters)
-        }
-        RichRouteBehaviour::CorsPreflight(_) => None,
-        RichRouteBehaviour::WebhookCallback(_) => None,
-        RichRouteBehaviour::OpenApiSpec(_) => None,
-        RichRouteBehaviour::OidcCallback(_) => None,
+        RichRouteBehaviour::CallAgent(behaviour) => Some(&behaviour.method_parameters),
+        _ => None,
     };
 
     let (path_str, path_params_raw) =
-        get_full_path_and_variables(agent_method, route.path(), method_params);
+        get_full_path_and_variables(route.associated_agent_method(), route.path(), method_params);
 
     let path_item = paths.entry(path_str).or_default();
-
     let mut operation = openapiv3::Operation::default();
 
     let query_params_raw = get_query_variable_and_types(method_params);
-
     let header_params_raw = get_header_variable_and_types(method_params);
 
     add_parameters(
@@ -403,11 +393,13 @@ fn create_path_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::Pa
 }
 
 fn create_query_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::Parameter {
+    let required = !schema.schema_data.nullable;
+
     openapiv3::Parameter::Query {
         parameter_data: openapiv3::ParameterData {
             name: name.to_string(),
             description: Some(format!("Query parameter: {name}")),
-            required: true,
+            required,
             deprecated: None,
             explode: Some(false),
             format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
@@ -424,11 +416,13 @@ fn create_query_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::P
 }
 
 fn create_header_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::Parameter {
+    let required = !schema.schema_data.nullable;
+
     openapiv3::Parameter::Header {
         parameter_data: openapiv3::ParameterData {
             name: name.to_string(),
             description: Some(format!("Header parameter: {name}")),
-            required: true,
+            required,
             deprecated: None,
             explode: Some(false),
             format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
@@ -510,8 +504,7 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openap
 }
 
 fn add_responses<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
-    let (response_schema, headers, explicit_status) =
-        determine_response_schema_content_type_headers(route);
+    let (response_schema, headers, explicit_status) = determine_response_type(route);
 
     let mut response = openapiv3::Response {
         description: "Response".to_string(),
@@ -592,7 +585,7 @@ enum DeterminedResponseBodySchema {
     NoBody,
 }
 
-fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
+fn determine_response_type<T: HttpApiRoute + ?Sized>(
     route: &T,
 ) -> (
     DeterminedResponseBodySchema,
@@ -638,8 +631,9 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
             }
         }
 
-        RichRouteBehaviour::CorsPreflight(_) => {
+        RichRouteBehaviour::CorsPreflight(cors_preflight_behaviour) => {
             let mut headers = IndexMap::new();
+
             let string_schema = openapiv3::Schema {
                 schema_data: Default::default(),
                 schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
@@ -657,15 +651,52 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
                 "Access-Control-Allow-Origin".to_string(),
                 string_schema.clone(),
             );
+
             headers.insert(
                 "Access-Control-Allow-Headers".to_string(),
                 string_schema.clone(),
             );
 
+            // Access-Control-Allow-Methods (REQUIRED)
+            let allowed_methods_enum: Vec<Option<String>> = cors_preflight_behaviour
+                .allowed_methods
+                .iter()
+                .map(|m| {
+                    Some(match m {
+                        HttpMethod::Get(_) => "GET".to_string(),
+                        HttpMethod::Head(_) => "HEAD".to_string(),
+                        HttpMethod::Post(_) => "POST".to_string(),
+                        HttpMethod::Put(_) => "PUT".to_string(),
+                        HttpMethod::Delete(_) => "DELETE".to_string(),
+                        HttpMethod::Connect(_) => "CONNECT".to_string(),
+                        HttpMethod::Options(_) => "OPTIONS".to_string(),
+                        HttpMethod::Trace(_) => "TRACE".to_string(),
+                        HttpMethod::Patch(_) => "PATCH".to_string(),
+                        HttpMethod::Custom(custom) => custom.value.to_uppercase(),
+                    })
+                })
+                .collect();
+
+            headers.insert(
+                "Access-Control-Allow-Methods".to_string(),
+                openapiv3::Schema {
+                    schema_data: Default::default(),
+                    schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
+                        openapiv3::StringType {
+                            format: openapiv3::VariantOrUnknownOrEmpty::Empty,
+                            pattern: None,
+                            enumeration: allowed_methods_enum,
+                            min_length: None,
+                            max_length: None,
+                        },
+                    )),
+                },
+            );
+
             (
                 DeterminedResponseBodySchema::NoBody,
                 Some(headers),
-                Some(200),
+                Some(204),
             )
         }
 
@@ -944,12 +975,13 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
                             openapiv3::StringType {
                                 format: openapiv3::VariantOrUnknownOrEmpty::Empty,
                                 pattern: None,
-                                enumeration: vec![],
+                                enumeration: vec![Some(case_name.clone())],
                                 min_length: None,
                                 max_length: None,
                             },
                         )),
                     };
+
                     one_of.push(openapiv3::ReferenceOr::Item(schema));
                 }
             }
@@ -1003,7 +1035,7 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
                     openapiv3::ObjectType {
                         properties: ok_properties,
                         required: ok_required,
-                        additional_properties: None,
+                        additional_properties: Some(openapiv3::AdditionalProperties::Any(false)),
                         min_properties: None,
                         max_properties: None,
                     },
@@ -1022,7 +1054,7 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
                     openapiv3::ObjectType {
                         properties: err_properties,
                         required: err_required,
-                        additional_properties: None,
+                        additional_properties: Some(openapiv3::AdditionalProperties::Any(false)),
                         min_properties: None,
                         max_properties: None,
                     },
@@ -1084,6 +1116,20 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
                 },
             )),
         },
-        AnalysedType::Handle(_) => unimplemented!(),
+        AnalysedType::Handle(_) => openapiv3::Schema {
+            schema_data: openapiv3::SchemaData {
+                description: Some("Opaque handle identifier".to_string()),
+                ..Default::default()
+            },
+            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
+                openapiv3::StringType {
+                    format: openapiv3::VariantOrUnknownOrEmpty::Empty,
+                    pattern: None,
+                    enumeration: vec![],
+                    min_length: None,
+                    max_length: None,
+                },
+            )),
+        },
     }
 }

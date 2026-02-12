@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::custom_api::RichCompiledRoute;
-use crate::custom_api::openapi::{HttpApiDefinitionOpenApiSpec, RichCompiledRouteWithAgentType};
+use crate::custom_api::openapi::{HttpApiOpenApiSpec, RichCompiledRouteWithAgentType};
 use golem_common::base_model::agent::AgentType;
 
 pub struct OpenApiHandler;
@@ -30,7 +30,7 @@ impl OpenApiHandler {
             })
             .collect();
 
-        let spec = HttpApiDefinitionOpenApiSpec::from_routes(&routes).await?;
+        let spec = HttpApiOpenApiSpec::from_routes(&routes)?;
 
         serde_yaml::to_string(&spec.0).map_err(|e| e.to_string())
     }
