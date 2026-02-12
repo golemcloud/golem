@@ -555,6 +555,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let client = self
             .deps
@@ -568,6 +569,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Automatic,
                     target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await?;
@@ -578,6 +580,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let client = self
             .deps
@@ -591,6 +594,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Manual,
                     target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await?;

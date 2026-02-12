@@ -502,6 +502,7 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         update_mode: AgentUpdateMode,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
@@ -509,7 +510,7 @@ impl AppCommandHandler {
         let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
-            .update_workers_by_components(&components, update_mode, await_update)
+            .update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
@@ -1576,7 +1577,7 @@ impl AppCommandHandler {
         if let Some(update_mode) = &post_deploy_args.update_agents {
             self.ctx
                 .component_handler()
-                .update_workers_by_components(&components, *update_mode, true)
+                .update_workers_by_components(&components, *update_mode, true, false)
                 .await
                 .map(|()| PostDeploySummary::AgentUpdateOk)
                 .map_err(PostDeployError::AgentUpdateError)

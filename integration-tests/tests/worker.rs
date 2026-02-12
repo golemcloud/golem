@@ -803,7 +803,7 @@ async fn auto_update_on_idle(
         updated_component.revision
     );
 
-    user.auto_update_worker(&worker_id, updated_component.revision)
+    user.auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = user
@@ -1464,7 +1464,7 @@ async fn worker_initial_files_after_automatic_worker_update(
         )
         .await?;
 
-    user.auto_update_worker(&worker_id, updated_component.revision)
+    user.auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result1 = user.get_file_contents(&worker_id, "/foo.txt").await?;

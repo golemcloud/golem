@@ -760,7 +760,13 @@ impl WorkerApi {
         auth: AuthCtx,
     ) -> Result<Json<UpdateWorkerResponse>> {
         self.worker_service
-            .update(&worker_id, params.mode, params.target_revision, auth)
+            .update(
+                &worker_id,
+                params.mode,
+                params.target_revision,
+                params.disable_wakeup,
+                auth,
+            )
             .await?;
 
         Ok(Json(UpdateWorkerResponse {}))

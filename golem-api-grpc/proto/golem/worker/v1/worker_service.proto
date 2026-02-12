@@ -133,6 +133,7 @@ message UpdateWorkerRequest {
   uint64 target_revision = 2;
   golem.worker.UpdateMode mode = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  bool disable_wakeup = 5;
 }
 
 message UpdateWorkerResponse {
