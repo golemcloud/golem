@@ -19,16 +19,16 @@ use golem_common::base_model::agent::AgentType;
 pub struct OpenApiHandler;
 
 impl OpenApiHandler {
-    pub async fn generate_spec(
-        spec_details: Vec<(AgentType, RichCompiledRoute)>,
+    pub async fn generate_spec<'a>(
+        spec_details: &[(&'a AgentType, &'a RichCompiledRoute)],
     ) -> Result<String, String> {
-        let routes = spec_details
+        let routes: Vec<_> = spec_details
             .iter()
             .map(|(agent_type, rich_route)| RichCompiledRouteWithAgentType {
-                agent_type: agent_type.clone(),
-                details: rich_route.clone(),
+                agent_type,
+                details: rich_route,
             })
-            .collect::<Vec<_>>();
+            .collect();
 
         let spec = HttpApiDefinitionOpenApiSpec::from_routes(&routes).await?;
 

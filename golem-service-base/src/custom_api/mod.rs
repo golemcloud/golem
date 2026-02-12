@@ -239,7 +239,7 @@ pub struct CompiledRoute {
     pub cors: CorsOptions,
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RouteBehaviour {
     CallAgent(CallAgentBehaviour),
@@ -248,22 +248,19 @@ pub enum RouteBehaviour {
     OpenApiSpec(OpenApiSpecBehaviour),
 }
 
-// OpenAPI spec behaviour is more per component for now
-// `open_api_spec` can also represent agent types across the deployment.
-// However, it should still be keyed by agent-type since it decides the mount path
-// and the structure enables us to have more fine-grained versions of open api spec.
-#[derive(Debug, Clone, BinaryCodec)]
+
+#[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct OpenApiSpecBehaviour {
     pub open_api_spec: Vec<RoutesWithAgentType>,
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, BinaryCodec)]
 pub struct RoutesWithAgentType {
     pub routes: Vec<(AgentType, RouteId)>,
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct CallAgentBehaviour {
     pub component_id: ComponentId,
@@ -276,20 +273,20 @@ pub struct CallAgentBehaviour {
     pub expected_agent_response: DataSchema,
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct CorsPreflightBehaviour {
     pub allowed_origins: BTreeSet<OriginPattern>,
     pub allowed_methods: BTreeSet<HttpMethod>,
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct WebhookCallbackBehaviour {
     pub component_id: ComponentId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SecuritySchemeDetails {
     pub id: SecuritySchemeId,
     pub name: SecuritySchemeName,

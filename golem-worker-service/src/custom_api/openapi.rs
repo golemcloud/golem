@@ -35,12 +35,12 @@ pub trait HttpApiRoute {
     fn associated_agent_method(&self) -> Option<&AgentMethod>;
 }
 
-pub struct RichCompiledRouteWithAgentType {
-    pub agent_type: AgentType,
-    pub details: RichCompiledRoute,
+pub struct RichCompiledRouteWithAgentType<'a> {
+    pub agent_type: &'a AgentType,
+    pub details: &'a RichCompiledRoute,
 }
 
-impl HttpApiRoute for RichCompiledRouteWithAgentType {
+impl<'a> HttpApiRoute for RichCompiledRouteWithAgentType<'a> {
     fn security_scheme_missing(&self) -> bool {
         false
     }
