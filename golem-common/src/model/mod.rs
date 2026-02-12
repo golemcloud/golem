@@ -967,16 +967,3 @@ impl Display for RdbmsPoolKey {
         write!(f, "{}", self.masked_address())
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
-#[serde(tag = "op")]
-#[oai(discriminator_name = "op")]
-pub enum FieldUpdate<
-    T: poem_openapi::types::Type
-        + poem_openapi::types::ParseFromJSON
-        + poem_openapi::types::ToJSON
-        + poem_openapi::types::IsObjectType,
-> {
-    Set(T),
-    Unset(Empty),
-}

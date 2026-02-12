@@ -1735,7 +1735,7 @@ mod app_builder {
         ComponentPresetName, ComponentPresetSelector, ComponentProperties, DependencyType,
         PartitionedComponentPresets, TemplateName, WithSource, DEFAULT_TEMP_DIR,
     };
-    use crate::model::app_raw::{self, HttpApiDeploymentAgentOptions};
+    use crate::model::app_raw;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -1746,8 +1746,8 @@ mod app_builder {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
-        HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation, SecuritySchemeAgentSecurity,
-        TestSessionHeaderAgentSecurity,
+        HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
+        SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
     use indexmap::IndexMap;
     use itertools::Itertools;
@@ -2071,7 +2071,7 @@ mod app_builder {
                                     .map(|(k, v)|
                                         (
                                             k,
-                                            golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions {
+                                            HttpApiDeploymentAgentOptions {
                                                 security: resolve_agent_security(validation, &v)
                                             }
                                         )
@@ -2622,7 +2622,7 @@ mod app_builder {
 
     fn resolve_agent_security(
         validation: &mut ValidationBuilder,
-        agent_options: &HttpApiDeploymentAgentOptions,
+        agent_options: &app_raw::HttpApiDeploymentAgentOptions,
     ) -> Option<HttpApiDeploymentAgentSecurity> {
         match (
             &agent_options.security_scheme,
