@@ -28,8 +28,8 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema,
-    RouteBehaviour, RoutesWithAgentType, WebhookCallbackBehaviour,
+    OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
+    RoutesWithAgentType, WebhookCallbackBehaviour,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -294,10 +294,10 @@ fn build_openapi_spec_for_component(
         for route in compiled_routes.values() {
             if let RouteBehaviour::CallAgent(call) = &route.behaviour
                 && call.component_id == *component_id
-                    && call.agent_type == agent.agent_type.type_name
-                {
-                    routes.push((agent.agent_type.clone(), route.route_id));
-                }
+                && call.agent_type == agent.agent_type.type_name
+            {
+                routes.push((agent.agent_type.clone(), route.route_id));
+            }
         }
 
         if !routes.is_empty() {

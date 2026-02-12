@@ -90,7 +90,7 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OidcCallbackBehaviour {
     pub security_scheme: Arc<SecuritySchemeDetails>,
 }

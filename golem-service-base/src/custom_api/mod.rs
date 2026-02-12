@@ -248,7 +248,6 @@ pub enum RouteBehaviour {
     OpenApiSpec(OpenApiSpecBehaviour),
 }
 
-
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct OpenApiSpecBehaviour {

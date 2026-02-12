@@ -20,13 +20,13 @@ use crate::custom_api::{
     OriginPattern, QueryOrHeaderType, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
+use golem_common::base_model::agent::AgentType;
 use golem_common::model::agent::{AgentTypeName, HttpMethod};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_wasm::analysis::TypeEnum;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
-use golem_common::base_model::agent::AgentType;
 
 impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeDetails {
     type Error = String;
@@ -155,7 +155,6 @@ impl From<CompiledRoute> for proto::golem::customapi::CompiledRoute {
     }
 }
 
-
 impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
     type Error = String;
 
@@ -211,16 +210,19 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
             }
             Kind::OpenApiSpec(openapi_spec) => {
                 Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                    open_api_spec: openapi_spec.routes_with_agent_type.into_iter().map(|x| {
-                        x.try_into()
-                            .map_err(|e| format!("Failed parsing RoutesWithAgentType: {e}"))
-                    }).collect::<Result<_, _>>()?,
+                    open_api_spec: openapi_spec
+                        .routes_with_agent_type
+                        .into_iter()
+                        .map(|x| {
+                            x.try_into()
+                                .map_err(|e| format!("Failed parsing RoutesWithAgentType: {e}"))
+                        })
+                        .collect::<Result<_, _>>()?,
                 }))
             }
         }
     }
 }
-
 
 impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
     fn from(value: RouteBehaviour) -> Self {
@@ -274,12 +276,17 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
-            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {open_api_spec}) => Self {
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }) => Self {
                 kind: Some(Kind::OpenApiSpec(
                     proto::golem::customapi::route_behaviour::OpenApiSpec {
-                        routes_with_agent_type: open_api_spec.into_iter().map(|x| {
-                            proto::golem::customapi::route_behaviour::RoutesWithAgentType::from(x)
-                        }).collect(),
+                        routes_with_agent_type: open_api_spec
+                            .into_iter()
+                            .map(|x| {
+                                proto::golem::customapi::route_behaviour::RoutesWithAgentType::from(
+                                    x,
+                                )
+                            })
+                            .collect(),
                     },
                 )),
             },
@@ -293,20 +300,25 @@ impl From<RoutesWithAgentType> for proto::golem::customapi::route_behaviour::Rou
             route_with_agent_type: value
                 .routes
                 .into_iter()
-                .map(|(agent_type, route_id)| proto::golem::customapi::route_behaviour::AgentTypeWithRouteId {
-                    agent_type: Some(agent_type.into()),
-                    route_id,
+                .map(|(agent_type, route_id)| {
+                    proto::golem::customapi::route_behaviour::AgentTypeWithRouteId {
+                        agent_type: Some(agent_type.into()),
+                        route_id,
+                    }
                 })
                 .collect(),
         }
-
     }
 }
 
-impl TryFrom<proto::golem::customapi::route_behaviour::RoutesWithAgentType> for RoutesWithAgentType {
+impl TryFrom<proto::golem::customapi::route_behaviour::RoutesWithAgentType>
+    for RoutesWithAgentType
+{
     type Error = String;
 
-    fn try_from(value: proto::golem::customapi::route_behaviour::RoutesWithAgentType) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::RoutesWithAgentType,
+    ) -> Result<Self, Self::Error> {
         Ok(Self {
             routes: value
                 .route_with_agent_type
