@@ -405,9 +405,13 @@ impl From<PublicUpdateDescription> for oplog::UpdateDescription {
     fn from(value: PublicUpdateDescription) -> Self {
         match value {
             PublicUpdateDescription::Automatic(_) => Self::AutoUpdate,
-            PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters { payload }) => {
-                Self::SnapshotBased(payload)
-            }
+            PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
+                payload,
+                mime_type,
+            }) => Self::SnapshotBased(crate::preview2::golem_api_1_x::host::Snapshot {
+                data: payload,
+                mime_type,
+            }),
         }
     }
 }

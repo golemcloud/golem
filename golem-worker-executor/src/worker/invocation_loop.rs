@@ -857,13 +857,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
                 match result {
                     Ok(InvokeResult::Succeeded { output, .. }) => {
-                        if let Some(bytes) = Self::decode_snapshot_result(output) {
+                        if let Some((bytes, mime_type)) = Self::decode_snapshot_result(output) {
                             match self
                                 .store
                                 .data()
                                 .get_public_state()
                                 .oplog()
-                                .create_snapshot_based_update_description(target_revision, bytes)
+                                .create_snapshot_based_update_description(target_revision, bytes, mime_type)
                                 .await
                             {
                                 Ok(update_description) => {
@@ -1006,18 +1006,26 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         CommandOutcome::Continue
     }
 
-    /// Attempts to interpret the save snapshot result as a byte vector
-    fn decode_snapshot_result(value: Option<Value>) -> Option<Vec<u8>> {
-        if let Some(Value::List(bytes)) = value {
-            let mut result = Vec::new();
-            for value in bytes {
-                if let Value::U8(byte) = value {
-                    result.push(byte);
+    /// Attempts to interpret the save snapshot result as a byte vector and mime type
+    fn decode_snapshot_result(value: Option<Value>) -> Option<(Vec<u8>, String)> {
+        if let Some(Value::Record(fields)) = value {
+            if fields.len() == 2 {
+                if let (Value::List(bytes), Value::String(mime_type)) = (&fields[0], &fields[1]) {
+                    let mut result = Vec::new();
+                    for value in bytes {
+                        if let Value::U8(byte) = value {
+                            result.push(*byte);
+                        } else {
+                            return None;
+                        }
+                    }
+                    Some((result, mime_type.clone()))
                 } else {
-                    return None;
+                    None
                 }
+            } else {
+                None
             }
-            Some(result)
         } else {
             None
         }
@@ -1081,8 +1089,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
                 match result {
                     Ok(InvokeResult::Succeeded { output, .. }) => {
-                        if let Some(bytes) = Self::decode_snapshot_result(output) {
-                            let mime_type = "application/octet-stream".to_string();
+                        if let Some((bytes, mime_type)) = Self::decode_snapshot_result(output) {
                             let oplog = self.store.data().get_public_state().oplog();
                             let serialized = golem_common::serialization::serialize(&bytes);
                             match serialized {

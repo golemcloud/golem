@@ -986,7 +986,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     .get_upload_description_payload(description)
                     .await
                 {
-                    Ok(Some(data)) => {
+                    Ok(Some((data, mime_type))) => {
                         let component_metadata = store
                             .as_context()
                             .data()
@@ -1011,7 +1011,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
                                 let load_result = invoke_observed_and_traced(
                                     load_snapshot.name.to_string(),
-                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
+                                    vec![Value::Record(vec![
+                                        Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
+                                        Value::String(mime_type),
+                                    ])],
                                     store,
                                     instance,
                                     &component_metadata,

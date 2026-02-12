@@ -275,6 +275,11 @@ declare module 'golem:api/oplog@1.3.0' {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
+  export type SnapshotParameters = {
+    timestamp: Datetime;
+    data: Uint8Array;
+    mimeType: string;
+  };
   export type Timestamp = {
     timestamp: Datetime;
   };
@@ -485,5 +490,10 @@ declare module 'golem:api/oplog@1.3.0' {
   {
     tag: 'rolled-back-remote-transaction'
     val: RemoteTransactionParameters
+  } |
+  /** A snapshot of the worker's state */
+  {
+    tag: 'snapshot'
+    val: SnapshotParameters
   };
 }

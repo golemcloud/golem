@@ -488,12 +488,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     UpdateDescription::Automatic { .. } => {
                         PublicUpdateDescription::Automatic(Empty {})
                     }
-                    UpdateDescription::SnapshotBased { payload, .. } => {
+                    UpdateDescription::SnapshotBased {
+                        payload, mime_type, ..
+                    } => {
                         let bytes = oplog_service
                             .download_payload(owned_worker_id, payload)
                             .await?;
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                             payload: bytes,
+                            mime_type,
                         })
                     }
                 };

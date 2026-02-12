@@ -938,6 +938,7 @@ mod test {
         let update1 = UpdateDescription::SnapshotBased {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
         };
 
         let test_case = TestCase::builder(1)
@@ -975,6 +976,7 @@ mod test {
         let update1 = UpdateDescription::SnapshotBased {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
         };
 
         let test_case = TestCase::builder(1)
@@ -1012,6 +1014,7 @@ mod test {
         let update2 = UpdateDescription::SnapshotBased {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
         };
 
         let test_case = TestCase::builder(1)
@@ -1078,6 +1081,7 @@ mod test {
         let update1 = UpdateDescription::SnapshotBased {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
         };
 
         let test_case = TestCase::builder(1)
@@ -1116,10 +1120,12 @@ mod test {
         let update1 = UpdateDescription::SnapshotBased {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
         };
         let update2 = UpdateDescription::SnapshotBased {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
         };
 
         let test_case = TestCase::builder(1)

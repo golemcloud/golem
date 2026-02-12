@@ -117,7 +117,7 @@ async function getDefinition(): Promise<AgentType> {
   return resolvedAgent.getAgentType();
 }
 
-async function save(): Promise<Uint8Array> {
+async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
   if (!resolvedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
@@ -130,10 +130,12 @@ async function save(): Promise<Uint8Array> {
   view.setUint8(0, 1); // version
   fullSnapshot.set(agentSnapshot, 1);
 
-  return fullSnapshot;
+  return { data: fullSnapshot, mimeType: "application/octet-stream" };
 }
 
-async function load(bytes: Uint8Array): Promise<void> {
+async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
+  const bytes = snapshot.data;
+
   if (resolvedAgent) {
     throw `Agent is already initialized in this container`;
   }

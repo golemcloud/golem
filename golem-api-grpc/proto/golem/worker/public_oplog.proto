@@ -186,6 +186,7 @@ message PendingWorkerInvocationParameters {
 
 message SnapshotBasedUpdateParameters {
   bytes payload = 1;
+  string mime_type = 2;
 }
 
 message UpdateDescription {

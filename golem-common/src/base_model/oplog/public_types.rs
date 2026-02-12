@@ -251,6 +251,7 @@ pub enum PublicWorkerInvocation {
 #[wit_transparent]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
+    pub mime_type: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]

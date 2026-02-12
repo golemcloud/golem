@@ -1308,6 +1308,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
                 snapshot_based,
             ) => Ok(PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: snapshot_based.payload,
+                mime_type: snapshot_based.mime_type,
             })),
         }
     }
@@ -1328,7 +1329,8 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
                     description: Some(
                         golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
                             golem_api_grpc::proto::golem::worker::SnapshotBasedUpdateParameters {
-                                payload: snapshot_based.payload
+                                payload: snapshot_based.payload,
+                                mime_type: snapshot_based.mime_type,
                             }
                         ),
                     ),
