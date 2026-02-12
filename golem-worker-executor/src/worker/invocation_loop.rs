@@ -17,6 +17,7 @@ use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
+use crate::services::golem_config::SnapshotPolicy;
 use crate::worker::{
     interpret_function_result, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker,
     WorkerCommand,
@@ -29,7 +30,7 @@ use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::oplog::{OplogEntry, WorkerError};
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
     OplogIndex,
@@ -99,6 +100,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     interrupt_signal: self.interrupt_signal.clone(),
                     instance: &instance,
                     store: &store,
+                    invocations_since_snapshot: 0,
                 };
 
                 final_decision = inner_loop.run().await;
@@ -241,6 +243,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
+    invocations_since_snapshot: u64,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -363,12 +366,28 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     .external_invocation(timestamped_invocation.clone(), &invocation_span)
                     .await
                 {
-                    CommandOutcome::Continue => continue,
+                    CommandOutcome::Continue => {
+                        self.on_external_invocation_completed().await;
+                        continue;
+                    }
                     other => break other,
                 }
             }
 
             break CommandOutcome::Continue;
+        }
+    }
+
+    async fn on_external_invocation_completed(&mut self) {
+        self.invocations_since_snapshot += 1;
+        if let SnapshotPolicy::EveryNInvocation { count } = self.parent.snapshot_policy() {
+            if self.invocations_since_snapshot >= *count as u64 {
+                self.invocations_since_snapshot = 0;
+                self.active
+                    .write()
+                    .await
+                    .push_back(QueuedWorkerInvocation::SaveSnapshot);
+            }
         }
     }
 
@@ -449,6 +468,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
                 let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
+            }
+            QueuedWorkerInvocation::SaveSnapshot => {
+                self.save_snapshot().await
             }
         }
     }
@@ -1037,6 +1059,89 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             )
         }
         invocation_context.push(invocation_span);
+    }
+
+    async fn save_snapshot(&mut self) -> CommandOutcome {
+        let component_metadata = self.store.data().component_metadata().metadata.clone();
+
+        match component_metadata.save_snapshot() {
+            Ok(Some(save_snapshot)) => {
+                self.store.data_mut().begin_call_snapshotting_function();
+
+                let result = invoke_observed_and_traced(
+                    save_snapshot.name.to_string(),
+                    vec![],
+                    self.store,
+                    self.instance,
+                    &component_metadata,
+                    true,
+                )
+                .await;
+                self.store.data_mut().end_call_snapshotting_function();
+
+                match result {
+                    Ok(InvokeResult::Succeeded { output, .. }) => {
+                        if let Some(bytes) = Self::decode_snapshot_result(output) {
+                            let mime_type = "application/octet-stream".to_string();
+                            let oplog = self.store.data().get_public_state().oplog();
+                            let serialized = golem_common::serialization::serialize(&bytes);
+                            match serialized {
+                                Ok(serialized_bytes) => {
+                                    match oplog
+                                        .upload_raw_payload(serialized_bytes)
+                                        .await
+                                    {
+                                        Ok(raw_payload) => {
+                                            match raw_payload.into_payload::<Vec<u8>>() {
+                                                Ok(payload) => {
+                                                    oplog
+                                                        .add_and_commit(OplogEntry::snapshot(payload, mime_type))
+                                                        .await;
+                                                    debug!("Periodic snapshot saved successfully");
+                                                }
+                                                Err(err) => {
+                                                    warn!("Failed to convert snapshot payload: {err}");
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            warn!("Failed to upload periodic snapshot payload: {err}");
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    warn!("Failed to serialize snapshot data: {err}");
+                                }
+                            }
+                        } else {
+                            warn!("Periodic snapshot returned unexpected result format");
+                        }
+                        CommandOutcome::Continue
+                    }
+                    Ok(InvokeResult::Failed { .. }) => {
+                        warn!("Periodic snapshot save function failed");
+                        CommandOutcome::Continue
+                    }
+                    Ok(InvokeResult::Exited { .. }) => {
+                        warn!("Worker exited during periodic snapshot save");
+                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                    }
+                    Ok(InvokeResult::Interrupted { .. }) => {
+                        warn!("Worker interrupted during periodic snapshot save");
+                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                    }
+                    Err(err) => {
+                        warn!("Periodic snapshot save invocation error: {err}");
+                        CommandOutcome::Continue
+                    }
+                }
+            }
+            Ok(None) => CommandOutcome::Continue,
+            Err(err) => {
+                warn!("Failed to find save-snapshot function: {err}");
+                CommandOutcome::Continue
+            }
+        }
     }
 }
 

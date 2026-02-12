@@ -497,7 +497,7 @@ pub struct OplogConfig {
     pub entry_count_limit: u64,
     #[serde(with = "humantime_serde")]
     pub archive_interval: Duration,
-    pub default_snapshotting: DefaultSnapshottingConfig,
+    pub default_snapshotting: SnapshotPolicy,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -995,57 +995,34 @@ impl SafeDisplay for AgentWebhooksServiceConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 #[derive(Default)]
-pub enum DefaultSnapshottingConfig {
+pub enum SnapshotPolicy {
     #[default]
     Disabled,
-    Periodic(DefaultSnapshottingPeriodicConfig),
-    EveryNInvocation(DefaultSnapshottingEveryNInvocationConfig),
+    Periodic {
+        #[serde(with = "humantime_serde")]
+        period: Duration,
+    },
+    EveryNInvocation {
+        count: u16,
+    },
 }
 
-
-impl SafeDisplay for DefaultSnapshottingConfig {
+impl SafeDisplay for SnapshotPolicy {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         match self {
-            DefaultSnapshottingConfig::Disabled => {
+            SnapshotPolicy::Disabled => {
                 let _ = writeln!(&mut result, "disabled");
             }
-            DefaultSnapshottingConfig::Periodic(config) => {
+            SnapshotPolicy::Periodic { period } => {
                 let _ = writeln!(&mut result, "periodic:");
-                let _ = writeln!(&mut result, "{}", config.to_safe_string_indented());
+                let _ = writeln!(&mut result, "  period: {period:?}");
             }
-            DefaultSnapshottingConfig::EveryNInvocation(config) => {
+            SnapshotPolicy::EveryNInvocation { count } => {
                 let _ = writeln!(&mut result, "every n invocation:");
-                let _ = writeln!(&mut result, "{}", config.to_safe_string_indented());
+                let _ = writeln!(&mut result, "  count: {count}");
             }
         }
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DefaultSnapshottingPeriodicConfig {
-    #[serde(with = "humantime_serde")]
-    pub period: Duration,
-}
-
-impl SafeDisplay for DefaultSnapshottingPeriodicConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "period: {:?}", self.period);
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DefaultSnapshottingEveryNInvocationConfig {
-    pub count: u16,
-}
-
-impl SafeDisplay for DefaultSnapshottingEveryNInvocationConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "count: {}", self.count);
         result
     }
 }
@@ -1129,7 +1106,7 @@ impl Default for OplogConfig {
             blob_storage_layers: 1,
             entry_count_limit: 1024,
             archive_interval: Duration::from_secs(60 * 60 * 24), // 24 hours
-            default_snapshotting: DefaultSnapshottingConfig::default(),
+            default_snapshotting: SnapshotPolicy::default(),
         }
     }
 }
