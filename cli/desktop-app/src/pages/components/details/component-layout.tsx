@@ -196,7 +196,7 @@ export const ComponentLayout = () => {
 
     // Run async operation without blocking using .then()
     API.appService
-      .deployAgents(appId, [currentComponent.componentName])
+      .deployAgents(appId)
       .then(result => {
         if (result.success) {
           toast({
@@ -271,7 +271,7 @@ export const ComponentLayout = () => {
 
     // Run async operation without blocking using .then()
     API.appService
-      .deployAgents(appId, [currentComponent.componentName])
+      .deployAgents(appId)
       .then(result => {
         if (result.success) {
           toast({
