@@ -233,8 +233,27 @@ export class AgentService {
     // Extract agent type from function name (e.g. "pack:ts/human-agent.{fn}" -> "human-agent")
     const interfacePart = functionName.split(".{")[0] || "";
     const agentType = interfacePart.split("/").pop() || "";
-    const ephemeralId = `desktop-app-${crypto.randomUUID()}`;
-    const ephemeralAgentName = `${component?.componentName}/${agentType}("${ephemeralId}")`;
+
+    // Look up the constructor signature to determine if it accepts parameters
+    const agentTypes = await this.getAgentTypesForComponent(appId, componentId);
+
+    // Constructor names from CLI are PascalCase (e.g. "HumanAgent") while
+    // function names use kebab-case (e.g. "human-agent"), so normalize both
+    const normalize = (s: string) => s.toLowerCase().replace(/-/g, "");
+    const matchingType = agentTypes.find(
+      t => normalize(t.agentType.constructor.name) === normalize(agentType),
+    );
+
+    const constructorParamCount =
+      matchingType?.agentType.constructor.inputSchema.elements.length ?? 0;
+
+    let ephemeralAgentName: string;
+    if (constructorParamCount > 0) {
+      const ephemeralId = `desktop-app-${crypto.randomUUID()}`;
+      ephemeralAgentName = `${component?.componentName}/${agentType}("${ephemeralId}")`;
+    } else {
+      ephemeralAgentName = `${component?.componentName}/${agentType}()`;
+    }
 
     // Convert payload to individual WAVE-formatted arguments using enhanced converter
     let waveArgs: string[];
@@ -296,6 +315,7 @@ export class AgentService {
       "list-agent-types",
       [],
     )) as AgentTypeSchema[];
+
     return result.filter(spec => spec.implementedBy.componentId == componentId);
   }
 }

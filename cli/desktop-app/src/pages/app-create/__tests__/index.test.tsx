@@ -359,8 +359,8 @@ describe("CreateApplication", () => {
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith("call_golem_command", {
-          command: "root",
-          subcommands: ["new", "test-app", "ts"],
+          command: "new",
+          subcommands: ["test-app", "ts"],
           folderPath: "/path/to/folder",
         });
         expect(toast).toHaveBeenCalledWith({

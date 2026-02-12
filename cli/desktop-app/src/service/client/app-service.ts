@@ -34,17 +34,10 @@ export class AppService {
     );
   };
 
-  public deployAgents = async (
-    appId: string,
-    componentNames?: string[],
-    updateAgents?: boolean,
-  ) => {
+  public deployAgents = async (appId: string, updateAgents?: boolean) => {
     const subcommands: string[] = [];
     if (updateAgents) {
       subcommands.push("--update-agents");
-    }
-    if (componentNames && componentNames.length > 0) {
-      subcommands.push(...componentNames);
     }
     return await this.cliService.callCLIWithLogs(appId, "deploy", subcommands);
   };

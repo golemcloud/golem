@@ -39,7 +39,7 @@ export const UnbuiltComponentCard = ({
   const handleDeploy = async () => {
     setIsDeployingState(true);
     try {
-      await API.cliService.callCLI(appId, "deploy", [name]);
+      await API.cliService.callCLI(appId, "deploy", []);
       toast({
         title: "Deploy Successful",
         description: `Component ${name} has been deployed successfully.`,
