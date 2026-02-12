@@ -260,7 +260,7 @@ fn get_full_path_and_variables(
 
                     path_segment_string.push(name.clone());
 
-                    path_params_and_types.push((name.clone(), param_type.clone().clone()));
+                    path_params_and_types.push((name.clone(), (*param_type).clone()));
                 }
             }
 
@@ -274,7 +274,7 @@ fn get_full_path_and_variables(
 
                     path_segment_string.push(name.clone());
 
-                    path_params_and_types.push((name.clone(), param_type.clone().clone()));
+                    path_params_and_types.push((name.clone(), (*param_type).clone()));
                 }
             }
         }
