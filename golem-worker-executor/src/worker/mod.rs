@@ -113,6 +113,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     snapshot_policy: SnapshotPolicy,
 
     last_resume_request: Mutex<Timestamp>,
+    pub(crate) snapshot_recovery_disabled: AtomicBool,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -294,6 +295,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             update_state_lock: Mutex::new(()),
             last_known_status_detached: AtomicBool::new(false),
             last_resume_request: Mutex::new(Timestamp::now_utc()),
+            snapshot_recovery_disabled: AtomicBool::new(false),
         };
 
         // just some sanity checking
@@ -2068,6 +2070,13 @@ impl RunningWorker {
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.wasi_config_vars,
+                if pending_update.is_none()
+                    && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
+                {
+                    worker_metadata.last_known_status.last_snapshot_index
+                } else {
+                    None
+                },
             ),
             parent.execution_status.clone(),
             parent.file_loader(),

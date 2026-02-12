@@ -605,6 +605,7 @@ pub struct WorkerStatusRecord {
     /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
     /// the last invocation boundary.
     pub current_retry_count: HashMap<OplogIndex, u32>,
+    pub last_snapshot_index: Option<OplogIndex>,
 }
 
 impl Default for WorkerStatusRecord {
@@ -628,6 +629,7 @@ impl Default for WorkerStatusRecord {
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_count: HashMap::new(),
+            last_snapshot_index: None,
         }
     }
 }
