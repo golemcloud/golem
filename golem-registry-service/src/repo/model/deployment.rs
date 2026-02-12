@@ -278,10 +278,7 @@ impl DeploymentCompiledRouteRecord {
             deployment_revision_id: deployment_revision.into(),
             domain: compiled_route.domain.0.clone(),
             route_id: compiled_route.route_id,
-            security_scheme: compiled_route
-                .security_scheme
-                .as_ref()
-                .map(|scn| scn.0.clone()),
+            security_scheme: compiled_route.security_scheme().map(|sn| sn.0),
             compiled_route: Blob::new(compiled_route),
         }
     }

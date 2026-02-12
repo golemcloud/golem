@@ -21,8 +21,8 @@ use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_f
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
-use golem_worker_service::custom_api::security::session_store::SessionStore;
-use golem_worker_service::custom_api::security::session_store::{
+use golem_worker_service::custom_api::oidc::session_store::SessionStore;
+use golem_worker_service::custom_api::oidc::session_store::{
     RedisSessionStore, SqliteSessionStore,
 };
 use std::sync::Arc;

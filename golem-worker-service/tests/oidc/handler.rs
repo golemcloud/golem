@@ -21,12 +21,15 @@ use golem_service_base::custom_api::{
     WebhookCallbackBehaviour,
 };
 use golem_worker_service::custom_api::error::RequestHandlerError;
+use golem_worker_service::custom_api::oidc::handler::OidcHandler;
+use golem_worker_service::custom_api::oidc::model::{AuthorizationUrl, PendingOidcLogin};
+use golem_worker_service::custom_api::oidc::session_store::SessionStore;
+use golem_worker_service::custom_api::oidc::{IdentityProvider, IdentityProviderError};
 use golem_worker_service::custom_api::route_resolver::ResolvedRouteEntry;
-use golem_worker_service::custom_api::security::handler::OidcHandler;
-use golem_worker_service::custom_api::security::model::{AuthorizationUrl, PendingOidcLogin};
-use golem_worker_service::custom_api::security::session_store::SessionStore;
-use golem_worker_service::custom_api::security::{IdentityProvider, IdentityProviderError};
-use golem_worker_service::custom_api::{RichCompiledRoute, RichRequest, RichRouteBehaviour};
+use golem_worker_service::custom_api::{
+    RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
+    RichSecuritySchemeRouteSecurity,
+};
 use http::Method;
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
@@ -123,7 +126,9 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         behavior: RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
             component_id: ComponentId::new(),
         }),
-        security_scheme: Some(scheme.clone()),
+        security: RichRouteSecurity::SecurityScheme(RichSecuritySchemeRouteSecurity {
+            security_scheme: scheme,
+        }),
         cors: CorsOptions {
             allowed_patterns: vec![OriginPattern("*".to_string())],
         },

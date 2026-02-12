@@ -21,8 +21,23 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::{
     CorsOptions, PathSegment, RequestBodySchema, RouteBehaviour, RouteId, SecuritySchemeDetails,
+    SessionFromHeaderRouteSecurity,
 };
 use std::collections::HashMap;
+
+#[derive(BinaryCodec)]
+#[desert(evolution())]
+pub enum UnboundRouteSecurity {
+    None,
+    SessionFromHeader(SessionFromHeaderRouteSecurity),
+    SecurityScheme(UnboundSecuritySchemeRouteSecurity),
+}
+
+#[derive(BinaryCodec)]
+#[desert(evolution())]
+pub struct UnboundSecuritySchemeRouteSecurity {
+    pub security_scheme: SecuritySchemeName,
+}
 
 #[derive(BinaryCodec)]
 #[desert(evolution())]
@@ -34,8 +49,17 @@ pub struct UnboundCompiledRoute {
     pub path: Vec<PathSegment>,
     pub body: RequestBodySchema,
     pub behaviour: RouteBehaviour,
-    pub security_scheme: Option<SecuritySchemeName>,
+    pub security: UnboundRouteSecurity,
     pub cors: CorsOptions,
+}
+
+impl UnboundCompiledRoute {
+    pub fn security_scheme(&self) -> Option<SecuritySchemeName> {
+        match &self.security {
+            UnboundRouteSecurity::SecurityScheme(inner) => Some(inner.security_scheme.clone()),
+            UnboundRouteSecurity::None | UnboundRouteSecurity::SessionFromHeader(_) => None,
+        }
+    }
 }
 
 pub struct BoundCompiledRoute {

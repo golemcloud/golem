@@ -15,8 +15,8 @@
 use chrono::{TimeDelta, Utc};
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_worker_service::custom_api::model::OidcSession;
-use golem_worker_service::custom_api::security::model::{PendingOidcLogin, SessionId};
-use golem_worker_service::custom_api::security::session_store::SessionStore;
+use golem_worker_service::custom_api::oidc::model::{PendingOidcLogin, SessionId};
+use golem_worker_service::custom_api::oidc::session_store::SessionStore;
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
     Audience, EmptyAdditionalClaims, IssuerUrl, Nonce, Scope, StandardClaims, SubjectIdentifier,
@@ -108,7 +108,7 @@ async fn pending_login_expires(
         .store_pending_oidc_login("state_expired", login)
         .await?;
 
-    sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let fetched = store.take_pending_oidc_login("state_expired").await?;
 

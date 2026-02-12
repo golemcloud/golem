@@ -17,9 +17,12 @@ use super::session_store::SessionStore;
 use super::{IdentityProvider, OIDC_SESSION_EXPIRY};
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::model::OidcSession;
+use crate::custom_api::oidc::model::SessionId;
 use crate::custom_api::route_resolver::ResolvedRouteEntry;
-use crate::custom_api::security::model::SessionId;
-use crate::custom_api::{ResponseBody, RichRequest, RouteExecutionResult};
+use crate::custom_api::{
+    ResponseBody, RichRequest, RichRouteSecurity, RichSecuritySchemeRouteSecurity,
+    RouteExecutionResult,
+};
 use anyhow::anyhow;
 use chrono::Utc;
 use cookie::Cookie;
@@ -145,7 +148,9 @@ impl OidcHandler {
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
         debug!("Begin executing OidcSecurityMiddleware");
 
-        let Some(security_scheme) = resolved_route.route.security_scheme.as_ref() else {
+        let RichRouteSecurity::SecurityScheme(RichSecuritySchemeRouteSecurity { security_scheme }) =
+            &resolved_route.route.security
+        else {
             return Ok(None);
         };
 
