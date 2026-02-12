@@ -15,7 +15,8 @@ use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema};
 use golem_common::model::agent::DataSchema;
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::{
-    MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, SecuritySchemeDetails,
+    MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
+    SecuritySchemeDetails,
 };
 use golem_service_base::model::SafeIndex;
 use golem_wasm::analysis::AnalysedType;
@@ -85,9 +86,7 @@ impl HttpApiDefinitionOpenApiSpec {
         T: 'a + HttpApiRoute + ?Sized,
         I: IntoIterator<Item = &'a T>,
     {
-        let mut open_api = create_base_openapi(
-            security_schemes,
-        );
+        let mut open_api = create_base_openapi(security_schemes);
 
         let mut paths = BTreeMap::new();
         for route in routes {
@@ -199,7 +198,7 @@ fn get_full_path_and_variables(
         return (
             path_segments
                 .iter()
-                .map(|x| x.to_string())
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join("/"),
             Vec::new(),
@@ -260,7 +259,7 @@ fn get_full_path_and_variables(
 
                     path_segment_string.push(name.clone());
 
-                    path_params_and_types.push((name.clone(), (*param_type).clone()));
+                    path_params_and_types.push((name, (*param_type).clone()));
                 }
             }
 
@@ -274,20 +273,13 @@ fn get_full_path_and_variables(
 
                     path_segment_string.push(name.clone());
 
-                    path_params_and_types.push((name.clone(), (*param_type).clone()));
+                    path_params_and_types.push((name, (*param_type).clone()));
                 }
             }
         }
     }
 
-    (
-        path_segment_string
-            .iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<_>>()
-            .join("/"),
-        path_params_and_types,
-    )
+    (path_segment_string.join("/"), path_params_and_types)
 }
 
 async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
@@ -309,7 +301,7 @@ async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     let (path_str, path_params_raw) =
         get_full_path_and_variables(agent_method, route.path(), method_params);
 
-    let path_item = paths.entry(path_str.clone()).or_default();
+    let path_item = paths.entry(path_str).or_default();
 
     let mut operation = openapiv3::Operation::default();
 
@@ -391,19 +383,19 @@ fn get_parameters(
     let mut query_params = Vec::new();
     let mut header_params = Vec::new();
 
-    for (name, path_segment_type) in path_params_raw.iter() {
+    for (name, path_segment_type) in path_params_raw {
         let schema = create_schema_from_path_segment_type(path_segment_type.clone());
-        path_params.push((name.clone(), schema));
+        path_params.push((name, schema));
     }
 
-    for (name, query_or_header_type) in query_params_raw.iter() {
+    for (name, query_or_header_type) in query_params_raw {
         let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        query_params.push((name.clone(), schema));
+        query_params.push((name, schema));
     }
 
-    for (name, query_or_header_type) in header_params_raw.iter() {
+    for (name, query_or_header_type) in header_params_raw {
         let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        header_params.push((name.clone(), schema));
+        header_params.push((name, schema));
     }
 
     (path_params, query_params, header_params)
@@ -551,7 +543,7 @@ fn add_responses<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation,
         } => {
             let mut content = IndexMap::new();
             content.insert(
-                content_type.clone(),
+                content_type,
                 openapiv3::MediaType {
                     schema: Some(openapiv3::ReferenceOr::Item(*schema)),
                     ..Default::default()
