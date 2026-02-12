@@ -27,12 +27,13 @@ use golem_common::model::oplog::public_oplog_entry::{
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAttributeValue, PublicDurableFunctionType,
     PublicRetryConfig, PublicSpanData, PublicWorkerInvocation, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
     StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
-    PublicOplogEntry, PublicUpdateDescription, SnapshotBasedUpdateParameters,
+    JsonSnapshotData, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
+    RawSnapshotData, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::Timestamp;
 
@@ -353,6 +354,22 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
             }),
+            PublicOplogEntry::Snapshot(SnapshotParams { timestamp, data }) => {
+                let (snapshot_bytes, mime_type) = match data {
+                    PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }) => {
+                        (data, mime_type)
+                    }
+                    PublicSnapshotData::Json(JsonSnapshotData { data }) => (
+                        serde_json::to_vec(&data).unwrap_or_default(),
+                        "application/json".to_string(),
+                    ),
+                };
+                Self::Snapshot(oplog::SnapshotParameters {
+                    timestamp: timestamp.into(),
+                    data: snapshot_bytes,
+                    mime_type,
+                })
+            }
         }
     }
 }

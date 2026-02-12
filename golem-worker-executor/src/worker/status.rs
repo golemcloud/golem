@@ -330,6 +330,7 @@ fn calculate_latest_worker_status(
             OplogEntry::RolledBackRemoteTransaction { .. } => {
                 current_status = WorkerStatus::Running;
             }
+            OplogEntry::Snapshot { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }

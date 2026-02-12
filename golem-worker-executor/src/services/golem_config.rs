@@ -994,17 +994,14 @@ impl SafeDisplay for AgentWebhooksServiceConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
+#[derive(Default)]
 pub enum DefaultSnapshottingConfig {
+    #[default]
     Disabled,
     Periodic(DefaultSnapshottingPeriodicConfig),
     EveryNInvocation(DefaultSnapshottingEveryNInvocationConfig),
 }
 
-impl Default for DefaultSnapshottingConfig {
-    fn default() -> Self {
-        Self::Disabled
-    }
-}
 
 impl SafeDisplay for DefaultSnapshottingConfig {
     fn to_safe_string(&self) -> String {
