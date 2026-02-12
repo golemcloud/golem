@@ -15,7 +15,8 @@
 use crate::custom_api::RichCompiledRoute;
 use crate::custom_api::openapi::{HttpApiDefinitionOpenApiSpec, RouteWithAgentType};
 use golem_common::base_model::agent::AgentType;
-use golem_service_base::custom_api::{CompiledRoute, RoutesWithAgentType};
+use golem_common::base_model::security_scheme::SecuritySchemeId;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use std::collections::HashMap;
 
 pub struct OpenApiHandler;
@@ -23,7 +24,7 @@ pub struct OpenApiHandler;
 impl OpenApiHandler {
     pub async fn generate_spec(
         spec_details: Vec<(AgentType, RichCompiledRoute)>,
-        security_scheme_details: &HashMap<String, String>,
+        security_scheme_details: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
     ) -> Result<String, String> {
         let routes = spec_details
             .iter()
@@ -34,7 +35,7 @@ impl OpenApiHandler {
             .collect::<Vec<_>>();
 
         let spec =
-            HttpApiDefinitionOpenApiSpec::from_routes(routes, &security_scheme_details).await?;
+            HttpApiDefinitionOpenApiSpec::from_routes(&routes, security_scheme_details).await?;
 
         serde_yaml::to_string(&spec.0).map_err(|e| e.to_string())
     }

@@ -136,9 +136,9 @@ impl RequestHandler {
                                 open_api_spec
                                     .iter()
                                     .flat_map(|r| r.routes.iter())
-                                    .find(|route| route.route_id == rich_compiled_route.route_id)
-                                    .map(|route| {
-                                        (route.agent_type.clone(), rich_compiled_route.clone())
+                                    .find(|(_, route_id)| *route_id == rich_compiled_route.route_id)
+                                    .map(|(agent_type, _)| {
+                                        (agent_type.clone(), rich_compiled_route.clone())
                                     })
                             })
                             .collect();
@@ -195,6 +195,6 @@ fn route_execution_result_to_response(
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
 
-        ResponseBody::PlainText(body) => Ok(response_builder.body(body)),
+        ResponseBody::PlainText { body } => Ok(response_builder.body(body)),
     }
 }

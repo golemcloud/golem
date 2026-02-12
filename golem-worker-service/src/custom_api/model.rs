@@ -57,7 +57,7 @@ impl OidcSession {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RichCompiledRoute {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
@@ -70,7 +70,7 @@ pub struct RichCompiledRoute {
     pub cors: CorsOptions,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RichRouteBehaviour {
     CallAgent(CallAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
@@ -90,7 +90,7 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OidcCallbackBehaviour {
     pub security_scheme: Arc<SecuritySchemeDetails>,
 }

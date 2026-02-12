@@ -27,12 +27,11 @@ use std::sync::Arc;
 const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
 
 pub trait HttpApiRoute {
-    fn agent_type(&self) -> &AgentType;
     fn security_scheme_missing(&self) -> bool;
     fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>>;
-    fn method(&self) -> &String;
+    fn method(&self) -> String;
     fn path(&self) -> &Vec<PathSegment>;
-    fn binding(&self) -> &RouteBehaviour;
+    fn binding(&self) -> &RichRouteBehaviour;
     fn request_body_schema(&self) -> &RequestBodySchema;
     fn associated_agent_method(&self) -> Option<&AgentMethod>;
 }
@@ -43,18 +42,14 @@ pub struct RouteWithAgentType {
 }
 
 impl HttpApiRoute for RouteWithAgentType {
-    fn agent_type(&self) -> &AgentType {
-        &self.agent_type
-    }
-
     fn security_scheme_missing(&self) -> bool {
         false
     }
     fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>> {
         &self.details.security_scheme
     }
-    fn method(&self) -> &String {
-        &self.details.method.to_string()
+    fn method(&self) -> String {
+        self.details.method.to_string()
     }
     fn path(&self) -> &Vec<PathSegment> {
         &self.details.path
@@ -307,12 +302,13 @@ async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
 ) -> Result<(), String> {
     let agent_method = route.associated_agent_method();
     let method_params = match route.binding() {
-        RouteBehaviour::CallAgent(call_agent_behaviour) => {
+        RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
             Some(&call_agent_behaviour.method_parameters)
         }
-        RouteBehaviour::CorsPreflight(_) => None,
-        RouteBehaviour::WebhookCallback(_) => None,
-        RouteBehaviour::OpenApiSpec(_) => None,
+        RichRouteBehaviour::CorsPreflight(_) => None,
+        RichRouteBehaviour::WebhookCallback(_) => None,
+        RichRouteBehaviour::OpenApiSpec(_) => None,
+        RichRouteBehaviour::OidcCallback(_) => None,
     };
 
     let (path_str, path_params_raw) =
@@ -635,7 +631,7 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
     Option<u16>, // status code
 ) {
     match route.binding() {
-        RouteBehaviour::CallAgent(call_agent_behaviour) => {
+        RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
             let response = &call_agent_behaviour.expected_agent_response;
 
             match response {
@@ -673,7 +669,7 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
             }
         }
 
-        RouteBehaviour::CorsPreflight(cors_preflight_behaviour) => {
+        RichRouteBehaviour::CorsPreflight(_) => {
             let mut headers = IndexMap::new();
             let string_schema = openapiv3::Schema {
                 schema_data: Default::default(),
@@ -704,7 +700,7 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
             )
         }
 
-        RouteBehaviour::OpenApiSpec(openapi_spec_behaviour) => {
+        RichRouteBehaviour::OpenApiSpec(_) => {
             let schema = create_schema_from_analysed_type(&AnalysedType::Str(
                 golem_wasm::analysis::TypeStr {},
             ));
@@ -718,7 +714,11 @@ fn determine_response_schema_content_type_headers<T: HttpApiRoute + ?Sized>(
             )
         }
 
-        RouteBehaviour::WebhookCallback(_) => {
+        RichRouteBehaviour::WebhookCallback(_) => {
+            (DeterminedResponseBodySchema::NoBody, None, Some(200))
+        }
+
+        RichRouteBehaviour::OidcCallback(_) => {
             (DeterminedResponseBodySchema::NoBody, None, Some(200))
         }
     }
@@ -749,7 +749,7 @@ fn add_security<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, 
 
 fn add_operation_to_path_item(
     path_item: &mut openapiv3::PathItem,
-    method: &String,
+    method: String,
     operation: openapiv3::Operation,
 ) -> Result<(), String> {
     match method.as_str() {
