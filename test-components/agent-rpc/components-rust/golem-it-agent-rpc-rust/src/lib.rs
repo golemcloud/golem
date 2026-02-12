@@ -85,3 +85,24 @@ pub trait SimpleChildAgent {
     fn value(&self) -> f64;
 }
 // implemented in `golem-it-agent-rpc`
+
+#[agent_definition]
+pub trait Counter {
+    fn new(id: String) -> Self;
+    fn get_value(&self) -> String;
+}
+
+struct CounterImpl {
+    id: String,
+}
+
+#[agent_implementation]
+impl Counter for CounterImpl {
+    fn new(id: String) -> Self {
+        Self { id }
+    }
+
+    fn get_value(&self) -> String {
+        format!("counter-{}", self.id)
+    }
+}

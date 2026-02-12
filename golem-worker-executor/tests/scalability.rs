@@ -67,7 +67,7 @@ async fn spawning_many_workers_that_sleep(
         .await?;
 
     let warmup_agent_id = agent_id(0);
-    let warmup_worker = executor
+    let _warmup_worker = executor
         .start_agent(&component.id, warmup_agent_id.clone())
         .await?;
 
@@ -182,7 +182,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         .await?;
 
     let warmup_agent_id = agent_id(0);
-    let warmup_worker = executor
+    let _warmup_worker = executor
         .start_agent(&component.id, warmup_agent_id.clone())
         .await?;
 

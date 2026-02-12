@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::compatibility::worker_recovery::save_recovery_golden_file;
 use crate::Tracing;
 use anyhow::anyhow;
 use assert2::{check, let_assert};
 use axum::routing::get;
 use axum::Router;
+use golem_common::model::agent::DataValue;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
+use golem_common::{agent_id, data_value};
 use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::worker::{ExportedResourceMetadata, WorkerMetadataDto};
 use golem_common::model::{
@@ -203,114 +204,88 @@ async fn simulated_crash(
 async fn shopping_cart_example(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let repo_id = agent_id!("repository", "test-repo");
     let worker_id = executor
-        .start_worker(&component.id, "shopping-cart-1")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec![ValueAndType {
-                value: Value::String("test-user-1".to_string()),
-                typ: analysed_type::str(),
-            }],
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
         .await?;
 
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1001", "Golem Cloud Subscription 1y"),
         )
         .await?;
 
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-                ("price", 999999.0f32.into_value_and_type()),
-                ("quantity", 1u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
         )
         .await?;
 
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 10u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{update-item-quantity}",
-            vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
         )
         .await?;
 
     let contents = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
+        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
         .await?;
-
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await?;
-
-    save_recovery_golden_file(&executor, &context, "shopping_cart_example", &worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
+    let contents_value = contents
+        .into_return_value()
+        .expect("Expected a single return value");
+
     check!(
-        contents
-            == Ok(vec![Value::List(vec![
+        contents_value
+            == Value::List(vec![
                 Value::Record(vec![
                     Value::String("G1000".to_string()),
                     Value::String("Golem T-Shirt M".to_string()),
-                    Value::F32(100.0),
-                    Value::U32(5),
+                    Value::U64(1),
                 ]),
                 Value::Record(vec![
                     Value::String("G1001".to_string()),
                     Value::String("Golem Cloud Subscription 1y".to_string()),
-                    Value::F32(999999.0),
-                    Value::U32(1),
+                    Value::U64(1),
                 ]),
                 Value::Record(vec![
                     Value::String("G1002".to_string()),
                     Value::String("Mud Golem".to_string()),
-                    Value::F32(11.0),
-                    Value::U32(20),
+                    Value::U64(2),
                 ]),
-            ])])
+            ])
     );
     Ok(())
 }
@@ -736,63 +711,60 @@ async fn get_metadata_from_worker(
 async fn invoking_with_same_idempotency_key_is_idempotent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let repo_id = agent_id!("repository", "test-repo-2");
     let worker_id = executor
-        .start_worker(&component.id, "shopping-cart-2")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
     let idempotency_key = IdempotencyKey::fresh();
-    let _result = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+    executor
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &repo_id,
             &idempotency_key,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await??;
+        .await?;
 
-    let _result2 = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+    executor
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &repo_id,
             &idempotency_key,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await??;
+        .await?;
 
     let contents = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    let contents_value = contents
+        .into_return_value()
+        .expect("Expected a single return value");
+
     check!(
-        contents
-            == vec![Value::List(vec![Value::Record(vec![
+        contents_value
+            == Value::List(vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
-                Value::F32(100.0),
-                Value::U32(5),
-            ])])]
+                Value::U64(1),
+            ])])
     );
     Ok(())
 }
@@ -803,66 +775,63 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
 async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let repo_id = agent_id!("repository", "test-repo-3");
     let worker_id = executor
-        .start_worker(&component.id, "shopping-cart-4")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
     let idempotency_key = IdempotencyKey::fresh();
-    let _result = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+    executor
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &repo_id,
             &idempotency_key,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await??;
+        .await?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
-    let _result2 = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+    executor
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &repo_id,
             &idempotency_key,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await??;
+        .await?;
 
     let contents = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    let contents_value = contents
+        .into_return_value()
+        .expect("Expected a single return value");
+
     check!(
-        contents
-            == vec![Value::List(vec![Value::Record(vec![
+        contents_value
+            == Value::List(vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
-                Value::F32(100.0),
-                Value::U32(5),
-            ])])]
+                Value::U64(1),
+            ])])
     );
     Ok(())
 }
@@ -1417,56 +1386,60 @@ async fn get_worker_metadata(
 async fn create_invoke_delete_create_invoke(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let counter_id = agent_id!("counter", "delete-recreate-test");
     let worker_id = executor
-        .start_worker(&component.id, "create-invoke-delete-create-invoke-1")
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
     let r1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &counter_id,
+            "increment",
+            data_value!(),
         )
         .await?;
+    check!(r1.into_return_value() == Some(Value::U32(1)));
+
+    let r2 = executor
+        .invoke_and_await_agent(
+            &component.id,
+            &counter_id,
+            "increment",
+            data_value!(),
+        )
+        .await?;
+    check!(r2.into_return_value() == Some(Value::U32(2)));
 
     executor.delete_worker(&worker_id).await?;
 
     let worker_id = executor
-        .start_worker(&component.id, "create-invoke-delete-create-invoke-1") // same name as before
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
-    let r2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+    let r3 = executor
+        .invoke_and_await_agent(
+            &component.id,
+            &counter_id,
+            "increment",
+            data_value!(),
         )
         .await?;
+    check!(r3.into_return_value() == Some(Value::U32(1)));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(r1.is_ok());
-    check!(r2.is_ok());
     Ok(())
 }
 
@@ -1476,56 +1449,41 @@ async fn create_invoke_delete_create_invoke(
 async fn recovering_an_old_worker_after_updating_a_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .unique()
         .store()
         .await?;
-    let worker_id = executor
-        .start_worker(
-            &component.id,
-            "recovering-an-old-worker-after-updating-a-component-1",
-        )
+
+    let counter_id = agent_id!("counter", "recover-test");
+    let _worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
     let r1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .await?;
 
     // Updating the component with an incompatible new version
     executor
-        .update_component(&component.id, "option-service")
+        .update_component(&component.id, "golem_it_agent_rpc")
         .await?;
 
     // Creating a new worker of the updated component and call it
-    let worker_id2 = executor
-        .start_worker(
-            &component.id,
-            "recovering-an-old-worker-after-updating-a-component-2",
-        )
+    let new_agent_id = agent_id!("simple-child-agent", "recover-test-new");
+    let _worker_id2 = executor
+        .start_agent(&component.id, new_agent_id.clone())
         .await?;
 
     let r2 = executor
-        .invoke_and_await(
-            &worker_id2,
-            "golem:it/api.{echo}",
-            vec![Some("Hello").into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &new_agent_id, "value", data_value!())
+        .await?;
 
     // Restarting the server to force worker recovery
     drop(executor);
@@ -1533,26 +1491,17 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
     // Call the first worker again to check if it is still working
     let r3 = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .await?;
 
+    let worker_id = WorkerId::from_agent_id(component.id.clone(), &counter_id)
+        .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    check!(r1 == vec![]);
-    check!(
-        r2 == vec![Value::Option(Some(Box::new(Value::String(
-            "Hello".to_string()
-        ))))]
-    );
-    check!(
-        r3 == vec![Value::List(vec![Value::Record(vec![
-            Value::String("G1000".to_string()),
-            Value::String("Golem T-Shirt M".to_string()),
-            Value::F32(100.0),
-            Value::U32(5),
-        ])])]
-    );
+    check!(r1.into_return_value() == Some(Value::U32(1)));
+    check!(r2.into_return_value() == Some(Value::F64(1.0)));
+    check!(r3.into_return_value() == Some(Value::U32(2)));
     Ok(())
 }
 
@@ -1562,69 +1511,50 @@ async fn recovering_an_old_worker_after_updating_a_component(
 async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .unique()
         .store()
         .await?;
+
+    let counter_id = agent_id!("counter", "recreate-after-delete");
     let worker_id = executor
-        .start_worker(
-            &component.id,
-            "recreating-an-worker-after-it-got-deleted-with-a-different-version-1",
-        )
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
     let r1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .await?;
 
-    // Updating the component with an incompatible new version
+    // Updating the component with an incompatible new version that also has a "counter" agent
+    // but with different methods (get-value -> string instead of increment -> u32)
     executor
-        .update_component(&component.id, "option-service")
+        .update_component(&component.id, "golem_it_agent_rpc_rust_release")
         .await?;
 
     // Deleting the first instance
     executor.delete_worker(&worker_id).await?;
 
-    // Create a new instance with the same name and call it the first instance again to check if it is still working
+    // Recreate the same agent (same type name and constructor params) on the updated component
     let worker_id = executor
-        .start_worker(
-            &component.id,
-            "recovering-an-old-worker-after-updating-a-component-1",
-        )
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
     let r2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{echo}",
-            vec![Some("Hello").into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &counter_id, "get-value", data_value!())
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    check!(r1 == vec![]);
-    check!(
-        r2 == vec![Value::Option(Some(Box::new(Value::String(
-            "Hello".to_string()
-        ))))]
-    );
+    check!(r1.into_return_value() == Some(Value::U32(1)));
+    check!(r2.into_return_value() == Some(Value::String("counter-recreate-after-delete".to_string())));
     Ok(())
 }
 

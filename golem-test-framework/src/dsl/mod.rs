@@ -259,12 +259,46 @@ pub trait TestDsl {
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(component_id, agent_id, None, method_name, params)
+            .await
+    }
+
+    async fn invoke_and_await_agent_with_key(
+        &self,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(
+            component_id,
+            agent_id,
+            Some(idempotency_key),
+            method_name,
+            params,
+        )
+        .await
+    }
+
+    async fn invoke_and_await_agent_impl(
+        &self,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: Option<&IdempotencyKey>,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
         // TODO: temporarily going through the dynamic invocation route, will be migrated to the new invocation API
         let worker_id = WorkerId::from_agent_id(component_id.clone(), agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+        let key = idempotency_key
+            .cloned()
+            .unwrap_or_else(IdempotencyKey::fresh);
         let invoke_result = self
-            .invoke_and_await(
+            .invoke_and_await_with_key(
                 &worker_id,
+                &key,
                 "golem:agent/guest.{invoke}",
                 vec![
                     method_name.into_value_and_type(),
@@ -275,7 +309,6 @@ pub trait TestDsl {
             .await?;
         match invoke_result {
             Ok(mut values) if values.len() == 1 => {
-                // return value has type 'result<data-value, agent-error>'
                 let component = self.get_latest_component_revision(&component_id).await?;
                 let agent_type = component
                     .metadata
