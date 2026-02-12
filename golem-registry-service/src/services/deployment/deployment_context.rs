@@ -221,19 +221,19 @@ impl DeploymentContext {
                     &mut compiled_routes,
                 );
 
-                add_openapi_spec_routes(
-                    deployment,
-                    registered_agent_types,
-                    &mut current_route_id,
-                    &mut compiled_routes,
-                );
-
                 add_cors_preflight_http_routes(
                     deployment,
                     &mut current_route_id,
                     &mut compiled_routes,
                 );
             }
+
+            add_openapi_spec_routes(
+                deployment,
+                registered_agent_types,
+                &mut current_route_id,
+                &mut compiled_routes,
+            );
         }
 
         // Fixme: code-first routes

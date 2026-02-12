@@ -336,7 +336,8 @@ pub fn add_openapi_spec_routes(
             continue;
         }
 
-        // It's per deployment
+        // Note: This is currently a fixed path, 
+        // but it can be part of the http api deployment configuration
         let path = vec![
             PathSegment::Literal {
                 value: ".well-known".to_string(),
@@ -358,7 +359,6 @@ pub fn add_openapi_spec_routes(
 
         compiled_routes.insert(
             key,
-            // This is still pre-stage, and final stage conversion to be done at worker service.
             UnboundCompiledRoute {
                 route_id,
                 domain: deployment.domain.clone(),
