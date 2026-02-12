@@ -1116,7 +1116,7 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let http_server = TestHttpServer::start().await;
+    let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
@@ -1130,17 +1130,38 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
         .await?;
     executor.log_output(&worker_id).await?;
 
-    // Invoke f1 to give the worker some history
-    executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await??;
+    // Invoke f1 with a blocking control point so the worker stays Running
+    let mut control = http_server.f1_control(100).await;
+    let executor_clone = executor.clone();
+    let worker_id_clone = worker_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:component/api.{f1}",
+                    vec![50u64.into_value_and_type()],
+                )
+                .await
+        }
+        .in_current_span(),
+    );
 
-    // Interrupt the worker so it transitions to Interrupted status
-    executor.interrupt(&worker_id).await?;
+    // Wait until the worker reaches the blocking point (Running state)
+    control.await_reached().await;
+
+    // Interrupt and resume concurrently: interrupt() blocks until the worker is
+    // actually interrupted, but the worker is waiting for the HTTP response,
+    // so we must resume the HTTP server in parallel to avoid a deadlock.
+    let executor_clone2 = executor.clone();
+    let worker_id_clone2 = worker_id.clone();
+    let interrupt_fiber = spawn(async move { executor_clone2.interrupt(&worker_id_clone2).await });
+    control.resume();
+    interrupt_fiber.await??;
+
+    // The invoke should fail due to interruption
+    let _ = fiber.await?;
+
     executor
         .wait_for_status(
             &worker_id,
