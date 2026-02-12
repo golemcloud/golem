@@ -128,7 +128,10 @@ impl RequestHandler {
                     .await
                 {
                     Ok(routes) => {
-                        let result: Vec<(AgentType, RichCompiledRoute)> = routes
+                        let agent_type_with_rich_compiled_routes: Vec<(
+                            AgentType,
+                            RichCompiledRoute,
+                        )> = routes
                             .iter()
                             .filter_map(|rich_compiled_route| {
                                 open_api_spec
@@ -141,7 +144,9 @@ impl RequestHandler {
                             })
                             .collect();
 
-                        match OpenApiHandler::generate_spec(result, &HashMap::new()).await {
+                        match OpenApiHandler::generate_spec(agent_type_with_rich_compiled_routes)
+                            .await
+                        {
                             Ok(yaml) => Ok(RouteExecutionResult {
                                 status: StatusCode::OK,
                                 headers: HashMap::new(),

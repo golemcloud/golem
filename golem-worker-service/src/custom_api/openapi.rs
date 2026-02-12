@@ -13,7 +13,6 @@
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema};
 use golem_common::model::agent::DataSchema;
-use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::{
     MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
     SecuritySchemeDetails,
@@ -78,19 +77,21 @@ impl HttpApiRoute for RichCompiledRouteWithAgentType {
 pub struct HttpApiDefinitionOpenApiSpec(pub openapiv3::OpenAPI);
 
 impl HttpApiDefinitionOpenApiSpec {
-    pub async fn from_routes<'a, T, I>(
-        routes: I,
-        security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
-    ) -> Result<Self, String>
+    pub async fn from_routes<'a, T, I>(routes: I) -> Result<Self, String>
     where
         T: 'a + HttpApiRoute + ?Sized,
         I: IntoIterator<Item = &'a T>,
     {
-        let mut open_api = create_base_openapi(security_schemes);
+        let routes_vec: Vec<&T> = routes.into_iter().collect();
+
+        let security_schemes = get_security_scheme_details(&routes_vec);
+
+        let mut open_api = create_base_openapi(&security_schemes);
 
         let mut paths = BTreeMap::new();
-        for route in routes {
-            add_route_to_paths(route, &mut paths, security_schemes).await?;
+
+        for route in &routes_vec {
+            add_route_to_paths(*route, &mut paths).await?;
         }
 
         open_api.paths.paths = paths
@@ -102,9 +103,22 @@ impl HttpApiDefinitionOpenApiSpec {
     }
 }
 
-fn create_base_openapi(
-    security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
-) -> openapiv3::OpenAPI {
+pub fn get_security_scheme_details<T>(routes: &[&T]) -> Vec<Arc<SecuritySchemeDetails>>
+where
+    T: HttpApiRoute + ?Sized,
+{
+    let mut schemes = Vec::new();
+
+    for route in routes {
+        if let Some(scheme_details) = route.security_scheme() {
+            schemes.push(scheme_details.clone());
+        }
+    }
+
+    schemes
+}
+
+fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> openapiv3::OpenAPI {
     let mut open_api = openapiv3::OpenAPI {
         openapi: "3.0.0".to_string(),
         info: openapiv3::Info {
@@ -120,7 +134,7 @@ fn create_base_openapi(
     };
 
     let mut components = openapiv3::Components::default();
-    for security_scheme in security_schemes.values() {
+    for security_scheme in security_schemes {
         let openid_config_url = format!(
             "{}/.well-known/openid-configuration",
             security_scheme.provider_type.issuer_url().url()
@@ -254,7 +268,6 @@ fn get_full_path_and_variables<'a>(
 async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     route: &T,
     paths: &mut BTreeMap<String, openapiv3::PathItem>,
-    _security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
 ) -> Result<(), String> {
     let agent_method = route.associated_agent_method();
     let method_params = match route.binding() {
