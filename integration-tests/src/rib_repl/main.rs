@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
 
     let component_name = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "shopping-cart".to_string());
+        .unwrap_or_else(|| "it_agent_counters_release".to_string());
 
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
