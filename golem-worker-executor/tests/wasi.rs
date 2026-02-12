@@ -733,7 +733,7 @@ async fn file_update_1(
             .await?;
 
         executor
-            .auto_update_worker(&worker_id, updated_component.revision)
+            .auto_update_worker(&worker_id, updated_component.revision, false)
             .await?;
     };
 
@@ -811,7 +811,7 @@ async fn file_update_1(
             .await?;
 
         executor
-            .manual_update_worker(&worker_id, updated_component.revision)
+            .manual_update_worker(&worker_id, updated_component.revision, false)
             .await?;
     };
 
@@ -950,7 +950,7 @@ async fn file_update_in_the_middle_of_exported_function(
             .await?;
 
         executor
-            .auto_update_worker(&worker_id, updated_component.revision)
+            .auto_update_worker(&worker_id, updated_component.revision, false)
             .await?;
     };
 

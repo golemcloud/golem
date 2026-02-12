@@ -414,12 +414,14 @@ pub trait TestDsl {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
     async fn manual_update_worker(
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
     async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()>;

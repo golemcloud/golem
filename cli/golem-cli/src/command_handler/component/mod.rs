@@ -96,9 +96,15 @@ impl ComponentCommandHandler {
                 component_name,
                 update_mode,
                 r#await,
+                disable_wakeup,
             } => {
-                self.cmd_update_workers(component_name.component_name, update_mode, r#await)
-                    .await
+                self.cmd_update_workers(
+                    component_name.component_name,
+                    update_mode,
+                    r#await,
+                    disable_wakeup,
+                )
+                .await
             }
             ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
@@ -355,9 +361,10 @@ impl ComponentCommandHandler {
         component_name: Option<ComponentName>,
         update_mode: AgentUpdateMode,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let components = self.components_for_deploy_args(component_name).await?;
-        self.update_workers_by_components(&components, update_mode, await_update)
+        self.update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
@@ -465,6 +472,7 @@ impl ComponentCommandHandler {
         components: &[ComponentDto],
         update: AgentUpdateMode,
         await_updates: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
@@ -484,6 +492,7 @@ impl ComponentCommandHandler {
                     update,
                     component.revision,
                     await_updates,
+                    disable_wakeup,
                 )
                 .await?;
             update_results.extend(result);

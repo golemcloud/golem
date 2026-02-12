@@ -3925,6 +3925,9 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        disableWakeup:
+          type: boolean
+          default: false
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse

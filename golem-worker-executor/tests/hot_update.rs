@@ -190,7 +190,7 @@ async fn auto_update_on_running(
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     control.resume();
@@ -250,7 +250,7 @@ async fn auto_update_on_idle(
     );
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -312,7 +312,7 @@ async fn failing_auto_update_on_idle(
         .await??;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -379,7 +379,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .await??;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -455,7 +455,7 @@ async fn failing_auto_update_on_running(
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     control.resume();
@@ -533,7 +533,7 @@ async fn manual_update_on_idle(
         .await??;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let after_update = executor
@@ -604,7 +604,7 @@ async fn manual_update_on_idle_without_save_snapshot(
         .await??;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -693,10 +693,10 @@ async fn auto_update_on_running_followed_by_manual(
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, updated_component_1.revision)
+        .auto_update_worker(&worker_id, updated_component_1.revision, false)
         .await?;
     executor
-        .manual_update_worker(&worker_id, updated_component_2.revision)
+        .manual_update_worker(&worker_id, updated_component_2.revision, false)
         .await?;
     control.resume();
 
@@ -778,7 +778,7 @@ async fn manual_update_on_idle_with_failing_load(
         .await??;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -851,7 +851,7 @@ async fn manual_update_on_idle_using_v11(
         .await??;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let after_update = executor
@@ -926,7 +926,7 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
         .await??;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let after_update = executor
@@ -980,7 +980,7 @@ async fn auto_update_on_idle_to_non_existing(
     );
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result1 = executor
@@ -989,7 +989,7 @@ async fn auto_update_on_idle_to_non_existing(
 
     // Now we try to update to version target_version + 1, which does not exist.
     executor
-        .auto_update_worker(&worker_id, updated_component.revision.next()?)
+        .auto_update_worker(&worker_id, updated_component.revision.next()?, false)
         .await?;
 
     // We expect this update to fail, and the component to remain on `target_version` and remain
@@ -1047,7 +1047,7 @@ async fn update_component_revision_environment_variable(
         .await?;
 
     executor
-        .auto_update_worker(&worker_id, updated_component_1.revision)
+        .auto_update_worker(&worker_id, updated_component_1.revision, false)
         .await?;
 
     {
@@ -1085,7 +1085,7 @@ async fn update_component_revision_environment_variable(
         .await?;
 
     executor
-        .manual_update_worker(&worker_id, updated_component_2.revision)
+        .manual_update_worker(&worker_id, updated_component_2.revision, false)
         .await?;
 
     {

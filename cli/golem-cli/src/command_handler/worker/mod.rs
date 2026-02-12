@@ -158,12 +158,14 @@ impl WorkerCommandHandler {
                 mode,
                 target_revision,
                 r#await,
+                disable_wakeup,
             } => {
                 self.cmd_update(
                     worker_name,
                     mode.unwrap_or(AgentUpdateMode::Automatic),
                     target_revision,
                     r#await,
+                    disable_wakeup,
                 )
                 .await
             }
@@ -854,6 +856,7 @@ impl WorkerCommandHandler {
         mode: AgentUpdateMode,
         target_revision: Option<ComponentRevision>,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
@@ -900,6 +903,7 @@ impl WorkerCommandHandler {
             mode,
             target_revision,
             await_update,
+            disable_wakeup,
         )
         .await?;
 
@@ -1245,6 +1249,7 @@ impl WorkerCommandHandler {
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, false)
@@ -1279,6 +1284,7 @@ impl WorkerCommandHandler {
                     update_mode,
                     target_revision,
                     false,
+                    disable_wakeup,
                 )
                 .await;
 
@@ -1325,6 +1331,7 @@ impl WorkerCommandHandler {
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Triggering update",
@@ -1352,6 +1359,7 @@ impl WorkerCommandHandler {
                         AgentUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
                     },
                     target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await

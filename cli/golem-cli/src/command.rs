@@ -730,6 +730,9 @@ pub enum GolemCliSubcommand {
         /// Await the update to be completed
         #[arg(long, default_value_t = false)]
         r#await: bool,
+        /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+        #[arg(long, default_value_t = false)]
+        disable_wakeup: bool,
     },
     /// Redeploy all agents of the application using the latest version
     RedeployAgents {
@@ -991,6 +994,9 @@ pub mod component {
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
+            /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+            #[arg(long, default_value_t = false)]
+            disable_wakeup: bool,
         },
         /// Redeploy all agents of the selected component using the latest version
         RedeployAgents {
@@ -1172,6 +1178,9 @@ pub mod worker {
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
+            /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+            #[arg(long, default_value_t = false)]
+            disable_wakeup: bool,
         },
         /// Interrupts a running agent
         Interrupt {

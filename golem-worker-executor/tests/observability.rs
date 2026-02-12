@@ -255,7 +255,7 @@ async fn get_oplog_with_api_changing_updates(
         .await??;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor

@@ -614,6 +614,7 @@ impl WorkerService {
         worker_id: &WorkerId,
         update_mode: WorkerUpdateMode,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let component = self
@@ -634,6 +635,7 @@ impl WorkerService {
                 worker_id,
                 update_mode,
                 target_revision,
+                disable_wakeup,
                 component.environment_id,
                 auth_ctx,
             )
