@@ -29,27 +29,27 @@ const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
 pub trait HttpApiRoute {
     fn security_scheme_missing(&self) -> bool;
     fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>>;
-    fn method(&self) -> String;
+    fn method(&self) -> &str;
     fn path(&self) -> &Vec<PathSegment>;
     fn binding(&self) -> &RichRouteBehaviour;
     fn request_body_schema(&self) -> &RequestBodySchema;
     fn associated_agent_method(&self) -> Option<&AgentMethod>;
 }
 
-pub struct RouteWithAgentType {
+pub struct RichCompiledRouteWithAgentType {
     pub agent_type: AgentType,
     pub details: RichCompiledRoute,
 }
 
-impl HttpApiRoute for RouteWithAgentType {
+impl HttpApiRoute for RichCompiledRouteWithAgentType {
     fn security_scheme_missing(&self) -> bool {
         false
     }
     fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>> {
         &self.details.security_scheme
     }
-    fn method(&self) -> String {
-        self.details.method.to_string()
+    fn method(&self) -> &str {
+        self.details.method.as_str()
     }
     fn path(&self) -> &Vec<PathSegment> {
         &self.details.path
@@ -705,10 +705,10 @@ fn add_security<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, 
 
 fn add_operation_to_path_item(
     path_item: &mut openapiv3::PathItem,
-    method: String,
+    method: &str,
     operation: openapiv3::Operation,
 ) -> Result<(), String> {
-    match method.as_str() {
+    match method {
         "GET" => path_item.get = Some(operation),
         "POST" => path_item.post = Some(operation),
         "PUT" => path_item.put = Some(operation),

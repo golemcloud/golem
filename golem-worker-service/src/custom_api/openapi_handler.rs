@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::custom_api::RichCompiledRoute;
-use crate::custom_api::openapi::{HttpApiDefinitionOpenApiSpec, RouteWithAgentType};
+use crate::custom_api::openapi::{HttpApiDefinitionOpenApiSpec, RichCompiledRouteWithAgentType};
 use golem_common::base_model::agent::AgentType;
 use golem_common::base_model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::SecuritySchemeDetails;
@@ -28,7 +28,7 @@ impl OpenApiHandler {
     ) -> Result<String, String> {
         let routes = spec_details
             .iter()
-            .map(|(agent_type, rich_route)| RouteWithAgentType {
+            .map(|(agent_type, rich_route)| RichCompiledRouteWithAgentType {
                 agent_type: agent_type.clone(),
                 details: rich_route.clone(),
             })
