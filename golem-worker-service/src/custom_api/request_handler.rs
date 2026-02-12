@@ -30,8 +30,6 @@ use golem_wasm::json::ValueAndTypeJsonExtensions;
 use http::StatusCode;
 use poem::{Request, Response};
 use std::collections::HashMap;
-use std::iter::Map;
-use std::slice::Iter;
 use std::sync::Arc;
 use tracing::{Instrument, debug};
 

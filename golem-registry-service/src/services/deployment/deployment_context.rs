@@ -223,7 +223,7 @@ impl DeploymentContext {
 
                 add_openapi_spec_routes(
                     deployment,
-                    &registered_agent_types,
+                    registered_agent_types,
                     &mut current_route_id,
                     &mut compiled_routes,
                 );

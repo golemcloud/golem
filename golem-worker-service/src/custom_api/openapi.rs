@@ -15,11 +15,10 @@ use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema};
 use golem_common::model::agent::DataSchema;
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::{
-    MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
-    RouteBehaviour, SecuritySchemeDetails,
+    MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, SecuritySchemeDetails,
 };
 use golem_service_base::model::SafeIndex;
-use golem_wasm::analysis::{AnalysedType, NameTypePair};
+use golem_wasm::analysis::AnalysedType;
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -87,8 +86,6 @@ impl HttpApiDefinitionOpenApiSpec {
         I: IntoIterator<Item = &'a T>,
     {
         let mut open_api = create_base_openapi(
-            "foo", // TODO;
-            "bar", // TODO;
             security_schemes,
         );
 
@@ -107,19 +104,17 @@ impl HttpApiDefinitionOpenApiSpec {
 }
 
 fn create_base_openapi(
-    http_api_definition_name: &str,
-    http_api_definition_version: &str,
     security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
 ) -> openapiv3::OpenAPI {
     let mut open_api = openapiv3::OpenAPI {
         openapi: "3.0.0".to_string(),
         info: openapiv3::Info {
-            title: http_api_definition_name.to_string(),
+            title: "".to_string(),
             description: None,
             terms_of_service: None,
             contact: None,
             license: None,
-            version: http_api_definition_version.to_string(),
+            version: "".to_string(),
             extensions: Default::default(),
         },
         ..Default::default()
@@ -197,10 +192,10 @@ fn get_header_variable_and_types(
 
 fn get_full_path_and_variables(
     agent_method: Option<&AgentMethod>,
-    path_segments: &Vec<PathSegment>,
+    path_segments: &[PathSegment],
     method_params: Option<&Vec<MethodParameter>>,
 ) -> (String, Vec<(String, PathSegmentType)>) {
-    if (agent_method.is_none()) {
+    if agent_method.is_none() {
         return (
             path_segments
                 .iter()
@@ -298,7 +293,7 @@ fn get_full_path_and_variables(
 async fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     route: &T,
     paths: &mut BTreeMap<String, openapiv3::PathItem>,
-    security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
+    _security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
 ) -> Result<(), String> {
     let agent_method = route.associated_agent_method();
     let method_params = match route.binding() {

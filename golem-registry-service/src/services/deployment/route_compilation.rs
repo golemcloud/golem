@@ -28,7 +28,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    HttpRouteDetails, OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema,
+    OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema,
     RouteBehaviour, RoutesWithAgentType, WebhookCallbackBehaviour,
 };
 use itertools::Itertools;
@@ -281,14 +281,6 @@ pub fn add_webhook_callback_routes(
     }
 }
 
-// this is done for open api spec
-fn to_http_route_details(route: &UnboundCompiledRoute, agent_type: &AgentType) -> HttpRouteDetails {
-    HttpRouteDetails {
-        agent_type: agent_type.clone(),
-        route_id: route.route_id,
-    }
-}
-
 fn build_openapi_spec_for_component(
     component_id: &ComponentId,
     agents: &[&InProgressDeployedRegisteredAgentType],
@@ -300,13 +292,12 @@ fn build_openapi_spec_for_component(
         let mut routes = Vec::new();
 
         for route in compiled_routes.values() {
-            if let RouteBehaviour::CallAgent(call) = &route.behaviour {
-                if call.component_id == *component_id
+            if let RouteBehaviour::CallAgent(call) = &route.behaviour
+                && call.component_id == *component_id
                     && call.agent_type == agent.agent_type.type_name
                 {
-                    routes.push(to_http_route_details(route, &agent.agent_type));
+                    routes.push((agent.agent_type.clone(), route.route_id));
                 }
-            }
         }
 
         if !routes.is_empty() {
