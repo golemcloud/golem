@@ -1735,7 +1735,7 @@ mod app_builder {
         ComponentPresetName, ComponentPresetSelector, ComponentProperties, DependencyType,
         PartitionedComponentPresets, TemplateName, WithSource, DEFAULT_TEMP_DIR,
     };
-    use crate::model::app_raw;
+    use crate::model::app_raw::{self, HttpApiDeploymentAgentOptions};
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -1746,7 +1746,8 @@ mod app_builder {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
-        HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
+        HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation, SecuritySchemeAgentSecurity,
+        TestSessionHeaderAgentSecurity,
     };
     use indexmap::IndexMap;
     use itertools::Itertools;
@@ -2070,8 +2071,8 @@ mod app_builder {
                                     .map(|(k, v)|
                                         (
                                             k,
-                                            HttpApiDeploymentAgentOptions {
-                                                security_scheme: v.security_scheme
+                                            golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions {
+                                                security: resolve_agent_security(validation, &v)
                                             }
                                         )
                                     )
@@ -2617,6 +2618,34 @@ mod app_builder {
             ));
         }
         !is_empty
+    }
+
+    fn resolve_agent_security(
+        validation: &mut ValidationBuilder,
+        agent_options: &HttpApiDeploymentAgentOptions,
+    ) -> Option<HttpApiDeploymentAgentSecurity> {
+        match (
+            &agent_options.security_scheme,
+            &agent_options.test_session_header_name,
+        ) {
+            (Some(_), Some(_)) => {
+                validation.add_error(
+                    "Only one of securityScheme and testSessionHeaderName may be provided".into(),
+                );
+                None
+            }
+            (Some(security_scheme), None) => Some(HttpApiDeploymentAgentSecurity::SecurityScheme(
+                SecuritySchemeAgentSecurity {
+                    security_scheme: security_scheme.clone(),
+                },
+            )),
+            (None, Some(test_session_header_name)) => Some(
+                HttpApiDeploymentAgentSecurity::TestSessionHeader(TestSessionHeaderAgentSecurity {
+                    header_name: test_session_header_name.clone(),
+                }),
+            ),
+            (None, None) => None,
+        }
     }
 }
 

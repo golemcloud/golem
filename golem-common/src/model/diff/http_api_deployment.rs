@@ -21,12 +21,14 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeploymentAgentOptions {
     pub security_scheme: Option<String>,
+    pub test_session_header: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeploymentAgentOptionsDiff {
     pub security_scheme_changed: bool,
+    pub test_session_header_changed: bool,
 }
 
 impl Diffable for HttpApiDeploymentAgentOptions {
@@ -34,10 +36,12 @@ impl Diffable for HttpApiDeploymentAgentOptions {
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
         let security_scheme_changed = new.security_scheme != current.security_scheme;
+        let test_session_header_changed = new.test_session_header != current.test_session_header;
 
-        if security_scheme_changed {
+        if security_scheme_changed || test_session_header_changed {
             Some(HttpApiDeploymentAgentOptionsDiff {
                 security_scheme_changed,
+                test_session_header_changed,
             })
         } else {
             None

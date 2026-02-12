@@ -12,14 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff;
-
 pub use crate::base_model::http_api_deployment::*;
+use crate::declare_structs;
+use crate::model::agent::AgentTypeName;
+use crate::model::diff;
+use std::collections::BTreeMap;
 
 impl HttpApiDeploymentAgentOptions {
     pub fn to_diffable(&self) -> diff::HttpApiDeploymentAgentOptions {
+        let mut security_scheme = None;
+        let mut test_session_header = None;
+
+        match &self.security {
+            None => {}
+            Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(inner)) => {
+                test_session_header = Some(inner.header_name.clone());
+            }
+            Some(HttpApiDeploymentAgentSecurity::SecurityScheme(inner)) => {
+                security_scheme = Some(inner.security_scheme.0.clone());
+            }
+        }
+
         diff::HttpApiDeploymentAgentOptions {
-            security_scheme: self.security_scheme.as_ref().map(|v| v.0.clone()),
+            security_scheme,
+            test_session_header,
         }
     }
 }
@@ -34,5 +50,13 @@ impl HttpApiDeployment {
                 .map(|(k, v)| (k.0.clone(), v.to_diffable()))
                 .collect(),
         }
+    }
+}
+
+declare_structs! {
+    pub struct HttpApiDeploymentUpdate {
+        pub current_revision: HttpApiDeploymentRevision,
+        pub webhook_url: Option<String>,
+        pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
 }

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::oidc::IdentityProviderError;
+use super::oidc::session_store::SessionStoreError;
 use super::route_resolver::RouteResolverError;
-use super::security::IdentityProviderError;
-use super::security::session_store::SessionStoreError;
 use crate::service::worker::WorkerServiceError;
 use golem_common::{SafeDisplay, error_forwarding};
 

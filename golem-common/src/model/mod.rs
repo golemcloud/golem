@@ -34,6 +34,7 @@ pub mod invocation_context;
 pub mod login;
 pub mod lucene;
 pub mod oplog;
+pub mod optional_field_update;
 pub mod plan;
 pub mod plugin_registration;
 pub mod poem;
@@ -965,4 +966,17 @@ impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
+#[serde(tag = "op")]
+#[oai(discriminator_name = "op")]
+pub enum FieldUpdate<
+    T: poem_openapi::types::Type
+        + poem_openapi::types::ParseFromJSON
+        + poem_openapi::types::ToJSON
+        + poem_openapi::types::IsObjectType,
+> {
+    Set(T),
+    Unset(Empty),
 }

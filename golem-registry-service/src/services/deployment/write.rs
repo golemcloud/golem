@@ -146,6 +146,8 @@ pub enum DeployValidationError {
         agent_type: AgentTypeName,
         url: String,
     },
+    #[error("Overriding security scheme is only allowed if the environment level option is set")]
+    SecurityOverrideDisabled,
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -246,7 +248,8 @@ impl DeploymentWriteService {
                 .map_err(DeploymentWriteError::from),
         )?;
 
-        let deployment_context = DeploymentContext::new(components, http_api_deployments);
+        let deployment_context =
+            DeploymentContext::new(environment, components, http_api_deployments);
 
         {
             let actual_hash = deployment_context.hash();
@@ -281,7 +284,11 @@ impl DeploymentWriteService {
 
         let deployment: CurrentDeployment = self
             .deployment_repo
-            .deploy(auth.account_id().0, record, environment.version_check)
+            .deploy(
+                auth.account_id().0,
+                record,
+                deployment_context.environment.version_check,
+            )
             .await
             .map_err(|err| match err {
                 DeployRepoError::ConcurrentModification => {

@@ -15,8 +15,8 @@
 use chrono::{TimeDelta, Utc};
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_worker_service::custom_api::model::OidcSession;
-use golem_worker_service::custom_api::security::model::{PendingOidcLogin, SessionId};
-use golem_worker_service::custom_api::security::session_store::SessionStore;
+use golem_worker_service::custom_api::oidc::model::{PendingOidcLogin, SessionId};
+use golem_worker_service::custom_api::oidc::session_store::SessionStore;
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
     Audience, EmptyAdditionalClaims, IssuerUrl, Nonce, Scope, StandardClaims, SubjectIdentifier,

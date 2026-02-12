@@ -18,7 +18,7 @@ use golem_common::model::agent::BinarySource;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, SecuritySchemeDetails,
-    WebhookCallbackBehaviour,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
 use http::Method;
@@ -66,7 +66,7 @@ pub struct RichCompiledRoute {
     pub path: Vec<PathSegment>,
     pub body: RequestBodySchema,
     pub behavior: RichRouteBehaviour,
-    pub security_scheme: Option<Arc<SecuritySchemeDetails>>,
+    pub security: RichRouteSecurity,
     pub cors: CorsOptions,
 }
 
@@ -90,6 +90,18 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
 
 #[derive(Debug)]
 pub struct OidcCallbackBehaviour {
+    pub security_scheme: Arc<SecuritySchemeDetails>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RichRouteSecurity {
+    None,
+    SessionFromHeader(SessionFromHeaderRouteSecurity),
+    SecurityScheme(RichSecuritySchemeRouteSecurity),
+}
+
+#[derive(Debug, Clone)]
+pub struct RichSecuritySchemeRouteSecurity {
     pub security_scheme: Arc<SecuritySchemeDetails>,
 }
 

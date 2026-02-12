@@ -59,7 +59,7 @@ impl Router<Arc<RichCompiledRoute>> {
             let route_id = route.route_id;
 
             if !router.add_route(route.method.clone(), route.path.clone(), Arc::new(route)) {
-                tracing::warn!("Failed to add route with index {route_id}");
+                tracing::warn!("Failed to add route with route_id {route_id}");
             }
         }
 

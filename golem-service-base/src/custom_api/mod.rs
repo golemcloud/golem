@@ -237,7 +237,7 @@ pub struct CompiledRoute {
     // TODO: move this into the individual route behaviours
     pub body: RequestBodySchema,
     pub behavior: RouteBehaviour,
-    pub security_scheme: Option<SecuritySchemeId>,
+    pub security: RouteSecurity,
     pub cors: CorsOptions,
 }
 
@@ -273,6 +273,24 @@ pub struct CorsPreflightBehaviour {
 #[desert(evolution())]
 pub struct WebhookCallbackBehaviour {
     pub component_id: ComponentId,
+}
+
+#[derive(Debug, Clone)]
+pub enum RouteSecurity {
+    None,
+    SessionFromHeader(SessionFromHeaderRouteSecurity),
+    SecurityScheme(SecuritySchemeRouteSecurity),
+}
+
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct SessionFromHeaderRouteSecurity {
+    pub header_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecuritySchemeRouteSecurity {
+    pub security_scheme_id: SecuritySchemeId,
 }
 
 #[derive(Debug, Clone)]

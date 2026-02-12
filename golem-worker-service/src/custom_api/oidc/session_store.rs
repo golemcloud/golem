@@ -438,7 +438,7 @@ impl SessionStore for SqliteSessionStore {
 mod records {
     use super::SessionStoreError;
     use crate::custom_api::model::OidcSession;
-    use crate::custom_api::security::model::PendingOidcLogin;
+    use crate::custom_api::oidc::model::PendingOidcLogin;
     use anyhow::anyhow;
     use chrono::{DateTime, Utc};
     use desert_rust::BinaryCodec;
@@ -546,7 +546,7 @@ mod records {
 mod tests {
     use super::records;
     use crate::custom_api::OidcSession;
-    use crate::custom_api::security::model::PendingOidcLogin;
+    use crate::custom_api::oidc::model::PendingOidcLogin;
     use chrono::{TimeDelta, Utc};
     use golem_common::model::security_scheme::SecuritySchemeId;
     use openidconnect::core::CoreIdTokenClaims;

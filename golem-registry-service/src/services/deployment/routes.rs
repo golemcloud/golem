@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::api_definition::{
-    BoundCompiledRoute, CompiledRoutesForDomain, MaybeDisabledCompiledRoute,
-};
+use crate::model::api_definition::{BoundCompiledRoute, UnboundRouteSecurity};
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
-use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
+use crate::services::http_api_deployment::HttpApiDeploymentError;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::custom_api::{
+    CompiledRoute, CompiledRoutes, RouteSecurity, SecuritySchemeRouteSecurity,
+};
 use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,17 +62,17 @@ error_forwarding!(
 
 pub struct DeployedRoutesService {
     deployment_repo: Arc<dyn DeploymentRepo>,
-    http_api_deployment_service: Arc<HttpApiDeploymentService>,
+    // http_api_deployment_service: Arc<HttpApiDeploymentService>,
 }
 
 impl DeployedRoutesService {
     pub fn new(
         deployment_repo: Arc<dyn DeploymentRepo>,
-        http_api_deployment_service: Arc<HttpApiDeploymentService>,
+        // http_api_deployment_service: Arc<HttpApiDeploymentService>,
     ) -> Self {
         Self {
             deployment_repo,
-            http_api_deployment_service,
+            // http_api_deployment_service,
         }
     }
 
@@ -104,68 +103,68 @@ impl DeployedRoutesService {
     //     Ok(openapi_spec)
     // }
 
-    pub async fn get_compiled_routes_for_domain(
-        &self,
-        environment_id: EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        domain: &Domain,
-        auth: &AuthCtx,
-    ) -> Result<CompiledRoutesForDomain, DeployedRoutesError> {
-        let _http_api_deployment = self
-            .http_api_deployment_service
-            .get_in_deployment_by_domain(environment_id, deployment_revision, domain, auth)
-            .await
-            .map_err(|err| match err {
-                HttpApiDeploymentError::ParentEnvironmentNotFound(environment_id) => {
-                    DeployedRoutesError::ParentEnvironmentNotFound(environment_id)
-                }
-                HttpApiDeploymentError::DeploymentRevisionNotFound(deployment_revision) => {
-                    DeployedRoutesError::DeploymentRevisionNotFound(deployment_revision)
-                }
-                HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(name) => {
-                    DeployedRoutesError::DomainNotFoundInDeployment(name)
-                }
-                other => other.into(),
-            })?;
+    // pub async fn get_compiled_routes_for_domain(
+    //     &self,
+    //     environment_id: EnvironmentId,
+    //     deployment_revision: DeploymentRevision,
+    //     domain: &Domain,
+    //     auth: &AuthCtx,
+    // ) -> Result<CompiledRoutesForDomain, DeployedRoutesError> {
+    //     let _http_api_deployment = self
+    //         .http_api_deployment_service
+    //         .get_in_deployment_by_domain(environment_id, deployment_revision, domain, auth)
+    //         .await
+    //         .map_err(|err| match err {
+    //             HttpApiDeploymentError::ParentEnvironmentNotFound(environment_id) => {
+    //                 DeployedRoutesError::ParentEnvironmentNotFound(environment_id)
+    //             }
+    //             HttpApiDeploymentError::DeploymentRevisionNotFound(deployment_revision) => {
+    //                 DeployedRoutesError::DeploymentRevisionNotFound(deployment_revision)
+    //             }
+    //             HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(name) => {
+    //                 DeployedRoutesError::DomainNotFoundInDeployment(name)
+    //             }
+    //             other => other.into(),
+    //         })?;
 
-        let routes: Vec<BoundCompiledRoute> = self
-            .deployment_repo
-            .list_compiled_routes_for_domain_and_deployment(
-                environment_id.0,
-                deployment_revision.into(),
-                &domain.0,
-            )
-            .await?
-            .into_iter()
-            .map(|r| r.try_into())
-            .collect::<Result<_, _>>()?;
+    //     let routes: Vec<BoundCompiledRoute> = self
+    //         .deployment_repo
+    //         .list_compiled_routes_for_domain_and_deployment(
+    //             environment_id.0,
+    //             deployment_revision.into(),
+    //             &domain.0,
+    //         )
+    //         .await?
+    //         .into_iter()
+    //         .map(|r| r.try_into())
+    //         .collect::<Result<_, _>>()?;
 
-        let mut security_schemes = HashMap::new();
-        let mut converted_routes = Vec::with_capacity(routes.len());
+    //     let mut security_schemes = HashMap::new();
+    //     let mut converted_routes = Vec::with_capacity(routes.len());
 
-        for route in routes {
-            let mut security_scheme_id = None;
-            if let Some(security_scheme) = route.security_scheme {
-                let _ = security_scheme_id.insert(security_scheme.id);
-                security_schemes.insert(security_scheme.id, security_scheme);
-            }
-            let converted = MaybeDisabledCompiledRoute {
-                method: route.route.method,
-                path: route.route.path,
-                behavior: route.route.behaviour,
-                body: route.route.body,
-                security_scheme_missing: route.security_scheme_missing,
-                security_scheme: security_scheme_id,
-                cors: route.route.cors,
-            };
-            converted_routes.push(converted);
-        }
+    //     for route in routes {
+    //         let mut security_scheme_id = None;
+    //         if let Some(security_scheme) = route.security_scheme {
+    //             let _ = security_scheme_id.insert(security_scheme.id);
+    //             security_schemes.insert(security_scheme.id, security_scheme);
+    //         }
+    //         let converted = MaybeDisabledCompiledRoute {
+    //             method: route.route.method,
+    //             path: route.route.path,
+    //             behavior: route.route.behaviour,
+    //             body: route.route.body,
+    //             security_scheme_missing: route.security_scheme_missing,
+    //             security_scheme: security_scheme_id,
+    //             cors: route.route.cors,
+    //         };
+    //         converted_routes.push(converted);
+    //     }
 
-        Ok(CompiledRoutesForDomain {
-            security_schemes,
-            routes: converted_routes,
-        })
-    }
+    //     Ok(CompiledRoutesForDomain {
+    //         security_schemes,
+    //         routes: converted_routes,
+    //     })
+    // }
 
     pub async fn get_currently_active_compiled_routes(
         &self,
@@ -200,13 +199,29 @@ impl DeployedRoutesService {
                 let _ = security_scheme_id.insert(security_scheme.id);
                 security_schemes.insert(security_scheme.id, security_scheme);
             }
+
+            let security = match route.route.security {
+                UnboundRouteSecurity::None => RouteSecurity::None,
+                UnboundRouteSecurity::SessionFromHeader(inner) => {
+                    RouteSecurity::SessionFromHeader(inner)
+                }
+                UnboundRouteSecurity::SecurityScheme(_) => {
+                    // Safe as the repo layer guarantees that security_scheme_missing would be set
+                    // if the security scheme for this name could not be found.
+                    let security_scheme_id = security_scheme_id.unwrap();
+                    RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity {
+                        security_scheme_id,
+                    })
+                }
+            };
+
             let converted = CompiledRoute {
                 route_id: route.route.route_id,
                 method: route.route.method,
                 path: route.route.path,
                 body: route.route.body,
                 behavior: route.route.behaviour,
-                security_scheme: security_scheme_id,
+                security,
                 cors: route.route.cors,
             };
             converted_routes.push(converted);
