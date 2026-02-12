@@ -45,6 +45,7 @@ message AgentType {
   repeated AgentDependency dependencies = 5;
   AgentMode mode = 6;
   optional HttpMountDetails http_mount = 7;
+  optional Snapshotting snapshotting = 8;
 }
 
 message BinaryDescriptor {
@@ -219,6 +220,21 @@ message HeaderVariable {
 message QueryVariable {
   string query_param_name = 1;
   string variable_name = 2;
+}
+
+message Snapshotting {
+  oneof value {
+    golem.common.Empty disabled = 1;
+    SnapshottingConfig enabled = 2;
+  }
+}
+
+message SnapshottingConfig {
+  oneof value {
+    golem.common.Empty default = 1;
+    uint64 periodic_nanos = 2;
+    uint32 every_n_invocation = 3;
+  }
 }
 
 message AgentHttpAuthDetails {

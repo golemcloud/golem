@@ -371,6 +371,7 @@ pub struct AgentType {
     pub dependencies: Vec<AgentDependency>,
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
+    pub snapshotting: Snapshotting,
 }
 
 impl AgentType {
@@ -391,6 +392,7 @@ impl AgentType {
                 .collect(),
             mode: self.mode,
             http_mount: self.http_mount,
+            snapshotting: self.snapshotting,
         }
     }
 
@@ -934,6 +936,59 @@ pub struct HeaderVariable {
 pub struct QueryVariable {
     pub query_param_name: String,
     pub variable_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum Snapshotting {
+    #[unit_case]
+    Disabled(Empty),
+    Enabled(SnapshottingConfig),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum SnapshottingConfig {
+    #[unit_case]
+    Default(Empty),
+    Periodic(SnapshottingPeriodic),
+    EveryNInvocation(SnapshottingEveryNInvocation),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshottingPeriodic {
+    pub duration_nanos: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshottingEveryNInvocation {
+    pub count: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]

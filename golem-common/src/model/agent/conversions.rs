@@ -23,7 +23,8 @@ use crate::model::agent::{
     AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
     ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
+    RegisteredAgentType, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
+    SnapshottingPeriodic, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
     UntypedElementValue, Url,
 };
 use crate::model::Empty;
@@ -176,6 +177,7 @@ impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
                 .collect(),
             mode: value.mode.into(),
             http_mount: value.http_mount.map(|v| v.into()),
+            snapshotting: value.snapshotting.into(),
         }
     }
 }
@@ -194,6 +196,7 @@ impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
                 .collect(),
             mode: value.mode.into(),
             http_mount: value.http_mount.map(|v| v.into()),
+            snapshotting: value.snapshotting.into(),
         }
     }
 }
@@ -940,6 +943,56 @@ impl From<super::bindings::golem::agent::common::GolemUserPrincipal> for GolemUs
     fn from(value: super::bindings::golem::agent::common::GolemUserPrincipal) -> Self {
         Self {
             account_id: value.account_id.into(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::Snapshotting> for Snapshotting {
+    fn from(value: super::bindings::golem::agent::common::Snapshotting) -> Self {
+        match value {
+            super::bindings::golem::agent::common::Snapshotting::Disabled => {
+                Self::Disabled(Empty {})
+            }
+            super::bindings::golem::agent::common::Snapshotting::Enabled(config) => {
+                Self::Enabled(config.into())
+            }
+        }
+    }
+}
+
+impl From<Snapshotting> for super::bindings::golem::agent::common::Snapshotting {
+    fn from(value: Snapshotting) -> Self {
+        match value {
+            Snapshotting::Disabled(_) => Self::Disabled,
+            Snapshotting::Enabled(config) => Self::Enabled(config.into()),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::SnapshottingConfig> for SnapshottingConfig {
+    fn from(value: super::bindings::golem::agent::common::SnapshottingConfig) -> Self {
+        match value {
+            super::bindings::golem::agent::common::SnapshottingConfig::Default => {
+                Self::Default(Empty {})
+            }
+            super::bindings::golem::agent::common::SnapshottingConfig::Periodic(nanos) => {
+                Self::Periodic(SnapshottingPeriodic {
+                    duration_nanos: nanos,
+                })
+            }
+            super::bindings::golem::agent::common::SnapshottingConfig::EveryNInvocation(n) => {
+                Self::EveryNInvocation(SnapshottingEveryNInvocation { count: n })
+            }
+        }
+    }
+}
+
+impl From<SnapshottingConfig> for super::bindings::golem::agent::common::SnapshottingConfig {
+    fn from(value: SnapshottingConfig) -> Self {
+        match value {
+            SnapshottingConfig::Default(_) => Self::Default,
+            SnapshottingConfig::Periodic(periodic) => Self::Periodic(periodic.duration_nanos),
+            SnapshottingConfig::EveryNInvocation(every_n) => Self::EveryNInvocation(every_n.count),
         }
     }
 }
