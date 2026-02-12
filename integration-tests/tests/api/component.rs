@@ -52,7 +52,11 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
     {
         let fetched_component = client.get_component(&component.id.0).await?;
@@ -450,7 +454,8 @@ async fn install_component_transformer_plugin(
         .await?;
 
     let component = user
-        .component(&env.id, "environment-service")
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
         .with_env(vec![("TEST_ENV_VAR_1".to_string(), "value_1".to_string())])
         .with_plugin(&component_transformer_plugin_grant.id, 0)
         .store()

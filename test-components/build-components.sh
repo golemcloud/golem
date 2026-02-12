@@ -2,10 +2,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_components=("write-stdout" "write-stderr" "read-stdin" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
-"option-service" "http-client-2" "failing-component" "key-value-service" "blob-store-service" "runtime-service" "networking"
-"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests" "update-test-env-var")
-rust_test_apps=("host-api-tests" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2")
+rust_test_components=("write-stdout" "write-stderr" "http-client" "interruption"
+"option-service" "http-client-2" "failing-component" "runtime-service" "networking"
+"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "oplog-processor" "rdbms-service" "http-client-3" "update-test-env-var")
+rust_test_apps=("host-api-tests" "custom-durability" "scheduled-invocation" "ifs-update" "ifs-update-inside-exported-function" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2")
 c_test_components=("large-initial-memory" "large-dynamic-memory")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc")
 benchmark_apps=("benchmarks")

@@ -14,12 +14,12 @@
 
 use assert2::assert;
 use assert2::let_assert;
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::routing::post;
-use axum::Router;
 use base64::Engine;
-use golem_api_grpc::proto::golem::worker::{log_event, Log};
+use golem_api_grpc::proto::golem::worker::{Log, log_event};
 use golem_client::api::{RegistryServiceClient, RegistryServiceCreateComponentError};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
@@ -30,11 +30,12 @@ use golem_common::model::plugin_registration::{
     PluginSpecDto,
 };
 use golem_common::model::{Empty, ScanCursor};
+use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
-use golem_wasm::{IntoValueAndType, Record, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use reqwest::StatusCode;
 use serde_json::json;
 use std::collections::HashMap;
@@ -42,7 +43,7 @@ use std::path::PathBuf;
 use test_r::{inherit_test_dep, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
-use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
+use wac_graph::{CompositionGraph, EncodeOptions, Processor, plug};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -180,9 +181,11 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         })
         .collect();
 
-    assert!(log_events
-        .iter()
-        .all(|log| log.context.contains("custom-context")));
+    assert!(
+        log_events
+            .iter()
+            .all(|log| log.context.contains("custom-context"))
+    );
 
     Ok(())
 }
@@ -403,7 +406,8 @@ async fn component_transformer_env_var(deps: &EnvBasedTestDependencies) -> anyho
         .await?;
 
     let component = user
-        .component(&env.id, "environment-service")
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
         .with_env(vec![("TEST_ENV_VAR_1".to_string(), "value_1".to_string())])
         .with_plugin(&component_transformer_plugin_grant.id, 0)
         .store()
@@ -411,24 +415,24 @@ async fn component_transformer_env_var(deps: &EnvBasedTestDependencies) -> anyho
 
     server_handle.abort();
 
-    let worker = user
+    let agent_id = agent_id!("environment", "worker1");
+    let _worker = user
         .start_worker_with(
             &component.id,
-            "worker1",
+            &agent_id.to_string(),
             HashMap::from_iter(vec![("TEST_ENV_VAR_3".to_string(), "value_3".to_string())]),
             vec![],
         )
         .await?;
 
     let response = user
-        .invoke_and_await(&worker, "golem:it/api.{get-environment}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
 
     let response_map = {
-        assert_eq!(response.len(), 1);
-
-        let_assert!(Value::Result(Ok(Some(response))) = &response[0]);
+        let_assert!(Value::Result(Ok(Some(response))) = &response);
         let_assert!(Value::List(response) = response.as_ref());
         response
             .iter()
@@ -538,7 +542,8 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies) -> anyhow::R
         .await?;
 
     let component = user
-        .component(&env.id, "file-service")
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
         .with_files(&[IFSEntry {
             source_path: PathBuf::from("ifs-update/files/bar.txt"),
             target_path: ComponentFilePath::from_abs_str("/files/bar.txt").unwrap(),
@@ -550,38 +555,39 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     server_handle.abort();
 
-    let worker_id = user.start_worker(&component.id, "worker1").await?;
+    let agent_id = agent_id!("file-system", "worker1");
+    let _worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result_foo = user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{read-file}",
-            vec!["/files/foo.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "read_file",
+            data_value!("/files/foo.txt"),
         )
-        .await
-        .collapse()?;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
 
     assert_eq!(
         result_foo,
-        vec![Value::Result(Ok(Some(Box::new(Value::String(
-            "foobar".to_string()
-        )))))]
+        Value::Result(Ok(Some(Box::new(Value::String("foobar".to_string())))))
     );
 
     let result_bar = user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{read-file}",
-            vec!["/files/bar.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "read_file",
+            data_value!("/files/bar.txt"),
         )
-        .await
-        .collapse()?;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
 
     assert_eq!(
         result_bar,
-        vec![Value::Result(Ok(Some(Box::new(Value::String(
-            "bar\n".to_string()
-        )))))]
+        Value::Result(Ok(Some(Box::new(Value::String("bar\n".to_string())))))
     );
 
     Ok(())
@@ -653,7 +659,12 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies) -> anyhow
             downcasted
     );
 
-    assert!(inner_error.errors == vec!["Component transformer plugin with priority 0 failed with: HTTP status: 500 Internal Server Error"]);
+    assert!(
+        inner_error.errors
+            == vec![
+                "Component transformer plugin with priority 0 failed with: HTTP status: 500 Internal Server Error"
+            ]
+    );
 
     Ok(())
 }
@@ -695,78 +706,38 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let component = user
-        .component(&env.id, "shopping-cart")
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .with_plugin(&oplog_processor_plugin_grant.id, 0)
         .store()
         .await?;
 
-    let worker_id = user.start_worker(&component.id, "worker1").await?;
+    let repo_id = agent_id!("repository", "worker1");
+    let _worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{initialize-cart}",
-        vec!["test-user-1".into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1000", "Golem T-Shirt M"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1000".into_value_and_type()),
-            ("name", "Golem T-Shirt M".into_value_and_type()),
-            ("price", 100.0f32.into_value_and_type()),
-            ("quantity", 5u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1001", "Golem Cloud Subscription 1y"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1001".into_value_and_type()),
-            ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-            ("price", 999999.0f32.into_value_and_type()),
-            ("quantity", 1u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
-
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1002".into_value_and_type()),
-            ("name", "Mud Golem".into_value_and_type()),
-            ("price", 11.0f32.into_value_and_type()),
-            ("quantity", 10u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
-    )
-    .await
-    .collapse()?;
-
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{update-item-quantity}",
-        vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-    )
-    .await
-    .collapse()?;
-
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{force-commit}",
-        vec![10u8.into_value_and_type()],
-    )
-    .await
-    .collapse()?;
+    .await?;
 
     let mut plugin_worker_id = None;
     let mut cursor = ScanCursor::default();
@@ -824,13 +795,13 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     let account_id = user.account_id;
     let component_id = component.id;
+    let worker_name = repo_id.to_string();
 
+    // TODO: to be updated once tests are no longer going through the dynamic agent invocation
     let expected = vec![
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
+        format!("{account_id}/{component_id}/{worker_name}/golem:agent/guest.{{invoke}}"),
+        format!("{account_id}/{component_id}/{worker_name}/golem:agent/guest.{{invoke}}"),
+        format!("{account_id}/{component_id}/{worker_name}/golem:agent/guest.{{invoke}}"),
     ];
     assert_eq!(invocations, expected);
 
@@ -998,7 +969,8 @@ async fn oplog_processor_in_different_env_after_unregistering(
         .await?;
 
     let component = user_1
-        .component(&env_1.id, "shopping-cart")
+        .component(&env_1.id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .with_plugin(&oplog_processor_plugin_grant.id, 0)
         .store()
         .await?;
@@ -1008,79 +980,35 @@ async fn oplog_processor_in_different_env_after_unregistering(
         .await?;
     client_2.delete_plugin(&oplog_processor_plugin.id.0).await?;
 
-    let worker_id = user_1.start_worker(&component.id, "worker1").await?;
+    let repo_id = agent_id!("repository", "worker1");
+    let _worker_id = user_1.start_agent(&component.id, repo_id.clone()).await?;
 
     user_1
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await
-        .collapse()?;
+        .await?;
 
     user_1
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1001", "Golem Cloud Subscription 1y"),
         )
-        .await
-        .collapse()?;
+        .await?;
 
     user_1
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-                ("price", 999999.0f32.into_value_and_type()),
-                ("quantity", 1u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
         )
-        .await
-        .collapse()?;
-
-    user_1
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 10u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await
-        .collapse()?;
-
-    user_1
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{update-item-quantity}",
-            vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-        )
-        .await
-        .collapse()?;
-
-    user_1
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{force-commit}",
-            vec![10u8.into_value_and_type()],
-        )
-        .await
-        .collapse()?;
+        .await?;
 
     let mut plugin_worker_id = None;
     let mut cursor = ScanCursor::default();
@@ -1138,13 +1066,13 @@ async fn oplog_processor_in_different_env_after_unregistering(
 
     let account_id = user_1.account_id;
     let component_id = component.id;
+    let worker_name = repo_id.to_string();
 
+    // TODO: to be updated once tests are no longer going through the dynamic agent invocation
     let expected = vec![
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("{account_id}/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
+        format!("{account_id}/{component_id}/{worker_name}/golem:agent/guest.{{invoke}}"),
+        format!("{account_id}/{component_id}/{worker_name}/golem:agent/guest.{{invoke}}"),
+        format!("{account_id}/{component_id}/{worker_name}/golem:agent/guest.{{invoke}}"),
     ];
     assert_eq!(invocations, expected);
 

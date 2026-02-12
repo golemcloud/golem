@@ -207,6 +207,17 @@ pub trait TestDsl {
         self.start_worker(component_id, &id.to_string()).await
     }
 
+    async fn start_agent_with(
+        &self,
+        component_id: &ComponentId,
+        id: AgentId,
+        env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
+    ) -> anyhow::Result<WorkerId> {
+        self.start_worker_with(component_id, &id.to_string(), env, wasi_config_vars)
+            .await
+    }
+
     async fn start_worker(
         &self,
         component_id: &ComponentId,
@@ -250,6 +261,29 @@ pub trait TestDsl {
     ) -> WorkerInvocationResult<Vec<Value>> {
         self.invoke_and_await_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
             .await
+    }
+
+    async fn invoke_agent(
+        &self,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<()> {
+        let worker_id = WorkerId::from_agent_id(component_id.clone(), agent_id)
+            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+        self.invoke_with_key(
+            &worker_id,
+            &IdempotencyKey::fresh(),
+            "golem:agent/guest.{invoke}",
+            vec![
+                method_name.into_value_and_type(),
+                params.into_value_and_type(),
+                golem_common::model::agent::Principal::anonymous().into_value_and_type(),
+            ],
+        )
+        .await?
+        .map_err(|err| anyhow!("Agent invocation error: {err}"))
     }
 
     async fn invoke_and_await_agent(

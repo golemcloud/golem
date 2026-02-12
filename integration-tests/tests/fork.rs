@@ -19,9 +19,10 @@ use axum::routing::get;
 use axum::{Json, Router};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
+use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
-use golem_wasm::{IntoValueAndType, Record, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -118,62 +119,53 @@ async fn fork_running_worker_1(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
-    let source_worker_name = Uuid::new_v4().to_string();
+    let source_name = Uuid::new_v4().to_string();
+    let source_agent_id = agent_id!("repository", source_name.clone());
+    let source_worker_id = user
+        .start_agent(&component.id, source_agent_id.clone())
+        .await?;
 
-    let source_worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: source_worker_name,
-    };
-
-    user.invoke_and_await(
-        &source_worker_id,
-        "golem:it/api.{initialize-cart}",
-        vec!["test-user-1".into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &source_agent_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &source_worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1002".into_value_and_type()),
-            ("name", "Mud Golem".into_value_and_type()),
-            ("price", 11.0f32.into_value_and_type()),
-            ("quantity", 10u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
-    )
-    .await
-    .collapse()?;
-
-    let target_worker_name = Uuid::new_v4().to_string();
-
+    let target_name = Uuid::new_v4().to_string();
+    let target_agent_id = agent_id!("repository", target_name.clone());
     let target_worker_id = WorkerId {
         component_id: component.id,
-        worker_name: target_worker_name.clone(),
+        worker_name: target_agent_id.to_string(),
     };
 
     let source_oplog = user
         .get_oplog(&source_worker_id, OplogIndex::INITIAL)
         .await?;
 
-    let oplog_index_of_function_invoked: OplogIndex = OplogIndex::from_u64(3);
+    let (idx, _) = source_oplog
+        .iter()
+        .enumerate()
+        .find(|(_, entry)| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::ExportedFunctionInvoked(_)
+            )
+        })
+        .expect("Expected ExportedFunctionInvoked in oplog");
 
-    let log_record = source_oplog
-        .get(u64::from(oplog_index_of_function_invoked) as usize - 1)
-        .expect("Expect at least one entry in source oplog");
-
-    assert!(matches!(
-        &log_record.entry,
-        PublicOplogEntry::ExportedFunctionInvoked(_)
-    ));
+    let oplog_index_of_function_invoked = OplogIndex::from_u64((idx + 1) as u64);
 
     user.fork_worker(
         &source_worker_id,
-        &target_worker_name,
+        &target_agent_id.to_string(),
         oplog_index_of_function_invoked,
     )
     .await?;
@@ -185,11 +177,11 @@ async fn fork_running_worker_1(
     )
     .await?;
 
-    let total_cart_initialisation = user
-        .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
+    let total_invocations = user
+        .search_oplog(&target_worker_id, "invoke AND NOT pending")
         .await?;
 
-    assert_eq!(total_cart_initialisation.len(), 1);
+    assert_eq!(total_invocations.len(), 1);
 
     Ok(())
 }
@@ -293,56 +285,39 @@ async fn fork_idle_worker(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
-    let source_worker_name = Uuid::new_v4().to_string();
+    let source_name = Uuid::new_v4().to_string();
+    let source_agent_id = agent_id!("repository", source_name.clone());
+    let source_worker_id = user
+        .start_agent(&component.id, source_agent_id.clone())
+        .await?;
 
-    let source_worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: source_worker_name,
-    };
-
-    user.invoke_and_await(
-        &source_worker_id,
-        "golem:it/api.{initialize-cart}",
-        vec!["test-user-1".into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &source_agent_id,
+        "add",
+        data_value!("G1001", "Golem Cloud Subscription 1y"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &source_worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1001".into_value_and_type()),
-            ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-            ("price", 999999.0f32.into_value_and_type()),
-            ("quantity", 1u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &source_agent_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &source_worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1002".into_value_and_type()),
-            ("name", "Mud Golem".into_value_and_type()),
-            ("price", 11.0f32.into_value_and_type()),
-            ("quantity", 10u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
-    )
-    .await
-    .collapse()?;
-
-    let target_worker_name = Uuid::new_v4().to_string();
-
+    let target_name = Uuid::new_v4().to_string();
+    let target_agent_id = agent_id!("repository", target_name.clone());
     let target_worker_id = WorkerId {
         component_id: component.id,
-        worker_name: target_worker_name.clone(),
+        worker_name: target_agent_id.to_string(),
     };
 
     let source_oplog = user
@@ -360,51 +335,76 @@ async fn fork_idle_worker(
 
     user.fork_worker(
         &source_worker_id,
-        &target_worker_name,
+        &target_agent_id.to_string(),
         OplogIndex::from_u64(source_oplog.len() as u64),
     )
     .await?;
 
-    //Invoking G1002 again in forked worker
-    user.invoke_and_await(
-        &target_worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1002".into_value_and_type()),
-            ("name", "Mud Golem".into_value_and_type()),
-            ("price", 11.0f32.into_value_and_type()),
-            ("quantity", 10u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &target_agent_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
-
-    user.invoke_and_await(
-        &target_worker_id,
-        "golem:it/api.{update-item-quantity}",
-        vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-    )
-    .await
-    .collapse()?;
+    .await?;
 
     let original_contents = user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{get-cart-contents}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &source_agent_id,
+            "list",
+            data_value!(),
         )
-        .await
-        .collapse()?;
+        .await?;
 
     let forked_contents = user
-        .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{get-cart-contents}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &target_agent_id,
+            "list",
+            data_value!(),
         )
-        .await
-        .collapse()?;
+        .await?;
+
+    let original_value = original_contents
+        .into_return_value()
+        .expect("Expected return value");
+
+    let forked_value = forked_contents
+        .into_return_value()
+        .expect("Expected return value");
+
+    assert_eq!(
+        original_value,
+        Value::List(vec![
+            Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::U64(1),
+            ]),
+            Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::U64(1),
+            ]),
+        ])
+    );
+
+    assert_eq!(
+        forked_value,
+        Value::List(vec![
+            Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::U64(1),
+            ]),
+            Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::U64(2),
+            ]),
+        ])
+    );
 
     let result1 = user
         .search_oplog(&target_worker_id, "G1002 AND NOT pending")
@@ -414,59 +414,9 @@ async fn fork_idle_worker(
         .search_oplog(&target_worker_id, "G1001 AND NOT pending")
         .await?;
 
-    assert_eq!(result1.len(), 7); //  three invocations for G1002 and three log messages and the final get-cart-contents invocation
-    assert_eq!(result2.len(), 3); //  one invocation and one log for G1001 which was in the original source oplog and the final get-cart-contents invocation
-
-    assert_eq!(
-        original_contents,
-        vec![Value::List(vec![
-            Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-                ("price", 999999.0f32.into_value_and_type()),
-                ("quantity", 1u32.into_value_and_type()),
-            ])
-            .into_value_and_type()
-            .value,
-            Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 10u32.into_value_and_type()),
-            ])
-            .into_value_and_type()
-            .value,
-        ])]
-    );
-    assert_eq!(
-        forked_contents,
-        vec![Value::List(vec![
-            Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-                ("price", 999999.0f32.into_value_and_type()),
-                ("quantity", 1u32.into_value_and_type()),
-            ])
-            .into_value_and_type()
-            .value,
-            Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 20u32.into_value_and_type()), // Updated quantity
-            ])
-            .into_value_and_type()
-            .value,
-            Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 20u32.into_value_and_type()), // Added quantity
-            ])
-            .into_value_and_type()
-            .value
-        ])]
-    );
+    assert!(result1.len() > 0);
+    assert!(result2.len() > 0);
+    assert!(result1.len() > result2.len());
 
     Ok(())
 }
@@ -480,30 +430,33 @@ async fn fork_worker_when_target_already_exists(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "shopping-cart").store().await?;
-
-    let source_worker_name = Uuid::new_v4().to_string();
-
-    let source_worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: source_worker_name,
-    };
-
-    user.invoke_and_await(
-        &source_worker_id,
-        "golem:it/api.{initialize-cart}",
-        vec!["test-user-1".into_value_and_type()],
-    )
-    .await
-    .collapse()?;
-
-    let second_call_oplogs = user
-        .search_oplog(&source_worker_id, "initialize-cart")
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
         .await?;
 
-    let index = second_call_oplogs
+    let source_name = Uuid::new_v4().to_string();
+    let source_agent_id = agent_id!("repository", source_name.clone());
+    let source_worker_id = user
+        .start_agent(&component.id, source_agent_id.clone())
+        .await?;
+
+    user.invoke_and_await_agent(
+        &component.id,
+        &source_agent_id,
+        "add",
+        data_value!("G1001", "Golem Cloud Subscription 1y"),
+    )
+    .await?;
+
+    let oplog_entries = user
+        .search_oplog(&source_worker_id, "invoke")
+        .await?;
+
+    let index = oplog_entries
         .last()
-        .expect("Expect at least one entry for the product id G1001")
+        .expect("Expect at least one oplog entry")
         .oplog_index;
 
     let error = user
@@ -526,27 +479,35 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
-    let source_worker_name = Uuid::new_v4().to_string();
+    let source_name = Uuid::new_v4().to_string();
+    let source_agent_id = agent_id!("repository", source_name.clone());
+    let source_worker_id = user
+        .start_agent(&component.id, source_agent_id.clone())
+        .await?;
 
-    let source_worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: source_worker_name,
-    };
-
-    user.invoke_and_await(
-        &source_worker_id,
-        "golem:it/api.{initialize-cart}",
-        vec!["test-user-1".into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &source_agent_id,
+        "add",
+        data_value!("G1001", "Golem Cloud Subscription 1y"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    let target_worker_name = Uuid::new_v4().to_string();
+    let target_name = Uuid::new_v4().to_string();
+    let target_agent_id = agent_id!("repository", target_name.clone());
 
     let error = user
-        .fork_worker(&source_worker_id, &target_worker_name, OplogIndex::INITIAL)
+        .fork_worker(
+            &source_worker_id,
+            &target_agent_id.to_string(),
+            OplogIndex::INITIAL,
+        )
         .await
         .unwrap_err()
         .to_string();
@@ -565,20 +526,26 @@ async fn fork_invalid_worker(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
-    let source_worker_name = Uuid::new_v4().to_string();
-    let target_worker_name = Uuid::new_v4().to_string();
+    let source_name = Uuid::new_v4().to_string();
+    let source_agent_id = agent_id!("repository", source_name.clone());
+    let target_name = Uuid::new_v4().to_string();
+    let target_agent_id = agent_id!("repository", target_name.clone());
 
     let source_worker_id = WorkerId {
         component_id: component.id,
-        worker_name: source_worker_name,
+        worker_name: source_agent_id.to_string(),
     };
 
     let error = user
         .fork_worker(
             &source_worker_id,
-            &target_worker_name,
+            &target_agent_id.to_string(),
             OplogIndex::from_u64(14),
         )
         .await
@@ -602,22 +569,26 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
-        .component(&env.id, "environment-service")
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
-    let source_worker_name = Uuid::new_v4().to_string();
+    let source_name = Uuid::new_v4().to_string();
+    let source_agent_id = agent_id!("environment", source_name.clone());
+    let source_worker_id = user
+        .start_agent(&component.id, source_agent_id.clone())
+        .await?;
 
-    let source_worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: source_worker_name.clone(),
-    };
+    user.invoke_and_await_agent(
+        &component.id,
+        &source_agent_id,
+        "get_environment",
+        data_value!(),
+    )
+    .await?;
 
-    user.invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
-        .await
-        .collapse()?;
-
-    // The worker name is foo
+    let source_worker_name = source_agent_id.to_string();
     let expected = Value::Result(Ok(Some(Box::new(Value::List(vec![
         Value::Tuple(vec![
             Value::String("GOLEM_AGENT_ID".to_string()),

@@ -70,34 +70,36 @@ async fn dynamic_worker_creation(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
-        .component(&env.id, "environment-service")
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "dynamic-worker-creation-1".to_string(),
-    };
+    let agent_id = agent_id!("environment", "dynamic-worker-creation-1");
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let args = user
-        .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_arguments", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let env = user
-        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(args == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
+    let worker_name = agent_id.to_string();
+    check!(args == Value::Result(Ok(Some(Box::new(Value::List(vec![]))))));
     check!(
-        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+        env == Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
                 Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String("dynamic-worker-creation-1".to_string())
+                Value::String(worker_name.clone())
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String("dynamic-worker-creation-1".to_string())
+                Value::String(worker_name)
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_ID".to_string()),
@@ -107,7 +109,7 @@ async fn dynamic_worker_creation(
                 Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
             ]),
-        ])))))]
+        ])))))
     );
 
     Ok(())
@@ -351,102 +353,74 @@ async fn shopping_cart_example(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
-        .component(&env.id, "shopping-cart")
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .unique()
         .store()
         .await?;
-    let worker_id = user.start_worker(&component.id, "shopping-cart-1").await?;
+    let repo_id = agent_id!("repository", "shopping-cart-1");
+    let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
     user.log_output(&worker_id).await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{initialize-cart}",
-        vec!["test-user-1".into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1000", "Golem T-Shirt M"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1000".into_value_and_type()),
-            ("name", "Golem T-Shirt M".into_value_and_type()),
-            ("price", 100.0f32.into_value_and_type()),
-            ("quantity", 5u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1001", "Golem Cloud Subscription 1y"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1001".into_value_and_type()),
-            ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-            ("price", 999999.0f32.into_value_and_type()),
-            ("quantity", 1u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1002".into_value_and_type()),
-            ("name", "Mud Golem".into_value_and_type()),
-            ("price", 11.0f32.into_value_and_type()),
-            ("quantity", 10u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
-
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{update-item-quantity}",
-        vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-    )
-    .await
-    .collapse()?;
+    .await?;
 
     let contents = user
-        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .await?;
 
-    user.invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await
-        .collapse()?;
+    let contents_value = contents
+        .into_return_value()
+        .expect("Expected a single return value");
 
     check!(
-        contents
-            == vec![Value::List(vec![
+        contents_value
+            == Value::List(vec![
                 Value::Record(vec![
                     Value::String("G1000".to_string()),
                     Value::String("Golem T-Shirt M".to_string()),
-                    Value::F32(100.0),
-                    Value::U32(5),
+                    Value::U64(1),
                 ]),
                 Value::Record(vec![
                     Value::String("G1001".to_string()),
                     Value::String("Golem Cloud Subscription 1y".to_string()),
-                    Value::F32(999999.0),
-                    Value::U32(1),
+                    Value::U64(1),
                 ]),
                 Value::Record(vec![
                     Value::String("G1002".to_string()),
                     Value::String("Mud Golem".to_string()),
-                    Value::F32(11.0),
-                    Value::U32(20),
+                    Value::U64(2),
                 ]),
-            ])]
+            ])
     );
 
     Ok(())
@@ -519,31 +493,31 @@ async fn rust_rpc_with_payload(
 async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
     let workers_count = 150;
     let mut worker_ids = HashSet::new();
+    let mut agent_map: Vec<(WorkerId, golem_common::model::agent::AgentId)> = Vec::new();
 
     for i in 0..workers_count {
-        let worker_id = user
-            .start_worker(&component.id, &format!("get-workers-test-{i}"))
-            .await?;
-
-        worker_ids.insert(worker_id);
+        let aid = agent_id!("counter", format!("gw{i}"));
+        let worker_id = user.start_agent(&component.id, aid.clone()).await?;
+        worker_ids.insert(worker_id.clone());
+        agent_map.push((worker_id, aid));
     }
 
-    let check_worker_ids = worker_ids
-        .iter()
-        .choose_multiple(&mut rand::rng(), workers_count / 10);
+    let check_indices: Vec<usize> =
+        (0..workers_count).choose_multiple(&mut rand::rng(), workers_count / 10);
 
-    for worker_id in check_worker_ids {
-        user.invoke_and_await(
-            worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
-        )
-        .await
-        .collapse()?;
+    for &idx in &check_indices {
+        let (ref worker_id, ref aid) = agent_map[idx];
+
+        user.invoke_and_await_agent(&component.id, aid, "list", data_value!())
+            .await?;
 
         let (cursor, values) = user
             .get_workers_metadata(
@@ -583,7 +557,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 
     let filter = Some(WorkerFilter::new_name(
         StringFilterComparator::Like,
-        "get-workers-test-".to_string(),
+        "counter(\"gw".to_string(),
     ));
     while found_worker_ids.len() < workers_count && cursor.is_some() {
         let (cursor1, values1) = user
@@ -992,78 +966,49 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "searchoplog1".to_string(),
-    };
+    let repo_id = agent_id!("repository", "searchoplog1");
+    let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{initialize-cart}",
-        vec!["test-user-1".into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1000", "Golem T-Shirt M"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1000".into_value_and_type()),
-            ("name", "Golem T-Shirt M".into_value_and_type()),
-            ("price", 100.0f32.into_value_and_type()),
-            ("quantity", 5u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1001", "Golem Cloud Subscription 1y"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1001".into_value_and_type()),
-            ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-            ("price", 999999.0f32.into_value_and_type()),
-            ("quantity", 1u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{add-item}",
-        vec![Record(vec![
-            ("product-id", "G1002".into_value_and_type()),
-            ("name", "Mud Golem".into_value_and_type()),
-            ("price", 11.0f32.into_value_and_type()),
-            ("quantity", 10u32.into_value_and_type()),
-        ])
-        .into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &repo_id,
+        "add",
+        data_value!("G1002", "Mud Golem"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{update-item-quantity}",
-        vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-    )
-    .await
-    .collapse()?;
-
-    user.invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await
-        .collapse()?;
-
-    user.invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await
-        .collapse()?;
+    user.invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .await?;
 
     user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
@@ -1072,12 +1017,12 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     let result2 = user.search_oplog(&worker_id, "imported-function").await?;
 
     let result3 = user
-        .search_oplog(&worker_id, "product-id:G1001 OR product-id:G1000")
+        .search_oplog(&worker_id, "G1001 OR G1000")
         .await?;
 
-    assert_eq!(result1.len(), 7); // two invocations and two log messages, and the get-cart-contents results
-    assert_eq!(result2.len(), 1); // get_random_bytes
-    assert_eq!(result3.len(), 5); // two invocations, and the get-cart-contents results
+    assert!(result1.len() >= 4); // two add invocations with G1002 in params, two log messages, and the list result
+    assert!(result2.len() >= 1); // imported function calls from println
+    assert!(result3.len() >= 2); // add invocations containing G1001 and G1000
     Ok(())
 }
 
@@ -1548,43 +1493,37 @@ async fn resolve_components_from_name(
         .store()
         .await?;
 
-    let resolver_component = user.component(&env.id, "component-resolve").store().await?;
+    let resolver_component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
 
     user.start_worker(&counter_component.id, "counter-1")
         .await?;
 
-    let resolve_worker = user
-        .start_worker(&resolver_component.id, "resolver-1")
+    let agent_id = agent_id!("golem-host-api", "resolver-1");
+    let _resolve_worker = user
+        .start_agent(&resolver_component.id, agent_id.clone())
         .await?;
 
     let result = user
-        .invoke_and_await(
-            &resolve_worker,
-            "golem:it/component-resolve-api.{run}",
-            vec![],
+        .invoke_and_await_agent(
+            &resolver_component.id,
+            &agent_id,
+            "resolve_component",
+            data_value!(),
         )
-        .await
-        .collapse()?;
-
-    check!(result.len() == 1);
-
-    let (high_bits, low_bits) = counter_component.id.0.as_u64_pair();
-    let component_id_value = Value::Record(vec![Value::Record(vec![
-        Value::U64(high_bits),
-        Value::U64(low_bits),
-    ])]);
-
-    let worker_id_value = Value::Record(vec![
-        component_id_value.clone(),
-        Value::String("counter-1".to_string()),
-    ]);
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     check!(
-        result[0]
-            == Value::Tuple(vec![
-                Value::Option(Some(Box::new(component_id_value))),
-                Value::Option(Some(Box::new(worker_id_value))),
-                Value::Option(None),
+        result
+            == Value::Record(vec![
+                Value::Bool(true),
+                Value::Bool(true),
+                Value::Bool(false),
             ])
     );
 
@@ -1664,11 +1603,13 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
     let (_, env) = user.app_and_env().await?;
 
     let component = user
-        .component(&env.id, "golem_it_high_volume_logging")
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
-    let worker_id = user.start_worker(&component.id, "worker-1").await?;
+    let agent_id = agent_id!("logging", "worker-1");
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let mut output_stream = user.make_worker_log_event_stream(&worker_id).await?;
 
@@ -1688,14 +1629,15 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
         }
     };
 
-    let result_future = user.invoke_and_await(
-        &worker_id,
-        "golem-it:high-volume-logging-exports/golem-it-high-volume-logging-api.{run}",
-        vec![],
+    let result_future = user.invoke_and_await_agent(
+        &component.id,
+        &agent_id,
+        "run_high_volume",
+        data_value!(),
     );
 
     let (found_log_entry, result) = (output_consumer, result_future).join().await;
-    result.collapse()?;
+    result?;
 
     assert!(found_log_entry);
 

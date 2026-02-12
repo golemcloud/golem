@@ -16,12 +16,12 @@ use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
 };
+use golem_common::model::Empty;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::collections::HashSet;
@@ -157,7 +157,11 @@ async fn fails_with_bad_request_if_user_creates_oplog_processor_from_invalid_com
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
     let result = client
         .create_plugin(
             &user.account_id.0,

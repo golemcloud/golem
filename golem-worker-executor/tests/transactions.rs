@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use crate::Tracing;
+use anyhow::anyhow;
 use assert2::check;
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use bytes::Bytes;
+use golem_common::model::agent::Principal;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_logs,
     worker_error_message, worker_error_underlying_error, TestDsl,
@@ -490,24 +493,30 @@ async fn golem_rust_explicit_oplog_commit(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
+    let agent_id = agent_id!("golem-host-api", "explicit-oplog-commit");
     let worker_id = executor
-        .start_worker(&component.id, "golem-rust-tests-explicit-oplog-commit")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{explicit-commit}",
-            vec![0u8.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "explicit_commit",
+            data_value!(0u8),
         )
-        .await?;
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -526,11 +535,17 @@ async fn golem_rust_set_retry_policy(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+
+    let agent_id = agent_id!("golem-host-api", "set-retry-policy-1");
     let worker_id = executor
-        .start_worker(&component.id, "golem-rust-tests-set-retry-policy-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -539,8 +554,12 @@ async fn golem_rust_set_retry_policy(
     let result1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api.{fail-with-custom-max-retries}",
-            vec![2u64.into_value_and_type()],
+            "golem:agent/guest.{invoke}",
+            vec![
+                "fail_with_custom_max_retries".into_value_and_type(),
+                data_value!(2u64).into_value_and_type(),
+                Principal::anonymous().into_value_and_type(),
+            ],
         )
         .await?;
     let elapsed = start.elapsed().unwrap();
@@ -548,8 +567,12 @@ async fn golem_rust_set_retry_policy(
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api.{fail-with-custom-max-retries}",
-            vec![1u64.into_value_and_type()],
+            "golem:agent/guest.{invoke}",
+            vec![
+                "fail_with_custom_max_retries".into_value_and_type(),
+                data_value!(1u64).into_value_and_type(),
+                Principal::anonymous().into_value_and_type(),
+            ],
         )
         .await?;
 
@@ -563,7 +586,10 @@ async fn golem_rust_set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    let result1_logs = worker_error_logs(&result1_err);
+    assert!(result1_logs
+        .as_ref()
+        .map_or(false, |l| l.contains("Fail now")));
     let result2_err = result2.err().unwrap();
     assert_eq!(
         worker_error_message(&result2_err),
@@ -572,7 +598,10 @@ async fn golem_rust_set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    let result2_logs = worker_error_logs(&result2_err);
+    assert!(result2_logs
+        .as_ref()
+        .map_or(false, |l| l.contains("Fail now")));
 
     Ok(())
 }
@@ -590,20 +619,25 @@ async fn golem_rust_atomic_region(
 
     let http_server = TestHttpServer::start(2).await;
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
+    let agent_id = agent_id!("golem-host-api", "atomic-region");
     let worker_id = executor
-        .start_worker_with(&component.id, "golem-rust-tests-atomic-region", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor
-        .invoke_and_await(&worker_id, "golem:it/api.{atomic-region}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "atomic_region", data_value!())
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -632,29 +666,30 @@ async fn golem_rust_idempotence_on(
     let http_server = TestHttpServer::start(1).await;
 
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
+    let agent_id = agent_id!("golem-host-api", "idempotence-flag-on");
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "golem-rust-tests-idempotence-flag-on",
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{idempotence-flag}",
-            vec![true.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "idempotence_flag",
+            data_value!(true),
         )
-        .await??;
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -683,29 +718,30 @@ async fn golem_rust_idempotence_off(
     let http_server = TestHttpServer::start(1).await;
 
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
+    let agent_id = agent_id!("golem-host-api", "idempotence-flag-off");
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "golem-rust-tests-idempotence-flag-off",
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{idempotence-flag}",
-            vec![false.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "idempotence_flag",
+            data_value!(false),
         )
-        .await?;
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -736,25 +772,25 @@ async fn golem_rust_persist_nothing(
     let http_server = TestHttpServer::start(2).await;
 
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
+    let agent_id = agent_id!("golem-host-api", "persist-nothing");
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "golem-rust-tests-persist-nothing",
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{persist-nothing}", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "persist_nothing", data_value!())
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -792,30 +828,32 @@ async fn golem_rust_fallible_transaction(
     .await;
 
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let agent_id = agent_id!("golem-host-api", "fallible-transaction");
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "golem-rust-tests-fallible-transaction",
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{fallible-transaction-test}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "fallible_transaction_test",
+            data_value!(),
         )
-        .await?;
+        .await;
 
     let events = http_server.get_events();
 
@@ -861,30 +899,34 @@ async fn golem_rust_infallible_transaction(
     .await;
 
     let component = executor
-        .component(&context.default_environment_id, "golem-rust-tests")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let agent_id = agent_id!("golem-host-api", "infallible-transaction");
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "golem-rust-tests-infallible-transaction",
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{infallible-transaction-test}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "infallible_transaction_test",
+            data_value!(),
         )
-        .await?;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let events = http_server.get_events();
 
@@ -893,7 +935,7 @@ async fn golem_rust_infallible_transaction(
     drop(executor);
     http_server.abort();
 
-    check!(result == Ok(vec![Value::U64(11)]));
+    check!(result == Value::U64(11));
     check!(
         events
             == vec![

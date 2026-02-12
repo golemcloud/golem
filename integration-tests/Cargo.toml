@@ -16,7 +16,6 @@ golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true }
 golem-rib = { workspace = true }
-golem-rib-repl = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
@@ -60,12 +59,6 @@ harness = false
 name = "sharding"
 path = "tests/sharding.rs"
 harness = false
-
-[[bin]]
-name = "rib-repl"
-path = "src/rib_repl/main.rs"
-harness = false
-test = false
 
 [[bin]]
 name = "benchmarks"

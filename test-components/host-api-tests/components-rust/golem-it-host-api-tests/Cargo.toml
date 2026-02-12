@@ -16,4 +16,9 @@ golem-rust = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 time = { version = "0.3", features = ["formatting"] }
+golem-wasi-http = { workspace = true }
+wasi = { workspace = true }
+futures-concurrency = { workspace = true }
+rand = { workspace = true }
+wasi-logger = { version = "0.1.2", features = ["kv"] }
 wstd = { workspace = true }

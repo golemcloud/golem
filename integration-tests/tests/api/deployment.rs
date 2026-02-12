@@ -45,7 +45,10 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    user.component(&env.id, "shopping-cart").store().await?;
+    user.component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
 
@@ -55,7 +58,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "ac2f64cca38293baa0e971ce6dd1678e95c688557f42a6d6463bfe9983a1c5d2".parse()?,
+                    "e423710f910328f379b6f71809ed86d9866c58a07f3f6c1f1f8112958df7d5b9".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -91,7 +94,10 @@ async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    user.component(&env.id, "shopping-cart").store().await?;
+    user.component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
     {
         let result = client
@@ -124,7 +130,11 @@ async fn get_component_version_from_previous_deployment(
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
     let deployment_1 = client
         .deploy_environment(
@@ -132,7 +142,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash:
-                    "ac2f64cca38293baa0e971ce6dd1678e95c688557f42a6d6463bfe9983a1c5d2".parse()?,
+                    "e423710f910328f379b6f71809ed86d9866c58a07f3f6c1f1f8112958df7d5b9".parse()?,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -164,7 +174,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_revision: Some(deployment_1.current_revision),
                 expected_deployment_hash:
-                    "d6a1f6264c4eb8c61f9e5b9360e55d24d862b10ec0abcfb51998365561c94063".parse()?,
+                    "d44a48380813372268fb08a8e07594162684571335aadcfcc8798b2e0aeae380".parse()?,
                 version: DeploymentVersion("0.0.2".to_string()),
             },
         )
@@ -294,11 +304,15 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    user.component(&env.id, "shopping-cart").store().await?;
+    user.component(&env.id, "golem_it_agent_rpc")
+        .name("golem-it:agent-rpc")
+        .store()
+        .await?;
 
     let deployment_1 = user.deploy_environment(&env.id).await?;
 
     user.component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
@@ -380,7 +394,11 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
     let deployment_1 = user.deploy_environment(&env.id).await?;
 

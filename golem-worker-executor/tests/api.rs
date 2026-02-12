@@ -299,32 +299,38 @@ async fn dynamic_worker_creation(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "environment-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "dynamic-worker-creation-1".to_string(),
-    };
+    let agent_id = agent_id!("environment", "dynamic-worker-creation-1");
 
     let args = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_arguments", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let env = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(args == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
+    let worker_name = agent_id.to_string();
+    check!(args == Value::Result(Ok(Some(Box::new(Value::List(vec![]))))));
     check!(
-        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+        env == Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
                 Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String("dynamic-worker-creation-1".to_string())
+                Value::String(worker_name.clone())
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String("dynamic-worker-creation-1".to_string())
+                Value::String(worker_name)
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_ID".to_string()),
@@ -334,7 +340,7 @@ async fn dynamic_worker_creation(
                 Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
             ]),
-        ])))))]
+        ])))))
     );
     Ok(())
 }
@@ -351,6 +357,33 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
                             let key = iter.next();
                             let value = iter.next();
                             match (key, value) {
+                                (Some(Value::String(key)), Some(Value::String(value))) => {
+                                    Some((key, value))
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<(String, String)>>();
+                HashMap::from_iter(pairs)
+            }
+            _ => panic!("Unexpected result value"),
+        },
+        _ => panic!("Unexpected result value"),
+    }
+}
+
+fn get_env_result_from_value(env: Value) -> HashMap<String, String> {
+    match env {
+        Value::Result(Ok(Some(inner))) => match *inner {
+            Value::List(items) => {
+                let pairs = items
+                    .into_iter()
+                    .filter_map(|item| match item {
+                        Value::Tuple(values) if values.len() == 2 => {
+                            let mut iter = values.into_iter();
+                            match (iter.next(), iter.next()) {
                                 (Some(Value::String(key)), Some(Value::String(value))) => {
                                     Some((key, value))
                                 }
@@ -421,31 +454,49 @@ async fn promise(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "promise")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let worker_id = executor.start_worker(&component.id, "promise-1").await?;
 
-    let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{create}", vec![])
-        .await??;
-    let promise_id = ValueAndType::new(result[0].clone(), PromiseId::get_type());
-
-    let poll1 = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
+    let agent_id = agent_id!("golem-host-api", "promise-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let promise_id_vat = ValueAndType::new(promise_id_value.clone(), PromiseId::get_type());
+
+    let poll1 = executor
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "poll_promise",
+            data_value!(promise_id_vat.clone()),
+        )
+        .await;
+
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
-    let promise_id_clone = promise_id.clone();
+    let component_id_clone = component.id.clone();
+    let agent_id_clone = agent_id.clone();
+    let promise_id_vat_clone = promise_id_vat.clone();
 
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:it/api.{await}",
-                    vec![promise_id_clone],
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "await_promise",
+                    data_value!(promise_id_vat_clone),
                 )
                 .await
         }
@@ -454,18 +505,18 @@ async fn promise(
 
     info!("Waiting for worker to be suspended on promise");
 
-    // While waiting for the promise, the worker gets suspended
     executor
         .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
         .await?;
 
     info!("Completing promise to resume worker");
 
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
         .complete_promise(
             &PromiseId {
                 worker_id: worker_id.clone(),
-                oplog_idx: OplogIndex::from_u64(4),
+                oplog_idx,
             },
             vec![42],
         )
@@ -474,20 +525,41 @@ async fn promise(
     let result = fiber.await??;
 
     let poll2 = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
-        .await?;
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "poll_promise",
+            data_value!(promise_id_vat.clone()),
+        )
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result == Ok(vec![Value::List(vec![Value::U8(42)])]));
-    check!(poll1 == Ok(vec![Value::Option(None)]));
-    check!(
-        poll2
-            == Ok(vec![Value::Option(Some(Box::new(Value::List(vec![
-                Value::U8(42)
-            ]))))])
-    );
+    let result_value = result
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    check!(result_value == Value::List(vec![Value::U8(42)]));
+
+    let poll1_value = poll1?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    check!(poll1_value == Value::Option(None));
+
+    let poll2_value = poll2?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    check!(poll2_value == Value::Option(Some(Box::new(Value::List(vec![Value::U8(42)])))));
     Ok(())
+}
+
+fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
+    let Value::Record(fields) = promise_id_value else {
+        panic!("Expected a record for PromiseId");
+    };
+    let Value::U64(oplog_idx) = fields[1] else {
+        panic!("Expected u64 oplog-idx field");
+    };
+    OplogIndex::from_u64(oplog_idx)
 }
 
 #[test]
@@ -841,33 +913,37 @@ async fn component_env_variables(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "environment-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "component-env-variables-1".to_string(),
-    };
+    let agent_id = agent_id!("environment", "component-env-variables-1");
+    let worker_name = agent_id.to_string();
 
     let env = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     check!(
-        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+        env == Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
                 Value::String("FOO".to_string()),
                 Value::String("bar".to_string())
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String("component-env-variables-1".to_string())
+                Value::String(worker_name.clone())
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String("component-env-variables-1".to_string())
+                Value::String(worker_name)
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_ID".to_string()),
@@ -877,7 +953,7 @@ async fn component_env_variables(
                 Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
             ]),
-        ])))))]
+        ])))))
     );
 
     Ok(())
@@ -894,13 +970,18 @@ async fn component_env_variables_update(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "environment-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
+    let agent_id = agent_id!("environment", "component-env-variables-1");
     let worker_id = executor
-        .start_worker(&component.id, "component-env-variables-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let WorkerMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
@@ -915,7 +996,7 @@ async fn component_env_variables_update(
     let updated_component = executor
         .update_component_with_env(
             &component.id,
-            "environment-service",
+            "golem_it_host_api_tests_release",
             &[("BAR".to_string(), "baz".to_string())],
         )
         .await?;
@@ -925,17 +1006,17 @@ async fn component_env_variables_update(
         .await?;
 
     let env = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let env = get_env_result(env);
+    let env = get_env_result_from_value(env);
 
     assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
     assert_eq!(env.get("BAR"), Some(&"baz".to_string()));
-    assert_eq!(
-        env.get("GOLEM_AGENT_ID"),
-        Some(&"component-env-variables-1".to_string())
-    );
+    let worker_name = agent_id.to_string();
+    assert_eq!(env.get("GOLEM_AGENT_ID"), Some(&worker_name));
 
     Ok(())
 }
@@ -951,20 +1032,20 @@ async fn component_env_and_worker_env_priority(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "environment-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
+    let agent_id = agent_id!("environment", "component-env-variables-1");
     let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
 
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "component-env-variables-1",
-            worker_env,
-            vec![],
-        )
+        .start_worker_with(&component.id, &agent_id.to_string(), worker_env, vec![])
         .await?;
 
     let WorkerMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
@@ -1321,23 +1402,30 @@ async fn get_worker_metadata(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
+    let agent_id = agent_id!("clock", "get-worker-metadata-1");
     let worker_id = executor
-        .start_worker(&component.id, "get-worker-metadata-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let worker_id_clone = worker_id.clone();
     let executor_clone = executor.clone();
+    let component_id_clone = component.id.clone();
+    let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:it/api.{sleep}",
-                    vec![2u64.into_value_and_type()],
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "sleep",
+                    data_value!(2u64),
                 )
                 .await
         }
@@ -1352,7 +1440,7 @@ async fn get_worker_metadata(
         )
         .await?;
 
-    fiber.await???;
+    fiber.await??;
 
     let metadata2 = executor
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
@@ -1369,8 +1457,8 @@ async fn get_worker_metadata(
     check!(metadata1.worker_id == worker_id);
     check!(metadata1.created_by == context.account_id);
 
-    check!(metadata2.component_size == 194447);
-    check!(metadata2.total_linear_memory_size == 1245184);
+    check!(metadata2.component_size == 3729469);
+    check!(metadata2.total_linear_memory_size == 1703936);
     Ok(())
 }
 
@@ -3118,7 +3206,11 @@ async fn resolve_components_from_name(
         .await?;
 
     let resolver_component = executor
-        .component(&context.default_environment_id, "component-resolve")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
@@ -3126,37 +3218,28 @@ async fn resolve_components_from_name(
         .start_worker(&counter_component.id, "counter-1")
         .await?;
 
+    let agent_id = agent_id!("golem-host-api", "resolver-1");
     let resolve_worker = executor
-        .start_worker(&resolver_component.id, "resolver-1")
+        .start_agent(&resolver_component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &resolve_worker,
-            "golem:it/component-resolve-api.{run}",
-            vec![],
+        .invoke_and_await_agent(
+            &resolver_component.id,
+            &agent_id,
+            "resolve_component",
+            data_value!(),
         )
-        .await??;
-
-    check!(result.len() == 1);
-
-    let (high_bits, low_bits) = counter_component.id.0.as_u64_pair();
-    let component_id_value = Value::Record(vec![Value::Record(vec![
-        Value::U64(high_bits),
-        Value::U64(low_bits),
-    ])]);
-
-    let worker_id_value = Value::Record(vec![
-        component_id_value.clone(),
-        Value::String("counter-1".to_string()),
-    ]);
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     check!(
-        result[0]
-            == Value::Tuple(vec![
-                Value::Option(Some(Box::new(component_id_value))),
-                Value::Option(Some(Box::new(worker_id_value))),
-                Value::Option(None),
+        result
+            == Value::Record(vec![
+                Value::Bool(true),
+                Value::Bool(true),
+                Value::Bool(false),
             ])
     );
 
@@ -3422,23 +3505,25 @@ async fn delete_worker_during_invocation(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+
+    let agent_id = agent_id!("clock", "delete-worker-during-invocation");
     let worker_id = executor
-        .start_worker(&component.id, "delete-worker-during-invocation")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     info!("Enqueuing invocations");
     // Enqueuing a large number of invocations, each sleeping for 2 seconds
     for _ in 0..25 {
         executor
-            .invoke(
-                &worker_id,
-                "golem:it/api.{sleep}",
-                vec![2u64.into_value_and_type()],
-            )
-            .await??;
+            .invoke_agent(&component.id, &agent_id, "sleep", data_value!(2u64))
+            .await?;
     }
 
     executor
@@ -3451,18 +3536,15 @@ async fn delete_worker_during_invocation(
     info!("Invoking again");
     // Invoke it one more time - it should create a new instance and return successfully
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep}",
-            vec![1u64.into_value_and_type()],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(1u64))
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result == Ok(vec![Value::Result(Ok(None))]));
+    let result_value = result.into_return_value();
+    check!(result_value == Some(Value::Result(Ok(None))));
     check!(metadata.pending_invocation_count == 0);
     Ok(())
 }

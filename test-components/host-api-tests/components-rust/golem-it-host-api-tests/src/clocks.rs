@@ -1,14 +1,22 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, Schema};
+use serde::{Deserialize, Serialize};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+#[derive(Clone, Schema, Serialize, Deserialize)]
+pub struct StdTimeApisResult {
+    pub elapsed1: f64,
+    pub elapsed2: f64,
+    pub odt: String,
+}
+
 #[agent_definition]
 pub trait Clocks {
     fn new(name: String) -> Self;
 
-    fn use_std_time_apis(&self) -> (f64, f64, String);
+    fn use_std_time_apis(&self) -> StdTimeApisResult;
     fn sleep_for(&self, seconds: f64) -> f64;
 }
 
@@ -22,7 +30,7 @@ impl Clocks for ClocksImpl {
         Self { _name: name }
     }
 
-    fn use_std_time_apis(&self) -> (f64, f64, String) {
+    fn use_std_time_apis(&self) -> StdTimeApisResult {
         let odt_now: OffsetDateTime = OffsetDateTime::now_utc();
 
         let time_epoch = SystemTime::UNIX_EPOCH;
@@ -32,7 +40,11 @@ impl Clocks for ClocksImpl {
         let instant1 = Instant::now();
         sleep(Duration::from_secs(2));
         let elapsed2 = instant1.elapsed().as_secs_f64();
-        (elapsed1, elapsed2, odt_now.format(&Rfc3339).unwrap())
+        StdTimeApisResult {
+            elapsed1,
+            elapsed2,
+            odt: odt_now.format(&Rfc3339).unwrap(),
+        }
     }
 
     fn sleep_for(&self, seconds: f64) -> f64 {
