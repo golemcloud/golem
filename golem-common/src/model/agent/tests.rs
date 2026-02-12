@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::agent::{
-    SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic, Snapshotting,
+    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
 };
 use crate::base_model::Empty;
 use crate::model::agent::{
@@ -456,9 +456,7 @@ fn snapshotting_disabled_serde_poem_roundtrip() {
 
 #[test]
 fn snapshotting_enabled_default_serde_poem_roundtrip() {
-    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::Default(
-        Empty {},
-    )));
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::Default(Empty {})));
 }
 
 #[test]
@@ -472,9 +470,9 @@ fn snapshotting_enabled_periodic_serde_poem_roundtrip() {
 
 #[test]
 fn snapshotting_enabled_every_n_invocation_serde_poem_roundtrip() {
-    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(
-        SnapshottingConfig::EveryNInvocation(SnapshottingEveryNInvocation { count: 5 }),
-    ));
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::EveryNInvocation(
+        SnapshottingEveryNInvocation { count: 5 },
+    )));
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {

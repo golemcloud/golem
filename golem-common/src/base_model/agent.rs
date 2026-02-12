@@ -957,7 +957,10 @@ pub enum Snapshotting {
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
 )]
-#[cfg_attr(feature = "full", oai(discriminator_name = "configType", one_of = true))]
+#[cfg_attr(
+    feature = "full",
+    oai(discriminator_name = "configType", one_of = true)
+)]
 #[serde(tag = "configType")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum SnapshottingConfig {
