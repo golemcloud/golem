@@ -108,7 +108,7 @@ async fn pending_login_expires(
         .store_pending_oidc_login("state_expired", login)
         .await?;
 
-    sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let fetched = store.take_pending_oidc_login("state_expired").await?;
 
