@@ -17,6 +17,7 @@ use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+pub use crate::command::shared_args::mcp::McpSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
@@ -77,6 +78,7 @@ impl GolemCliCommand {
                     vec!["clean"],
                     vec!["cloud"],
                     vec!["completion"],
+                    vec!["mcp"],
                     vec!["generate-bridge"],
                     vec!["new"],
                     vec!["plugin"],
@@ -799,6 +801,11 @@ pub enum GolemCliSubcommand {
         /// Selects shell
         shell: clap_complete::Shell,
     },
+    /// Model Context Protocol (MCP) server
+    Mcp {
+        #[clap(subcommand)]
+        subcommand: McpSubcommand,
+    },
 }
 
 pub mod shared_args {
@@ -828,6 +835,28 @@ pub mod shared_args {
         /// Optional component names, if not specified, components are selected based on the current directory.
         #[arg(verbatim_doc_comment)]
         pub component_name: Vec<ComponentName>,
+    }
+
+    pub mod mcp {
+        use clap::Args;
+        use clap::Subcommand;
+
+        #[derive(Debug, Subcommand)]
+        pub enum McpSubcommand {
+            /// Serve the MCP server on SSE
+            Serve(McpServeArgs),
+        }
+
+        #[derive(Debug, Args)]
+        pub struct McpServeArgs {
+            /// Port to listen on
+            #[arg(long, short, default_value_t = 8080)]
+            pub port: u16,
+
+            /// Host to listen on
+            #[arg(long, short = 'H', default_value = "127.0.0.1")]
+            pub host: String,
+        }
     }
 
     #[derive(Debug, Args)]

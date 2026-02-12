@@ -24,6 +24,7 @@ use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandle
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::bridge::BridgeCommandHandler;
+use crate::command_handler::mcp::McpCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
 use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::cloud::CloudCommandHandler;
@@ -59,6 +60,7 @@ mod component;
 mod environment;
 pub(crate) mod interactive;
 mod log;
+pub mod mcp;
 mod partial_match;
 mod plugin;
 mod profile;
@@ -393,6 +395,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
+            GolemCliSubcommand::Mcp { subcommand } => {
+                McpCommandHandler::new(self.ctx.clone())
+                    .handle_command(subcommand)
+                    .await
+            }
         }
     }
 
