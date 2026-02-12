@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use assert2::{check, let_assert};
 use axum::routing::get;
 use axum::Router;
-use golem_common::model::agent::DataValue;
+use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
@@ -480,28 +480,32 @@ async fn promise(
 
     let promise_id_vat = ValueAndType::new(promise_id_value.clone(), PromiseId::get_type());
 
+    let promise_data = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::ComponentModel(promise_id_vat)],
+    });
+
     let poll1 = executor
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
             "poll_promise",
-            data_value!(promise_id_vat.clone()),
+            promise_data.clone(),
         )
         .await;
 
     let executor_clone = executor.clone();
     let component_id_clone = component.id.clone();
     let agent_id_clone = agent_id.clone();
-    let promise_id_vat_clone = promise_id_vat.clone();
+    let promise_data_clone = promise_data.clone();
 
-    let fiber = tokio::spawn(
+    let mut fiber = tokio::spawn(
         async move {
             executor_clone
                 .invoke_and_await_agent(
                     &component_id_clone,
                     &agent_id_clone,
                     "await_promise",
-                    data_value!(promise_id_vat_clone),
+                    promise_data_clone,
                 )
                 .await
         }
@@ -510,9 +514,15 @@ async fn promise(
 
     info!("Waiting for worker to be suspended on promise");
 
-    executor
-        .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
-        .await?;
+    tokio::select! {
+        result = &mut fiber => {
+            let invoke_result = result??;
+            return Err(anyhow!("await_promise returned immediately instead of suspending: {:?}", invoke_result));
+        }
+        status = executor.wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10)) => {
+            status?;
+        }
+    }
 
     info!("Completing promise to resume worker");
 
@@ -534,7 +544,7 @@ async fn promise(
             &component.id,
             &agent_id,
             "poll_promise",
-            data_value!(promise_id_vat.clone()),
+            promise_data,
         )
         .await;
 
