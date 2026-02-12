@@ -23,6 +23,7 @@ use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParam
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_common::{agent_id, data_value};
+use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
 use golem_worker_executor_test_utils::{
@@ -34,7 +35,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
 use tracing::Instrument;
-use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -133,9 +133,7 @@ async fn search_oplog_1(
         .await?;
 
     let repo_id = agent_id!("repository", "search-oplog-1");
-    let worker_id = executor
-        .start_agent(&component.id, repo_id.clone())
-        .await?;
+    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     executor
         .invoke_and_await_agent(
@@ -178,12 +176,7 @@ async fn search_oplog_1(
         .await?;
 
     executor
-        .invoke_and_await_agent(
-            &component.id,
-            &repo_id,
-            "get",
-            data_value!("G1002"),
-        )
+        .invoke_and_await_agent(&component.id, &repo_id, "get", data_value!("G1002"))
         .await?;
 
     let result1 = executor.search_oplog(&worker_id, "G1002").await?;

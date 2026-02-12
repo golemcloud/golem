@@ -22,13 +22,13 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::{agent_id, data_value};
 use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::worker::{ExportedResourceMetadata, WorkerMetadataDto};
 use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
     Timestamp, WorkerFilter, WorkerId, WorkerResourceDescription, WorkerStatus,
 };
+use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{
@@ -216,9 +216,7 @@ async fn shopping_cart_example(
         .await?;
 
     let repo_id = agent_id!("repository", "test-repo");
-    let worker_id = executor
-        .start_agent(&component.id, repo_id.clone())
-        .await?;
+    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     executor
         .invoke_and_await_agent(
@@ -723,9 +721,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
         .await?;
 
     let repo_id = agent_id!("repository", "test-repo-2");
-    let worker_id = executor
-        .start_agent(&component.id, repo_id.clone())
-        .await?;
+    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     let idempotency_key = IdempotencyKey::fresh();
     executor
@@ -787,9 +783,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .await?;
 
     let repo_id = agent_id!("repository", "test-repo-3");
-    let worker_id = executor
-        .start_agent(&component.id, repo_id.clone())
-        .await?;
+    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     let idempotency_key = IdempotencyKey::fresh();
     executor
@@ -1403,22 +1397,12 @@ async fn create_invoke_delete_create_invoke(
         .await?;
 
     let r1 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &counter_id,
-            "increment",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
     check!(r1.into_return_value() == Some(Value::U32(1)));
 
     let r2 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &counter_id,
-            "increment",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
     check!(r2.into_return_value() == Some(Value::U32(2)));
 
@@ -1429,12 +1413,7 @@ async fn create_invoke_delete_create_invoke(
         .await?;
 
     let r3 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &counter_id,
-            "increment",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
     check!(r3.into_return_value() == Some(Value::U32(1)));
 
@@ -1554,7 +1533,9 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     drop(executor);
 
     check!(r1.into_return_value() == Some(Value::U32(1)));
-    check!(r2.into_return_value() == Some(Value::String("counter-recreate-after-delete".to_string())));
+    check!(
+        r2.into_return_value() == Some(Value::String("counter-recreate-after-delete".to_string()))
+    );
     Ok(())
 }
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::data_value;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
@@ -21,7 +22,6 @@ use crate::model::agent::{
     UntypedJsonElementValue, UntypedJsonElementValues, Url,
 };
 use async_trait::async_trait;
-use crate::data_value;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
@@ -727,12 +727,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
 #[test]
 fn data_value_macro_empty() {
     let value = data_value!();
-    assert_eq!(
-        value,
-        DataValue::Tuple(ElementValues {
-            elements: vec![]
-        })
-    );
+    assert_eq!(value, DataValue::Tuple(ElementValues { elements: vec![] }));
 }
 
 #[test]

@@ -1,13 +1,14 @@
 use crate::debug_mode::debug_worker_executor::UntypedJrpcMessage;
 use crate::*;
+use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionCompletedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{Timestamp, WorkerId};
+use golem_common::{agent_id, data_value};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::analysis::analysed_type::{record, str, variant};
-use golem_wasm::analysis::{NameOptionTypePair, NameTypePair};
-use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
+use golem_wasm::{IntoValueAndType, ValueAndType};
 use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
 use test_r::{inherit_test_dep, test};
 
@@ -28,12 +29,14 @@ async fn test_connect_non_invoked_worker(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "non-invoked");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await
         .unwrap_or_else(|e| panic!("Failed to start a regular worker: {e}"));
 
@@ -62,35 +65,33 @@ async fn test_connect_invoked_worker(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "invoked");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
     regular_worker_executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await??;
+        .await?;
 
     regular_worker_executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1001", "Golem Cloud Subscription 1y"),
         )
-        .await??;
+        .await?;
 
     let connect_result = debug_executor.connect(&worker_id).await?;
 
@@ -111,15 +112,17 @@ async fn test_connect_and_playback(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "playback");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -152,33 +155,30 @@ async fn test_connect_and_playback_raw(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "playback-raw");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     regular_worker_executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem T-Shirt L".into_value_and_type()),
-                ("price", 120.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
         )
-        .await??;
+        .await?;
 
     regular_worker_executor
-        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -269,7 +269,7 @@ async fn test_connect_and_playback_raw(
             .unwrap()
             .get("message")
             .unwrap(),
-        &serde_json::json!("Initializing cart for user test-user-1\n")
+        &serde_json::json!("Adding item G1000 to repository\n")
     );
 
     Ok(())
@@ -287,15 +287,17 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "playback-middle");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -329,45 +331,43 @@ async fn test_playback_from_breakpoint(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "breakpoint");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
         .await?;
 
-    let initialize_boundary = nth_invocation_boundary(&oplogs, 1);
+    let first_add_boundary = nth_invocation_boundary(&oplogs, 1);
 
-    let add_item_boundary = nth_invocation_boundary(&oplogs, 2);
+    let second_add_boundary = nth_invocation_boundary(&oplogs, 2);
 
     let connect_result = debug_executor.connect(&worker_id).await?;
 
-    let playback_result1 = debug_executor.playback(initialize_boundary, None).await?;
+    let playback_result1 = debug_executor.playback(first_add_boundary, None).await?;
 
     let current_index = debug_executor.current_index().await?;
 
-    // In the test We expect the current index to be the index of the initialize-cart invocation within
-    // the configured wait_time_in_seconds.
-    // If this is false, we haven't waited enough. Asking for the current index again
-    // will be a good way to ensure that the playback has completed.
-    assert_eq!(current_index, initialize_boundary);
+    assert_eq!(current_index, first_add_boundary);
 
-    let playback_result2 = debug_executor.playback(add_item_boundary, None).await?;
+    let playback_result2 = debug_executor.playback(second_add_boundary, None).await?;
 
     let current_index = debug_executor.current_index().await?;
 
-    assert_eq!(current_index, add_item_boundary);
+    assert_eq!(current_index, second_add_boundary);
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result1.worker_id, worker_id);
-    assert_eq!(playback_result1.current_index, initialize_boundary);
+    assert_eq!(playback_result1.current_index, first_add_boundary);
     assert!(!playback_result1.incremental_playback);
     assert_eq!(playback_result2.worker_id, worker_id);
     assert!(playback_result2.incremental_playback);
@@ -387,15 +387,17 @@ async fn test_playback_and_rewind(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "rewind");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -432,15 +434,17 @@ async fn test_playback_and_fork(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "fork-source");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -453,48 +457,37 @@ async fn test_playback_and_fork(
 
     let playback_result = debug_executor.playback(first_boundary, None).await?;
 
-    let target_worker_id = WorkerId {
-        component_id: worker_id.component_id,
-        worker_name: "forked-worker".to_string(),
-    };
+    let forked_repo_id = agent_id!("repository", "forked-worker");
+    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id.clone(), &forked_repo_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let fork_result = debug_executor.fork(&target_worker_id, first_boundary).await;
 
-    // We ensure first invocation exists in the forked worker
-    let first_invocation_in_forked = regular_worker_executor
-        .search_oplog(&target_worker_id, "initialize-cart")
+    // Verify forked worker has oplog entries up to first boundary (first add only)
+    let forked_oplogs = regular_worker_executor
+        .get_oplog(&target_worker_id, OplogIndex::INITIAL)
         .await?;
+    let forked_oplog_len_before = forked_oplogs.len();
 
-    // We ensure second invocation doesn't exist in the forked worker
-    let second_invocation_in_forked = regular_worker_executor
-        .search_oplog(&target_worker_id, "G1000")
-        .await?;
-
-    // invoke the forked worker with second invocation
+    // Invoke the forked worker with another add
     regular_worker_executor
-        .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &forked_repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await??;
+        .await?;
 
-    let post_fork_invocation_in_forked = regular_worker_executor
-        .search_oplog(&target_worker_id, "G1000")
+    let forked_oplogs_after = regular_worker_executor
+        .get_oplog(&target_worker_id, OplogIndex::INITIAL)
         .await?;
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
     assert!(fork_result.is_ok());
-    assert!(!first_invocation_in_forked.is_empty());
-    assert!(second_invocation_in_forked.is_empty());
-    assert!(!post_fork_invocation_in_forked.is_empty());
+    assert_eq!(forked_oplog_len_before, u64::from(first_boundary) as usize);
+    assert!(forked_oplogs_after.len() > forked_oplog_len_before);
 
     Ok(())
 }
@@ -511,28 +504,45 @@ async fn test_playback_with_overrides(
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component(&context.default_environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
+    let repo_id = agent_id!("repository", "overrides");
     let worker_id = regular_worker_executor
-        .start_worker(&component.id, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    let shopping_cart_execution_result =
-        run_shopping_cart_workflow(&regular_worker_executor, &worker_id).await?;
+    let workflow_result =
+        run_repo_workflow(&regular_worker_executor, &component.id, &repo_id).await?;
 
-    let new_checkout_result = new_shopping_cart_checkout_result();
+    // Extract the actual response from the list invocation to get the correct type,
+    // then construct a modified override value with the same type structure
+    let original_list_entry =
+        &workflow_result.oplogs[u64::from(workflow_result.list_boundary) as usize - 1];
+    let original_response = match &original_list_entry.entry {
+        PublicOplogEntry::ExportedFunctionCompleted(completed) => completed
+            .response
+            .clone()
+            .expect("Expected response in list completion"),
+        _ => panic!("Expected ExportedFunctionCompleted at list boundary"),
+    };
+
+    let override_response = ValueAndType::new(
+        original_response.value.clone(),
+        original_response.typ.clone(),
+    );
 
     let public_oplog_entry =
         PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
             timestamp: Timestamp::now_utc(),
-            response: Some(new_checkout_result),
+            response: Some(override_response.clone()),
             consumed_fuel: 0,
         });
 
     let oplog_overrides = PlaybackOverride {
-        index: shopping_cart_execution_result.last_checkout_boundary,
+        index: workflow_result.list_boundary,
         oplog: public_oplog_entry,
     };
 
@@ -542,23 +552,19 @@ async fn test_playback_with_overrides(
     // Playback until the last invocation boundary
     debug_executor
         .playback(
-            shopping_cart_execution_result.last_add_item_boundary,
+            workflow_result.last_add_boundary,
             Some(vec![oplog_overrides]),
         )
         .await?;
 
-    // Fork from the last checkout boundary
+    // Fork from the list boundary
     let target_worker_id = WorkerId {
         component_id: worker_id.component_id,
         worker_name: "forked-worker".to_string(),
     };
 
-    // While we played back until last boundary, we fork from shopping cart boundary
     let fork = debug_executor
-        .fork(
-            &target_worker_id,
-            shopping_cart_execution_result.last_checkout_boundary,
-        )
+        .fork(&target_worker_id, workflow_result.list_boundary)
         .await;
 
     assert!(fork.is_ok());
@@ -575,17 +581,14 @@ async fn test_playback_with_overrides(
         oplog_index: _,
     }) = entry
     {
-        assert_eq!(
-            completed.response,
-            Some(new_shopping_cart_checkout_result())
-        );
+        assert_eq!(completed.response, Some(override_response));
     } else {
         panic!("Expected ExportedFunctionCompleted entry");
     }
 
     assert_eq!(
         oplogs_in_forked_worker.len(),
-        u64::from(shopping_cart_execution_result.last_checkout_boundary) as usize
+        u64::from(workflow_result.list_boundary) as usize
     );
 
     Ok(())
@@ -607,102 +610,72 @@ fn previous_index(index: OplogIndex) -> OplogIndex {
     OplogIndex::from_u64(u64::from(index) - 1)
 }
 
-// Regardless of the items added, we override the checkout result
-// with a new value.
-fn new_shopping_cart_checkout_result() -> ValueAndType {
-    ValueAndType::new(
-        Value::Variant {
-            case_idx: 1,
-            case_value: Some(Box::new(Value::Record(vec![Value::String(
-                "new-order-id".to_string(),
-            )]))),
-        },
-        variant(vec![
-            NameOptionTypePair {
-                name: "error".to_string(),
-                typ: Some(str()),
-            },
-            NameOptionTypePair {
-                name: "success".to_string(),
-                typ: Some(record(vec![NameTypePair {
-                    name: "order-id".to_string(),
-                    typ: str(),
-                }])),
-            },
-        ]),
-    )
-}
-
-async fn run_shopping_cart_initialize_and_add(
-    regular_worker_executor: &TestWorkerExecutor,
-    worker_id: &WorkerId,
+async fn run_repo_add_two(
+    executor: &TestWorkerExecutor,
+    component_id: &ComponentId,
+    repo_id: &AgentId,
 ) -> anyhow::Result<()> {
-    regular_worker_executor
-        .invoke_and_await(
-            worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
+    executor
+        .invoke_and_await_agent(
+            component_id,
+            repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await??;
+        .await?;
 
-    regular_worker_executor
-        .invoke_and_await(
-            worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+    executor
+        .invoke_and_await_agent(
+            component_id,
+            repo_id,
+            "add",
+            data_value!("G1001", "Golem Cloud Subscription 1y"),
         )
-        .await??;
+        .await?;
 
     Ok(())
 }
 
-async fn run_shopping_cart_workflow(
-    regular_worker_executor: &TestWorkerExecutor,
-    worker_id: &WorkerId,
-) -> anyhow::Result<ShoppingCartExecutionResult> {
-    // Initialize
-    run_shopping_cart_initialize_and_add(regular_worker_executor, worker_id).await?;
+async fn run_repo_workflow(
+    executor: &TestWorkerExecutor,
+    component_id: &ComponentId,
+    repo_id: &AgentId,
+) -> anyhow::Result<RepoWorkflowResult> {
+    // Add two items
+    run_repo_add_two(executor, component_id, repo_id).await?;
 
-    // Checkout
-    regular_worker_executor
-        .invoke_and_await(worker_id, "golem:it/api.{checkout}", vec![])
-        .await??;
-
-    // Add Item again
-    regular_worker_executor
-        .invoke_and_await(
-            worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await??;
-
-    let oplogs = regular_worker_executor
-        .get_oplog(worker_id, OplogIndex::INITIAL)
+    // List
+    executor
+        .invoke_and_await_agent(component_id, repo_id, "list", data_value!())
         .await?;
 
-    let last_checkout_boundary = nth_invocation_boundary(&oplogs, 3);
-    let last_add_item_boundary = nth_invocation_boundary(&oplogs, 4);
+    // Add another item
+    executor
+        .invoke_and_await_agent(
+            component_id,
+            repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
+        )
+        .await?;
 
-    Ok(ShoppingCartExecutionResult {
-        last_checkout_boundary,
-        last_add_item_boundary,
+    let worker_id = WorkerId::from_agent_id(component_id.clone(), repo_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let oplogs = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let list_boundary = nth_invocation_boundary(&oplogs, 3);
+    let last_add_boundary = nth_invocation_boundary(&oplogs, 4);
+
+    Ok(RepoWorkflowResult {
+        oplogs,
+        list_boundary,
+        last_add_boundary,
     })
 }
 
-struct ShoppingCartExecutionResult {
-    last_checkout_boundary: OplogIndex,
-    last_add_item_boundary: OplogIndex,
+struct RepoWorkflowResult {
+    oplogs: Vec<PublicOplogEntryWithIndex>,
+    list_boundary: OplogIndex,
+    last_add_boundary: OplogIndex,
 }

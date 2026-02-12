@@ -32,6 +32,7 @@ impl Repository for RepositoryImpl {
     }
 
     fn add(&mut self, id: String, description: String) {
+        println!("Adding item {id} to repository");
         let entry = self.items.entry(id.clone()).or_insert(Item {
             id,
             description,
