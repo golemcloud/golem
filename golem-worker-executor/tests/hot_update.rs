@@ -19,7 +19,9 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::WorkerStatus;
 use golem_test_framework::dsl::{update_counts, TestDsl};
+use std::time::Duration;
 use golem_wasm::{IntoValueAndType, Value};
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
@@ -1101,5 +1103,82 @@ async fn update_component_revision_environment_variable(
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component = executor
+        .component(&context.default_environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker_with(
+            &component.id,
+            "auto_update_disable_wakeup",
+            env,
+            vec![],
+        )
+        .await?;
+    executor.log_output(&worker_id).await?;
+
+    // Invoke f1 to give the worker some history
+    executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
+        .await??;
+
+    // Interrupt the worker so it transitions to Interrupted status
+    executor.interrupt(&worker_id).await?;
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Interrupted, Duration::from_secs(10))
+        .await?;
+
+    // Upload an updated component
+    let updated_component = executor
+        .update_component(&component.id, "update-test-v2")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
+
+    // Request auto-update with disable_wakeup=true
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, true)
+        .await?;
+
+    // Give some time for any unintended wake-up to happen
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify the worker is still Interrupted (not woken up)
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    // The worker should still be interrupted since disable_wakeup was true
+    check!(metadata.status == WorkerStatus::Interrupted);
+    // The update should be pending, not yet applied
+    check!(update_counts(&metadata) == (1, 0, 0));
+
     Ok(())
 }
