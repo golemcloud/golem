@@ -9877,8 +9877,8 @@ components:
           type: integer
           format: uint64
         disableWakeup:
-          type: boolean
           default: false
+          type: boolean
       required:
       - mode
       - targetRevision

@@ -21,7 +21,6 @@ use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::WorkerStatus;
 use golem_test_framework::dsl::{update_counts, TestDsl};
-use std::time::Duration;
 use golem_wasm::{IntoValueAndType, Value};
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
@@ -31,6 +30,7 @@ use log::info;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
@@ -1126,12 +1126,7 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "auto_update_disable_wakeup",
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "auto_update_disable_wakeup", env, vec![])
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -1147,7 +1142,11 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     // Interrupt the worker so it transitions to Interrupted status
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Interrupted, Duration::from_secs(10))
+        .wait_for_status(
+            &worker_id,
+            WorkerStatus::Interrupted,
+            Duration::from_secs(10),
+        )
         .await?;
 
     // Upload an updated component
