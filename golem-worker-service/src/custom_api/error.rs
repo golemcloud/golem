@@ -52,6 +52,8 @@ pub enum RequestHandlerError {
     ResolvingRouteFailed(#[from] RouteResolverError),
     #[error("Invocation failed: {0}")]
     AgentInvocationFailed(#[from] WorkerServiceError),
+    #[error("OIDC loging state is associated with a different security scheme")]
+    OidcSchemeMismatch,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -75,6 +77,7 @@ impl SafeDisplay for RequestHandlerError {
             Self::UnsupportedMimeType { .. } => self.to_string(),
             Self::UnknownOidcState => self.to_string(),
             Self::OidcTokenExchangeFailed => self.to_string(),
+            Self::OidcSchemeMismatch => self.to_string(),
 
             Self::InvariantViolated { .. } => "internal error".to_string(),
 

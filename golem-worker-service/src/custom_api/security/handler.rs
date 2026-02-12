@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::IdentityProvider;
-use super::model::AuthorizationUrl;
+use super::model::PendingOidcLogin;
 use super::session_store::SessionStore;
+use super::{IdentityProvider, OIDC_SESSION_EXPIRY};
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::model::OidcSession;
 use crate::custom_api::route_resolver::ResolvedRouteEntry;
 use crate::custom_api::security::model::SessionId;
 use crate::custom_api::{ResponseBody, RichRequest, RouteExecutionResult};
+use anyhow::anyhow;
+use chrono::Utc;
 use cookie::Cookie;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use http::StatusCode;
-use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
+use openidconnect::{AuthorizationCode, CsrfToken, Nonce};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::debug;
@@ -61,28 +63,30 @@ impl OidcHandler {
             .await?
             .ok_or(RequestHandlerError::UnknownOidcState)?;
 
-        let client = self.identity_provider.get_client(scheme).await?;
+        if pending_login.scheme_id != scheme.id {
+            return Err(RequestHandlerError::OidcSchemeMismatch);
+        }
 
-        let nonce = pending_login.nonce.clone();
-
-        let token_response = self
+        let (id_token_scopes, id_token_claims) = self
             .identity_provider
-            .exchange_code_for_tokens(&client, &AuthorizationCode::new(code.to_string()))
+            .exchange_code_for_scopes_and_claims(
+                scheme,
+                &AuthorizationCode::new(code.to_string()),
+                &pending_login.nonce,
+            )
             .await
             .map_err(|err| {
                 tracing::warn!("OIDC token exchange failed: {err}");
                 RequestHandlerError::OidcTokenExchangeFailed
             })?;
 
-        let id_token_verifier = self.identity_provider.get_id_token_verifier(&client);
-        let id_token_claims =
-            self.identity_provider
-                .get_claims(&id_token_verifier, &token_response, &nonce)?;
+        let session_expires_at = Utc::now()
+            .checked_add_signed(OIDC_SESSION_EXPIRY)
+            .ok_or_else(|| anyhow!("Failed to compute expiry"))?;
 
         let session = OidcSession {
             subject: id_token_claims.subject().to_string(),
             issuer: id_token_claims.issuer().to_string(),
-
             email: id_token_claims.email().map(|v| v.to_string()),
             name: id_token_claims
                 .name()
@@ -102,10 +106,9 @@ impl OidcHandler {
                 .and_then(|v| v.get(None))
                 .map(|v| v.to_string()),
             preferred_username: id_token_claims.preferred_username().map(|v| v.to_string()),
-
             claims: id_token_claims.clone(),
-            scopes: HashSet::from_iter(token_response.scopes().cloned().unwrap_or_default()),
-            expires_at: id_token_claims.expiration(),
+            scopes: HashSet::from_iter(id_token_scopes),
+            expires_at: session_expires_at,
         };
 
         let session_id = SessionId(Uuid::now_v7());
@@ -119,6 +122,9 @@ impl OidcHandler {
             .http_only(true)
             .secure(true)
             .same_site(cookie::SameSite::Lax)
+            .max_age(cookie::time::Duration::seconds(
+                OIDC_SESSION_EXPIRY.num_seconds(),
+            ))
             .build();
 
         let mut headers = HashMap::new();
@@ -149,8 +155,9 @@ impl OidcHandler {
             SessionId(parsed)
         } else {
             // missing or invalid session_id -> restart flow
-            let execution_result =
-                start_oidc_flow_for_route(security_scheme, self.identity_provider.clone()).await?;
+            let execution_result = self
+                .start_oidc_flow_for_route(request, security_scheme)
+                .await?;
             return Ok(Some(execution_result));
         };
 
@@ -161,8 +168,9 @@ impl OidcHandler {
 
         let Some(session) = session_opt else {
             // session information missing, restart flow
-            let auth_url =
-                start_oidc_flow_for_route(security_scheme, self.identity_provider.clone()).await?;
+            let auth_url = self
+                .start_oidc_flow_for_route(request, security_scheme)
+                .await?;
             return Ok(Some(auth_url));
         };
 
@@ -170,29 +178,41 @@ impl OidcHandler {
 
         Ok(None)
     }
-}
 
-async fn start_oidc_flow_for_route(
-    security_scheme: &SecuritySchemeDetails,
-    identity_provider: Arc<dyn IdentityProvider>,
-) -> Result<RouteExecutionResult, RequestHandlerError> {
-    let client = identity_provider.get_client(security_scheme).await?;
-    let auth_url = identity_provider.get_authorization_url(
-        &client,
-        security_scheme.scopes.clone(),
-        None,
-        None,
-    );
+    async fn start_oidc_flow_for_route(
+        &self,
+        request: &RichRequest,
+        security_scheme: &SecuritySchemeDetails,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let state = CsrfToken::new_random();
+        let nonce = Nonce::new_random();
 
-    Ok(start_oidc_flow(auth_url))
-}
+        let pending_login = PendingOidcLogin {
+            scheme_id: security_scheme.id,
+            nonce: nonce.clone(),
+            original_uri: request.underlying.uri().to_string(),
+        };
 
-fn start_oidc_flow(auth_url: AuthorizationUrl) -> RouteExecutionResult {
-    let mut headers = std::collections::HashMap::new();
-    headers.insert(http::header::LOCATION, auth_url.url.to_string());
-    RouteExecutionResult {
-        status: http::StatusCode::FOUND,
-        headers,
-        body: ResponseBody::NoBody,
+        self.session_store
+            .store_pending_oidc_login(state.secret(), pending_login)
+            .await?;
+
+        let auth_url = self
+            .identity_provider
+            .get_authorization_url(
+                security_scheme,
+                security_scheme.scopes.clone(),
+                state,
+                nonce,
+            )
+            .await?;
+
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(http::header::LOCATION, auth_url.url.to_string());
+        Ok(RouteExecutionResult {
+            status: http::StatusCode::FOUND,
+            headers,
+            body: ResponseBody::NoBody,
+        })
     }
 }
