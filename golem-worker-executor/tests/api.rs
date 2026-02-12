@@ -321,9 +321,10 @@ async fn dynamic_worker_creation(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let worker_name = agent_id.to_string();
-    check!(args == Value::Result(Ok(Some(Box::new(Value::List(vec![]))))));
-    check!(
-        env == Value::Result(Ok(Some(Box::new(Value::List(vec![
+    assert_eq!(args, Value::Result(Ok(Some(Box::new(Value::List(vec![]))))));
+    assert_eq!(
+        env,
+        Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
                 Value::String("GOLEM_AGENT_ID".to_string()),
                 Value::String(worker_name.clone())
@@ -340,6 +341,10 @@ async fn dynamic_worker_creation(
                 Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
             ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_TYPE".to_string()),
+                Value::String("Environment".to_string()),
+            ])
         ])))))
     );
     Ok(())
@@ -931,8 +936,9 @@ async fn component_env_variables(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(
-        env == Value::Result(Ok(Some(Box::new(Value::List(vec![
+    assert_eq!(
+        env,
+        Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
                 Value::String("FOO".to_string()),
                 Value::String("bar".to_string())
@@ -952,6 +958,10 @@ async fn component_env_variables(
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_TYPE".to_string()),
+                Value::String("Environment".to_string())
             ]),
         ])))))
     );

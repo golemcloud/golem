@@ -153,7 +153,6 @@ array_push ${components} http-client
 array_push ${components} ifs-update
 array_push ${components} ifs-update-inside-exported-function
 array_push ${components} oplog-processor
-array_push ${components} rdbms-service
 array_push ${components} rpc
 array_push ${components} runtime-service
 array_push ${components} scheduled-invocation
@@ -162,7 +161,6 @@ array_push ${components} update-test-v2-11
 array_push ${components} update-test-v3-11
 array_push ${components} update-test-v3-sdk
 array_push ${components} update-test-v4
-array_push ${components} wasi-config
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"

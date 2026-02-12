@@ -35,6 +35,7 @@ use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::{HeaderMap, StatusCode};
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
@@ -159,13 +160,11 @@ async fn read_stdin(
 
     let result = executor
         .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(matches!(result, Value::Result(Err(_)))); // stdin is disabled
+    assert!(result.is_err()); // stdin is disabled
     Ok(())
 }
 
@@ -1037,7 +1036,7 @@ async fn file_update_in_the_middle_of_exported_function(
 
 #[test]
 #[tracing::instrument]
-async fn environment_service(
+async fn environment_variables(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1059,7 +1058,7 @@ async fn environment_service(
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&component.id, &agent_id.to_string(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let result = executor
@@ -1071,30 +1070,34 @@ async fn environment_service(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let worker_name = agent_id.to_string();
-    check!(
-        result
-            == Value::Result(Ok(Some(Box::new(Value::List(vec![
-                Value::Tuple(vec![
-                    Value::String("TEST_ENV".to_string()),
-                    Value::String("test-value".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_AGENT_ID".to_string()),
-                    Value::String(worker_name.clone())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_WORKER_NAME".to_string()),
-                    Value::String(worker_name)
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_COMPONENT_ID".to_string()),
-                    Value::String(component.id.to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_COMPONENT_REVISION".to_string()),
-                    Value::String("0".to_string())
-                ]),
-            ])))))
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("TEST_ENV".to_string()),
+                Value::String("test-value".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String(worker_name.clone())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String(worker_name)
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(component.id.to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
+                Value::String("0".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_TYPE".to_string()),
+                Value::String("Environment".to_string())
+            ])
+        ])))))
     );
 
     Ok(())
@@ -3042,7 +3045,7 @@ async fn wasi_config_initial_worker_config(
         // get all keys
 
         let result = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get-all", data_value!())
+            .invoke_and_await_agent(&component.id, &agent_id, "get_all", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
