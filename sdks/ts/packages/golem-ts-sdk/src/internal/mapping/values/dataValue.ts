@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isEmptyType, isOptionalWithQuestionMark, TypeInfoInternal } from '../../typeInfoInternal';
+import { isEmptyType, isOptionalWithQuestionMark, isPrincipal, TypeInfoInternal } from '../../typeInfoInternal';
 
 import * as Either from '../../../newTypes/either';
 import * as WitValue from '../../mapping/values/WitValue';
@@ -64,16 +64,17 @@ export function deserializeDataValue(
 ): Either.Either<any[], string> {
   switch (dataValue.tag) {
     case 'tuple':
-      const elements = dataValue.val;
-      const elementsCount = elements.length;
+      const inputElements = dataValue.val;
+      const inputElementsLen = inputElements.length;
 
-      let dataValueElementIdx = 0;
+      // An index that's incremented corresponding to the schema
+      let schemaBasedIndex = 0;
 
       return Either.all(
         paramTypes.map((parameterDetail) => {
           const parameterType = parameterDetail.type;
 
-          if (dataValueElementIdx >= elementsCount) {
+          if (schemaBasedIndex >= inputElementsLen) {
             if (isOptionalWithQuestionMark(parameterType)) {
               return Either.right(undefined);
             }
@@ -82,12 +83,16 @@ export function deserializeDataValue(
               return Either.right(undefined);
             }
 
+            if (isPrincipal(parameterType)) {
+              return Either.right(principal)
+            }
+
             throw new Error(
               `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
             );
           }
 
-          const elementValue = elements[dataValueElementIdx];
+          const elementValue = inputElements[schemaBasedIndex];
 
           switch (parameterType.tag) {
             case 'multimodal':
@@ -119,7 +124,7 @@ export function deserializeDataValue(
                 );
               }
 
-              dataValueElementIdx += 1;
+              schemaBasedIndex += 1;
 
               return UnstructuredText.fromDataValue(
                 unstructuredTextParamName,
@@ -128,7 +133,7 @@ export function deserializeDataValue(
               );
 
             case 'unstructured-binary':
-              const binaryParameterDetail = paramTypes[dataValueElementIdx];
+              const binaryParameterDetail = paramTypes[schemaBasedIndex];
 
               if (elementValue.tag !== 'unstructured-binary') {
                 throw new Error(
@@ -146,7 +151,7 @@ export function deserializeDataValue(
                 );
               }
 
-              dataValueElementIdx += 1;
+              schemaBasedIndex += 1;
 
               return UnstructuredBinary.fromDataValue(
                 binaryParameterDetail.name,
@@ -161,7 +166,7 @@ export function deserializeDataValue(
                 );
               }
 
-              dataValueElementIdx += 1;
+              schemaBasedIndex += 1;
 
               return Either.right(WitValue.toTsValue(elementValue.val, parameterType.val));
           }
