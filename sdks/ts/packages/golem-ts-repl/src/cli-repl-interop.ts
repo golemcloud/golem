@@ -175,6 +175,7 @@ export class CliReplInterop {
     if (this.agentStreams.get(key) !== state) return;
     this.agentStreams.delete(key);
     state.stop();
+    writeStreamSeparator();
   }
 
   private async runReplCliCommand(
@@ -320,6 +321,12 @@ function safeJsonStringify(value: unknown): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function writeStreamSeparator() {
+  const width = process.stdout.isTTY ? process.stdout.columns : 80;
+  if (!width || width <= 0) return;
+  process.stdout.write(pc.dim('~'.repeat(width)) + '\n');
 }
 
 function filterStdoutLine(
