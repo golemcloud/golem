@@ -44,6 +44,9 @@ componentTemplates:
     generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
     componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
     linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm
+    customCommands:
+      copy:
+        - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm ../../..
 customCommands:
   ts-npm-install:
   - command: npm install

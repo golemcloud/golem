@@ -30,4 +30,9 @@ class HttpAgent extends BaseAgent {
     echoPrincipal3(foo: string, bar: number, principal: Principal): {value: Principal, foo: string, bar: number} {
         return {value: principal, foo, bar};
     }
+
+    @endpoint({ get: "/authed-principal", auth: true })
+    authedPrincipal(principal: Principal): { value: Principal } {
+        return { value: principal }
+    }
 }
