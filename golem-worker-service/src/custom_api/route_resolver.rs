@@ -25,12 +25,10 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::SecuritySchemeId;
+use golem_service_base::custom_api::CompiledRoute;
 use golem_service_base::custom_api::{
     CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteSecurity,
     SecuritySchemeDetails,
-};
-use golem_service_base::custom_api::{
-    CompiledRoute
 };
 use std::collections::HashMap;
 use std::sync::Arc;

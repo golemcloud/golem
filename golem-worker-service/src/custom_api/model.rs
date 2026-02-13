@@ -18,8 +18,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::BinarySource;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, SecuritySchemeDetails,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour, OpenApiSpecBehaviour
+    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
+    SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
 use http::Method;

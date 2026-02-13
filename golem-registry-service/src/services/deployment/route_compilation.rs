@@ -32,9 +32,9 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity,
 };
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OriginPattern,
-    PathSegment, RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour, OpenApiSpecBehaviour, RoutesWithAgentType
+    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
+    OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
+    RoutesWithAgentType, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};

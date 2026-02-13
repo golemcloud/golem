@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{CompiledRoute, CompiledRoutes, RouteSecurity,  OpenApiSpecBehaviour, RoutesWithAgentType};
+use super::{
+    CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteSecurity, RoutesWithAgentType,
+};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
