@@ -20,8 +20,10 @@ use crate::command_handler::repl::typescript::TypeScriptRepl;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::fs;
+use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
+use crate::model::deploy::DeployConfig;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
 use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
@@ -186,20 +188,51 @@ impl ReplHandler {
             }
         };
 
-        // NOTE: we check for all components, but in practice we usually only have one, and the
-        //       first missing one will trigger deployment for all components.
-        for component_name in &args.component_names {
-            self.ctx
-                .component_handler()
-                .component_by_name_with_auto_deploy(
-                    &args.environment,
-                    ComponentNameMatchKind::App,
-                    component_name,
-                    None,
-                    post_deploy_args,
-                    Some(language),
-                )
-                .await?;
+        match post_deploy_args {
+            Some(post_deploy_args) => {
+                self.ctx
+                    .app_handler()
+                    .deploy(DeployConfig {
+                        plan: false,
+                        stage: false,
+                        approve_staging_steps: false,
+                        force_build: None,
+                        post_deploy_args: post_deploy_args.clone(),
+                        repl_bridge_sdk_target: Some(language),
+                        skip_build: false,
+                    })
+                    .await?;
+            }
+            None => {
+                // We explicitly trigger 'build', so we ensure that we have the REPL bridge SDKs
+                self.ctx
+                    .app_handler()
+                    .build(
+                        &BuildConfig::new()
+                            .with_repl_bridge_sdk_target(args.repl_bridge_sdk_target.clone()),
+                        vec![],
+                        &ApplicationComponentSelectMode::All,
+                    )
+                    .await?;
+
+                // We check for all components, but in practice we usually only have one, and the
+                // first missing one will trigger deployment for all components. We also skip
+                // building, as that was already done above.
+                for component_name in &args.component_names {
+                    self.ctx
+                        .component_handler()
+                        .component_by_name_with_auto_deploy(
+                            &args.environment,
+                            ComponentNameMatchKind::App,
+                            component_name,
+                            None,
+                            post_deploy_args,
+                            Some(language),
+                            true,
+                        )
+                        .await?;
+                }
+            }
         }
 
         match language {
@@ -244,6 +277,7 @@ impl ReplHandler {
                 component_revision.map(|r| r.into()),
                 post_deploy_args,
                 None,
+                false,
             )
             .await?;
 

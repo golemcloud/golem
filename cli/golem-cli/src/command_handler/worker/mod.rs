@@ -223,6 +223,7 @@ impl WorkerCommandHandler {
                 Some((&worker_name_match.worker_name).into()),
                 None,
                 None,
+                false,
             )
             .await?;
 
@@ -301,6 +302,7 @@ impl WorkerCommandHandler {
                 Some((&worker_name_match.worker_name).into()),
                 post_deploy_args.as_ref(),
                 None,
+                false,
             )
             .await?;
 
