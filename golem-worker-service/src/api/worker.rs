@@ -24,7 +24,6 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, PluginPriority,
 };
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -1275,7 +1274,6 @@ impl WorkerApi {
         Ok(stream)
     }
 
-    // TODO: replace by "metadata-less" normalization, see normalize_worker_id
     async fn normalize_worker_id_by_latest_version(
         &self,
         component_id: ComponentId,
@@ -1296,108 +1294,30 @@ impl WorkerApi {
                 }))
             })?;
 
-        let worker_id = validated_worker_id(component_id, &latest_component.metadata, worker_id)?;
+        let worker_id =
+            WorkerId::from_worker_name_string(component_id, worker_id).map_err(
+                |error| {
+                    ApiEndpointError::BadRequest(Json(ErrorsBody {
+                        errors: vec![format!("Invalid worker id: {error}")],
+                        cause: None,
+                    }))
+                },
+            )?;
         Ok((worker_id, latest_component))
     }
 
-    // TODO: ideally we should not use metadata at all here, and instead we should use
-    //       a generic agent-id normalizer, but we do not have that yet. As a quick-fix, for now
-    //       we try with all the available component versions.
-    //       Once we have the "metadata-less" normalizer, we should also use that in
-    //       `normalize_worker_id_by_latest_version`, and leave actual validation to the worker executor.
     async fn normalize_worker_id(
         &self,
         component_id: ComponentId,
         worker_id: &str,
     ) -> Result<WorkerId> {
-        // First, we try with the latest cached version to avoid the overhead of calling the component service
-        let latest_cached_component = self
-            .component_service
-            .get_latest_by_id_in_cache(component_id)
-            .await;
-
-        if let Some(component) = latest_cached_component {
-            let id = validated_worker_id(component_id, &component.metadata, worker_id);
-
-            if id.is_ok() || !component.metadata.is_agent() {
-                // Normalization worked with the cached metadata,
-                // or this is a non-agent component => returning the result
-                return id;
-            }
-        }
-
-        // Next we try with the latest version which we have to fetch from the component service        let latest_component_version = self
-        let latest_component_version = self
-            .component_service
-            .get_latest_by_id_uncached(component_id)
-            .await
-            .map_err(|error| {
-                ApiEndpointError::NotFound(Json(ErrorBody {
-                    error: format!(
-                        "Couldn't retrieve component: {}. error: {}",
-                        &component_id,
-                        error.to_safe_string()
-                    ),
-                    cause: None,
-                }))
-            })?;
-
-        let id = validated_worker_id(component_id, &latest_component_version.metadata, worker_id);
-
-        // We return:
-        // - if we parsed successfully
-        // - or if the worker is not an agent: non-agent workers are only
-        //   expected in our tests, users cannot create them, so we do
-        //   not have to consider that a worker changed "agent-ness"
-        if id.is_ok() || !latest_component_version.metadata.is_agent() {
-            return id;
-        }
-
-        // Fallback for previous versions
-        let all_component_versions = self
-            .component_service
-            .get_all_revisions(component_id)
-            .await
-            .map_err(|error| {
-                ApiEndpointError::NotFound(Json(ErrorBody {
-                    error: format!(
-                        "Couldn't retrieve component versions: {}. error: {}",
-                        &component_id,
-                        error.to_safe_string()
-                    ),
-                    cause: None,
-                }))
-            })?;
-
-        // Try with all except the last, as we already tried that
-        for component in all_component_versions
-            .iter()
-            .take(all_component_versions.len() - 1)
-        {
-            let id_with_version = validated_worker_id(component_id, &component.metadata, worker_id);
-            if id_with_version.is_ok() {
-                return id_with_version;
-            }
-        }
-
-        // If no fallback succeeded, then return the original error
-        id
-    }
-}
-
-fn validated_worker_id<S: AsRef<str>>(
-    component_id: ComponentId,
-    component_metadata: &ComponentMetadata,
-    id: S,
-) -> Result<WorkerId> {
-    WorkerId::from_component_metadata_and_worker_id(component_id, component_metadata, id).map_err(
-        |error| {
+        WorkerId::from_worker_name_string(component_id, worker_id).map_err(|error| {
             ApiEndpointError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Invalid agent id: {error}")],
+                errors: vec![format!("Invalid worker id: {error}")],
                 cause: None,
             }))
-        },
-    )
+        })
+    }
 }
 
 fn make_component_file_path(name: String) -> Result<ComponentFilePath> {

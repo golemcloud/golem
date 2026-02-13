@@ -275,6 +275,177 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     result
 }
 
+/// Normalizes an agent ID string without requiring component metadata.
+/// Strips unnecessary whitespace from the agent ID by parsing WAVE values and re-emitting them compactly.
+pub fn normalize_agent_id_text(s: &str) -> Result<String, String> {
+    static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
+    });
+
+    let captures = AGENT_ID_REGEX.captures(s).ok_or_else(|| {
+        format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
+    })?;
+
+    let agent_type_name = captures.get(1).unwrap().as_str().trim();
+    let param_list = captures.get(2).unwrap().as_str();
+    let phantom_id = captures
+        .get(3)
+        .map(|m| {
+            Uuid::parse_str(m.as_str().trim())
+                .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))
+        })
+        .transpose()?;
+
+    let elements = split_top_level_commas(param_list);
+    let compacted_elements: Vec<String> = elements
+        .iter()
+        .map(|elem| compact_wave_element(elem.trim()))
+        .collect();
+    let compacted_params = compacted_elements.join(",");
+
+    let mut result = format!("{agent_type_name}({compacted_params})");
+    if let Some(phantom_id) = phantom_id {
+        use std::fmt::Write;
+        write!(result, "[{phantom_id}]").unwrap();
+    }
+    Ok(result)
+}
+
+fn compact_wave_element(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    match wasm_wave::untyped::UntypedValue::parse(s) {
+        Ok(val) => {
+            let mut result = String::new();
+            if compact_fmt_node(&mut result, val.node(), val.source()).is_ok() {
+                result
+            } else {
+                s.to_string()
+            }
+        }
+        Err(_) => s.to_string(),
+    }
+}
+
+fn compact_fmt_node(
+    f: &mut impl std::fmt::Write,
+    node: &wasm_wave::ast::Node,
+    src: &str,
+) -> std::fmt::Result {
+    use wasm_wave::ast::NodeType::*;
+    use wasm_wave::lex::Keyword;
+    match node.ty() {
+        BoolTrue | BoolFalse | Number | Char | String | MultilineString | Label => {
+            f.write_str(&src[node.span()])
+        }
+        Tuple => compact_fmt_sequence(
+            f,
+            '(',
+            ')',
+            node.as_tuple().map_err(|_| std::fmt::Error)?,
+            src,
+        ),
+        List => compact_fmt_sequence(
+            f,
+            '[',
+            ']',
+            node.as_list().map_err(|_| std::fmt::Error)?,
+            src,
+        ),
+        Record => {
+            let fields: Vec<_> = node.as_record(src).map_err(|_| std::fmt::Error)?.collect();
+            if fields.is_empty() {
+                return f.write_str("{:}");
+            }
+            f.write_char('{')?;
+            for (idx, (name, value)) in fields.into_iter().enumerate() {
+                if idx != 0 {
+                    f.write_char(',')?;
+                }
+                f.write_str(name)?;
+                f.write_char(':')?;
+                compact_fmt_node(f, value, src)?;
+            }
+            f.write_char('}')
+        }
+        VariantWithPayload => {
+            let (label, payload) = node.as_variant(src).map_err(|_| std::fmt::Error)?;
+            if Keyword::decode(label).is_some() {
+                f.write_char('%')?;
+            }
+            compact_fmt_variant(f, label, payload, src)
+        }
+        OptionSome => compact_fmt_variant(
+            f,
+            "some",
+            node.as_option().map_err(|_| std::fmt::Error)?,
+            src,
+        ),
+        OptionNone => compact_fmt_variant(f, "none", None, src),
+        ResultOk => compact_fmt_variant(
+            f,
+            "ok",
+            node.as_result().map_err(|_| std::fmt::Error)?.unwrap(),
+            src,
+        ),
+        ResultErr => compact_fmt_variant(
+            f,
+            "err",
+            node.as_result()
+                .map_err(|_| std::fmt::Error)?
+                .unwrap_err(),
+            src,
+        ),
+        Flags => {
+            f.write_char('{')?;
+            for (idx, flag) in node
+                .as_flags(src)
+                .map_err(|_| std::fmt::Error)?
+                .enumerate()
+            {
+                if idx != 0 {
+                    f.write_char(',')?;
+                }
+                f.write_str(flag)?;
+            }
+            f.write_char('}')
+        }
+    }
+}
+
+fn compact_fmt_sequence<'a>(
+    f: &mut impl std::fmt::Write,
+    open: char,
+    close: char,
+    nodes: impl Iterator<Item = &'a wasm_wave::ast::Node>,
+    src: &str,
+) -> std::fmt::Result {
+    f.write_char(open)?;
+    for (idx, node) in nodes.enumerate() {
+        if idx != 0 {
+            f.write_char(',')?;
+        }
+        compact_fmt_node(f, node, src)?;
+    }
+    f.write_char(close)
+}
+
+fn compact_fmt_variant(
+    f: &mut impl std::fmt::Write,
+    case: &str,
+    payload: Option<&wasm_wave::ast::Node>,
+    src: &str,
+) -> std::fmt::Result {
+    f.write_str(case)?;
+    if let Some(node) = payload {
+        f.write_char('(')?;
+        compact_fmt_node(f, node, src)?;
+        f.write_char(')')?;
+    }
+    Ok(())
+}
+
 impl Display for DataValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

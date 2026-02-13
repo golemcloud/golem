@@ -431,6 +431,215 @@ fn untyped_data_value_serde_poem_roundtrip() {
     assert_eq!(original, serde_deserialized);
 }
 
+// Tests for normalize_agent_id_text
+
+use crate::model::agent::normalize_agent_id_text;
+
+#[test]
+fn normalize_strips_whitespace_in_wave_values() {
+    assert_eq!(
+        normalize_agent_id_text("agent-7(  [  12,     13 , 14 ]   )").unwrap(),
+        "agent-7([12,13,14])"
+    );
+}
+
+#[test]
+fn normalize_strips_whitespace_in_records() {
+    assert_eq!(
+        normalize_agent_id_text(
+            r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#
+        )
+        .unwrap(),
+        "agent-3(32,{x:12,y:32,properties:{a,b,c}})"
+    );
+}
+
+#[test]
+fn normalize_preserves_already_compact() {
+    assert_eq!(
+        normalize_agent_id_text("agent-1()").unwrap(),
+        "agent-1()"
+    );
+}
+
+#[test]
+fn normalize_preserves_strings() {
+    assert_eq!(
+        normalize_agent_id_text(r#"agent-2("hello world")"#).unwrap(),
+        r#"agent-2("hello world")"#
+    );
+}
+
+#[test]
+fn normalize_handles_phantom_id() {
+    let result =
+        normalize_agent_id_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]").unwrap();
+    assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
+}
+
+#[test]
+fn normalize_handles_phantom_id_with_whitespace() {
+    let result =
+        normalize_agent_id_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]").unwrap();
+    assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
+}
+
+#[test]
+fn normalize_rejects_invalid_format() {
+    assert!(normalize_agent_id_text("not-an-agent-id").is_err());
+}
+
+#[test]
+fn normalize_rejects_invalid_phantom_id() {
+    assert!(normalize_agent_id_text("agent-1()[not-a-uuid]").is_err());
+}
+
+#[test]
+fn normalize_handles_urls() {
+    assert_eq!(
+        normalize_agent_id_text("agent-4(https://url1.com/,https://url2.com/)").unwrap(),
+        "agent-4(https://url1.com/,https://url2.com/)"
+    );
+}
+
+#[test]
+fn normalize_handles_inline_text() {
+    assert_eq!(
+        normalize_agent_id_text(r#"agent-4("hello, world!","goodbye")"#).unwrap(),
+        r#"agent-4("hello, world!","goodbye")"#
+    );
+}
+
+#[test]
+fn normalize_handles_multimodal_elements() {
+    assert_eq!(
+        normalize_agent_id_text("agent-6(x(  42  ),y(https://example.com/))").unwrap(),
+        "agent-6(x(42),y(https://example.com/))"
+    );
+}
+
+#[test]
+fn normalize_handles_nested_records_with_whitespace() {
+    assert_eq!(
+        normalize_agent_id_text(
+            r#"non-kebab-agent({ agent-id : { component-id : { uuid : { high-bits : 115746831381919841 , low-bits : 13556493125794766855 } } , agent-id : "some-agent-id(\"hello\")" } , oplog-idx : 1234 })"#
+        )
+        .unwrap(),
+        r#"non-kebab-agent({agent-id:{component-id:{uuid:{high-bits:115746831381919841,low-bits:13556493125794766855}},agent-id:"some-agent-id(\"hello\")"},oplog-idx:1234})"#
+    );
+}
+
+#[test]
+fn normalize_handles_options_and_results() {
+    assert_eq!(
+        normalize_agent_id_text("agent-x( some( 42 ) )").unwrap(),
+        "agent-x(some(42))"
+    );
+    assert_eq!(
+        normalize_agent_id_text("agent-x( none )").unwrap(),
+        "agent-x(none)"
+    );
+    assert_eq!(
+        normalize_agent_id_text("agent-x( ok( 1 ) )").unwrap(),
+        "agent-x(ok(1))"
+    );
+    assert_eq!(
+        normalize_agent_id_text("agent-x( err( 2 ) )").unwrap(),
+        "agent-x(err(2))"
+    );
+}
+
+#[test]
+fn normalize_handles_empty_record() {
+    assert_eq!(
+        normalize_agent_id_text("agent-x( {  :  } )").unwrap(),
+        "agent-x({:})"
+    );
+}
+
+#[test]
+fn normalize_handles_empty_flags() {
+    assert_eq!(
+        normalize_agent_id_text("agent-x( {  } )").unwrap(),
+        "agent-x({})"
+    );
+}
+
+#[test]
+fn normalize_handles_char_values() {
+    assert_eq!(
+        normalize_agent_id_text("agent-x( 'a' , 'b' )").unwrap(),
+        "agent-x('a','b')"
+    );
+}
+
+#[test]
+fn normalize_handles_variant_with_percent_prefix() {
+    assert_eq!(
+        normalize_agent_id_text("agent-x( %true( 42 ) )").unwrap(),
+        "agent-x(%true(42))"
+    );
+}
+
+proptest! {
+    #[test]
+    fn normalize_text_idempotent_for_simple_agent(x in 0u32..10000) {
+        let agent_id = AgentId::new(
+            AgentTypeName("agent-2".to_string()),
+            DataValue::Tuple(ElementValues {
+                elements: vec![
+                    ElementValue::ComponentModel(x.into_value_and_type()),
+                ],
+            }),
+            None,
+        );
+        let canonical = agent_id.to_string();
+        let normalized = normalize_agent_id_text(&canonical).unwrap();
+        prop_assert_eq!(&normalized, &canonical);
+    }
+
+    #[test]
+    fn normalize_text_idempotent_for_list_agent(
+        a in 0u32..100,
+        b in 0u32..100,
+        c in 0u32..100,
+    ) {
+        let agent_id = AgentId::new(
+            AgentTypeName("agent-7".to_string()),
+            DataValue::Tuple(ElementValues {
+                elements: vec![
+                    ElementValue::ComponentModel(ValueAndType::new(
+                        Value::List(vec![Value::U32(a), Value::U32(b), Value::U32(c)]),
+                        list(u32()),
+                    )),
+                ],
+            }),
+            None,
+        );
+        let canonical = agent_id.to_string();
+        let normalized = normalize_agent_id_text(&canonical).unwrap();
+        prop_assert_eq!(&normalized, &canonical);
+    }
+
+    #[test]
+    fn normalize_text_strips_whitespace_for_simple_agent(x in 0u32..10000) {
+        let with_spaces = format!("agent-2(  {x}  )");
+        let normalized = normalize_agent_id_text(&with_spaces).unwrap();
+        prop_assert_eq!(normalized, format!("agent-2({x})"));
+    }
+
+    #[test]
+    fn normalize_text_strips_whitespace_for_list(
+        a in 0u32..100,
+        b in 0u32..100,
+        c in 0u32..100,
+    ) {
+        let with_spaces = format!("agent-7( [ {a} , {b} , {c} ] )");
+        let normalized = normalize_agent_id_text(&with_spaces).unwrap();
+        prop_assert_eq!(normalized, format!("agent-7([{a},{b},{c}])"));
+    }
+}
+
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
     let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
     let s = id.to_string();
