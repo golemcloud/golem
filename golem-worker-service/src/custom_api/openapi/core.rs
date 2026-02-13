@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
+use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use golem_common::base_model::agent::{AgentMethod, AgentType};
 use golem_common::model::agent::AgentConstructor;
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, SecuritySchemeDetails};
@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 pub trait HttpApiRoute {
     fn security_scheme_missing(&self) -> bool;
-    fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>>;
+    fn security_scheme(&self) -> Option<Arc<SecuritySchemeDetails>>;
     fn method(&self) -> &str;
     fn path(&self) -> &Vec<PathSegment>;
     fn binding(&self) -> &RichRouteBehaviour;
@@ -36,8 +36,11 @@ impl<'a> HttpApiRoute for RichCompiledRouteWithAgentType<'a> {
     fn security_scheme_missing(&self) -> bool {
         false
     }
-    fn security_scheme(&self) -> &Option<Arc<SecuritySchemeDetails>> {
-        &self.details.security_scheme
+    fn security_scheme(&self) -> Option<Arc<SecuritySchemeDetails>> {
+        match &self.details.security {
+            RichRouteSecurity::SecurityScheme(details) => Some(details.security_scheme.clone()),
+            _ => None,
+        }
     }
     fn method(&self) -> &str {
         self.details.method.as_str()

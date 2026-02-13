@@ -354,7 +354,7 @@ pub fn add_openapi_spec_routes(
                 path,
                 body: RequestBodySchema::Unused,
                 behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }),
-                security_scheme: None,
+                security: UnboundRouteSecurity::None,
                 cors: CorsOptions {
                     allowed_patterns: Vec::new(),
                 },
