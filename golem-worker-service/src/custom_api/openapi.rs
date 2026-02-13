@@ -20,6 +20,13 @@ use golem_service_base::custom_api::{
 use golem_service_base::model::SafeIndex;
 use golem_wasm::analysis::AnalysedType;
 use indexmap::IndexMap;
+use openapiv3::{
+    AdditionalProperties, ArrayType, BooleanType, Components, Header, HeaderStyle, Info,
+    IntegerFormat, IntegerType, MediaType, NumberFormat, NumberType, ObjectType, OpenAPI,
+    Operation, Parameter, ParameterData, ParameterSchemaOrContent, PathItem, PathStyle, QueryStyle,
+    ReferenceOr, RequestBody, Response, Schema, SchemaData, SchemaKind, SecurityScheme, StatusCode,
+    StringFormat, StringType, Type, VariantOrUnknownOrEmpty,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -74,7 +81,7 @@ impl<'a> HttpApiRoute for RichCompiledRouteWithAgentType<'a> {
     }
 }
 
-pub struct HttpApiOpenApiSpec(pub openapiv3::OpenAPI);
+pub struct HttpApiOpenApiSpec(pub OpenAPI);
 
 impl HttpApiOpenApiSpec {
     pub fn from_routes<'a, T, I>(routes: I) -> Result<Self, String>
@@ -96,7 +103,7 @@ impl HttpApiOpenApiSpec {
 
         open_api.paths.paths = paths
             .into_iter()
-            .map(|(k, v)| (k, openapiv3::ReferenceOr::Item(v)))
+            .map(|(k, v)| (k, ReferenceOr::Item(v)))
             .collect();
 
         Ok(HttpApiOpenApiSpec(open_api))
@@ -118,10 +125,10 @@ where
     schemes
 }
 
-fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> openapiv3::OpenAPI {
-    let mut open_api = openapiv3::OpenAPI {
+fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> OpenAPI {
+    let mut open_api = OpenAPI {
         openapi: "3.0.0".to_string(),
-        info: openapiv3::Info {
+        info: Info {
             title: "".to_string(),
             description: None,
             terms_of_service: None,
@@ -133,14 +140,14 @@ fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> op
         ..Default::default()
     };
 
-    let mut components = openapiv3::Components::default();
+    let mut components = Components::default();
     for security_scheme in security_schemes {
         let openid_config_url = format!(
             "{}/.well-known/openid-configuration",
             security_scheme.provider_type.issuer_url().url()
         );
 
-        let scheme = openapiv3::SecurityScheme::OpenIDConnect {
+        let scheme = SecurityScheme::OpenIDConnect {
             open_id_connect_url: openid_config_url,
             description: Some(format!(
                 "OpenID Connect provider for {}",
@@ -149,10 +156,9 @@ fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> op
             extensions: Default::default(),
         };
 
-        components.security_schemes.insert(
-            security_scheme.name.0.clone(),
-            openapiv3::ReferenceOr::Item(scheme),
-        );
+        components
+            .security_schemes
+            .insert(security_scheme.name.0.clone(), ReferenceOr::Item(scheme));
     }
 
     open_api.components = Some(components);
@@ -268,7 +274,7 @@ fn get_full_path_and_variables<'a>(
 
 fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     route: &T,
-    paths: &mut BTreeMap<String, openapiv3::PathItem>,
+    paths: &mut BTreeMap<String, PathItem>,
 ) -> Result<(), String> {
     let method_params = match route.binding() {
         RichRouteBehaviour::CallAgent(behaviour) => Some(&behaviour.method_parameters),
@@ -279,7 +285,7 @@ fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
         get_full_path_and_variables(route.associated_agent_method(), route.path(), method_params);
 
     let path_item = paths.entry(path_str).or_default();
-    let mut operation = openapiv3::Operation::default();
+    let mut operation = Operation::default();
 
     let query_params_raw = get_query_variable_and_types(method_params);
     let header_params_raw = get_header_variable_and_types(method_params);
@@ -298,167 +304,160 @@ fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     Ok(())
 }
 
-type ParameterTuple = (String, openapiv3::Schema);
+struct ParameterSchema<'a> {
+    name: &'a str,
+    schema: Schema,
+}
+struct Parameters<'a> {
+    path_params: Vec<ParameterSchema<'a>>,
+    query_params: Vec<ParameterSchema<'a>>,
+    header_params: Vec<ParameterSchema<'a>>,
+}
 
 fn add_parameters(
-    operation: &mut openapiv3::Operation,
+    operation: &mut Operation,
     path_params_raw: Vec<(&str, &PathSegmentType)>,
     query_params_raw: Vec<(&str, &QueryOrHeaderType)>,
     header_params_raw: Vec<(&str, &QueryOrHeaderType)>,
 ) {
-    let (path_params, query_params, header_params) =
-        get_parameters(path_params_raw, query_params_raw, header_params_raw);
+    let params = get_parameters(path_params_raw, query_params_raw, header_params_raw);
 
-    for (name, schema) in path_params {
+    for ParameterSchema { name, schema } in params.path_params {
         operation
             .parameters
-            .push(openapiv3::ReferenceOr::Item(create_path_parameter(
-                &name, schema,
-            )));
+            .push(ReferenceOr::Item(create_path_parameter(name, schema)));
     }
-    for (name, schema) in query_params {
+    for ParameterSchema { name, schema } in params.query_params {
         operation
             .parameters
-            .push(openapiv3::ReferenceOr::Item(create_query_parameter(
-                &name, schema,
-            )));
+            .push(ReferenceOr::Item(create_query_parameter(name, schema)));
     }
-    for (name, schema) in header_params {
+    for ParameterSchema { name, schema } in params.header_params {
         operation
             .parameters
-            .push(openapiv3::ReferenceOr::Item(create_header_parameter(
-                &name, schema,
-            )));
+            .push(ReferenceOr::Item(create_header_parameter(name, schema)));
     }
 }
 
-fn create_schema_from_path_segment_type(path_segment_type: &PathSegmentType) -> openapiv3::Schema {
+fn create_schema_from_path_segment_type(path_segment_type: &PathSegmentType) -> Schema {
     let analysed_type = AnalysedType::from(path_segment_type);
     create_schema_from_analysed_type(&analysed_type)
 }
 
-fn create_schema_from_query_or_header_type(
-    query_or_header_type: &QueryOrHeaderType,
-) -> openapiv3::Schema {
+fn create_schema_from_query_or_header_type(query_or_header_type: &QueryOrHeaderType) -> Schema {
     let analysed_type = AnalysedType::from(query_or_header_type.clone());
     create_schema_from_analysed_type(&analysed_type)
 }
 
-fn get_parameters(
-    path_params_raw: Vec<(&str, &PathSegmentType)>,
-    query_params_raw: Vec<(&str, &QueryOrHeaderType)>,
-    header_params_raw: Vec<(&str, &QueryOrHeaderType)>,
-) -> (
-    Vec<ParameterTuple>,
-    Vec<ParameterTuple>,
-    Vec<ParameterTuple>,
-) {
+fn get_parameters<'a>(
+    path_params_raw: Vec<(&'a str, &PathSegmentType)>,
+    query_params_raw: Vec<(&'a str, &QueryOrHeaderType)>,
+    header_params_raw: Vec<(&'a str, &QueryOrHeaderType)>,
+) -> Parameters<'a> {
     let mut path_params = Vec::new();
     let mut query_params = Vec::new();
     let mut header_params = Vec::new();
 
     for (name, path_segment_type) in path_params_raw {
         let schema = create_schema_from_path_segment_type(&path_segment_type);
-        path_params.push((name.to_string(), schema));
+        path_params.push(ParameterSchema { name, schema });
     }
 
     for (name, query_or_header_type) in query_params_raw {
         let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        query_params.push((name.to_string(), schema));
+        query_params.push(ParameterSchema { name, schema });
     }
 
     for (name, query_or_header_type) in header_params_raw {
         let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        header_params.push((name.to_string(), schema));
+        header_params.push(ParameterSchema { name, schema });
     }
 
-    (path_params, query_params, header_params)
+    Parameters {
+        path_params,
+        query_params,
+        header_params,
+    }
 }
 
-fn create_path_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::Parameter {
-    openapiv3::Parameter::Path {
-        parameter_data: openapiv3::ParameterData {
+fn create_path_parameter(name: &str, schema: Schema) -> Parameter {
+    Parameter::Path {
+        parameter_data: ParameterData {
             name: name.to_string(),
             description: Some(format!("Path parameter: {name}")),
             required: true,
             deprecated: None,
             explode: Some(false),
-            format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
-                schema,
-            )),
+            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
             example: None,
             examples: Default::default(),
             extensions: Default::default(),
         },
-        style: openapiv3::PathStyle::Simple,
+        style: PathStyle::Simple,
     }
 }
 
-fn create_query_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::Parameter {
+fn create_query_parameter(name: &str, schema: Schema) -> Parameter {
     let required = !schema.schema_data.nullable;
 
-    openapiv3::Parameter::Query {
-        parameter_data: openapiv3::ParameterData {
+    Parameter::Query {
+        parameter_data: ParameterData {
             name: name.to_string(),
             description: Some(format!("Query parameter: {name}")),
             required,
             deprecated: None,
             explode: Some(false),
-            format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
-                schema,
-            )),
+            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
             example: None,
             examples: Default::default(),
             extensions: Default::default(),
         },
-        style: openapiv3::QueryStyle::Form,
+        style: QueryStyle::Form,
         allow_empty_value: Some(false),
         allow_reserved: false,
     }
 }
 
-fn create_header_parameter(name: &str, schema: openapiv3::Schema) -> openapiv3::Parameter {
+fn create_header_parameter(name: &str, schema: Schema) -> Parameter {
     let required = !schema.schema_data.nullable;
 
-    openapiv3::Parameter::Header {
-        parameter_data: openapiv3::ParameterData {
+    Parameter::Header {
+        parameter_data: ParameterData {
             name: name.to_string(),
             description: Some(format!("Header parameter: {name}")),
             required,
             deprecated: None,
             explode: Some(false),
-            format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
-                schema,
-            )),
+            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
             example: None,
             examples: Default::default(),
             extensions: Default::default(),
         },
-        style: openapiv3::HeaderStyle::Simple,
+        style: HeaderStyle::Simple,
     }
 }
 
-fn add_request_body(operation: &mut openapiv3::Operation, request_body_schema: &RequestBodySchema) {
+fn add_request_body(operation: &mut Operation, request_body_schema: &RequestBodySchema) {
     let request_body = create_request_body(request_body_schema);
 
     if let Some(rb) = request_body {
-        operation.request_body = Some(openapiv3::ReferenceOr::Item(rb));
+        operation.request_body = Some(ReferenceOr::Item(rb));
     }
 }
 
-fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openapiv3::RequestBody> {
+fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<RequestBody> {
     match request_body_schema {
         RequestBodySchema::Unused => None,
         RequestBodySchema::JsonBody { expected_type } => {
             let schema = create_schema_from_analysed_type(expected_type);
-            Some(openapiv3::RequestBody {
+            Some(RequestBody {
                 description: Some("JSON body".to_string()),
                 content: {
                     let mut content = IndexMap::new();
                     content.insert(
                         "application/json".to_string(),
-                        openapiv3::MediaType {
-                            schema: Some(openapiv3::ReferenceOr::Item(schema)),
+                        MediaType {
+                            schema: Some(ReferenceOr::Item(schema)),
                             ..Default::default()
                         },
                     );
@@ -469,13 +468,13 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openap
             })
         }
 
-        RequestBodySchema::UnrestrictedBinary => Some(openapiv3::RequestBody {
+        RequestBodySchema::UnrestrictedBinary => Some(RequestBody {
             description: Some("Unrestricted binary body".to_string()),
             content: {
                 let mut content = IndexMap::new();
                 content.insert(
                     "*/*".to_string(),
-                    openapiv3::MediaType {
+                    MediaType {
                         ..Default::default()
                     },
                 );
@@ -490,12 +489,12 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openap
             for mime in allowed_mime_types {
                 content.insert(
                     mime.clone(),
-                    openapiv3::MediaType {
+                    MediaType {
                         ..Default::default()
                     },
                 );
             }
-            Some(openapiv3::RequestBody {
+            Some(RequestBody {
                 description: Some("Restricted binary body".to_string()),
                 content,
                 required: true,
@@ -505,148 +504,207 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<openap
     }
 }
 
-fn add_responses<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
-    let (response_schema, headers, explicit_status) = determine_response_type(route);
+fn add_responses<T: HttpApiRoute + ?Sized>(operation: &mut Operation, route: &T) {
+    let (status_code_and_response_schemas, headers_map) =
+        determine_agent_response_with_status_code(route);
 
-    let mut response = openapiv3::Response {
-        description: "Response".to_string(),
-        ..Default::default()
-    };
+    for (status_code, response_schema) in status_code_and_response_schemas {
+        let mut response = Response {
+            description: format!("Response {}", status_code),
+            ..Default::default()
+        };
 
-    match response_schema {
-        DeterminedResponseBodySchema::Known {
-            schema,
-            content_type,
-        } => {
-            let mut content = IndexMap::new();
-            content.insert(
+        match response_schema {
+            DeterminedResponseBodySchema::Known {
+                schema,
                 content_type,
-                openapiv3::MediaType {
-                    schema: Some(openapiv3::ReferenceOr::Item(*schema)),
-                    ..Default::default()
-                },
-            );
-            response.content = content;
+            } => {
+                let mut content = IndexMap::new();
+                content.insert(
+                    content_type,
+                    MediaType {
+                        schema: Some(ReferenceOr::Item(*schema)),
+                        ..Default::default()
+                    },
+                );
+                response.content = content;
+            }
+            DeterminedResponseBodySchema::Unknown => {
+                let mut content = IndexMap::new();
+                content.insert(
+                    "*/*".to_string(),
+                    MediaType {
+                        ..Default::default()
+                    },
+                );
+                response.content = content;
+            }
+            DeterminedResponseBodySchema::NoBody => {
+                response.content = IndexMap::new();
+            }
         }
-        DeterminedResponseBodySchema::Unknown => {
-            let mut content = IndexMap::new();
-            content.insert(
-                "*/*".to_string(),
-                openapiv3::MediaType {
-                    ..Default::default()
-                },
-            );
-            response.content = content;
-        }
-        DeterminedResponseBodySchema::NoBody => {
-            response.content = IndexMap::new();
-        }
-    }
 
-    // Add headers if any
-    if let Some(headers_map) = headers {
         let mut response_headers = IndexMap::new();
-        for (name, schema) in headers_map {
+
+        for (name, schema) in headers_map.iter() {
             let description = format!("Response header: {}", name);
             response_headers.insert(
                 name.clone(),
-                openapiv3::ReferenceOr::Item(openapiv3::Header {
+                ReferenceOr::Item(Header {
                     description: Some(description),
                     required: true,
                     deprecated: None,
-                    format: openapiv3::ParameterSchemaOrContent::Schema(
-                        openapiv3::ReferenceOr::Item(schema),
-                    ),
+                    format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema.clone())),
                     example: None,
                     examples: Default::default(),
                     extensions: Default::default(),
-                    style: openapiv3::HeaderStyle::Simple,
+                    style: HeaderStyle::Simple,
                 }),
             );
         }
         response.headers = response_headers;
-    }
 
-    // Insert response: explicit status if given, otherwise default
-    if let Some(status) = explicit_status {
-        operation.responses.responses.insert(
-            openapiv3::StatusCode::Code(status),
-            openapiv3::ReferenceOr::Item(response),
-        );
-    } else {
-        operation.responses.default = Some(openapiv3::ReferenceOr::Item(response));
+        operation
+            .responses
+            .responses
+            .insert(StatusCode::Code(status_code), ReferenceOr::Item(response));
     }
 }
 
 enum DeterminedResponseBodySchema {
     Unknown,
     Known {
-        schema: Box<openapiv3::Schema>,
+        schema: Box<Schema>,
         content_type: String,
     },
     NoBody,
 }
 
-fn determine_response_type<T: HttpApiRoute + ?Sized>(
+fn determine_agent_response_with_status_code<T: HttpApiRoute + ?Sized>(
     route: &T,
 ) -> (
-    DeterminedResponseBodySchema,
-    Option<IndexMap<String, openapiv3::Schema>>,
-    Option<u16>, // status code
+    IndexMap<u16, DeterminedResponseBodySchema>, // u16 for status code
+    IndexMap<String, Schema>,
 ) {
+    let mut responses = IndexMap::new();
+    let mut headers = IndexMap::new();
+
     match route.binding() {
         RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
-            let response = &call_agent_behaviour.expected_agent_response;
+            match &call_agent_behaviour.expected_agent_response {
+                DataSchema::Tuple(named_elements) => match named_elements.elements.len() {
+                    0 => {
+                        responses.insert(204, DeterminedResponseBodySchema::NoBody);
+                    }
+                    1 => {
+                        let element_schema = &named_elements.elements[0].schema;
 
-            match response {
-                DataSchema::Tuple(named_element_schemas) => {
-                    match named_element_schemas.elements.len() {
-                        0 => (DeterminedResponseBodySchema::NoBody, None, Some(204)),
-                        1 => {
-                            let element_schema = &named_element_schemas.elements[0];
-                            let schema = &element_schema.schema;
+                        match element_schema {
+                            // based on response_mapping logic in the actual request_handler
+                            ElementSchema::ComponentModel(typ) => {
+                                if let AnalysedType::Option(opt) = &typ.element_type {
+                                    let inner_schema = create_schema_from_analysed_type(&opt.inner);
+                                    responses.insert(
+                                        200,
+                                        DeterminedResponseBodySchema::Known {
+                                            schema: Box::new(inner_schema),
+                                            content_type: "application/json".to_string(),
+                                        },
+                                    );
+                                    responses.insert(404, DeterminedResponseBodySchema::NoBody);
+                                } else if let AnalysedType::Result(res) = &typ.element_type {
+                                    if let Some(ok_type) = &res.ok {
+                                        let ok_schema = create_schema_from_analysed_type(ok_type);
+                                        responses.insert(
+                                            200,
+                                            DeterminedResponseBodySchema::Known {
+                                                schema: Box::new(ok_schema),
+                                                content_type: "application/json".to_string(),
+                                            },
+                                        );
+                                    } else {
+                                        responses
+                                            .insert(200, DeterminedResponseBodySchema::Unknown);
+                                    }
 
-                            match schema {
-                                ElementSchema::ComponentModel(inner) => {
+                                    if let Some(err_type) = &res.err {
+                                        let err_schema = create_schema_from_analysed_type(err_type);
+                                        responses.insert(
+                                            500,
+                                            DeterminedResponseBodySchema::Known {
+                                                schema: Box::new(err_schema),
+                                                content_type: "application/json".to_string(),
+                                            },
+                                        );
+                                        responses.insert(500, DeterminedResponseBodySchema::NoBody);
+                                    } else {
+                                        responses
+                                            .insert(500, DeterminedResponseBodySchema::Unknown);
+                                    }
+                                } else {
                                     let schema =
-                                        create_schema_from_analysed_type(&inner.element_type);
-                                    (
+                                        create_schema_from_analysed_type(&typ.element_type);
+                                    responses.insert(
+                                        200,
                                         DeterminedResponseBodySchema::Known {
                                             schema: Box::new(schema),
                                             content_type: "application/json".to_string(),
                                         },
-                                        None,
-                                        Some(200),
-                                    )
-                                }
-
-                                _ => {
-                                    todo!()
+                                    );
                                 }
                             }
-                        }
-                        _ => (DeterminedResponseBodySchema::Unknown, None, Some(200)),
-                    }
-                }
+                            ElementSchema::UnstructuredBinary(binary_descriptor) => {
+                                let content_type = binary_descriptor
+                                    .restrictions
+                                    .as_ref()
+                                    .and_then(|types| types.first())
+                                    .map(|bt| bt.mime_type.clone())
+                                    .unwrap_or_else(|| "application/octet-stream".to_string());
 
-                _ => todo!("response schema other than tuple not supported yet"),
+                                let schema = Schema {
+                                    schema_data: SchemaData::default(),
+                                    schema_kind: SchemaKind::Type(Type::String(StringType {
+                                        format: VariantOrUnknownOrEmpty::Item(StringFormat::Binary),
+                                        pattern: None,
+                                        enumeration: Vec::new(),
+                                        min_length: None,
+                                        max_length: None,
+                                    })),
+                                };
+                                responses.insert(
+                                    200,
+                                    DeterminedResponseBodySchema::Known {
+                                        schema: Box::new(schema),
+                                        content_type,
+                                    },
+                                );
+                            }
+                            _ => {
+                                responses.insert(200, DeterminedResponseBodySchema::Unknown);
+                            }
+                        }
+                    }
+                    _ => {
+                        responses.insert(200, DeterminedResponseBodySchema::Unknown);
+                    }
+                },
+                DataSchema::Multimodal(_) => {
+                    responses.insert(200, DeterminedResponseBodySchema::Unknown);
+                }
             }
         }
-
         RichRouteBehaviour::CorsPreflight(cors_preflight_behaviour) => {
-            let mut headers = IndexMap::new();
+            responses.insert(204, DeterminedResponseBodySchema::NoBody);
 
-            let string_schema = openapiv3::Schema {
+            let string_schema = Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                    openapiv3::StringType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                        pattern: None,
-                        enumeration: vec![],
-                        min_length: None,
-                        max_length: None,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::String(StringType {
+                    format: VariantOrUnknownOrEmpty::Empty,
+                    pattern: None,
+                    enumeration: vec![],
+                    min_length: None,
+                    max_length: None,
+                })),
             };
 
             headers.insert(
@@ -659,7 +717,6 @@ fn determine_response_type<T: HttpApiRoute + ?Sized>(
                 string_schema.clone(),
             );
 
-            // Access-Control-Allow-Methods (REQUIRED)
             let allowed_methods_enum: Vec<Option<String>> = cors_preflight_behaviour
                 .allowed_methods
                 .iter()
@@ -681,52 +738,57 @@ fn determine_response_type<T: HttpApiRoute + ?Sized>(
 
             headers.insert(
                 "Access-Control-Allow-Methods".to_string(),
-                openapiv3::Schema {
+                Schema {
                     schema_data: Default::default(),
-                    schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                        openapiv3::StringType {
-                            format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                            pattern: None,
-                            enumeration: allowed_methods_enum,
-                            min_length: None,
-                            max_length: None,
-                        },
-                    )),
+                    schema_kind: SchemaKind::Type(Type::String(StringType {
+                        format: VariantOrUnknownOrEmpty::Empty,
+                        pattern: None,
+                        enumeration: allowed_methods_enum,
+                        min_length: None,
+                        max_length: None,
+                    })),
                 },
             );
-
-            (
-                DeterminedResponseBodySchema::NoBody,
-                Some(headers),
-                Some(204),
-            )
         }
-
+        RichRouteBehaviour::WebhookCallback(_) => {
+            // based on runtime behaviour of webhook
+            responses.insert(204, DeterminedResponseBodySchema::NoBody);
+            responses.insert(404, DeterminedResponseBodySchema::NoBody);
+        }
         RichRouteBehaviour::OpenApiSpec(_) => {
             let schema = create_schema_from_analysed_type(&AnalysedType::Str(
                 golem_wasm::analysis::TypeStr {},
             ));
-            (
+
+            responses.insert(
+                200,
                 DeterminedResponseBodySchema::Known {
                     schema: Box::new(schema),
-                    content_type: "text/html".to_string(),
+                    content_type: "text/plain".to_string(),
                 },
-                None,
-                Some(200),
-            )
+            );
         }
-
-        RichRouteBehaviour::WebhookCallback(_) => {
-            (DeterminedResponseBodySchema::NoBody, None, Some(200))
-        }
-
         RichRouteBehaviour::OidcCallback(_) => {
-            (DeterminedResponseBodySchema::NoBody, None, Some(200))
+            let string_schema = Schema {
+                schema_data: Default::default(),
+                schema_kind: SchemaKind::Type(Type::String(StringType {
+                    format: VariantOrUnknownOrEmpty::Empty,
+                    pattern: None,
+                    enumeration: vec![],
+                    min_length: None,
+                    max_length: None,
+                })),
+            };
+
+            headers.insert("Set-Cookie".to_string(), string_schema.clone());
+            headers.insert("Location".to_string(), string_schema);
         }
     }
+
+    (responses, headers)
 }
 
-fn add_security<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, route: &T) {
+fn add_security<T: HttpApiRoute + ?Sized>(operation: &mut Operation, route: &T) {
     if route.security_scheme_missing() {
         operation.extensions.insert(
             GOLEM_DISABLED_EXTENSION.to_string(),
@@ -750,9 +812,9 @@ fn add_security<T: HttpApiRoute + ?Sized>(operation: &mut openapiv3::Operation, 
 }
 
 fn add_operation_to_path_item(
-    path_item: &mut openapiv3::PathItem,
+    path_item: &mut PathItem,
     method: &str,
-    operation: openapiv3::Operation,
+    operation: Operation,
 ) -> Result<(), String> {
     match method {
         "GET" => path_item.get = Some(operation),
@@ -763,157 +825,122 @@ fn add_operation_to_path_item(
         "OPTIONS" => path_item.options = Some(operation),
         "HEAD" => path_item.head = Some(operation),
         "TRACE" => path_item.trace = Some(operation),
-        _ => return Err(format!("Unsupported HTTP method: {:?}", method)), // Well, I don't know what to do here
+        _ => {}
     }
     Ok(())
 }
 
-fn create_integer_schema(
-    format: openapiv3::IntegerFormat,
-    min: Option<i64>,
-    max: Option<i64>,
-) -> openapiv3::Schema {
-    let schema_data = openapiv3::SchemaData::default();
-    openapiv3::Schema {
+fn create_integer_schema(format: IntegerFormat, min: Option<i64>, max: Option<i64>) -> Schema {
+    let schema_data = SchemaData::default();
+    Schema {
         schema_data,
-        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-            openapiv3::IntegerType {
-                format: openapiv3::VariantOrUnknownOrEmpty::Item(format),
-                minimum: min,
-                maximum: max,
-                multiple_of: None,
-                exclusive_minimum: false,
-                exclusive_maximum: false,
-                enumeration: vec![],
-            },
-        )),
+        schema_kind: SchemaKind::Type(Type::Integer(IntegerType {
+            format: VariantOrUnknownOrEmpty::Item(format),
+            minimum: min,
+            maximum: max,
+            multiple_of: None,
+            exclusive_minimum: false,
+            exclusive_maximum: false,
+            enumeration: vec![],
+        })),
     }
 }
 
-fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::Schema {
+fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> Schema {
     use golem_wasm::analysis::AnalysedType;
 
     match analysed_type {
-        AnalysedType::Bool(_) => openapiv3::Schema {
+        AnalysedType::Bool(_) => Schema {
             schema_data: Default::default(),
-            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Boolean(
-                openapiv3::BooleanType::default(),
-            )),
+            schema_kind: SchemaKind::Type(Type::Boolean(BooleanType::default())),
         },
-        AnalysedType::U8(_) => {
-            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(0), Some(255))
-        }
-        AnalysedType::U16(_) => {
-            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(0), Some(65535))
-        }
-        AnalysedType::U32(_) => {
-            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(0), None)
-        }
-        AnalysedType::U64(_) => {
-            create_integer_schema(openapiv3::IntegerFormat::Int64, Some(0), None)
-        }
-        AnalysedType::S8(_) => {
-            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(-128), Some(127))
-        }
+        AnalysedType::U8(_) => create_integer_schema(IntegerFormat::Int32, Some(0), Some(255)),
+        AnalysedType::U16(_) => create_integer_schema(IntegerFormat::Int32, Some(0), Some(65535)),
+        AnalysedType::U32(_) => create_integer_schema(IntegerFormat::Int32, Some(0), None),
+        AnalysedType::U64(_) => create_integer_schema(IntegerFormat::Int64, Some(0), None),
+        AnalysedType::S8(_) => create_integer_schema(IntegerFormat::Int32, Some(-128), Some(127)),
         AnalysedType::S16(_) => {
-            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(-32768), Some(32767))
+            create_integer_schema(IntegerFormat::Int32, Some(-32768), Some(32767))
         }
-        AnalysedType::S32(_) => create_integer_schema(openapiv3::IntegerFormat::Int32, None, None),
-        AnalysedType::S64(_) => create_integer_schema(openapiv3::IntegerFormat::Int64, None, None),
+        AnalysedType::S32(_) => create_integer_schema(IntegerFormat::Int32, None, None),
+        AnalysedType::S64(_) => create_integer_schema(IntegerFormat::Int64, None, None),
 
         AnalysedType::F32(_) => {
-            let sd = openapiv3::SchemaData::default();
-            openapiv3::Schema {
+            let sd = SchemaData::default();
+            Schema {
                 schema_data: sd,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Number(
-                    openapiv3::NumberType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::NumberFormat::Float,
-                        ),
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        minimum: None,
-                        maximum: None,
-                        enumeration: vec![],
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Number(NumberType {
+                    format: VariantOrUnknownOrEmpty::Item(NumberFormat::Float),
+                    multiple_of: None,
+                    exclusive_minimum: false,
+                    exclusive_maximum: false,
+                    minimum: None,
+                    maximum: None,
+                    enumeration: vec![],
+                })),
             }
         }
         AnalysedType::F64(_) => {
-            let sd = openapiv3::SchemaData::default();
-            openapiv3::Schema {
+            let sd = SchemaData::default();
+            Schema {
                 schema_data: sd,
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Number(
-                    openapiv3::NumberType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Item(
-                            openapiv3::NumberFormat::Double,
-                        ),
-                        multiple_of: None,
-                        exclusive_minimum: false,
-                        exclusive_maximum: false,
-                        minimum: None,
-                        maximum: None,
-                        enumeration: vec![],
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Number(NumberType {
+                    format: VariantOrUnknownOrEmpty::Item(NumberFormat::Double),
+                    multiple_of: None,
+                    exclusive_minimum: false,
+                    exclusive_maximum: false,
+                    minimum: None,
+                    maximum: None,
+                    enumeration: vec![],
+                })),
             }
         }
-        AnalysedType::Str(_) => openapiv3::Schema {
+        AnalysedType::Str(_) => Schema {
             schema_data: Default::default(),
-            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                openapiv3::StringType {
-                    format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                    pattern: None,
-                    enumeration: vec![],
-                    min_length: None,
-                    max_length: None,
-                },
-            )),
+            schema_kind: SchemaKind::Type(Type::String(StringType {
+                format: VariantOrUnknownOrEmpty::Empty,
+                pattern: None,
+                enumeration: vec![],
+                min_length: None,
+                max_length: None,
+            })),
         },
         AnalysedType::List(type_list) => {
-            let items = openapiv3::ReferenceOr::Item(Box::new(create_schema_from_analysed_type(
-                &type_list.inner,
-            )));
-            openapiv3::Schema {
+            let items =
+                ReferenceOr::Item(Box::new(create_schema_from_analysed_type(&type_list.inner)));
+            Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Array(
-                    openapiv3::ArrayType {
-                        items: Some(items),
-                        min_items: None,
-                        max_items: None,
-                        unique_items: false,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Array(ArrayType {
+                    items: Some(items),
+                    min_items: None,
+                    max_items: None,
+                    unique_items: false,
+                })),
             }
         }
         AnalysedType::Tuple(type_tuple) => {
             let min_items = Some(type_tuple.items.len());
             let max_items = Some(type_tuple.items.len());
 
-            let items = openapiv3::ReferenceOr::Item(Box::new(openapiv3::Schema {
+            let items = ReferenceOr::Item(Box::new(Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(
-                    Default::default(),
-                )),
+                schema_kind: SchemaKind::Type(Type::Object(Default::default())),
             }));
-            let array_schema = openapiv3::Schema {
+            let array_schema = Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Array(
-                    openapiv3::ArrayType {
-                        items: Some(items),
-                        min_items,
-                        max_items,
-                        unique_items: false,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Array(ArrayType {
+                    items: Some(items),
+                    min_items,
+                    max_items,
+                    unique_items: false,
+                })),
             };
 
-            let schema_data = openapiv3::SchemaData {
+            let schema_data = SchemaData {
                 description: Some("Tuple type".to_string()),
                 ..Default::default()
             };
-            openapiv3::Schema {
+            Schema {
                 schema_data,
                 schema_kind: array_schema.schema_kind,
             }
@@ -926,23 +953,21 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
                 let is_nullable = field_schema.schema_data.nullable;
                 properties.insert(
                     field.name.clone(),
-                    openapiv3::ReferenceOr::Item(Box::new(field_schema)),
+                    ReferenceOr::Item(Box::new(field_schema)),
                 );
                 if !is_nullable {
                     required.push(field.name.clone());
                 }
             }
-            openapiv3::Schema {
+            Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(
-                    openapiv3::ObjectType {
-                        properties,
-                        required,
-                        additional_properties: None,
-                        min_properties: None,
-                        max_properties: None,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Object(ObjectType {
+                    properties,
+                    required,
+                    additional_properties: None,
+                    min_properties: None,
+                    max_properties: None,
+                })),
             }
         }
         AnalysedType::Variant(type_variant) => {
@@ -952,60 +977,51 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
                 if let Some(case_type) = &case.typ {
                     let case_schema = create_schema_from_analysed_type(case_type);
                     let mut properties = IndexMap::new();
-                    properties.insert(
-                        case_name.clone(),
-                        openapiv3::ReferenceOr::Item(Box::new(case_schema)),
-                    );
+                    properties.insert(case_name.clone(), ReferenceOr::Item(Box::new(case_schema)));
                     let required = vec![case_name.clone()];
-                    let schema = openapiv3::Schema {
+                    let schema = Schema {
                         schema_data: Default::default(),
-                        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(
-                            openapiv3::ObjectType {
-                                properties,
-                                required,
-                                additional_properties: None,
-                                min_properties: None,
-                                max_properties: None,
-                            },
-                        )),
+                        schema_kind: SchemaKind::Type(Type::Object(ObjectType {
+                            properties,
+                            required,
+                            additional_properties: None,
+                            min_properties: None,
+                            max_properties: None,
+                        })),
                     };
-                    one_of.push(openapiv3::ReferenceOr::Item(schema));
+                    one_of.push(ReferenceOr::Item(schema));
                 } else {
-                    let schema = openapiv3::Schema {
+                    let schema = Schema {
                         schema_data: Default::default(),
-                        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                            openapiv3::StringType {
-                                format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                                pattern: None,
-                                enumeration: vec![Some(case_name.clone())],
-                                min_length: None,
-                                max_length: None,
-                            },
-                        )),
+                        schema_kind: SchemaKind::Type(Type::String(StringType {
+                            format: VariantOrUnknownOrEmpty::Empty,
+                            pattern: None,
+                            enumeration: vec![Some(case_name.clone())],
+                            min_length: None,
+                            max_length: None,
+                        })),
                     };
 
-                    one_of.push(openapiv3::ReferenceOr::Item(schema));
+                    one_of.push(ReferenceOr::Item(schema));
                 }
             }
-            openapiv3::Schema {
+            Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::OneOf { one_of },
+                schema_kind: SchemaKind::OneOf { one_of },
             }
         }
         AnalysedType::Enum(type_enum) => {
             let enum_values: Vec<Option<String>> =
                 type_enum.cases.iter().map(|c| Some(c.clone())).collect();
-            openapiv3::Schema {
+            Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                    openapiv3::StringType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                        pattern: None,
-                        enumeration: enum_values,
-                        min_length: None,
-                        max_length: None,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::String(StringType {
+                    format: VariantOrUnknownOrEmpty::Empty,
+                    pattern: None,
+                    enumeration: enum_values,
+                    min_length: None,
+                    max_length: None,
+                })),
             }
         }
         AnalysedType::Option(type_option) => {
@@ -1026,49 +1042,39 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
             let err_schema = create_schema_from_analysed_type(err_type);
 
             let mut ok_properties = IndexMap::new();
-            ok_properties.insert(
-                "ok".to_string(),
-                openapiv3::ReferenceOr::Item(Box::new(ok_schema)),
-            );
+            ok_properties.insert("ok".to_string(), ReferenceOr::Item(Box::new(ok_schema)));
             let ok_required = vec!["ok".to_string()];
-            let ok_object_schema = openapiv3::Schema {
+            let ok_object_schema = Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(
-                    openapiv3::ObjectType {
-                        properties: ok_properties,
-                        required: ok_required,
-                        additional_properties: Some(openapiv3::AdditionalProperties::Any(false)),
-                        min_properties: None,
-                        max_properties: None,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Object(ObjectType {
+                    properties: ok_properties,
+                    required: ok_required,
+                    additional_properties: Some(AdditionalProperties::Any(false)),
+                    min_properties: None,
+                    max_properties: None,
+                })),
             };
 
             let mut err_properties = IndexMap::new();
-            err_properties.insert(
-                "err".to_string(),
-                openapiv3::ReferenceOr::Item(Box::new(err_schema)),
-            );
+            err_properties.insert("err".to_string(), ReferenceOr::Item(Box::new(err_schema)));
             let err_required = vec!["err".to_string()];
-            let err_object_schema = openapiv3::Schema {
+            let err_object_schema = Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(
-                    openapiv3::ObjectType {
-                        properties: err_properties,
-                        required: err_required,
-                        additional_properties: Some(openapiv3::AdditionalProperties::Any(false)),
-                        min_properties: None,
-                        max_properties: None,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Object(ObjectType {
+                    properties: err_properties,
+                    required: err_required,
+                    additional_properties: Some(AdditionalProperties::Any(false)),
+                    min_properties: None,
+                    max_properties: None,
+                })),
             };
 
-            openapiv3::Schema {
+            Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::OneOf {
+                schema_kind: SchemaKind::OneOf {
                     one_of: vec![
-                        openapiv3::ReferenceOr::Item(ok_object_schema),
-                        openapiv3::ReferenceOr::Item(err_object_schema),
+                        ReferenceOr::Item(ok_object_schema),
+                        ReferenceOr::Item(err_object_schema),
                     ],
                 },
             }
@@ -1076,62 +1082,54 @@ fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> openapiv3::
         AnalysedType::Flags(type_flags) => {
             let enum_values: Vec<Option<String>> =
                 type_flags.names.iter().map(|n| Some(n.clone())).collect();
-            let items_schema = openapiv3::Schema {
+            let items_schema = Schema {
                 schema_data: Default::default(),
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                    openapiv3::StringType {
-                        format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                        pattern: None,
-                        enumeration: enum_values,
-                        min_length: None,
-                        max_length: None,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::String(StringType {
+                    format: VariantOrUnknownOrEmpty::Empty,
+                    pattern: None,
+                    enumeration: enum_values,
+                    min_length: None,
+                    max_length: None,
+                })),
             };
-            openapiv3::Schema {
-                schema_data: openapiv3::SchemaData {
+            Schema {
+                schema_data: SchemaData {
                     description: Some("Flags type - array of flag names".to_string()),
                     ..Default::default()
                 },
-                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Array(
-                    openapiv3::ArrayType {
-                        items: Some(openapiv3::ReferenceOr::Item(Box::new(items_schema))),
-                        min_items: Some(0),
-                        max_items: Some(type_flags.names.len()),
-                        unique_items: true,
-                    },
-                )),
+                schema_kind: SchemaKind::Type(Type::Array(ArrayType {
+                    items: Some(ReferenceOr::Item(Box::new(items_schema))),
+                    min_items: Some(0),
+                    max_items: Some(type_flags.names.len()),
+                    unique_items: true,
+                })),
             }
         }
-        AnalysedType::Chr(_) => openapiv3::Schema {
-            schema_data: openapiv3::SchemaData {
+        AnalysedType::Chr(_) => Schema {
+            schema_data: SchemaData {
                 description: Some("Unicode character".to_string()),
                 ..Default::default()
             },
-            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                openapiv3::StringType {
-                    format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                    pattern: Some("^.{1}$".to_string()),
-                    enumeration: vec![],
-                    min_length: Some(1),
-                    max_length: Some(1),
-                },
-            )),
+            schema_kind: SchemaKind::Type(Type::String(StringType {
+                format: VariantOrUnknownOrEmpty::Empty,
+                pattern: Some("^.{1}$".to_string()),
+                enumeration: vec![],
+                min_length: Some(1),
+                max_length: Some(1),
+            })),
         },
-        AnalysedType::Handle(_) => openapiv3::Schema {
-            schema_data: openapiv3::SchemaData {
+        AnalysedType::Handle(_) => Schema {
+            schema_data: SchemaData {
                 description: Some("Opaque handle identifier".to_string()),
                 ..Default::default()
             },
-            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
-                openapiv3::StringType {
-                    format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                    pattern: None,
-                    enumeration: vec![],
-                    min_length: None,
-                    max_length: None,
-                },
-            )),
+            schema_kind: SchemaKind::Type(Type::String(StringType {
+                format: VariantOrUnknownOrEmpty::Empty,
+                pattern: None,
+                enumeration: vec![],
+                min_length: None,
+                max_length: None,
+            })),
         },
     }
 }
