@@ -122,15 +122,18 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const agentSnapshot = await resolvedAgent.saveSnapshot();
+  const { data: agentSnapshot, isCustom } = await resolvedAgent.saveSnapshot();
 
-  const totalLength = 1 + agentSnapshot.length;
-  const fullSnapshot = new Uint8Array(totalLength);
-  const view = new DataView(fullSnapshot.buffer);
-  view.setUint8(0, 1); // version
-  fullSnapshot.set(agentSnapshot, 1);
-
-  return { data: fullSnapshot, mimeType: 'application/octet-stream' };
+  if (isCustom) {
+    const totalLength = 1 + agentSnapshot.length;
+    const fullSnapshot = new Uint8Array(totalLength);
+    const view = new DataView(fullSnapshot.buffer);
+    view.setUint8(0, 1); // version
+    fullSnapshot.set(agentSnapshot, 1);
+    return { data: fullSnapshot, mimeType: 'application/octet-stream' };
+  } else {
+    return { data: agentSnapshot, mimeType: 'application/json' };
+  }
 }
 
 async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
@@ -140,13 +143,17 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
     throw `Agent is already initialized in this container`;
   }
 
-  const view = new DataView(bytes.buffer);
-  const version = view.getUint8(0);
-  if (version !== 1) {
-    throw `Unsupported snapshot version ${version}`;
+  let agentSnapshot: Uint8Array;
+  if (snapshot.mimeType === 'application/json') {
+    agentSnapshot = bytes;
+  } else {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const version = view.getUint8(0);
+    if (version !== 1) {
+      throw `Unsupported snapshot version ${version}`;
+    }
+    agentSnapshot = bytes.slice(1);
   }
-
-  const agentSnapshot = bytes.slice(1);
 
   const [agentTypeName, agentParameters, _phantomId] = getRawSelfAgentId().parsed();
 
