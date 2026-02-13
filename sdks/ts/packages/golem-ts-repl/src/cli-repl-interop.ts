@@ -147,6 +147,8 @@ export class CliReplInterop {
     }
 
     const args = [
+      '--environment',
+      this.config.clientConfig.environment,
       'agent',
       'repl-stream',
       '--quiet',
@@ -161,11 +163,18 @@ export class CliReplInterop {
 
     const child = childProcess.spawn(this.config.binary, args, {
       cwd: this.config.appMainDir,
-      stdio: 'inherit',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        CLICOLOR_FORCE: pc.isColorSupported ? '1' : '0',
+      },
     });
 
     const state = createAgentStreamState(child);
     this.agentStreams.set(key, state);
+
+    child.stdout?.on('data', state.onStdout);
+    child.stderr?.on('data', state.onStderr);
 
     child.once('error', () => {
       void this.stopAgentStreamByKey(key);
@@ -187,7 +196,9 @@ export class CliReplInterop {
     if (this.agentStreams.get(key) !== state) return;
     this.agentStreams.delete(key);
     state.stop();
-    writeStreamSeparator();
+    if (state.hadOutput()) {
+      writeStreamSeparator();
+    }
   }
 
   private async runReplCliCommand(
@@ -250,10 +261,27 @@ type CommandHook = {
 
 type AgentStreamState = {
   stop: () => void;
+  onStdout: (chunk: Buffer) => void;
+  onStderr: (chunk: Buffer) => void;
+  hadOutput: () => boolean;
 };
 
 function createAgentStreamState(child: ChildProcess): AgentStreamState {
+  let outputSeen = false;
+
+  const onStdout = (chunk: Buffer) => {
+    outputSeen = outputSeen || chunk.length > 0;
+    process.stdout.write(chunk);
+  };
+
+  const onStderr = (chunk: Buffer) => {
+    outputSeen = outputSeen || chunk.length > 0;
+    process.stderr.write(chunk);
+  };
+
   const stop = () => {
+    child.stdout?.off('data', onStdout);
+    child.stderr?.off('data', onStderr);
     child.removeAllListeners('error');
     child.removeAllListeners('exit');
     if (child.exitCode === null && !child.killed) {
@@ -261,7 +289,12 @@ function createAgentStreamState(child: ChildProcess): AgentStreamState {
     }
   };
 
-  return { stop };
+  return {
+    stop,
+    onStdout,
+    onStderr,
+    hadOutput: () => outputSeen,
+  };
 }
 
 function getAgentStreamKey(request: base.AgentInvocationRequest): string {
