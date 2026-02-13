@@ -17,7 +17,8 @@ use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
     endpoint_on_static_method_error, generic_type_in_agent_method_error,
     generic_type_in_agent_return_type_error, generic_type_in_constructor_error, get_remote_client,
-    invalid_static_method_in_agent_error, multiple_constructor_methods_error, no_constructor_method_error,
+    invalid_static_method_in_agent_error, multiple_constructor_methods_error,
+    no_constructor_method_error,
 };
 
 use syn::spanned::Spanned;

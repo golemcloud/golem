@@ -61,8 +61,6 @@ pub fn is_constructor_method(sig: &syn::Signature, agent_impl_type: Option<&str>
     }
 }
 
-
-
 pub fn is_static_method(sig: &syn::Signature) -> bool {
     sig.receiver().is_none()
 }

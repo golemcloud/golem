@@ -59,9 +59,8 @@ mod tests {
 
     #[agent_definition]
     trait AgentWithTypeParameter<T: Schema + Clone + Debug> {
-        fn new(init: String,) -> Self;
+        fn new(init: String) -> Self;
         fn num(&self, i: String) -> u32;
-
     }
 
     #[agent_implementation]
