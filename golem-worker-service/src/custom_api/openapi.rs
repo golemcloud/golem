@@ -219,40 +219,42 @@ fn get_full_path_and_variables<'a>(
     constructor_parameter: Option<&'a Vec<ConstructorParameter>>,
     method_params: Option<&'a Vec<MethodParameter>>,
 ) -> (String, Vec<(&'a str, &'a PathSegmentType)>) {
-    if path_segments
-        .iter()
-        .all(|segment| matches!(segment, PathSegment::Literal { .. }))
-    {
+    if path_segments.iter().all(|s| matches!(s, PathSegment::Literal { .. })) {
         return (
-            path_segments
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("/"),
+            path_segments.iter().map(ToString::to_string).collect::<Vec<_>>().join("/"),
             Vec::new(),
         );
     }
 
-    let mut input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> = Vec::new();
+    let input_path_variable_types = collect_path_variable_types(constructor_parameter, method_params);
+    let agent_input_params = collect_agent_input_params(agent_constructor, agent_method);
+    let with_names = zip_params_with_path_variables(agent_input_params, input_path_variable_types);
 
-    // constructor params is in the order of the original agent constructor
-    let constructor_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> =
-        constructor_parameter
-            .map(|params| {
-                params
-                    .iter()
-                    .filter_map(|p| match p {
-                        ConstructorParameter::Path {
-                            parameter_type,
-                            path_segment_index,
-                        } => Some((path_segment_index, parameter_type)),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+    build_path_and_variables(path_segments, with_names)
+}
 
-    // method params is in the order of the original agent method signature,
-    let method_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> = method_params
+
+fn collect_path_variable_types<'a>(
+    constructor_parameter: Option<&'a Vec<ConstructorParameter>>,
+    method_params: Option<&'a Vec<MethodParameter>>,
+) -> Vec<(&'a SafeIndex, &'a PathSegmentType)> {
+    let mut types = Vec::new();
+
+    let constructor_types = constructor_parameter
+        .map(|params| {
+            params
+                .iter()
+                .filter_map(|p| match p {
+                    ConstructorParameter::Path {
+                        parameter_type,
+                        path_segment_index,
+                    } => Some((path_segment_index, parameter_type)),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let method_types = method_params
         .map(|params| {
             params
                 .iter()
@@ -263,49 +265,57 @@ fn get_full_path_and_variables<'a>(
                     } => Some((path_segment_index, parameter_type)),
                     _ => None,
                 })
-                .collect()
+                .collect::<Vec<_>>()
         })
         .unwrap_or_default();
 
-    input_path_variable_types.extend(constructor_input_path_variable_types);
-    input_path_variable_types.extend(method_input_path_variable_types);
+    types.extend(constructor_types);
+    types.extend(method_types);
+    types
+}
 
-    let mut agent_input_params = match &agent_constructor.input_schema {
-        DataSchema::Tuple(named_element_schema) => named_element_schema.elements.iter().collect(),
+fn collect_agent_input_params<'a>(
+    agent_constructor: &'a AgentConstructor,
+    agent_method: Option<&'a AgentMethod>,
+) -> Vec<&'a NamedElementSchema> {
+    let mut inputs = match &agent_constructor.input_schema {
+        DataSchema::Tuple(tuple) => tuple.elements.iter().collect(),
         DataSchema::Multimodal(_) => vec![],
     };
 
-    let agent_method_input_params: Vec<&NamedElementSchema> = match agent_method {
-        None => vec![],
-        Some(agent_method) => match &agent_method.input_schema {
-            DataSchema::Tuple(named_element_schemas) => {
-                named_element_schemas.elements.iter().collect()
-            }
+    if let Some(method) = agent_method {
+        let method_inputs = match &method.input_schema {
+            DataSchema::Tuple(tuple) => tuple.elements.iter().collect(),
             DataSchema::Multimodal(_) => vec![],
-        },
-    };
+        };
+        inputs.extend(method_inputs);
+    }
 
-    agent_input_params.extend(agent_method_input_params);
+    inputs
+}
 
-    let with_names: Vec<(&'a str, &'a SafeIndex, &'a PathSegmentType)> = agent_input_params
+fn zip_params_with_path_variables<'a>(
+    params: Vec<&'a NamedElementSchema>,
+    path_variables: Vec<(&'a SafeIndex, &'a PathSegmentType)>,
+) -> Vec<(&'a str, &'a SafeIndex, &'a PathSegmentType)> {
+    params
         .iter()
-        .zip(
-            input_path_variable_types
-                .iter()
-                .map(|(index, var_type)| (index, var_type)),
-        )
-        .map(|(param, (index, var_type))| (param.name.as_str(), *index, *var_type))
-        .collect();
+        .zip(path_variables.iter().map(|(idx, ty)| (idx, ty)))
+        .map(|(param, (idx, ty))| (param.name.as_str(), *idx, *ty))
+        .collect()
+}
 
-    let mut path_params_and_types: Vec<(&'a str, &'a PathSegmentType)> = Vec::new();
-    let mut path_segment_string: Vec<String> = Vec::new();
+fn build_path_and_variables<'a>(
+    path_segments: &'a [PathSegment],
+    with_names: Vec<(&'a str, &'a SafeIndex, &'a PathSegmentType)>,
+) -> (String, Vec<(&'a str, &'a PathSegmentType)>) {
+    let mut path_params_and_types = Vec::new();
+    let mut path_segment_string = Vec::new();
     let mut path_variable_index = SafeIndex::new(0);
 
     for segment in path_segments.iter() {
         match segment {
-            PathSegment::Literal { value } => {
-                path_segment_string.push(value.to_string());
-            }
+            PathSegment::Literal { value } => path_segment_string.push(value.to_string()),
 
             PathSegment::Variable | PathSegment::CatchAll => {
                 let (name, _, var_type) = with_names
@@ -314,16 +324,17 @@ fn get_full_path_and_variables<'a>(
                     .expect("Failed to find path variable index in agent parameters");
 
                 path_segment_string.push(format!("{{{}}}", name));
-                path_params_and_types.push((name, *var_type));
-                path_variable_index += 1
+                path_params_and_types.push((*name, *var_type));
+                path_variable_index += 1;
             }
         }
     }
 
-    let path_str = format!("/{}", path_segment_string.join("/"));
+    let full_path = format!("/{}", path_segment_string.join("/"));
 
-    (path_str, path_params_and_types)
+    (full_path, path_params_and_types)
 }
+
 
 fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     route: &T,

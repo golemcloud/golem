@@ -43,7 +43,7 @@ async fn test_open_api_generation(agent: &HttpTestContext) -> anyhow::Result<()>
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let bytes = response.bytes().await?;
     let actual: serde_yaml::Value = serde_json::from_slice(&bytes)?;
-    let expected: Value = serde_yaml::from_str(EXPECTED_OPENAPI_YAML).unwrap();
+    let expected: Value = serde_yaml::from_str(EXPECTED_OPENAPI_YAML)?;
 
     assert_eq!(actual, expected);
 
