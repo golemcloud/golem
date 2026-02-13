@@ -59,11 +59,9 @@ mod tests {
 
     #[agent_definition]
     trait AgentWithTypeParameter<T: Schema + Clone + Debug> {
-        fn new(init: String) -> Self;
+        fn new(init: String,) -> Self;
         fn num(&self, i: String) -> u32;
 
-        #[allow(unused)]
-        fn identity(&self, i: T) -> T;
     }
 
     #[agent_implementation]
@@ -74,10 +72,6 @@ mod tests {
 
         fn num(&self, _i: String) -> u32 {
             1
-        }
-
-        fn identity(&self, i: String) -> String {
-            i
         }
     }
 
