@@ -45,7 +45,7 @@ use crate::model::text::worker::{
     format_timestamp, format_worker_name_match, FileNodeView, WorkerCreateView, WorkerFilesView,
     WorkerGetView,
 };
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context as AnyhowContext};
 use colored::Colorize;
 
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
@@ -58,7 +58,7 @@ use golem_client::model::{
     ComponentDto, InvokeParameters, RevertWorkerTarget, UpdateWorkerRequest, WorkerCreationRequest,
 };
 use golem_client::model::{InvokeResult, ScanCursor};
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, DataValue, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -150,6 +150,22 @@ impl WorkerCommandHandler {
                 agent_id: worker_name,
                 stream_args,
             } => self.cmd_stream(worker_name, stream_args).await,
+            AgentSubcommand::ReplStream {
+                agent_type_name,
+                parameters,
+                idempotency_key,
+                phantom_id,
+                stream_args,
+            } => {
+                self.cmd_repl_stream(
+                    agent_type_name,
+                    parameters,
+                    idempotency_key,
+                    phantom_id,
+                    stream_args,
+                )
+                .await
+            }
             AgentSubcommand::Interrupt {
                 agent_id: worker_name,
             } => self.cmd_interrupt(worker_name).await,
@@ -449,6 +465,7 @@ impl WorkerCommandHandler {
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
+
         let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
@@ -468,6 +485,69 @@ impl WorkerCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             None,
+        )
+        .await?;
+
+        connection.run_forever().await;
+
+        Ok(())
+    }
+
+    async fn cmd_repl_stream(
+        &self,
+        agent_type_name: String,
+        parameters: String,
+        idempotency_key: IdempotencyKey,
+        phantom_id: Option<Uuid>,
+        stream_args: StreamArgs,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        let parameters: UntypedJsonDataValue = serde_json::from_str(&parameters)
+            .with_context(|| "Failed to deserialize agent parameters".to_string())?;
+
+        let Some(agent_type) = self
+            .ctx
+            .app_handler()
+            .list_agent_types(&environment)
+            .await?
+            .into_iter()
+            .find(|t| t.agent_type.type_name.0 == agent_type_name)
+        else {
+            bail!("Agent type not found: {}", agent_type_name);
+        };
+
+        let agent_type_name = agent_type.agent_type.type_name;
+        let typed_parameters = DataValue::try_from_untyped_json(
+            parameters,
+            agent_type.agent_type.constructor.input_schema,
+        )
+        .map_err(|err| {
+            anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
+        })?;
+        let agent_id = AgentId::new(agent_type_name, typed_parameters, phantom_id);
+        let worker_name = WorkerName(agent_id.to_string());
+
+        let worker_name_match = self.match_worker_name(worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        let connection = WorkerConnection::new(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &component.id,
+            worker_name.0.clone(),
+            stream_args.into(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+            Some(idempotency_key),
         )
         .await?;
 
@@ -1767,13 +1847,13 @@ impl WorkerCommandHandler {
                         if selected_component_names.len() != 1 {
                             logln("");
                             log_error(
-                            format!("Multiple components were selected based on the current directory: {}",
-                                    selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
-                        );
+                                format!("Multiple components were selected based on the current directory: {}",
+                                        selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
+                            );
                             logln("");
                             logln(
-                            "Switch to a different directory with only one component or specify the full or partial component name as part of the agent name!",
-                        );
+                                "Switch to a different directory with only one component or specify the full or partial component name as part of the agent name!",
+                            );
                             logln("");
                             log_text_view(&WorkerNameHelp);
                             logln("");
@@ -1945,9 +2025,9 @@ impl WorkerCommandHandler {
                                 } => {
                                     logln("");
                                     log_error(format!(
-                                    "The requested application component name ({}) is ambiguous.",
-                                    component_name.0.log_color_error_highlight()
-                                ));
+                                        "The requested application component name ({}) is ambiguous.",
+                                        component_name.0.log_color_error_highlight()
+                                    ));
                                     logln("");
                                     logln("Did you mean one of");
                                     for option in highlighted_options {

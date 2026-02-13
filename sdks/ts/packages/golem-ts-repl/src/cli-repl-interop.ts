@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import childProcess from 'node:child_process';
+import childProcess, { ChildProcess } from 'node:child_process';
 import repl from 'node:repl';
-import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig, ClientConfig } from './config';
-import { flushStdIO } from './process';
+import pc from 'picocolors';
+import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
+import { flushStdIO, getTerminalWidth } from './process';
+import * as base from './base';
+import * as uuid from 'uuid';
 
 export class CliReplInterop {
   private readonly config: CliCommandsConfig;
@@ -23,6 +26,7 @@ export class CliReplInterop {
   private readonly commandsByName: Map<string, ReplCliCommand>;
   private readonly cli: GolemCli;
   private builtinCommands: string[];
+  private readonly agentStreams: Map<string, AgentStreamState>;
 
   constructor(config: CliCommandsConfig) {
     this.config = config;
@@ -34,6 +38,7 @@ export class CliReplInterop {
       clientConfig: this.config.clientConfig,
     });
     this.builtinCommands = [];
+    this.agentStreams = new Map();
   }
 
   defineCommands(replServer: repl.REPLServer) {
@@ -128,6 +133,74 @@ export class CliReplInterop {
     process.exit(75);
   }
 
+  startAgentStream(request: base.AgentInvocationRequest) {
+    const key = getAgentStreamKey(request);
+    if (this.agentStreams.has(key)) {
+      return;
+    }
+
+    const parameters = safeJsonStringify(request.parameters);
+
+    const idempotencyKey = request.idempotencyKey ?? uuid.v4().toString();
+    if (!request.idempotencyKey) {
+      request.idempotencyKey = idempotencyKey;
+    }
+
+    const args = [
+      '--environment',
+      this.config.clientConfig.environment,
+      'agent',
+      'repl-stream',
+      '--quiet',
+      '--logs-only',
+      request.agentTypeName,
+      parameters,
+      idempotencyKey,
+    ];
+    if (request.phantomId) {
+      args.push(request.phantomId);
+    }
+
+    const child = childProcess.spawn(this.config.binary, args, {
+      cwd: this.config.appMainDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        CLICOLOR_FORCE: pc.isColorSupported ? '1' : '0',
+      },
+    });
+
+    const state = createAgentStreamState(child);
+    this.agentStreams.set(key, state);
+
+    child.stdout?.on('data', state.onStdout);
+    child.stderr?.on('data', state.onStderr);
+
+    child.once('error', () => {
+      void this.stopAgentStreamByKey(key);
+    });
+    child.once('exit', () => {
+      void this.stopAgentStreamByKey(key);
+    });
+  }
+
+  async stopAgentStream(request: base.AgentInvocationRequest) {
+    const key = getAgentStreamKey(request);
+    await this.stopAgentStreamByKey(key);
+  }
+
+  private async stopAgentStreamByKey(key: string) {
+    const state = this.agentStreams.get(key);
+    if (!state) return;
+    await delay(100);
+    if (this.agentStreams.get(key) !== state) return;
+    this.agentStreams.delete(key);
+    state.stop();
+    if (state.hadOutput()) {
+      writeStreamSeparator();
+    }
+  }
+
   private async runReplCliCommand(
     command: ReplCliCommand,
     rawArgs: string,
@@ -185,6 +258,70 @@ type CommandHook = {
   adaptArgs: (args: string[]) => string[];
   handleResult: (args: string[], result: { ok: boolean; code: number | null }) => Promise<void>;
 };
+
+type AgentStreamState = {
+  stop: () => void;
+  onStdout: (chunk: Buffer) => void;
+  onStderr: (chunk: Buffer) => void;
+  hadOutput: () => boolean;
+};
+
+function createAgentStreamState(child: ChildProcess): AgentStreamState {
+  let outputSeen = false;
+
+  const onStdout = (chunk: Buffer) => {
+    outputSeen = outputSeen || chunk.length > 0;
+    process.stdout.write(chunk);
+  };
+
+  const onStderr = (chunk: Buffer) => {
+    outputSeen = outputSeen || chunk.length > 0;
+    process.stderr.write(chunk);
+  };
+
+  const stop = () => {
+    child.stdout?.off('data', onStdout);
+    child.stderr?.off('data', onStderr);
+    child.removeAllListeners('error');
+    child.removeAllListeners('exit');
+    if (child.exitCode === null && !child.killed) {
+      child.kill();
+    }
+  };
+
+  return {
+    stop,
+    onStdout,
+    onStderr,
+    hadOutput: () => outputSeen,
+  };
+}
+
+function getAgentStreamKey(request: base.AgentInvocationRequest): string {
+  return [
+    request.agentTypeName,
+    safeJsonStringify(request.parameters),
+    request.phantomId ?? '',
+  ].join('|');
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function writeStreamSeparator() {
+  const width = getTerminalWidth();
+  if (width <= 0) return;
+  process.stdout.write(pc.dim('~'.repeat(width)) + '\n');
+}
 
 const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
   deploy: {
@@ -250,9 +387,9 @@ function findArgCompletionHook(arg: CliArgMetadata): CompletionHook | undefined 
 class GolemCli {
   private readonly binaryName: string;
   private readonly cwd: string;
-  private readonly clientConfig: ClientConfig;
+  private readonly clientConfig: base.Configuration;
 
-  constructor(opts: { binary: string; cwd: string; clientConfig: ClientConfig }) {
+  constructor(opts: { binary: string; cwd: string; clientConfig: base.Configuration }) {
     this.binaryName = opts.binary;
     this.cwd = opts.cwd;
     this.clientConfig = opts.clientConfig;
