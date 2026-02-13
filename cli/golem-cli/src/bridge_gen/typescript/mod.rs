@@ -467,13 +467,13 @@ impl TypeScriptBridgeGenerator {
         let class_name = &self.agent_type.type_name.0;
 
         writer.write_doc(&self.agent_type.description);
-        writer.begin_export_class(&class_name);
+        writer.begin_export_class(class_name);
 
         self.generate_ts_class_fields(writer);
         self.generate_ts_class_constructor(writer);
-        self.generate_ts_constructor_methods(writer, &class_name)?;
+        self.generate_ts_constructor_methods(writer, class_name)?;
         self.generate_ts_config_getter(writer, config_var);
-        self.generate_ts_remote_methods(writer, &class_name)?;
+        self.generate_ts_remote_methods(writer, class_name)?;
 
         writer.end_export_class();
 
