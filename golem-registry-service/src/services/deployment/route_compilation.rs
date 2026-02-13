@@ -19,7 +19,6 @@ use crate::model::api_definition::{
 };
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::write::DeployValidationError;
-use golem_common::base_model::component::ComponentId;
 use golem_common::model::Empty;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
@@ -35,7 +34,7 @@ use golem_common::model::http_api_deployment::{
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
     OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
-    RoutesWithAgentType, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -236,7 +235,9 @@ pub fn add_webhook_callback_routes(
             .collect();
 
         // final segment for promise id
-        typed_segments.push(PathSegment::Variable);
+        typed_segments.push(PathSegment::Variable {
+            display_name: "promise-id".to_string(),
+        });
 
         let compiled = UnboundCompiledRoute {
             route_id,
@@ -257,85 +258,30 @@ pub fn add_webhook_callback_routes(
     }
 }
 
-fn build_openapi_spec_for_component(
-    component_id: &ComponentId,
-    agents: &[&InProgressDeployedRegisteredAgentType],
-    compiled_routes: &Vec<UnboundCompiledRoute>,
-) -> Vec<RoutesWithAgentType> {
-    let mut result = Vec::new();
-
-    for agent in agents {
-        let mut routes = Vec::new();
-
-        for route in compiled_routes {
-            if let RouteBehaviour::CallAgent(call) = &route.behaviour
-                && call.component_id == *component_id
-                && call.agent_type == agent.agent_type.type_name
-            {
-                routes.push((agent.agent_type.clone(), route.route_id));
-            }
-        }
-
-        if !routes.is_empty() {
-            result.push(RoutesWithAgentType { routes });
-        }
-    }
-
-    result
-}
-
 pub fn add_openapi_spec_routes(
-    deployment: &HttpApiDeployment,
-    registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
+    domain: &Domain,
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
 ) {
-    let mut component_agents: BTreeMap<ComponentId, Vec<&InProgressDeployedRegisteredAgentType>> =
-        BTreeMap::new();
+    let route_id = *current_route_id;
+    *current_route_id = current_route_id.checked_add(1).unwrap();
 
-    for agent_type_name in deployment.agents.keys() {
-        let Some(agent) = registered_agent_types.get(agent_type_name) else {
-            continue;
-        };
-
-        component_agents
-            .entry(agent.implemented_by.component_id)
-            .or_default()
-            .push(agent);
-    }
-
-    for (component_id, agents) in component_agents {
-        let open_api_spec =
-            build_openapi_spec_for_component(&component_id, &agents, compiled_routes);
-
-        if open_api_spec.is_empty() {
-            continue;
-        }
-
+    compiled_routes.push(UnboundCompiledRoute {
+        route_id,
+        domain: domain.clone(),
+        method: HttpMethod::Get(Empty {}),
         // Note: This is currently a fixed path,
         // but it can be part of the http api deployment configuration
-        let path = vec![PathSegment::Literal {
+        path: vec![PathSegment::Literal {
             value: "openapi.json".to_string(),
-        }];
-
-        let method = HttpMethod::Get(Empty {});
-
-        let route_id = *current_route_id;
-        *current_route_id = current_route_id.checked_add(1).unwrap();
-
-        compiled_routes.push(UnboundCompiledRoute {
-            route_id,
-            domain: deployment.domain.clone(),
-            method,
-            path,
-            body: RequestBodySchema::Unused,
-            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }),
-            security: UnboundRouteSecurity::None,
-            cors: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-        });
-    }
+        }],
+        body: RequestBodySchema::Unused,
+        behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}),
+        security: UnboundRouteSecurity::None,
+        cors: CorsOptions {
+            allowed_patterns: Vec::new(),
+        },
+    });
 }
 
 pub fn build_agent_http_api_deployment_details(
@@ -393,7 +339,7 @@ pub fn build_agent_http_api_deployment_details(
         .chain(agent_webhook_suffix)
         .map(|segment| match segment {
             PathSegment::Literal { value } => Ok(value),
-            PathSegment::Variable | PathSegment::CatchAll => Err(
+            PathSegment::Variable { .. } | PathSegment::CatchAll { .. } => Err(
                 DeployValidationError::HttpApiDeploymentInvalidAgentWebhookSegmentType {
                     agent_type: agent_type_name.clone(),
                 },
@@ -548,11 +494,15 @@ fn compile_agent_path_segment(
     use golem_common::model::agent::PathSegment as AgentPathSegment;
 
     match path_segment {
-        AgentPathSegment::Literal(lit) => PathSegment::Literal {
-            value: lit.value.clone(),
+        AgentPathSegment::Literal(inner) => PathSegment::Literal {
+            value: inner.value.clone(),
         },
-        AgentPathSegment::PathVariable(_) => PathSegment::Variable,
-        AgentPathSegment::RemainingPathVariable(_) => PathSegment::CatchAll,
+        AgentPathSegment::PathVariable(inner) => PathSegment::Variable {
+            display_name: inner.variable_name.clone(),
+        },
+        AgentPathSegment::RemainingPathVariable(inner) => PathSegment::CatchAll {
+            display_name: inner.variable_name.clone(),
+        },
         AgentPathSegment::SystemVariable(system_var) => {
             let literal = match system_var.value {
                 SystemVariable::AgentType => agent.type_name.0.clone(),

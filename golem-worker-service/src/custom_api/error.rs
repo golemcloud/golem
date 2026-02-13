@@ -46,8 +46,8 @@ pub enum RequestHandlerError {
     UnknownOidcState,
     #[error("OIDC token exchange failed")]
     OidcTokenExchangeFailed,
-    #[error("OpenAPI spec for route is invalid: {error}")]
-    OpenApiSpecGenerationFailed { error: String },
+    #[error("OpenAPI spec generation for api failed")]
+    OpenApiSpecGenerationFailed,
     #[error("Invariant violated: {msg}")]
     InvariantViolated { msg: &'static str },
     #[error("Resolving route failed: {0}")]

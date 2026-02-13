@@ -19,7 +19,7 @@ use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentType, AgentTypeName, DataSchema, HttpMethod};
+use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -39,16 +39,16 @@ pub type RouteId = i32;
 #[desert(evolution())]
 pub enum PathSegment {
     Literal { value: String },
-    Variable,
-    CatchAll,
+    Variable { display_name: String },
+    CatchAll { display_name: String },
 }
 
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PathSegment::Literal { value } => f.write_str(value),
-            PathSegment::Variable => f.write_str("*"),
-            PathSegment::CatchAll => f.write_str("**"),
+            PathSegment::Variable { display_name } => f.write_str(&format!("{{{display_name}}}")),
+            PathSegment::CatchAll { display_name } => f.write_str(&format!("{{*{display_name}}}")),
         }
     }
 }
@@ -251,17 +251,6 @@ pub enum RouteBehaviour {
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
-pub struct OpenApiSpecBehaviour {
-    pub open_api_spec: Vec<RoutesWithAgentType>,
-}
-
-#[derive(Debug, BinaryCodec)]
-pub struct RoutesWithAgentType {
-    pub routes: Vec<(AgentType, RouteId)>,
-}
-
-#[derive(Debug, BinaryCodec)]
-#[desert(evolution())]
 pub struct CallAgentBehaviour {
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
@@ -285,6 +274,10 @@ pub struct CorsPreflightBehaviour {
 pub struct WebhookCallbackBehaviour {
     pub component_id: ComponentId,
 }
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct OpenApiSpecBehaviour {}
 
 #[derive(Debug, Clone)]
 pub enum RouteSecurity {

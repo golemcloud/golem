@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteSecurity, RoutesWithAgentType,
-};
+use super::{CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteSecurity};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
@@ -23,7 +21,6 @@ use crate::custom_api::{
     WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
-use golem_common::base_model::agent::AgentType;
 use golem_common::model::agent::{AgentTypeName, HttpMethod};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_wasm::analysis::TypeEnum;
@@ -211,18 +208,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                         .try_into()?,
                 }))
             }
-            Kind::OpenApiSpec(openapi_spec) => {
-                Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
-                    open_api_spec: openapi_spec
-                        .routes_with_agent_type
-                        .into_iter()
-                        .map(|x| {
-                            x.try_into()
-                                .map_err(|e| format!("Failed parsing RoutesWithAgentType: {e}"))
-                        })
-                        .collect::<Result<_, _>>()?,
-                }))
-            }
+            Kind::OpenApiSpec(_) => Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {})),
         }
     }
 }
@@ -279,61 +265,12 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
-            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }) => Self {
+            RouteBehaviour::OpenApiSpec(_) => Self {
                 kind: Some(Kind::OpenApiSpec(
-                    proto::golem::customapi::route_behaviour::OpenApiSpec {
-                        routes_with_agent_type: open_api_spec
-                            .into_iter()
-                            .map(|x| {
-                                proto::golem::customapi::route_behaviour::RoutesWithAgentType::from(
-                                    x,
-                                )
-                            })
-                            .collect(),
-                    },
+                    proto::golem::customapi::route_behaviour::OpenApiSpec {},
                 )),
             },
         }
-    }
-}
-
-impl From<RoutesWithAgentType> for proto::golem::customapi::route_behaviour::RoutesWithAgentType {
-    fn from(value: RoutesWithAgentType) -> Self {
-        Self {
-            route_with_agent_type: value
-                .routes
-                .into_iter()
-                .map(|(agent_type, route_id)| {
-                    proto::golem::customapi::route_behaviour::AgentTypeWithRouteId {
-                        agent_type: Some(agent_type.into()),
-                        route_id,
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<proto::golem::customapi::route_behaviour::RoutesWithAgentType>
-    for RoutesWithAgentType
-{
-    type Error = String;
-
-    fn try_from(
-        value: proto::golem::customapi::route_behaviour::RoutesWithAgentType,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            routes: value
-                .route_with_agent_type
-                .into_iter()
-                .map(|agent_type_with_route_id| {
-                    (
-                        AgentType::try_from(agent_type_with_route_id.agent_type.unwrap()).unwrap(),
-                        agent_type_with_route_id.route_id,
-                    )
-                })
-                .collect::<Vec<_>>(),
-        })
     }
 }
 
@@ -663,11 +600,15 @@ impl TryFrom<proto::golem::customapi::PathSegment> for PathSegment {
         use proto::golem::customapi::path_segment::Kind;
 
         match value.kind.ok_or("PathSegment.kind missing")? {
-            Kind::Literal(lit) => Ok(PathSegment::Literal { value: lit.value }),
+            Kind::Literal(inner) => Ok(PathSegment::Literal { value: inner.value }),
 
-            Kind::Variable(_) => Ok(PathSegment::Variable),
+            Kind::Variable(inner) => Ok(PathSegment::Variable {
+                display_name: inner.display_name,
+            }),
 
-            Kind::CatchAll(_) => Ok(PathSegment::CatchAll),
+            Kind::CatchAll(inner) => Ok(PathSegment::CatchAll {
+                display_name: inner.display_name,
+            }),
         }
     }
 }
@@ -681,9 +622,13 @@ impl From<PathSegment> for proto::golem::customapi::PathSegment {
                 Kind::Literal(proto::golem::customapi::path_segment::Literal { value })
             }
 
-            PathSegment::Variable => Kind::Variable(golem_api_grpc::proto::golem::common::Empty {}),
+            PathSegment::Variable { display_name } => {
+                Kind::Variable(proto::golem::customapi::path_segment::Variable { display_name })
+            }
 
-            PathSegment::CatchAll => Kind::CatchAll(golem_api_grpc::proto::golem::common::Empty {}),
+            PathSegment::CatchAll { display_name } => {
+                Kind::CatchAll(proto::golem::customapi::path_segment::CatchAll { display_name })
+            }
         };
 
         Self { kind: Some(kind) }

@@ -10,9 +10,8 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use crate::custom_api::RichRouteBehaviour;
-use crate::custom_api::openapi::core::HttpApiRoute;
 use crate::custom_api::openapi::schema_mapping::create_schema_from_analysed_type;
+use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::{ElementSchema, HttpMethod};
 use golem_common::model::agent::DataSchema;
 use golem_wasm::analysis::AnalysedType;
@@ -31,18 +30,16 @@ pub enum ResponseBodyOpenApiSchema {
     NoBody,
 }
 
-pub struct AgentResponseOpenApiSchema {
+pub struct RouteResponseOpenApiSchema {
     pub body_and_status_codes: IndexMap<u16, ResponseBodyOpenApiSchema>,
     pub headers: IndexMap<String, Schema>,
 }
 
-pub fn get_agent_response_schema<T: HttpApiRoute + ?Sized>(
-    route: &T,
-) -> AgentResponseOpenApiSchema {
+pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpenApiSchema {
     let mut responses = IndexMap::new();
     let mut headers = IndexMap::new();
 
-    match route.binding() {
+    match &route.behavior {
         RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
             match &call_agent_behaviour.expected_agent_response {
                 DataSchema::Tuple(named_elements) => match named_elements.elements.len() {
@@ -243,7 +240,7 @@ pub fn get_agent_response_schema<T: HttpApiRoute + ?Sized>(
         }
     }
 
-    AgentResponseOpenApiSchema {
+    RouteResponseOpenApiSchema {
         body_and_status_codes: responses,
         headers,
     }

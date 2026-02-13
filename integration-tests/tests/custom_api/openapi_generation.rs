@@ -13,16 +13,14 @@
 // limitations under the License.
 
 use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};
+use goldenfile::Mint;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
-use serde_yaml::Value;
+use std::io::Write;
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
-
-// This is based on the http rust agent in test components
-const EXPECTED_OPENAPI_YAML: &str = include_str!("test-data/expected-open-api.yaml");
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
@@ -34,6 +32,10 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
 #[test]
 #[tracing::instrument]
 async fn test_open_api_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let mut mint = Mint::new("tests/goldenfiles");
+
+    let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_yaml.yaml")?;
+
     let response = agent
         .client
         .get(agent.base_url.join("/openapi.json")?)
@@ -41,11 +43,11 @@ async fn test_open_api_generation(agent: &HttpTestContext) -> anyhow::Result<()>
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    let bytes = response.bytes().await?;
-    let actual: serde_yaml::Value = serde_json::from_slice(&bytes)?;
-    let expected: Value = serde_yaml::from_str(EXPECTED_OPENAPI_YAML)?;
 
-    assert_eq!(actual, expected);
+    let bytes = response.bytes().await?;
+    let decoded_yaml: serde_yaml::Value = serde_yaml::from_slice(&bytes)?;
+    let encoded_yaml = serde_yaml::to_string(&decoded_yaml)?;
+    let _ = mint_goldenfile.write(encoded_yaml.as_bytes())?;
 
     Ok(())
 }

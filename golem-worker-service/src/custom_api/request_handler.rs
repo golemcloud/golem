@@ -20,11 +20,9 @@ use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
 use super::webhoooks::WebhookCallbackHandler;
-use super::{OidcCallbackBehaviour, ResponseBody, RichCompiledRoute, RouteExecutionResult};
+use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
-use crate::custom_api::openapi::generate_open_api_spec;
 use anyhow::anyhow;
-use golem_common::base_model::agent::AgentType;
 use golem_service_base::custom_api::CorsPreflightBehaviour;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -128,45 +126,17 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }) => {
-                match self
-                    .route_resolver
-                    .get_enriched_routes_for_domain(&resolved_route.domain)
-                    .await
-                {
-                    Ok(routes) => {
-                        let route_id_to_agent: HashMap<_, _> = open_api_spec
-                            .iter()
-                            .flat_map(|r| r.routes.iter())
-                            .map(|(agent_type, route_id)| (route_id, agent_type))
-                            .collect();
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}) => {
+                let spec = resolved_route
+                    .openapi_spec
+                    .clone()
+                    .ok_or(RequestHandlerError::OpenApiSpecGenerationFailed)?;
 
-                        let selected_routes: Vec<(&AgentType, &RichCompiledRoute)> = routes
-                            .iter()
-                            .filter_map(|route| {
-                                route_id_to_agent
-                                    .get(&route.route_id)
-                                    .map(|agent_type| (*agent_type, route))
-                            })
-                            .collect();
-
-                        match generate_open_api_spec(&selected_routes).await {
-                            Ok(value) => Ok(RouteExecutionResult {
-                                status: StatusCode::OK,
-                                headers: HashMap::new(),
-                                body: ResponseBody::OpenApiSchema {
-                                    body: Box::new(value),
-                                },
-                            }),
-                            Err(e) => {
-                                Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: e })
-                            }
-                        }
-                    }
-                    Err(_) => Err(RequestHandlerError::OpenApiSpecGenerationFailed {
-                        error: "Failed to retrieve routes for domain".to_string(),
-                    }),
-                }
+                Ok(RouteExecutionResult {
+                    status: StatusCode::OK,
+                    headers: HashMap::new(),
+                    body: ResponseBody::OpenApiSchema { spec },
+                })
             }
 
             RichRouteBehaviour::WebhookCallback(behaviour) => {
@@ -204,7 +174,7 @@ fn route_execution_result_to_response(
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
 
-        ResponseBody::OpenApiSchema { body } => {
+        ResponseBody::OpenApiSchema { spec: body } => {
             let body_json = serde_json::to_value(&body.0)
                 .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
 

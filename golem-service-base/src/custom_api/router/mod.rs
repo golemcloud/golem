@@ -73,7 +73,9 @@ mod tests {
                 PathSegment::Literal {
                     value: "test".into(),
                 },
-                PathSegment::Variable,
+                PathSegment::Variable {
+                    display_name: "unused".into(),
+                },
             ],
             2,
         );

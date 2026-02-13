@@ -15,6 +15,7 @@
 use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
+use super::openapi::HttpApiOpenApiSpec;
 use crate::config::RouteResolverConfig;
 use crate::custom_api::{
     OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
@@ -24,7 +25,6 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::SecuritySchemeId;
-use golem_service_base::custom_api::CompiledRoute;
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
     CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteSecurity,
@@ -38,6 +38,7 @@ pub struct ResolvedRouteEntry {
     pub domain: Domain,
     pub route: Arc<RichCompiledRoute>,
     pub captured_path_parameters: Vec<String>,
+    pub openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,7 +60,7 @@ impl SafeDisplay for RouteResolverError {
 }
 
 pub struct RouteResolver {
-    router_cache: Cache<Domain, (), Router<Arc<RichCompiledRoute>>, ()>,
+    domain_api_cache: Cache<Domain, (), DomainHttpApi, ()>,
     api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
 }
 
@@ -69,7 +70,7 @@ impl RouteResolver {
         api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
     ) -> Self {
         Self {
-            router_cache: Cache::new(
+            domain_api_cache: Cache::new(
                 Some(config.router_cache_max_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::OlderThan {
@@ -82,20 +83,6 @@ impl RouteResolver {
         }
     }
 
-    pub async fn get_routes_for_domain(
-        &self,
-        domain: &Domain,
-    ) -> Result<Vec<CompiledRoute>, RouteResolverError> {
-        self.api_definition_lookup
-            .get(domain)
-            .await
-            .map(|compiled_routes| compiled_routes.routes)
-            .map_err(|e| match e {
-                ApiDefinitionLookupError::UnknownSite(_) => RouteResolverError::NoMatchingRoute,
-                _ => RouteResolverError::CouldNotBuildRouter,
-            })
-    }
-
     pub async fn resolve_matching_route(
         &self,
         request: &poem::Request,
@@ -104,14 +91,15 @@ impl RouteResolver {
             .map_err(RouteResolverError::CouldNotGetDomainFromRequest)?;
         debug!("Resolving router for domain: {domain}");
 
-        let router = self.get_or_build_router(&domain).await?;
+        let domain_api = self.get_or_build_domain_api(&domain).await?;
 
         let decoded_path = urlencoding::decode(request.uri().path())
             .map_err(|err| RouteResolverError::MalformedPath(err.to_string()))?;
 
         let path_segments: Vec<&str> = split_path(&decoded_path).collect();
 
-        let (route_entry, captured_path_parameters) = router
+        let (route_entry, captured_path_parameters) = domain_api
+            .router
             .route(request.method(), &path_segments)
             .ok_or(RouteResolverError::NoMatchingRoute)?;
 
@@ -121,49 +109,33 @@ impl RouteResolver {
             domain,
             captured_path_parameters,
             route: route_entry.clone(),
+            openapi_spec: domain_api.openapi_spec.clone(),
         })
     }
 
-    async fn get_or_build_router(
+    async fn get_or_build_domain_api(
         &self,
         domain: &Domain,
-    ) -> Result<Router<Arc<RichCompiledRoute>>, RouteResolverError> {
-        self.router_cache
-            .get_or_insert_simple(domain, async || self.build_router_for_domain(domain).await)
+    ) -> Result<DomainHttpApi, RouteResolverError> {
+        self.domain_api_cache
+            .get_or_insert_simple(domain, async || {
+                self.fetch_and_build_domain_api(domain).await
+            })
             .await
             .map_err(|_| RouteResolverError::CouldNotBuildRouter)
     }
 
-    pub async fn get_enriched_routes_for_domain(
-        &self,
-        domain: &Domain,
-    ) -> Result<Vec<RichCompiledRoute>, RouteResolverError> {
+    async fn fetch_and_build_domain_api(&self, domain: &Domain) -> Result<DomainHttpApi, ()> {
         let compiled_routes = self.api_definition_lookup.get(domain).await;
 
         let compiled_routes = match compiled_routes {
             Ok(value) => value,
-            Err(ApiDefinitionLookupError::UnknownSite(_)) => return Ok(Vec::new()),
-            Err(ApiDefinitionLookupError::InternalError(err)) => {
-                tracing::warn!("Failed to get compiled routes for domain {domain}: {err:?}");
-                return Err(RouteResolverError::CouldNotBuildRouter);
+            Err(ApiDefinitionLookupError::UnknownSite(_)) => {
+                return Ok(DomainHttpApi {
+                    router: Router::new(),
+                    openapi_spec: None,
+                });
             }
-        };
-
-        Self::finalize_routes(compiled_routes).await.map_err(|err| {
-            tracing::warn!("Failed to finalize routes for domain {domain}: {err:?}");
-            RouteResolverError::CouldNotBuildRouter
-        })
-    }
-
-    async fn build_router_for_domain(
-        &self,
-        domain: &Domain,
-    ) -> Result<Router<Arc<RichCompiledRoute>>, ()> {
-        let compiled_routes = self.api_definition_lookup.get(domain).await;
-
-        let compiled_routes = match compiled_routes {
-            Ok(value) => value,
-            Err(ApiDefinitionLookupError::UnknownSite(_)) => return Ok(Router::new()),
             Err(ApiDefinitionLookupError::InternalError(err)) => {
                 tracing::warn!("Failed to build router for domain {domain}: {err:?}");
                 return Err(());
@@ -178,7 +150,20 @@ impl RouteResolver {
             }
         };
 
-        Ok(build_router(finalized_routes))
+        let openapi_spec = match HttpApiOpenApiSpec::from_routes(&finalized_routes) {
+            Ok(spec) => Some(Arc::new(spec)),
+            Err(e) => {
+                tracing::warn!("Failed to build openapi spec for http api: {e}");
+                None
+            }
+        };
+
+        let router = build_router(finalized_routes);
+
+        Ok(DomainHttpApi {
+            router,
+            openapi_spec,
+        })
     }
 
     async fn finalize_routes(
@@ -285,7 +270,7 @@ fn compile_route_security(
     }
 }
 
-pub fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>> {
+fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>> {
     let mut router = Router::new();
 
     for route in routes {
@@ -297,4 +282,12 @@ pub fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRo
     }
 
     router
+}
+
+#[derive(Clone)]
+struct DomainHttpApi {
+    router: Router<Arc<RichCompiledRoute>>,
+    // invariant: will always be some if router contains any entries requesting
+    // an http api.
+    openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }

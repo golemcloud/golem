@@ -306,6 +306,19 @@ pub fn create_schema_from_analysed_type(analysed_type: &AnalysedType) -> Schema 
     }
 }
 
+pub fn arbitrary_binary_schema() -> Schema {
+    Schema {
+        schema_data: Default::default(),
+        schema_kind: SchemaKind::Type(Type::String(StringType {
+            format: VariantOrUnknownOrEmpty::Item(openapiv3::StringFormat::Binary),
+            pattern: None,
+            enumeration: vec![],
+            min_length: None,
+            max_length: None,
+        })),
+    }
+}
+
 fn create_integer_schema(format: IntegerFormat, min: Option<i64>, max: Option<i64>) -> Schema {
     let schema_data = SchemaData::default();
     Schema {

@@ -138,6 +138,7 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         domain: Domain("example.com".to_string()),
         route: Arc::new(compiled_route),
         captured_path_parameters: vec![],
+        openapi_spec: None,
     }
 }
 
