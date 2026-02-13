@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::custom_api::PathSegment;
+use crate::custom_api::PathSegment;
 use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]

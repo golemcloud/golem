@@ -4623,6 +4623,7 @@ dependencies = [
  "prometheus",
  "prost-types 0.14.1",
  "reqwest 0.12.24",
+ "rustc-hash 2.1.1",
  "scc",
  "serde",
  "serde_json",

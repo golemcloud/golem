@@ -14,6 +14,7 @@
 
 // pub mod openapi;
 mod protobuf;
+pub mod router;
 
 use crate::model::SafeIndex;
 use base64::Engine;
