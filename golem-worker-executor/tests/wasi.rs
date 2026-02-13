@@ -14,7 +14,6 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use assert2::{assert, check};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Router};
@@ -88,7 +87,7 @@ async fn write_stdout(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(stdout_events(events.into_iter()) == vec!["Sample text written to the output\n"]);
+    assert_eq!(stdout_events(events.into_iter()), vec!["Sample text written to the output\n"]);
     Ok(())
 }
 
@@ -128,7 +127,7 @@ async fn write_stderr(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(stderr_events(events.into_iter()) == vec!["Sample text written to the error output\n"]);
+    assert_eq!(stderr_events(events.into_iter()), vec!["Sample text written to the error output\n"]);
 
     Ok(())
 }
@@ -204,7 +203,7 @@ async fn clocks(
     let Value::Record(fields) = &result else {
         panic!("expected record, got {:?}", result)
     };
-    check!(fields.len() == 3);
+    assert_eq!(fields.len(), 3);
 
     let Value::F64(elapsed1) = &fields[0] else {
         panic!("expected f64")
@@ -224,10 +223,10 @@ async fn clocks(
     let parsed_odt = chrono::DateTime::parse_from_rfc3339(odt.as_str()).unwrap();
     let odt_diff = epoch_seconds - parsed_odt.timestamp() as f64;
 
-    check!(diff1 < 5.0);
-    check!(*elapsed2 >= 2.0);
-    check!(*elapsed2 < 3.0);
-    check!(odt_diff < 5.0);
+    assert!(diff1 < 5.0);
+    assert!(*elapsed2 >= 2.0);
+    assert!(*elapsed2 < 3.0);
+    assert!(odt_diff < 5.0);
 
     Ok(())
 }
@@ -271,9 +270,9 @@ async fn file_write_read_delete(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == Value::Record(vec![
+    assert_eq!(
+        result,
+        Value::Record(vec![
                 Value::Option(None),
                 Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
                 Value::Option(None)
@@ -323,9 +322,9 @@ async fn initial_file_read_write(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == vec![Value::Tuple(vec![
+    assert_eq!(
+        result,
+        vec![Value::Tuple(vec![
                 Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
                 Value::Option(None),
                 Value::Option(None),
@@ -386,9 +385,9 @@ async fn initial_file_listing_through_api(
 
     result.sort_by_key(|e| e.name.clone());
 
-    check!(
-        result
-            == vec![
+    assert_eq!(
+        result,
+        vec![
                 FlatComponentFileSystemNode {
                     name: "bar".to_string(),
                     last_modified: 0,
@@ -425,9 +424,9 @@ async fn initial_file_listing_through_api(
 
     result.sort_by_key(|e| e.name.clone());
 
-    check!(
-        result
-            == vec![FlatComponentFileSystemNode {
+    assert_eq!(
+        result,
+        vec![FlatComponentFileSystemNode {
                 name: "baz.txt".to_string(),
                 last_modified: 0,
                 kind: FlatComponentFileSystemNodeKind::File,
@@ -450,9 +449,9 @@ async fn initial_file_listing_through_api(
 
     result.sort_by_key(|e| e.name.clone());
 
-    check!(
-        result
-            == vec![FlatComponentFileSystemNode {
+    assert_eq!(
+        result,
+        vec![FlatComponentFileSystemNode {
                 name: "baz.txt".to_string(),
                 last_modified: 0,
                 kind: FlatComponentFileSystemNodeKind::File,
@@ -515,8 +514,8 @@ async fn initial_file_reading_through_api(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result1 == "foo\n");
-    check!(result2 == "hello world");
+    assert_eq!(result1, "foo\n");
+    assert_eq!(result2, "hello world");
 
     Ok(())
 }
@@ -557,12 +556,12 @@ async fn directories(
     let Value::Record(fields) = &result else {
         panic!("expected record, got {:?}", result)
     };
-    check!(fields.len() == 4);
+    assert_eq!(fields.len(), 4);
 
-    check!(fields[0] == Value::U32(0)); // initial number of entries
-    check!(
-        fields[1]
-            == Value::List(vec![Value::Record(vec![
+    assert_eq!(fields[0], Value::U32(0)); // initial number of entries
+    assert_eq!(
+        fields[1],
+        Value::List(vec![Value::Record(vec![
                 Value::String("/test".to_string()),
                 Value::Bool(true)
             ])])
@@ -572,9 +571,9 @@ async fn directories(
     let Value::List(list) = &fields[2] else {
         panic!("expected list")
     };
-    check!(
-        *list
-            == vec![
+    assert_eq!(
+        *list,
+        vec![
                 Value::Record(vec![
                     Value::String("/test/dir1".to_string()),
                     Value::Bool(true)
@@ -589,7 +588,7 @@ async fn directories(
                 ]),
             ]
     );
-    check!(fields[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
     Ok(())
 }
@@ -636,17 +635,17 @@ async fn directories_replay(
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
         .await?;
 
-    check!(metadata.status == WorkerStatus::Idle);
+    assert_eq!(metadata.status, WorkerStatus::Idle);
 
     let Value::Record(fields) = &result else {
         panic!("expected record, got {:?}", result)
     };
-    check!(fields.len() == 4);
+    assert_eq!(fields.len(), 4);
 
-    check!(fields[0] == Value::U32(0)); // initial number of entries
-    check!(
-        fields[1]
-            == Value::List(vec![Value::Record(vec![
+    assert_eq!(fields[0], Value::U32(0)); // initial number of entries
+    assert_eq!(
+        fields[1],
+        Value::List(vec![Value::Record(vec![
                 Value::String("/test".to_string()),
                 Value::Bool(true)
             ])])
@@ -656,9 +655,9 @@ async fn directories_replay(
     let Value::List(list) = &fields[2] else {
         panic!("expected list")
     };
-    check!(
-        *list
-            == vec![
+    assert_eq!(
+        *list,
+        vec![
                 Value::Record(vec![
                     Value::String("/test/dir1".to_string()),
                     Value::Bool(true)
@@ -673,7 +672,7 @@ async fn directories_replay(
                 ]),
             ]
     );
-    check!(fields[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
     Ok(())
 }
@@ -728,7 +727,7 @@ async fn file_write_read(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(result == Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
+    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
 
     Ok(())
 }
@@ -773,7 +772,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_before_update[0] == Value::String("foo\n".to_string()));
+        assert_eq!(content_before_update[0], Value::String("foo\n".to_string()));
     }
 
     {
@@ -803,7 +802,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_after_update[0] == Value::String("foo\n".to_string()));
+        assert_eq!(content_after_update[0], Value::String("foo\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
@@ -817,7 +816,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_after_crash[0] == Value::String("foo\n".to_string()));
+        assert_eq!(content_after_crash[0], Value::String("foo\n".to_string()));
     }
 
     executor
@@ -837,7 +836,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_after_reload[0] == Value::String("bar\n".to_string()));
+        assert_eq!(content_after_reload[0], Value::String("bar\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
@@ -851,7 +850,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_after_crash[0] == Value::String("bar\n".to_string()));
+        assert_eq!(content_after_crash[0], Value::String("bar\n".to_string()));
     }
 
     {
@@ -881,7 +880,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_after_manual_update[0] == Value::String("restored".to_string()));
+        assert_eq!(content_after_manual_update[0], Value::String("restored".to_string()));
     }
 
     executor
@@ -901,7 +900,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_after_reload[0] == Value::String("baz\n".to_string()));
+        assert_eq!(content_after_reload[0], Value::String("baz\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
@@ -915,7 +914,7 @@ async fn file_update_1(
             )
             .await??;
 
-        check!(content_after_crash[0] == Value::String("baz\n".to_string()));
+        assert_eq!(content_after_crash[0], Value::String("baz\n".to_string()));
     }
 
     executor.delete_worker(&worker_id).await?;
@@ -1021,9 +1020,9 @@ async fn file_update_in_the_middle_of_exported_function(
             )
             .await??;
 
-        check!(
-            result[0]
-                == Value::Tuple(vec![
+        assert_eq!(
+            result[0],
+            Value::Tuple(vec![
                     Value::String("foo\n".to_string()),
                     Value::String("bar\n".to_string())
                 ])
@@ -1167,9 +1166,9 @@ async fn http_client_response_persisted_between_invocations(
 
     http_server.abort();
 
-    check!(
-        result
-            == Ok(vec![Value::String(
+    assert_eq!(
+        result,
+        Ok(vec![Value::String(
                 "200 response is test-header test-body".to_string()
             )])
     );
@@ -1282,11 +1281,11 @@ async fn http_client_interrupting_response_stream(
     drop(executor);
     http_server.abort();
 
-    check!(result == Ok(vec![Value::U64(100 * 1024)]));
+    assert_eq!(result, Ok(vec![Value::U64(100 * 1024)]));
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
-    check!(idempotency_keys.len() == 2);
-    check!(idempotency_keys[0] == idempotency_keys[1]);
+    assert_eq!(idempotency_keys.len(), 2);
+    assert_eq!(idempotency_keys[0], idempotency_keys[1]);
 
     Ok(())
 }
@@ -1445,7 +1444,7 @@ async fn sleep(
         .await?;
     let duration = start.elapsed();
 
-    check!(duration.as_secs() < 2);
+    assert!(duration.as_secs() < 2);
     Ok(())
 }
 
@@ -1490,8 +1489,8 @@ async fn sleep_less_than_suspend_threshold(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 1);
-    check!(result == Value::Bool(true));
+    assert!(duration.as_secs() >= 1);
+    assert_eq!(result, Value::Bool(true));
     Ok(())
 }
 
@@ -1536,8 +1535,8 @@ async fn sleep_longer_than_suspend_threshold(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 12);
-    check!(result == Value::Bool(true));
+    assert!(duration.as_secs() >= 12);
+    assert_eq!(result, Value::Bool(true));
 
     Ok(())
 }
@@ -1612,9 +1611,9 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 2);
-    check!(duration.as_secs() < 10);
-    check!(result == Value::String("Timeout".to_string()));
+    assert!(duration.as_secs() >= 2);
+    assert!(duration.as_secs() < 10);
+    assert_eq!(result, Value::String("Timeout".to_string()));
     Ok(())
 }
 
@@ -1666,9 +1665,9 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 5);
-    check!(duration.as_secs() < 30);
-    check!(result == Value::String("slow response".to_string()));
+    assert!(duration.as_secs() >= 5);
+    assert!(duration.as_secs() < 30);
+    assert_eq!(result, Value::String("slow response".to_string()));
     Ok(())
 }
 
@@ -1720,9 +1719,9 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 15);
-    check!(duration.as_secs() < 30);
-    check!(result == Value::String("Timeout".to_string()));
+    assert!(duration.as_secs() >= 15);
+    assert!(duration.as_secs() < 30);
+    assert_eq!(result, Value::String("Timeout".to_string()));
 
     Ok(())
 }
@@ -1786,10 +1785,10 @@ async fn sleep_and_awaiting_parallel_responses(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(duration.as_secs() >= 10);
-    check!(duration.as_secs() < 20);
-    check!(result == Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
-    check!(healthcheck_result == Value::Bool(true));
+    assert!(duration.as_secs() >= 10);
+    assert!(duration.as_secs() < 20);
+    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
+    assert_eq!(healthcheck_result, Value::Bool(true));
 
     Ok(())
 }
@@ -1854,9 +1853,9 @@ async fn sleep_below_threshold_between_http_responses(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(duration.as_secs() >= 10);
-    check!(result == Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
-    check!(healthcheck_result == Value::Bool(true));
+    assert!(duration.as_secs() >= 10);
+    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
+    assert_eq!(healthcheck_result, Value::Bool(true));
     Ok(())
 }
 
@@ -1918,9 +1917,9 @@ async fn sleep_above_threshold_between_http_responses(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(duration.as_secs() >= 14);
-    check!(result == Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string()));
-    check!(healthcheck_result == Value::Bool(true));
+    assert!(duration.as_secs() >= 14);
+    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string()));
+    assert_eq!(healthcheck_result, Value::Bool(true));
 
     Ok(())
 }
@@ -1987,8 +1986,8 @@ async fn resuming_sleep(
         .await?;
     let duration = start.elapsed();
 
-    check!(duration.as_secs() < 20);
-    check!(duration.as_secs() >= 10);
+    assert!(duration.as_secs() < 20);
+    assert!(duration.as_secs() >= 10);
 
     Ok(())
 }
@@ -2033,9 +2032,9 @@ async fn failing_worker(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result1.is_ok());
-    check!(result2.is_err());
-    check!(result3.is_err());
+    assert!(result1.is_ok());
+    assert!(result2.is_err());
+    assert!(result3.is_err());
 
     let result2_err = result2.err().unwrap();
     assert_eq!(worker_error_message(&result2_err), "Invocation failed");
@@ -2106,7 +2105,7 @@ async fn file_service_write_direct(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(result == Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
+    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
 
     Ok(())
 }
@@ -2172,7 +2171,7 @@ async fn filesystem_write_replay_restores_file_times(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2228,7 +2227,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2287,7 +2286,7 @@ async fn file_hard_link(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(result == Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
+    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
 
     Ok(())
 }
@@ -2392,8 +2391,8 @@ async fn filesystem_link_replay_restores_file_times(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times_dir_1 == times_dir_2);
-    check!(times_file_1 == times_file_2);
+    assert_eq!(times_dir_1, times_dir_2);
+    assert_eq!(times_file_1, times_file_2);
 
     Ok(())
 }
@@ -2467,7 +2466,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2572,8 +2571,8 @@ async fn filesystem_symlink_replay_restores_file_times(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times_dir_1 == times_dir_2);
-    check!(times_file_1 == times_file_2);
+    assert_eq!(times_dir_1, times_dir_2);
+    assert_eq!(times_file_1, times_file_2);
 
     Ok(())
 }
@@ -2690,9 +2689,9 @@ async fn filesystem_rename_replay_restores_file_times(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times_srcdir_1 == times_srcdir_2);
-    check!(times_destdir_1 == times_destdir_2);
-    check!(times_file_1 == times_file_2);
+    assert_eq!(times_srcdir_1, times_srcdir_2);
+    assert_eq!(times_destdir_1, times_destdir_2);
+    assert_eq!(times_file_1, times_file_2);
 
     Ok(())
 }
@@ -2784,7 +2783,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2850,7 +2849,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2916,7 +2915,7 @@ async fn filesystem_metadata_hash(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(hash1 == hash2);
+    assert_eq!(hash1, hash2);
 
     Ok(())
 }
@@ -2974,8 +2973,8 @@ async fn ip_address_resolve(
     let Value::List(entries2) = &result2 else {
         panic!("expected list, got {:?}", result2)
     };
-    check!(entries1.len() > 0);
-    check!(entries2.len() > 0);
+    assert!(entries1.len() > 0);
+    assert!(entries2.len() > 0);
 
     Ok(())
 }

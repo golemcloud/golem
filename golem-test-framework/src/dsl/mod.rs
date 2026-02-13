@@ -270,7 +270,7 @@ pub trait TestDsl {
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
-        let worker_id = WorkerId::from_agent_id(component_id.clone(), agent_id)
+        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
         self.invoke_with_key(
             &worker_id,
@@ -324,7 +324,7 @@ pub trait TestDsl {
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
         // TODO: temporarily going through the dynamic invocation route, will be migrated to the new invocation API
-        let worker_id = WorkerId::from_agent_id(component_id.clone(), agent_id)
+        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
         let key = idempotency_key
             .cloned()
@@ -343,7 +343,7 @@ pub trait TestDsl {
             .await?;
         match invoke_result {
             Ok(mut values) if values.len() == 1 => {
-                let component = self.get_latest_component_revision(&component_id).await?;
+                let component = self.get_latest_component_revision(component_id).await?;
                 let agent_type = component
                     .metadata
                     .find_agent_type_by_wrapper_name(&agent_id.agent_type)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::check;
+use pretty_assertions::assert_eq;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::component::ComponentId;
@@ -243,8 +243,8 @@ async fn exists_append(
         .unwrap();
     let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
-    check!(result1 == false);
-    check!(result2 == true);
+    assert_eq!(result1, false);
+    assert_eq!(result2, true);
 }
 
 #[test]
@@ -265,7 +265,7 @@ async fn namespaces_are_separate(
         .unwrap();
     let result = is.exists("svc", "api", ns2.ns.clone(), key1).await.unwrap();
 
-    check!(result == false);
+    assert_eq!(result, false);
 }
 
 #[test]
@@ -322,7 +322,7 @@ async fn can_append_and_get(
         .await
         .unwrap();
 
-    check!(result == vec![(1, value1), (2, value2), (3, value3)]);
+    assert_eq!(result, vec![(1, value1), (2, value2), (3, value3)]);
 }
 
 #[test]
@@ -346,7 +346,7 @@ async fn append_cannot_overwrite(
         .append("svc", "api", "entity", ns.ns.clone(), key1, 1, value2)
         .await;
 
-    check!(result1.is_err());
+    assert!(result1.is_err());
 }
 
 #[test]
@@ -391,7 +391,7 @@ async fn append_can_skip(
         .await
         .unwrap();
 
-    check!(result == vec![(4, value1), (8, value2)]);
+    assert_eq!(result, vec![(4, value1), (8, value2)]);
 }
 
 #[test]
@@ -418,9 +418,9 @@ async fn length(
         .unwrap();
     let result3 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
-    check!(result1 == 0);
-    check!(result2 == 1);
-    check!(result3 == 2);
+    assert_eq!(result1, 0);
+    assert_eq!(result2, 1);
+    assert_eq!(result3, 2);
 }
 
 #[test]
@@ -447,7 +447,7 @@ async fn scan_empty(
         }
     }
 
-    check!(result == Vec::<String>::new());
+    assert_eq!(result, Vec::<String>::new());
 }
 
 #[test]
@@ -487,8 +487,8 @@ async fn scan_with_no_pattern_single_paged(
     }
 
     result.sort();
-    check!(result.contains(&key1.to_string()));
-    check!(result.contains(&key2.to_string()));
+    assert!(result.contains(&key1.to_string()));
+    assert!(result.contains(&key2.to_string()));
 }
 
 #[test]
@@ -605,9 +605,9 @@ async fn scan_with_no_pattern_paginated(
     // Note: Redis does not guarantee to return the asked number of items, it is just a hint.
     // check!(r1.len() == 1);
     // check!(r2.len() == 1);
-    check!(all.contains(&key1.to_string()));
-    check!(all.contains(&key2.to_string()));
-    check!(all.contains(&key3.to_string()));
+    assert!(all.contains(&key1.to_string()));
+    assert!(all.contains(&key2.to_string()));
+    assert!(all.contains(&key3.to_string()));
 }
 
 #[test]
@@ -652,8 +652,8 @@ async fn scan_with_prefix_pattern_single_paged(
     }
 
     result.sort();
-    check!(result.contains(&key1.to_string()));
-    check!(result.contains(&key3.to_string()));
+    assert!(result.contains(&key1.to_string()));
+    assert!(result.contains(&key3.to_string()));
 }
 
 #[test]
@@ -720,8 +720,8 @@ async fn scan_with_prefix_pattern_paginated(
     // Note: Redis does not guarantee to return the asked number of items, it is just a hint.
     // check!(r1.len() == 1);
     // check!(r2.len() == 1);
-    check!(all.contains(&key1.to_string()));
-    check!(all.contains(&key3.to_string()));
+    assert!(all.contains(&key1.to_string()));
+    assert!(all.contains(&key3.to_string()));
 }
 
 #[test]
@@ -744,8 +744,8 @@ async fn exists_append_delete(
     is.delete("svc", "api", ns.ns.clone(), key1).await.unwrap();
     let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
-    check!(result1 == false);
-    check!(result2 == false);
+    assert_eq!(result1, false);
+    assert_eq!(result2, false);
 }
 
 #[test]
@@ -767,7 +767,7 @@ async fn delete_is_per_namespace(
     is.delete("svc", "api", ns2.ns.clone(), key1).await.unwrap();
     let result = is.exists("svc", "api", ns1.ns.clone(), key1).await.unwrap();
 
-    check!(result == true);
+    assert_eq!(result, true);
 }
 
 #[test]
@@ -784,7 +784,7 @@ async fn delete_non_existing(
 
     let result = is.delete("svc", "api", ns.ns.clone(), key1).await;
 
-    check!(result.is_ok());
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -832,8 +832,8 @@ async fn first(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((5, value1)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((5, value1)));
 }
 
 #[test]
@@ -881,8 +881,8 @@ async fn last(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((7, value2)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((7, value2)));
 }
 
 #[test]
@@ -930,8 +930,8 @@ async fn closest_low(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((5, value1)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((5, value1)));
 }
 
 #[test]
@@ -979,8 +979,8 @@ async fn closest_match(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((5, value1)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((5, value1)));
 }
 
 #[test]
@@ -1028,8 +1028,8 @@ async fn closest_mid(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((7, value2)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((7, value2)));
 }
 
 #[test]
@@ -1061,8 +1061,8 @@ async fn closest_high(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == None);
+    assert_eq!(result1, None);
+    assert_eq!(result2, None);
 }
 
 #[test]
@@ -1122,7 +1122,7 @@ async fn drop_prefix_no_match(
         .await
         .unwrap();
 
-    check!(result == vec![(10, value1), (11, value2), (12, value3)]);
+    assert_eq!(result, vec![(10, value1), (11, value2), (12, value3)]);
 }
 
 #[test]
@@ -1182,7 +1182,7 @@ async fn drop_prefix_partial(
         .await
         .unwrap();
 
-    check!(result == vec![(11, value2), (12, value3)]);
+    assert_eq!(result, vec![(11, value2), (12, value3)]);
 }
 
 #[test]
@@ -1218,5 +1218,5 @@ async fn drop_prefix_full(
         .await
         .unwrap();
 
-    check!(result == vec![]);
+    assert_eq!(result, vec![]);
 }

@@ -429,9 +429,12 @@ macro_rules! error_forwarding {
 
 /// Create a DataValue::Tuple from component model values.
 ///
-/// Each argument is converted to ValueAndType via `.into_value_and_type()` and
+/// Each argument is converted to ValueAndType via `.convert_to_value_and_type()` and
 /// wrapped in ElementValue::ComponentModel. This is useful for creating
 /// agent parameter tuples.
+///
+/// Values that are already `ValueAndType` are passed through unchanged (via the
+/// inherent method), while other types are converted using `IntoValueAndType`.
 ///
 /// # Example
 /// ```ignore
@@ -441,15 +444,18 @@ macro_rules! error_forwarding {
 #[macro_export]
 macro_rules! data_value {
     ($($element:expr),* $(,)?) => {
-        $crate::model::agent::DataValue::Tuple(
-            $crate::model::agent::ElementValues {
-                elements: vec![
-                    $($crate::model::agent::ElementValue::ComponentModel(
-                        $element.into_value_and_type()
-                    )),*
-                ],
-            }
-        )
+        {
+            use golem_wasm::ConvertToValueAndType as _;
+            $crate::model::agent::DataValue::Tuple(
+                $crate::model::agent::ElementValues {
+                    elements: vec![
+                        $($crate::model::agent::ElementValue::ComponentModel(
+                            $element.convert_to_value_and_type()
+                        )),*
+                    ],
+                }
+            )
+        }
     };
 }
 

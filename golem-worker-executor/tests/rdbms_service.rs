@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::check;
+use pretty_assertions::assert_eq;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::component::ComponentId;
@@ -2666,7 +2666,7 @@ async fn rdbms_test<T: RdbmsType + 'static>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
     let (transaction_id, results) =
         execute_rdbms_test::<T>(rdbms.clone(), &pool_key, &worker_id, test.clone()).await;
@@ -2684,7 +2684,7 @@ async fn rdbms_test<T: RdbmsType + 'static>(
 
     let _ = rdbms.remove(&pool_key, &worker_id).await;
     let exists = rdbms.exists(&pool_key, &worker_id).await;
-    check!(!exists);
+    assert!(!exists);
 }
 
 async fn check_transaction<T: RdbmsType + 'static>(
@@ -2695,7 +2695,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
     transaction_id: Option<TransactionId>,
 ) {
     if let Some(te) = transaction_end {
-        check!(
+        assert!(
             transaction_id.is_some(),
             "transaction id for worker {worker_id} is some"
         );
@@ -2703,21 +2703,23 @@ async fn check_transaction<T: RdbmsType + 'static>(
         let transaction_status = rdbms
             .get_transaction_status(pool_key, worker_id, &transaction_id)
             .await;
-        check!(
+        assert!(
             transaction_status.is_ok(),
             "transaction status for worker {worker_id} is ok"
         );
         let transaction_status = transaction_status.unwrap();
         match te {
             TransactionEnd::Commit => {
-                check!(
-                    transaction_status == RdbmsTransactionStatus::Committed,
+                assert_eq!(
+                    transaction_status,
+                    RdbmsTransactionStatus::Committed,
                     "transaction status for worker {worker_id} is committed"
                 );
             }
             TransactionEnd::Rollback => {
-                check!(
-                    transaction_status == RdbmsTransactionStatus::RolledBack,
+                assert_eq!(
+                    transaction_status,
+                    RdbmsTransactionStatus::RolledBack,
                     "transaction status for worker {worker_id} is rolled back"
                 );
             }
@@ -2727,7 +2729,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
         let result = rdbms
             .cleanup_transaction(pool_key, worker_id, &transaction_id)
             .await;
-        check!(
+        assert!(
             result.is_ok(),
             "transaction cleanup for worker {worker_id} is ok"
         );
@@ -2736,13 +2738,14 @@ async fn check_transaction<T: RdbmsType + 'static>(
             let transaction_status = rdbms
                 .get_transaction_status(pool_key, worker_id, &transaction_id)
                 .await;
-            check!(
+            assert!(
                 transaction_status.is_ok(),
                 "transaction status for worker {worker_id} is ok"
             );
             let transaction_status = transaction_status.unwrap();
-            check!(
-                transaction_status == RdbmsTransactionStatus::NotFound,
+            assert_eq!(
+                transaction_status,
+                RdbmsTransactionStatus::NotFound,
                 "transaction status for worker {worker_id} is cleaned up"
             );
         }
@@ -2760,15 +2763,16 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Execute(result))) => {
                         if let Some(expected) = expected.expected {
-                            check!(
-                                result == expected,
+                            assert_eq!(
+                                result,
+                                expected,
                                 "execute result for worker {worker_id} and test statement with index {i} match"
                             );
                         }
                     }
                     v => {
                         info!("execute result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        check!(false, "execute result for worker {worker_id} and test statement with index {i} is error or not found");
+                        panic!("execute result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2778,15 +2782,15 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            check!(result.columns == expected_columns, "query result columns for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.columns, expected_columns, "query result columns for worker {worker_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            check!(result.rows == expected_rows, "query result rows for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.rows, expected_rows, "query result rows for worker {worker_id} and test statement with index {i} match");
                         }
                     }
                     v => {
                         info!("query result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        check!(false, "query result for worker {worker_id} and test statement with index {i} is error or not found");
+                        panic!("query result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2796,15 +2800,15 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            check!(result.columns == expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.columns, expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            check!(result.rows == expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.rows, expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} match");
                         }
                     }
                     v => {
                         info!("query stream result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        check!(false, "query stream result for worker {worker_id} and test statement with index {i} is error or not found");
+                        panic!("query stream result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2980,11 +2984,12 @@ async fn rdbms_connection_err_test<T: RdbmsType>(
     let worker_id = new_worker_id();
     let result = rdbms.create(db_address, &worker_id).await;
 
-    check!(result.is_err(), "connection to {db_address} is error");
+    assert!(result.is_err(), "connection to {db_address} is error");
 
     let error = result.err().unwrap();
-    check!(
-        error == expected,
+    assert_eq!(
+        error,
+        expected,
         "connection error for {db_address} - response error match"
     );
 }
@@ -2998,14 +3003,14 @@ async fn rdbms_query_err_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms
         .query_stream(&pool_key, &worker_id, query, params)
         .await;
 
-    check!(
+    assert!(
         result.is_err(),
         "query {} (executed on {}) - result is error",
         query,
@@ -3013,8 +3018,9 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    check!(
-        error == expected,
+    assert_eq!(
+        error,
+        expected,
         "query {} (executed on {}) - result error match",
         query,
         pool_key
@@ -3032,12 +3038,12 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms.execute(&pool_key, &worker_id, query, params).await;
 
-    check!(
+    assert!(
         result.is_err(),
         "query {} (executed on {}) - result is error",
         query,
@@ -3045,8 +3051,9 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    check!(
-        error == expected,
+    assert_eq!(
+        error,
+        expected,
         "query {} (executed on {}) - result error match",
         query,
         pool_key
@@ -3058,17 +3065,17 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 #[test]
 fn test_rdbms_pool_key_masked_address() {
     let key = RdbmsPoolKey::from("mysql://user:password@localhost:3306").unwrap();
-    check!(key.masked_address() == "mysql://user:*****@localhost:3306");
+    assert_eq!(key.masked_address(), "mysql://user:*****@localhost:3306");
     let key = RdbmsPoolKey::from("mysql://user@localhost:3306").unwrap();
-    check!(key.masked_address() == "mysql://user@localhost:3306");
+    assert_eq!(key.masked_address(), "mysql://user@localhost:3306");
     let key = RdbmsPoolKey::from("mysql://localhost:3306").unwrap();
-    check!(key.masked_address() == "mysql://localhost:3306");
+    assert_eq!(key.masked_address(), "mysql://localhost:3306");
     let key =
         RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&def=xyz").unwrap();
-    check!(key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&def=xyz");
+    assert_eq!(key.masked_address(), "postgres://user:*****@localhost:5432?abc=xyz&def=xyz");
     let key =
         RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&secret=xyz").unwrap();
-    check!(key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&secret=*****");
+    assert_eq!(key.masked_address(), "postgres://user:*****@localhost:5432?abc=xyz&secret=*****");
 }
 
 #[test]
@@ -3127,7 +3134,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
     let worker_id = new_worker_id();
 
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let mut values: Vec<String> = Vec::with_capacity(count as usize);
@@ -3144,7 +3151,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
             )
             .await;
 
-        check!(r.is_ok(), "db creation {} is ok", db_name);
+        assert!(r.is_ok(), "db creation {} is ok", db_name);
 
         let address = to_db_address(db_name);
         values.push(address);
@@ -3223,8 +3230,8 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         .map(|a| RdbmsPoolKey::from(a.as_str()))
         .collect::<Result<Vec<RdbmsPoolKey>, String>>();
 
-    check!(pool_keys.is_ok(), "pool keys are ok");
-    check!(
+    assert!(pool_keys.is_ok(), "pool keys are ok");
+    assert!(
         pool_keys
             .unwrap()
             .iter()
@@ -3235,7 +3242,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
     for (worker_id, pool_key) in workers_pools {
         let worker_ids = rdbms_status.pools.get(&pool_key);
 
-        check!(
+        assert!(
             worker_ids.is_some_and(|ids| ids.contains(&worker_id)),
             "worker {worker_id} found in pool {pool_key}"
         );

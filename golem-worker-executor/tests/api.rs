@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use assert2::{check, let_assert};
+use pretty_assertions::assert_eq;
 use axum::routing::get;
 use axum::Router;
 use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
@@ -44,7 +44,6 @@ use golem_worker_executor_test_utils::{
     start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies,
 };
-use pretty_assertions::assert_eq;
 use redis::Commands;
 use std::collections::HashMap;
 use std::env;
@@ -108,8 +107,8 @@ async fn interruption(
 
     drop(executor);
 
-    check!(result.is_err());
-    check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
+    assert!(result.is_err());
+    assert!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
     Ok(())
 }
 
@@ -146,7 +145,7 @@ async fn delete_interrupts_long_rpc_call(
     executor.delete_worker(&worker_id).await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await;
-    check!(metadata.is_err());
+    assert!(metadata.is_err());
 
     Ok(())
 }
@@ -192,9 +191,9 @@ async fn simulated_crash(
     rx.recv_many(&mut events, 100).await;
     drop(executor);
 
-    check!(result.is_ok());
-    check!(result == Ok(vec![Value::String("done".to_string())]));
-    check!(stdout_events(events.into_iter()) == vec!["Starting interruption test\n"]);
+    assert!(result.is_ok());
+    assert_eq!(result, Ok(vec![Value::String("done".to_string())]));
+    assert_eq!(stdout_events(events.into_iter()), vec!["Starting interruption test\n"]);
     Ok(())
 }
 
@@ -265,25 +264,25 @@ async fn shopping_cart_example(
         .into_return_value()
         .expect("Expected a single return value");
 
-    check!(
-        contents_value
-            == Value::List(vec![
-                Value::Record(vec![
-                    Value::String("G1000".to_string()),
-                    Value::String("Golem T-Shirt M".to_string()),
-                    Value::U64(1),
-                ]),
-                Value::Record(vec![
-                    Value::String("G1001".to_string()),
-                    Value::String("Golem Cloud Subscription 1y".to_string()),
-                    Value::U64(1),
-                ]),
-                Value::Record(vec![
-                    Value::String("G1002".to_string()),
-                    Value::String("Mud Golem".to_string()),
-                    Value::U64(2),
-                ]),
-            ])
+    assert_eq!(
+        contents_value,
+        Value::List(vec![
+            Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::U64(1),
+            ]),
+            Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::U64(1),
+            ]),
+            Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::U64(2),
+            ]),
+        ])
     );
     Ok(())
 }
@@ -553,17 +552,17 @@ async fn promise(
     let result_value = result
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    check!(result_value == Value::List(vec![Value::U8(42)]));
+    assert_eq!(result_value, Value::List(vec![Value::U8(42)]));
 
     let poll1_value = poll1?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    check!(poll1_value == Value::Option(None));
+    assert_eq!(poll1_value, Value::Option(None));
 
     let poll2_value = poll2?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    check!(poll2_value == Value::Option(Some(Box::new(Value::List(vec![Value::U8(42)])))));
+    assert_eq!(poll2_value, Value::Option(Some(Box::new(Value::List(vec![Value::U8(42)])))));
     Ok(())
 }
 
@@ -658,10 +657,10 @@ async fn get_workers_from_worker(
 
         match result.first() {
             Some(Value::List(list)) => {
-                check!(list.len() == expected_count);
+                assert_eq!(list.len(), expected_count);
             }
             _ => {
-                check!(false);
+                panic!("unexpected");
             }
         }
         Ok(())
@@ -730,10 +729,10 @@ async fn get_metadata_from_worker(
         match result.first() {
             Some(Value::Record(values)) if !values.is_empty() => {
                 let id_val = values.first().unwrap();
-                check!(worker_id_val1 == *id_val);
+                assert_eq!(worker_id_val1, *id_val);
             }
             _ => {
-                check!(false);
+                panic!("unexpected");
             }
         }
 
@@ -768,15 +767,15 @@ async fn get_metadata_from_worker(
                 match result {
                     Value::Record(values) if !values.is_empty() => {
                         let id_val = values.first().unwrap();
-                        check!(worker_id_val2 == *id_val);
+                        assert_eq!(worker_id_val2, *id_val);
                     }
                     _ => {
-                        check!(false);
+                        panic!("unexpected");
                     }
                 }
             }
             _ => {
-                check!(false);
+                panic!("unexpected");
             }
         }
         Ok(())
@@ -841,13 +840,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
         .into_return_value()
         .expect("Expected a single return value");
 
-    check!(
-        contents_value
-            == Value::List(vec![Value::Record(vec![
-                Value::String("G1000".to_string()),
-                Value::String("Golem T-Shirt M".to_string()),
-                Value::U64(1),
-            ])])
+    assert_eq!(
+        contents_value,
+        Value::List(vec![Value::Record(vec![
+            Value::String("G1000".to_string()),
+            Value::String("Golem T-Shirt M".to_string()),
+            Value::U64(1),
+        ])])
     );
     Ok(())
 }
@@ -906,13 +905,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .into_return_value()
         .expect("Expected a single return value");
 
-    check!(
-        contents_value
-            == Value::List(vec![Value::Record(vec![
-                Value::String("G1000".to_string()),
-                Value::String("Golem T-Shirt M".to_string()),
-                Value::U64(1),
-            ])])
+    assert_eq!(
+        contents_value,
+        Value::List(vec![Value::Record(vec![
+            Value::String("G1000".to_string()),
+            Value::String("Golem T-Shirt M".to_string()),
+            Value::U64(1),
+        ])])
     );
     Ok(())
 }
@@ -1137,15 +1136,15 @@ async fn optional_parameters(
         )
         .await??;
 
-    check!(
-        echo_some
-            == vec![Value::Option(Some(Box::new(Value::String(
-                "Hello".to_string()
-            ))))]
+    assert_eq!(
+        echo_some,
+        vec![Value::Option(Some(Box::new(Value::String(
+            "Hello".to_string()
+        ))))]
     );
-    check!(echo_none == vec![Value::Option(None)]);
-    check!(todo_some == vec![Value::String("todo".to_string())]);
-    check!(todo_none == vec![Value::String("todo".to_string())]);
+    assert_eq!(echo_none, vec![Value::Option(None)]);
+    assert_eq!(todo_some, vec![Value::String("todo".to_string())]);
+    assert_eq!(todo_none, vec![Value::String("todo".to_string())]);
 
     Ok(())
 }
@@ -1196,10 +1195,10 @@ async fn delete_worker(
 
     let metadata2 = executor.get_worker_metadata(&worker_id).await;
 
-    check!(values1.len() == 1);
-    check!(cursor1.is_none());
-    check!(metadata1.is_ok());
-    check!(metadata2.is_err());
+    assert_eq!(values1.len(), 1);
+    assert!(cursor1.is_none());
+    assert!(metadata1.is_ok());
+    assert!(metadata2.is_err());
     Ok(())
 }
 
@@ -1221,8 +1220,8 @@ async fn get_workers(
             .get_workers_metadata(component_id, filter, ScanCursor::default(), 20, true)
             .await?;
 
-        check!(values.len() == expected_count);
-        check!(cursor.is_none());
+        assert_eq!(values.len(), expected_count);
+        assert!(cursor.is_none());
 
         Ok(values)
     }
@@ -1317,8 +1316,8 @@ async fn get_workers(
         )
         .await?;
 
-    check!(cursor1.is_some());
-    check!(values1.len() >= workers_count / 2);
+    assert!(cursor1.is_some());
+    assert!(values1.len() >= workers_count / 2);
 
     let (cursor2, values2) = executor
         .get_workers_metadata(
@@ -1330,13 +1329,13 @@ async fn get_workers(
         )
         .await?;
 
-    check!(values2.len() == workers_count - values1.len());
+    assert_eq!(values2.len(), workers_count - values1.len());
 
     if let Some(cursor2) = cursor2 {
         let (_, values3) = executor
             .get_workers_metadata(&component.id, None, cursor2, workers_count as u64, true)
             .await?;
-        check!(values3.len() == 0);
+        assert_eq!(values3.len(), 0);
     }
 
     for worker_id in worker_ids {
@@ -1370,7 +1369,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-    check!(failure.is_err());
+    assert!(failure.is_err());
     Ok(())
 }
 
@@ -1405,7 +1404,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(failure.is_err());
+    assert!(failure.is_err());
 
     Ok(())
 }
@@ -1468,17 +1467,24 @@ async fn get_worker_metadata(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
+    assert!(
         metadata1.status == WorkerStatus::Suspended || // it is sleeping - whether it is suspended or not is the server's decision
         metadata1.status == WorkerStatus::Running
     );
-    check!(metadata2.status == WorkerStatus::Idle);
-    check!(metadata1.component_revision == ComponentRevision::INITIAL);
-    check!(metadata1.worker_id == worker_id);
-    check!(metadata1.created_by == context.account_id);
+    assert_eq!(metadata2.status, WorkerStatus::Idle);
+    assert_eq!(metadata1.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(metadata1.worker_id, worker_id);
+    assert_eq!(metadata1.created_by, context.account_id);
 
-    check!(metadata2.component_size == 3729469);
-    check!(metadata2.total_linear_memory_size == 1703936);
+    let component_file_size = std::fs::metadata(
+        executor
+            .deps
+            .component_directory
+            .join("golem_it_host_api_tests_release.wasm"),
+    )?
+    .len();
+    assert_eq!(metadata2.component_size, component_file_size);
+    assert_eq!(metadata2.total_linear_memory_size, 1703936);
     Ok(())
 }
 
@@ -1507,12 +1513,12 @@ async fn create_invoke_delete_create_invoke(
     let r1 = executor
         .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
-    check!(r1.into_return_value() == Some(Value::U32(1)));
+    assert_eq!(r1.into_return_value(), Some(Value::U32(1)));
 
     let r2 = executor
         .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
-    check!(r2.into_return_value() == Some(Value::U32(2)));
+    assert_eq!(r2.into_return_value(), Some(Value::U32(2)));
 
     executor.delete_worker(&worker_id).await?;
 
@@ -1523,7 +1529,7 @@ async fn create_invoke_delete_create_invoke(
     let r3 = executor
         .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
-    check!(r3.into_return_value() == Some(Value::U32(1)));
+    assert_eq!(r3.into_return_value(), Some(Value::U32(1)));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1586,9 +1592,9 @@ async fn recovering_an_old_worker_after_updating_a_component(
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    check!(r1.into_return_value() == Some(Value::U32(1)));
-    check!(r2.into_return_value() == Some(Value::F64(1.0)));
-    check!(r3.into_return_value() == Some(Value::U32(2)));
+    assert_eq!(r1.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(r2.into_return_value(), Some(Value::F64(1.0)));
+    assert_eq!(r3.into_return_value(), Some(Value::U32(2)));
     Ok(())
 }
 
@@ -1634,15 +1640,16 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
         .await?;
 
     let r2 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "get-value", data_value!())
+        .invoke_and_await_agent(&component.id, &counter_id, "get_value", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    check!(r1.into_return_value() == Some(Value::U32(1)));
-    check!(
-        r2.into_return_value() == Some(Value::String("counter-recreate-after-delete".to_string()))
+    assert_eq!(r1.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(
+        r2.into_return_value(),
+        Some(Value::String("counter-recreate-after-delete".to_string()))
     );
     Ok(())
 }
@@ -1669,19 +1676,17 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
         .try_start_worker(&component.id, "old-component-1")
         .await?;
 
-    check!(result.is_err());
-    {
-        assert2::let_assert!(
-            Err(WorkerExecutorError::ComponentParseFailed {
-                component_id,
-                component_revision,
-                reason
-            }) = result
-        );
-        assert!(component_id == component.id);
-        assert!(component_revision == ComponentRevision::INITIAL);
-        assert!(reason == "failed to parse WebAssembly module");
+    let Err(WorkerExecutorError::ComponentParseFailed {
+        component_id,
+        component_revision,
+        reason,
+    }) = result
+    else {
+        panic!("Expected ComponentParseFailed, got {:?}", result)
     };
+    assert_eq!(component_id, component.id);
+    assert_eq!(component_revision, ComponentRevision::INITIAL);
+    assert_eq!(reason, "failed to parse WebAssembly module");
 
     Ok(())
 }
@@ -1726,19 +1731,17 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         .try_start_worker(&component.id, "bad-wasm-1")
         .await?;
 
-    check!(result.is_err());
-    {
-        assert2::let_assert!(
-            Err(WorkerExecutorError::ComponentParseFailed {
-                component_id,
-                component_revision,
-                reason
-            }) = result
-        );
-        assert!(component_id == component.id);
-        assert!(component_revision == ComponentRevision::INITIAL);
-        assert!(reason == "failed to parse WebAssembly module");
+    let Err(WorkerExecutorError::ComponentParseFailed {
+        component_id,
+        component_revision,
+        reason,
+    }) = result
+    else {
+        panic!("Expected ComponentParseFailed, got {:?}", result)
     };
+    assert_eq!(component_id, component.id);
+    assert_eq!(component_revision, ComponentRevision::INITIAL);
+    assert_eq!(reason, "failed to parse WebAssembly module");
     Ok(())
 }
 
@@ -1797,19 +1800,17 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     // trying to invoke the previously created worker
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await?;
 
-    check!(result.is_err());
-    {
-        assert2::let_assert!(
-            Err(WorkerExecutorError::ComponentParseFailed {
-                component_id,
-                component_revision,
-                reason
-            }) = result
-        );
-        assert!(component_id == component.id);
-        assert!(component_revision == ComponentRevision::INITIAL);
-        assert!(reason == "failed to parse WebAssembly module");
+    let Err(WorkerExecutorError::ComponentParseFailed {
+        component_id,
+        component_revision,
+        reason,
+    }) = result
+    else {
+        panic!("Expected ComponentParseFailed, got {:?}", result)
     };
+    assert_eq!(component_id, component.id);
+    assert_eq!(component_revision, ComponentRevision::INITIAL);
+    assert_eq!(reason, "failed to parse WebAssembly module");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -2232,9 +2233,9 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     drop(executor);
     http_server.abort();
 
-    check!(!values1.is_empty());
+    assert!(!values1.is_empty());
     // first running
-    check!(values2.is_empty());
+    assert!(values2.is_empty());
     // first interrupted
     Ok(())
 }
@@ -2398,8 +2399,8 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     drop(executor);
     http_server.abort();
 
-    check!(status1.status == WorkerStatus::Interrupted);
-    check!(status2.status == WorkerStatus::Interrupted);
+    assert_eq!(status1.status, WorkerStatus::Interrupted);
+    assert_eq!(status2.status, WorkerStatus::Interrupted);
 
     Ok(())
 }
@@ -2534,8 +2535,8 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     drop(executor);
     http_server.abort();
 
-    check!(status2.status == WorkerStatus::Interrupted);
-    check!(status4.status == WorkerStatus::Idle);
+    assert_eq!(status2.status, WorkerStatus::Interrupted);
+    assert_eq!(status4.status, WorkerStatus::Idle);
     Ok(())
 }
 
@@ -2607,7 +2608,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     drop(executor);
     http_server.abort();
 
-    check!(metadata.is_err());
+    assert!(metadata.is_err());
     Ok(())
 }
 
@@ -2684,14 +2685,14 @@ async fn counter_resource_test_1(
 
     let metadata2 = executor.get_worker_metadata(&worker_id).await?;
 
-    check!(result1 == Ok(vec![Value::U64(5)]));
+    assert_eq!(result1, Ok(vec![Value::U64(5)]));
 
-    check!(
-        result2
-            == vec![Value::List(vec![Value::Tuple(vec![
-                Value::String("counter1".to_string()),
-                Value::U64(5)
-            ])])]
+    assert_eq!(
+        result2,
+        vec![Value::List(vec![Value::Tuple(vec![
+            Value::String("counter1".to_string()),
+            Value::U64(5)
+        ])])]
     );
 
     let ts = Timestamp::now_utc();
@@ -2707,16 +2708,16 @@ async fn counter_resource_test_1(
         })
         .collect::<Vec<_>>();
     resources1.sort_by_key(|erm| erm.key);
-    check!(
-        resources1
-            == vec![ExportedResourceMetadata {
-                key: WorkerResourceId(0),
-                description: WorkerResourceDescription {
-                    created_at: ts,
-                    resource_owner: "rpc:counters-exports/api".to_string(),
-                    resource_name: "counter".to_string()
-                }
-            }]
+    assert_eq!(
+        resources1,
+        vec![ExportedResourceMetadata {
+            key: WorkerResourceId(0),
+            description: WorkerResourceDescription {
+                created_at: ts,
+                resource_owner: "rpc:counters-exports/api".to_string(),
+                resource_name: "counter".to_string()
+            }
+        }]
     );
 
     let resources2 = metadata2
@@ -2730,7 +2731,7 @@ async fn counter_resource_test_1(
             },
         })
         .collect::<Vec<_>>();
-    check!(resources2 == vec![]);
+    assert_eq!(resources2, vec![]);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -2787,9 +2788,9 @@ async fn reconstruct_interrupted_state(
 
     let status = executor.get_worker_metadata(&worker_id).await?.status;
 
-    check!(result.is_err());
-    check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
-    check!(status == WorkerStatus::Interrupted);
+    assert!(result.is_err());
+    assert!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
+    assert_eq!(status, WorkerStatus::Interrupted);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -2899,7 +2900,7 @@ async fn invocation_queue_is_persistent(
 
     http_server.abort();
 
-    check!(result == vec![Value::U64(4)]);
+    assert_eq!(result, vec![Value::U64(4)]);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -2937,12 +2938,12 @@ async fn invoke_with_non_existing_function(
         )
         .await?;
 
-    check!(failure.is_err());
-    check!(
-        success
-            == Ok(vec![Value::Option(Some(Box::new(Value::String(
-                "Hello".to_string()
-            ))))])
+    assert!(failure.is_err());
+    assert_eq!(
+        success,
+        Ok(vec![Value::Option(Some(Box::new(Value::String(
+            "Hello".to_string()
+        ))))])
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2981,12 +2982,12 @@ async fn invoke_with_wrong_parameters(
         )
         .await?;
 
-    check!(failure.is_err());
-    check!(
-        success
-            == Ok(vec![Value::Option(Some(Box::new(Value::String(
-                "Hello".to_string()
-            ))))])
+    assert!(failure.is_err());
+    assert_eq!(
+        success,
+        Ok(vec![Value::Option(Some(Box::new(Value::String(
+            "Hello".to_string()
+        ))))])
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -3048,27 +3049,27 @@ async fn stderr_returned_for_failed_component(
         worker_error_message(&result3.clone().err().unwrap())
     );
 
-    check!(result1.is_ok());
-    check!(result2.is_err());
-    check!(result3.is_err());
+    assert!(result1.is_ok());
+    assert!(result2.is_err());
+    assert!(result3.is_err());
 
     let expected_stderr = "error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
-    check!(worker_error_logs(&result2.clone().err().unwrap())
+    assert!(worker_error_logs(&result2.clone().err().unwrap())
         .unwrap()
         .ends_with(&expected_stderr));
-    check!(worker_error_logs(&result3.clone().err().unwrap())
+    assert!(worker_error_logs(&result3.clone().err().unwrap())
         .unwrap()
         .ends_with(&expected_stderr));
 
-    check!(metadata.status == WorkerStatus::Failed);
-    check!(metadata.last_error.is_some());
-    check!(metadata.last_error.unwrap().ends_with(&expected_stderr));
+    assert_eq!(metadata.status, WorkerStatus::Failed);
+    assert!(metadata.last_error.is_some());
+    assert!(metadata.last_error.unwrap().ends_with(&expected_stderr));
 
-    check!(next.is_none());
-    check!(all.len() == 1);
-    check!(all[0].last_error.is_some());
-    check!(all[0]
+    assert!(next.is_none());
+    assert_eq!(all.len(), 1);
+    assert!(all[0].last_error.is_some());
+    assert!(all[0]
         .last_error
         .clone()
         .unwrap()
@@ -3199,9 +3200,9 @@ async fn cancelling_pending_invocations(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
-    check!(cancel2.is_ok() && cancel2.unwrap());
-    check!(cancel4.is_err()); // cannot cancel a non-existing invocation
+    assert!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
+    assert!(cancel2.is_ok() && cancel2.unwrap());
+    assert!(cancel4.is_err()); // cannot cancel a non-existing invocation
     assert_eq!(final_result, vec![Value::U64(12)]);
     Ok(())
 }
@@ -3254,13 +3255,13 @@ async fn resolve_components_from_name(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(
-        result
-            == Value::Record(vec![
-                Value::Bool(true),
-                Value::Bool(true),
-                Value::Bool(false),
-            ])
+    assert_eq!(
+        result,
+        Value::Record(vec![
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(false),
+        ])
     );
 
     executor.check_oplog_is_queryable(&resolve_worker).await?;
@@ -3508,8 +3509,8 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     // executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
-    check!(failure.is_err());
-    check!(success.is_ok());
+    assert!(failure.is_err());
+    assert!(success.is_ok());
     Ok(())
 }
 
@@ -3564,8 +3565,8 @@ async fn delete_worker_during_invocation(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let result_value = result.into_return_value();
-    check!(result_value == Some(Value::Result(Ok(None))));
-    check!(metadata.pending_invocation_count == 0);
+    assert_eq!(result_value, Some(Value::Result(Ok(None))));
+    assert_eq!(metadata.pending_invocation_count, 0);
     Ok(())
 }
 
@@ -3624,11 +3625,14 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let invocation_result = invoking_task.await?.unwrap()?;
     deleting_task_cancel_token.cancel();
-    {
-        // We tried invoking the worker while it was being deleted, we expect an invalid request
-        let_assert!(Err(WorkerExecutorError::InvalidRequest { details }) = invocation_result);
-        assert!(details.contains("being deleted"));
+    // We tried invoking the worker while it was being deleted, we expect an invalid request
+    let Err(WorkerExecutorError::InvalidRequest { details }) = invocation_result else {
+        panic!(
+            "Expected InvalidRequest, got {:?}",
+            invocation_result
+        )
     };
+    assert!(details.contains("being deleted"));
 
     Ok(())
 }

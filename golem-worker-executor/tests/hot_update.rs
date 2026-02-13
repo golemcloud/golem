@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::check;
 use async_lock::Mutex;
 use axum::routing::post;
 use axum::Router;
@@ -26,7 +25,7 @@ use golem_worker_executor_test_utils::{
 };
 use http::StatusCode;
 use log::info;
-use pretty_assertions::assert_eq;
+use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, test};
@@ -215,9 +214,9 @@ async fn auto_update_on_running(
 
     // Expectation: f1 is interrupted in the middle to update the worker, so it get restarted
     // and eventually finishes with 150. The update is marked as a success.
-    check!(result[0] == Value::U64(150));
-    check!(metadata.component_revision == updated_component.revision);
-    check!(update_counts(&metadata) == (0, 1, 0));
+    assert_eq!(result[0], Value::U64(150));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
 }
 
@@ -264,9 +263,9 @@ async fn auto_update_on_idle(
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    check!(result[0] == Value::U64(0));
-    check!(metadata.component_revision == updated_component.revision);
-    check!(update_counts(&metadata) == (0, 1, 0));
+    assert_eq!(result[0], Value::U64(0));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
 }
 
@@ -330,10 +329,10 @@ async fn failing_auto_update_on_idle(
     // Expectation: we finish executing f1 which returns with 300. Then we try updating, but the
     // updated f1 would return 150 which we detect as a divergence and fail the update. After this
     // f2's original version is executed which returns random u64.
-    check!(result[0] != Value::U64(150));
-    check!(result[0] != Value::U64(300));
-    check!(metadata.component_revision == ComponentRevision::INITIAL);
-    check!(update_counts(&metadata) == (0, 0, 1));
+    assert_ne!(result[0], Value::U64(150));
+    assert_ne!(result[0], Value::U64(300));
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
     Ok(())
 }
 
@@ -394,9 +393,9 @@ async fn auto_update_on_idle_with_non_diverging_history(
     // Expectation: the f3 function is not changing between the versions, so we can safely
     // update the component and call f4 which only exists in the new version.
     // the current state which is 0
-    check!(result[0] == Value::U64(11));
-    check!(metadata.component_revision == updated_component.revision);
-    check!(update_counts(&metadata) == (0, 1, 0));
+    assert_eq!(result[0], Value::U64(11));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
 }
 
@@ -482,9 +481,9 @@ async fn failing_auto_update_on_running(
     // and tries to get updated, but it fails because f2 was previously executed, and it is
     // diverging from the new version. The update is marked as a failure and the invocation continues
     // with the original version, resulting in 300.
-    check!(result[0] == Value::U64(300));
-    check!(metadata.component_revision == ComponentRevision::INITIAL);
-    check!(update_counts(&metadata) == (0, 0, 1));
+    assert_eq!(result[0], Value::U64(300));
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
     Ok(())
 }
 
@@ -551,9 +550,9 @@ async fn manual_update_on_idle(
     drop(executor);
     http_server.abort();
 
-    check!(before_update == after_update);
-    check!(metadata.component_revision == updated_component.revision);
-    check!(update_counts(&metadata) == (0, 1, 0));
+    assert_eq!(before_update, after_update);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
 
     Ok(())
 }
@@ -621,9 +620,9 @@ async fn manual_update_on_idle_without_save_snapshot(
     // Explanation: We are trying to update v1 to v3 using snapshots, but v1 does not
     // export a save function, so the update attempt fails and the worker continues running
     // the original version which we can invoke.
-    check!(result == vec![Value::U64(5)]);
-    check!(metadata.component_revision == ComponentRevision::INITIAL);
-    check!(update_counts(&metadata) == (0, 0, 1));
+    assert_eq!(result, vec![Value::U64(5)]);
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
 
     Ok(())
 }
@@ -724,10 +723,10 @@ async fn auto_update_on_running_followed_by_manual(
     // and eventually finishes with 150. The update is marked as a success, but immediately
     // it gets updated again to v3 on which we can call the previously non-existent 'get'
     // function to get the same state that was generated by 'v2'.
-    check!(result1[0] == Value::U64(150));
-    check!(result2[0] == Value::U64(150));
-    check!(metadata.component_revision == updated_component_2.revision);
-    check!(update_counts(&metadata) == (0, 2, 0));
+    assert_eq!(result1[0], Value::U64(150));
+    assert_eq!(result2[0], Value::U64(150));
+    assert_eq!(metadata.component_revision, updated_component_2.revision);
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
 
     Ok(())
 }
@@ -794,9 +793,9 @@ async fn manual_update_on_idle_with_failing_load(
 
     // Explanation: We try to update v2 to v4, but v4's load function always fails. So
     // the component must stay on v2, on which we can invoke f3.
-    check!(result == vec![Value::U64(5)]);
-    check!(metadata.component_revision == ComponentRevision::INITIAL);
-    check!(update_counts(&metadata) == (0, 0, 1));
+    assert_eq!(result, vec![Value::U64(5)]);
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
 
     Ok(())
 }
@@ -869,9 +868,9 @@ async fn manual_update_on_idle_using_v11(
     drop(executor);
     http_server.abort();
 
-    check!(before_update == after_update);
-    check!(metadata.component_revision == updated_component.revision);
-    check!(update_counts(&metadata) == (0, 1, 0));
+    assert_eq!(before_update, after_update);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
 
     Ok(())
 }
@@ -944,9 +943,9 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     drop(executor);
     http_server.abort();
 
-    check!(before_update == after_update);
-    check!(metadata.component_revision == updated_component.revision);
-    check!(update_counts(&metadata) == (0, 1, 0));
+    assert_eq!(before_update, after_update);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
 
     Ok(())
 }
@@ -1004,10 +1003,10 @@ async fn auto_update_on_idle_to_non_existing(
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    check!(result1[0] == Value::U64(0));
-    check!(result2[0] == Value::U64(0));
-    check!(metadata.component_revision == updated_component.revision);
-    check!(update_counts(&metadata) == (0, 1, 1));
+    assert_eq!(result1[0], Value::U64(0));
+    assert_eq!(result2[0], Value::U64(0));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 1));
 
     Ok(())
 }

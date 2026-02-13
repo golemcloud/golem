@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::check;
+use pretty_assertions::assert_eq;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_common::model::agent::AgentId;
@@ -143,8 +143,8 @@ async fn spawning_many_workers_that_sleep(
     let idx = (sorted.len() as f64 * 0.95) as usize;
     let p95 = sorted[idx];
 
-    check!(p95 < 6000);
-    check!(total_duration.as_secs() < 10);
+    assert!(p95 < 6000, "p95 ({p95}) should be < 6000");
+    assert!(total_duration.as_secs() < 10, "total duration ({:?}) should be < 10s", total_duration);
 
     Ok(())
 }
@@ -278,8 +278,8 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 
     drop(executor);
 
-    check!(p951 < 25000);
-    check!(p952 < 25000);
+    assert!(p951 < 25000, "p951 ({p951}) should be < 25000");
+    assert!(p952 < 25000, "p952 ({p952}) should be < 25000");
 
     Ok(())
 }
@@ -327,7 +327,7 @@ async fn initial_large_memory_allocation(
     }
 
     for i in 0..N {
-        check!(results[i][0] == Value::U64(536870912));
+        assert_eq!(results[i][0], Value::U64(536870912));
     }
 
     Ok(())
@@ -377,7 +377,7 @@ async fn dynamic_large_memory_allocation(
     }
 
     for i in 0..N {
-        check!(results[i][0] == Value::U64(0));
+        assert_eq!(results[i][0], Value::U64(0));
     }
 
     Ok(())

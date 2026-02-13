@@ -50,6 +50,8 @@ Choose the appropriate test command based on what you're changing:
 | API changes (HTTP) | `cargo make api-tests-http` |
 | API changes (gRPC) | `cargo make api-tests-grpc` |
 
+**Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
+
 For specific tests during development:
 ```shell
 cargo test -p <crate> <test_module> -- --report-time

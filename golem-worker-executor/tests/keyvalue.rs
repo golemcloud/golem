@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use assert2::check;
+use pretty_assertions::assert_eq;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
@@ -79,13 +79,13 @@ async fn readwrite_get_returns_the_value_that_was_set(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == Value::Option(Some(Box::new(Value::List(vec![
-                Value::U8(1),
-                Value::U8(2),
-                Value::U8(3),
-            ]))))
+    assert_eq!(
+        result,
+        Value::Option(Some(Box::new(Value::List(vec![
+            Value::U8(1),
+            Value::U8(2),
+            Value::U8(3),
+        ]))))
     );
 
     Ok(())
@@ -130,7 +130,7 @@ async fn readwrite_get_fails_if_the_value_was_not_set(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result == Value::Option(None));
+    assert_eq!(result, Value::Option(None));
 
     Ok(())
 }
@@ -200,13 +200,13 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == Value::Option(Some(Box::new(Value::List(vec![
-                Value::U8(4),
-                Value::U8(5),
-                Value::U8(6),
-            ]))))
+    assert_eq!(
+        result,
+        Value::Option(Some(Box::new(Value::List(vec![
+            Value::U8(4),
+            Value::U8(5),
+            Value::U8(6),
+        ]))))
     );
 
     Ok(())
@@ -276,7 +276,7 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result == Value::Option(None));
+    assert_eq!(result, Value::Option(None));
 
     Ok(())
 }
@@ -333,7 +333,7 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result == Value::Bool(true));
+    assert_eq!(result, Value::Bool(true));
     Ok(())
 }
 
@@ -376,7 +376,7 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result == Value::Bool(false));
+    assert_eq!(result, Value::Bool(false));
 
     Ok(())
 }
@@ -435,13 +435,13 @@ async fn readwrite_buckets_can_be_shared_between_workers(
     executor.check_oplog_is_queryable(&worker_id_1).await?;
     executor.check_oplog_is_queryable(&worker_id_2).await?;
 
-    check!(
-        result
-            == Value::Option(Some(Box::new(Value::List(vec![
-                Value::U8(1),
-                Value::U8(2),
-                Value::U8(3),
-            ]))))
+    assert_eq!(
+        result,
+        Value::Option(Some(Box::new(Value::List(vec![
+            Value::U8(1),
+            Value::U8(2),
+            Value::U8(3),
+        ]))))
     );
 
     Ok(())
@@ -515,13 +515,13 @@ async fn batch_get_many_gets_multiple_values(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == Value::Option(Some(Box::new(Value::List(vec![
-                Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3),]),
-                Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6),]),
-                Value::List(vec![Value::U8(7), Value::U8(8), Value::U8(9),])
-            ]))))
+    assert_eq!(
+        result,
+        Value::Option(Some(Box::new(Value::List(vec![
+            Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3),]),
+            Value::List(vec![Value::U8(4), Value::U8(5), Value::U8(6),]),
+            Value::List(vec![Value::U8(7), Value::U8(8), Value::U8(9),])
+        ]))))
     );
 
     Ok(())
@@ -585,7 +585,7 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-    check!(result == Value::Option(None));
+    assert_eq!(result, Value::Option(None));
     Ok(())
 }
 
@@ -660,29 +660,29 @@ async fn batch_set_many_sets_multiple_values(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result1
-            == Value::Option(Some(Box::new(Value::List(vec![
-                Value::U8(1),
-                Value::U8(2),
-                Value::U8(3),
-            ]))))
+    assert_eq!(
+        result1,
+        Value::Option(Some(Box::new(Value::List(vec![
+            Value::U8(1),
+            Value::U8(2),
+            Value::U8(3),
+        ]))))
     );
-    check!(
-        result2
-            == Value::Option(Some(Box::new(Value::List(vec![
-                Value::U8(4),
-                Value::U8(5),
-                Value::U8(6),
-            ]))))
+    assert_eq!(
+        result2,
+        Value::Option(Some(Box::new(Value::List(vec![
+            Value::U8(4),
+            Value::U8(5),
+            Value::U8(6),
+        ]))))
     );
-    check!(
-        result3
-            == Value::Option(Some(Box::new(Value::List(vec![
-                Value::U8(7),
-                Value::U8(8),
-                Value::U8(9),
-            ]))))
+    assert_eq!(
+        result3,
+        Value::Option(Some(Box::new(Value::List(vec![
+            Value::U8(7),
+            Value::U8(8),
+            Value::U8(9),
+        ]))))
     );
 
     Ok(())
@@ -782,9 +782,9 @@ async fn batch_delete_many_deletes_multiple_values(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result1 == Value::Option(None));
-    check!(result2 == Value::Option(None));
-    check!(result3 == Value::Option(None));
+    assert_eq!(result1, Value::Option(None));
+    assert_eq!(result2, Value::Option(None));
+    assert_eq!(result3, Value::Option(None));
 
     Ok(())
 }
@@ -849,13 +849,13 @@ async fn batch_get_keys_returns_multiple_keys(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == Value::List(vec![
-                Value::String("key1".to_string()),
-                Value::String("key2".to_string()),
-                Value::String("key3".to_string()),
-            ])
+    assert_eq!(
+        result,
+        Value::List(vec![
+            Value::String("key1".to_string()),
+            Value::String("key2".to_string()),
+            Value::String("key3".to_string()),
+        ])
     );
 
     Ok(())

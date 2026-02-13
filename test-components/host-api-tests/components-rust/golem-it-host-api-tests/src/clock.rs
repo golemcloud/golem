@@ -10,9 +10,9 @@ pub trait Clock {
     fn new(name: String) -> Self;
     fn sleep(&self, secs: u64) -> Result<(), String>;
     fn healthcheck(&self) -> bool;
-    fn sleep_during_request(&self, secs: u64) -> String;
-    fn sleep_during_parallel_requests(&self, secs: u64) -> String;
-    fn sleep_between_requests(&self, secs: u64, n: u64) -> String;
+    async fn sleep_during_request(&self, secs: u64) -> String;
+    async fn sleep_during_parallel_requests(&self, secs: u64) -> String;
+    async fn sleep_between_requests(&self, secs: u64, n: u64) -> String;
 }
 
 pub struct ClockImpl {
@@ -34,60 +34,54 @@ impl Clock for ClockImpl {
         true
     }
 
-    fn sleep_during_request(&self, secs: u64) -> String {
-        wstd::runtime::block_on(async {
-            let response = send_request();
-            let timeout = async {
-                wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
-                Err("Timeout".to_string())
-            };
-            let (Ok(result) | Err(result)) = ((response, timeout)).race().await;
-            result
-        })
+    async fn sleep_during_request(&self, secs: u64) -> String {
+        let response = send_request();
+        let timeout = async {
+            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            Err("Timeout".to_string())
+        };
+        let (Ok(result) | Err(result)) = ((response, timeout)).race().await;
+        result
     }
 
-    fn sleep_during_parallel_requests(&self, secs: u64) -> String {
-        wstd::runtime::block_on(async {
-            let response1 = async {
-                let mut result = String::new();
-                for _ in 0..5 {
-                    result.push_str(&format!("{:?}\n", send_request().await))
-                }
-                Ok(result)
-            };
-            let response2 = async {
-                let mut result = String::new();
-                for _ in 0..5 {
-                    result.push_str(&format!("{:?}\n", send_request().await))
-                }
-                Ok(result)
-            };
-            let response3 = async {
-                let mut result = String::new();
-                for _ in 0..5 {
-                    result.push_str(&format!("{:?}\n", send_request().await))
-                }
-                Ok(result)
-            };
-            let timeout = async {
-                wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
-                Err("Timeout".to_string())
-            };
-            let (Ok(result) | Err(result)) =
-                ((response1, response2, response3, timeout)).race().await;
-            result
-        })
-    }
-
-    fn sleep_between_requests(&self, secs: u64, n: u64) -> String {
-        wstd::runtime::block_on(async {
+    async fn sleep_during_parallel_requests(&self, secs: u64) -> String {
+        let response1 = async {
             let mut result = String::new();
-            for _ in 0..(n as usize) {
-                result.push_str(&format!("{:?}\n", send_request().await));
-                wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            for _ in 0..5 {
+                result.push_str(&format!("{:?}\n", send_request().await))
             }
-            result
-        })
+            Ok(result)
+        };
+        let response2 = async {
+            let mut result = String::new();
+            for _ in 0..5 {
+                result.push_str(&format!("{:?}\n", send_request().await))
+            }
+            Ok(result)
+        };
+        let response3 = async {
+            let mut result = String::new();
+            for _ in 0..5 {
+                result.push_str(&format!("{:?}\n", send_request().await))
+            }
+            Ok(result)
+        };
+        let timeout = async {
+            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            Err("Timeout".to_string())
+        };
+        let (Ok(result) | Err(result)) =
+            ((response1, response2, response3, timeout)).race().await;
+        result
+    }
+
+    async fn sleep_between_requests(&self, secs: u64, n: u64) -> String {
+        let mut result = String::new();
+        for _ in 0..(n as usize) {
+            result.push_str(&format!("{:?}\n", send_request().await));
+            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+        }
+        result
     }
 }
 

@@ -427,6 +427,22 @@ cargo fmt                        # Format code
 cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
 ```
 
+## Updating Test Components
+
+This is a test component used by the Golem test suite. After making changes:
+
+1. Rebuild with the release preset:
+   ```shell
+   golem build --preset release
+   ```
+
+2. Always copy the rebuilt WASM file to the stored location:
+   ```shell
+   golem exec --preset release copy
+   ```
+
+Both steps are required — the tests use the stored WASM files, not the build output directly.
+
 ## Documentation
 
 - App manifest reference: https://learn.golem.cloud/app-manifest

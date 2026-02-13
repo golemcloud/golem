@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::{check, let_assert};
+use pretty_assertions::{assert_eq, assert_ne};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
@@ -204,10 +204,10 @@ async fn revert_failed_worker(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result1.is_ok());
-    check!(result2.is_err());
-    check!(result3.is_err());
-    check!(result4.is_ok());
+    assert!(result1.is_ok());
+    assert!(result2.is_err());
+    assert!(result3.is_err());
+    assert!(result4.is_ok());
 
     Ok(())
 }
@@ -271,12 +271,14 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result1.is_ok());
-    check!(result2.is_err());
+    assert!(result1.is_ok());
+    assert!(result2.is_err());
     {
-        let_assert!(Err(WorkerExecutorError::InvocationFailed { stderr, .. }) = result3);
-        assert2::assert!(stderr.contains("value is too large"));
-        assert2::assert!(!stderr.contains("Oplog"));
+        let Err(WorkerExecutorError::InvocationFailed { stderr, .. }) = result3 else {
+            panic!("Expected InvocationFailed, got {:?}", result3)
+        };
+        assert!(stderr.contains("value is too large"));
+        assert!(!stderr.contains("Oplog"));
     }
 
     Ok(())
@@ -341,10 +343,10 @@ async fn revert_auto_update(
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0. After the revert, calling f2 again returns a random number.
     // The traces of the update should be gone.
-    check!(result1[0] == 0u64.into_value());
-    check!(result2[0] != 0u64.into_value());
-    check!(metadata.component_revision == ComponentRevision::INITIAL);
-    check!(update_counts(&metadata) == (0, 0, 0));
+    assert_eq!(result1[0], 0u64.into_value());
+    assert_ne!(result2[0], 0u64.into_value());
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 0));
 
     Ok(())
 }

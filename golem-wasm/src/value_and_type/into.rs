@@ -42,6 +42,21 @@ impl<T: IntoValue + Sized> IntoValueAndType for T {
     }
 }
 
+/// Helper trait for converting values to `ValueAndType` without double-encoding.
+///
+/// This is used by the `data_value!` macro. For `ValueAndType` values, the inherent
+/// method on `ValueAndType` takes priority (returning self), while for all other types
+/// this trait's blanket impl delegates to `into_value_and_type()`.
+pub trait ConvertToValueAndType {
+    fn convert_to_value_and_type(self) -> ValueAndType;
+}
+
+impl<T: IntoValue + Sized> ConvertToValueAndType for T {
+    fn convert_to_value_and_type(self) -> ValueAndType {
+        self.into_value_and_type()
+    }
+}
+
 impl IntoValue for u8 {
     fn into_value(self) -> Value {
         Value::U8(self)

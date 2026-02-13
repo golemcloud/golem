@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::check;
+use pretty_assertions::assert_eq;
 use golem_common::base_model::agent::ElementValue;
 use golem_common::model::agent::{AgentId, AgentTypeName, DataValue, ElementValues};
 use golem_common::model::component_metadata::{
@@ -214,13 +214,13 @@ async fn counter_resource_test_1(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(
-        result
-            == Ok(vec![Value::List(vec![
-                Value::Tuple(vec![Value::String("counter3".to_string()), Value::U64(3)]),
-                Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)]),
-                Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(3)])
-            ])])
+    assert_eq!(
+        result,
+        Ok(vec![Value::List(vec![
+            Value::Tuple(vec![Value::String("counter3".to_string()), Value::U64(3)]),
+            Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)]),
+            Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(3)])
+        ])])
     );
 
     Ok(())
@@ -308,8 +308,8 @@ async fn counter_resource_test_2(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(result1 == Ok(vec![Value::U64(1)]));
-    check!(result2 == Ok(vec![Value::U64(2)]));
+    assert_eq!(result1, Ok(vec![Value::U64(1)]));
+    assert_eq!(result2, Ok(vec![Value::U64(2)]));
 
     Ok(())
 }
@@ -398,8 +398,8 @@ async fn counter_resource_test_2_with_restart(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(result1 == Ok(vec![Value::U64(1)]));
-    check!(result2 == Ok(vec![Value::U64(2)]));
+    assert_eq!(result1, Ok(vec![Value::U64(1)]));
+    assert_eq!(result2, Ok(vec![Value::U64(2)]));
 
     Ok(())
 }
@@ -484,8 +484,8 @@ async fn counter_resource_test_3(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(result1 == Ok(vec![Value::U64(1)]));
-    check!(result2 == Ok(vec![Value::U64(2)]));
+    assert_eq!(result1, Ok(vec![Value::U64(1)]));
+    assert_eq!(result2, Ok(vec![Value::U64(2)]));
 
     Ok(())
 }
@@ -574,8 +574,8 @@ async fn counter_resource_test_3_with_restart(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(result1 == Ok(vec![Value::U64(1)]));
-    check!(result2 == Ok(vec![Value::U64(2)]));
+    assert_eq!(result1, Ok(vec![Value::U64(1)]));
+    assert_eq!(result2, Ok(vec![Value::U64(2)]));
 
     Ok(())
 }
@@ -679,9 +679,10 @@ async fn context_inheritance(
     };
     env.sort_by_key(|(k, _v)| k.clone());
 
-    check!(args == vec![]);
-    check!(
-        env == vec![
+    assert_eq!(args, vec![] as Vec<Value>);
+    assert_eq!(
+        env,
+        vec![
             (
                 "COUNTERS_COMPONENT_ID".to_string(),
                 counters_component.id.to_string()
@@ -778,13 +779,13 @@ async fn counter_resource_test_5(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(
-        result
-            == Ok(vec![Value::List(vec![
-                Value::U64(3),
-                Value::U64(3),
-                Value::U64(3),
-            ]),])
+    assert_eq!(
+        result,
+        Ok(vec![Value::List(vec![
+            Value::U64(3),
+            Value::U64(3),
+            Value::U64(3),
+        ]),])
     );
 
     Ok(())
@@ -879,22 +880,22 @@ async fn counter_resource_test_5_with_restart(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(
-        result1
-            == Ok(vec![Value::List(vec![
-                Value::U64(3),
-                Value::U64(3),
-                Value::U64(3),
-            ]),])
+    assert_eq!(
+        result1,
+        Ok(vec![Value::List(vec![
+            Value::U64(3),
+            Value::U64(3),
+            Value::U64(3),
+        ]),])
     );
     // The second call has the same result because new resources are created within test5()
-    check!(
-        result2
-            == Ok(vec![Value::List(vec![
-                Value::U64(3),
-                Value::U64(3),
-                Value::U64(3),
-            ]),]),
+    assert_eq!(
+        result2,
+        Ok(vec![Value::List(vec![
+            Value::U64(3),
+            Value::U64(3),
+            Value::U64(3),
+        ]),]),
     );
 
     Ok(())
@@ -980,12 +981,12 @@ async fn wasm_rpc_bug_32_test(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(
-        result
-            == Ok(vec![Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            }])
+    assert_eq!(
+        result,
+        Ok(vec![Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        }])
     );
 
     Ok(())
@@ -1064,7 +1065,7 @@ async fn golem_bug_1265_test(
 
     executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
-    check!(result == Ok(vec![Value::Result(Ok(None))]));
+    assert_eq!(result, Ok(vec![Value::Result(Ok(None))]));
 
     Ok(())
 }

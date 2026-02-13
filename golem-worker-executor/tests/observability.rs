@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::check;
+use pretty_assertions::assert_eq;
 use axum::routing::post;
 use axum::{Json, Router};
 use golem_common::model::component_metadata::{
@@ -247,7 +247,7 @@ async fn get_oplog_with_api_changing_updates(
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
-    check!(result[0] == Value::U64(11));
+    assert_eq!(result[0], Value::U64(11));
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
@@ -289,7 +289,7 @@ async fn get_oplog_starting_with_updated_component(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
-    check!(result[0] == Value::U64(11));
+    assert_eq!(result[0], Value::U64(11));
     assert_eq!(oplog.len(), 4);
 
     Ok(())
@@ -377,7 +377,7 @@ async fn invocation_context_test(
         drop(contexts);
 
         if start.elapsed().as_secs() > 30 {
-            check!(false, "Timeout waiting for contexts");
+            panic!("Timeout waiting for contexts");
         }
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
@@ -392,11 +392,11 @@ async fn invocation_context_test(
 
     let traceparents = traceparents.lock().unwrap();
 
-    check!(result.is_ok());
-    check!(traceparents.len() == 3);
-    check!(traceparents.iter().all(|tp| tp.is_some()));
+    assert!(result.is_ok());
+    assert_eq!(traceparents.len(), 3);
+    assert!(traceparents.iter().all(|tp| tp.is_some()));
 
-    check!(
+    assert_eq!(
         dump[0]
             .as_object()
             .unwrap()
@@ -404,10 +404,10 @@ async fn invocation_context_test(
             .unwrap()
             .as_array()
             .unwrap()
-            .len()
-            == 2
+            .len(),
+        2
     ); // root, invoke-exported-function
-    check!(
+    assert_eq!(
         dump[1]
             .as_object()
             .unwrap()
@@ -415,10 +415,10 @@ async fn invocation_context_test(
             .unwrap()
             .as_array()
             .unwrap()
-            .len()
-            == 5
+            .len(),
+        5
     ); // + rpc-connection, rpc-invocation, invoke-exported-function
-    check!(
+    assert_eq!(
         dump[2]
             .as_object()
             .unwrap()
@@ -426,8 +426,8 @@ async fn invocation_context_test(
             .unwrap()
             .as_array()
             .unwrap()
-            .len()
-            == 10
+            .len(),
+        10
     ); // + custom1, custom2, rpc-connection, rpc-invocation, invoke-exported-function
 
     Ok(())

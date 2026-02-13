@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use assert2::check;
+use pretty_assertions::assert_eq;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
@@ -76,7 +76,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
 
     drop(executor);
 
-    check!(result == Value::Bool(true));
+    assert_eq!(result, Value::Bool(true));
 
     Ok(())
 }
@@ -119,6 +119,6 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
 
     drop(executor);
 
-    check!(result == Value::Bool(false));
+    assert_eq!(result, Value::Bool(false));
     Ok(())
 }

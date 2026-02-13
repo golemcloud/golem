@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use assert2::check;
+use pretty_assertions::{assert_eq, assert_ne};
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use axum::Router;
@@ -184,18 +184,18 @@ async fn jump(
 
     info!("events: {:?}", events);
 
-    check!(result == vec![Value::U64(5)]);
-    check!(
-        stdout_events(events.into_iter().flatten())
-            == vec![
-                "started: 0\n",
-                "second: 2\n",
-                "second: 2\n",
-                "third: 3\n",
-                "fourth: 4\n",
-                "fourth: 4\n",
-                "fifth: 5\n",
-            ]
+    assert_eq!(result, vec![Value::U64(5)]);
+    assert_eq!(
+        stdout_events(events.into_iter().flatten()),
+        vec![
+            "started: 0\n",
+            "second: 2\n",
+            "second: 2\n",
+            "third: 3\n",
+            "fourth: 4\n",
+            "fourth: 4\n",
+            "fifth: 5\n",
+        ]
     );
 
     Ok(())
@@ -233,7 +233,7 @@ async fn explicit_oplog_commit(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result.is_ok());
+    assert!(result.is_ok());
 
     Ok(())
 }
@@ -337,7 +337,7 @@ async fn atomic_region(
     let events = http_server.get_events();
     info!("events:\n - {}", events.join("\n - "));
 
-    check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
+    assert_eq!(events, vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
 
     Ok(())
 }
@@ -383,7 +383,7 @@ async fn idempotence_on(
     let events = http_server.get_events();
     info!("events:\n - {}", events.join("\n - "));
 
-    check!(events == vec!["1", "1"]);
+    assert_eq!(events, vec!["1", "1"]);
 
     Ok(())
 }
@@ -430,8 +430,8 @@ async fn idempotence_off(
     info!("events:\n - {}", events.join("\n - "));
     info!("result: {:?}", result);
 
-    check!(events == vec!["1"]);
-    check!(result.is_err());
+    assert_eq!(events, vec!["1"]);
+    assert!(result.is_err());
 
     Ok(())
 }
@@ -474,8 +474,8 @@ async fn persist_nothing(
     info!("events:\n - {}", events.join("\n - "));
     info!("result: {:?}", result);
 
-    check!(events == vec!["1", "2", "3"]);
-    check!(result.is_err());
+    assert_eq!(events, vec!["1", "2", "3"]);
+    assert!(result.is_err());
 
     Ok(())
 }
@@ -520,7 +520,7 @@ async fn golem_rust_explicit_oplog_commit(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result.is_ok());
+    assert!(result.is_ok());
     Ok(())
 }
 
@@ -647,7 +647,7 @@ async fn golem_rust_atomic_region(
     let events = http_server.get_events();
     info!("events:\n - {}", events.join("\n - "));
 
-    check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
+    assert_eq!(events, vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
 
     Ok(())
 }
@@ -699,7 +699,7 @@ async fn golem_rust_idempotence_on(
     let events = http_server.get_events();
     info!("events:\n - {}", events.join("\n - "));
 
-    check!(events == vec!["1", "1"]);
+    assert_eq!(events, vec!["1", "1"]);
 
     Ok(())
 }
@@ -752,8 +752,8 @@ async fn golem_rust_idempotence_off(
     info!("events:\n - {}", events.join("\n - "));
     info!("result: {:?}", result);
 
-    check!(events == vec!["1"]);
-    check!(result.is_err());
+    assert_eq!(events, vec!["1"]);
+    assert!(result.is_err());
 
     Ok(())
 }
@@ -801,8 +801,8 @@ async fn golem_rust_persist_nothing(
     info!("events:\n - {}", events.join("\n - "));
     info!("result: {:?}", result);
 
-    check!(events == vec!["1", "2", "3"]);
-    check!(result.is_err());
+    assert_eq!(events, vec!["1", "2", "3"]);
+    assert!(result.is_err());
 
     Ok(())
 }
@@ -862,17 +862,17 @@ async fn golem_rust_fallible_transaction(
     drop(executor);
     http_server.abort();
 
-    check!(result.is_err());
-    check!(
-        events
-            == vec![
-                "=> 1".to_string(),
-                "=> 2".to_string(),
-                "=> 3".to_string(),
-                "<= 3".to_string(),
-                "<= 2".to_string(),
-                "<= 1".to_string()
-            ]
+    assert!(result.is_err());
+    assert_eq!(
+        events,
+        vec![
+            "=> 1".to_string(),
+            "=> 2".to_string(),
+            "=> 3".to_string(),
+            "<= 3".to_string(),
+            "<= 2".to_string(),
+            "<= 1".to_string()
+        ]
     );
 
     Ok(())
@@ -935,18 +935,18 @@ async fn golem_rust_infallible_transaction(
     drop(executor);
     http_server.abort();
 
-    check!(result == Value::U64(11));
-    check!(
-        events
-            == vec![
-                "=> 1".to_string(),
-                "=> 2".to_string(),
-                "=> 3".to_string(),
-                "=> 1".to_string(),
-                "=> 2".to_string(),
-                "=> 3".to_string(),
-                "=> 4".to_string(),
-            ]
+    assert_eq!(result, Value::U64(11));
+    assert_eq!(
+        events,
+        vec![
+            "=> 1".to_string(),
+            "=> 2".to_string(),
+            "=> 3".to_string(),
+            "=> 1".to_string(),
+            "=> 2".to_string(),
+            "=> 3".to_string(),
+            "=> 4".to_string(),
+        ]
     );
 
     Ok(())
@@ -1044,18 +1044,18 @@ async fn idempotency_keys_in_ephemeral_workers(
         }
     }
 
-    check!(returned_keys_are_different(&result11));
-    check!(returned_keys_are_different(&result21));
-    check!(returned_keys_are_different(&result31));
-    check!(returned_keys_are_different(&result12));
-    check!(returned_keys_are_different(&result22));
-    check!(returned_keys_are_different(&result32));
+    assert!(returned_keys_are_different(&result11));
+    assert!(returned_keys_are_different(&result21));
+    assert!(returned_keys_are_different(&result31));
+    assert!(returned_keys_are_different(&result12));
+    assert!(returned_keys_are_different(&result22));
+    assert!(returned_keys_are_different(&result32));
 
-    check!(result11 != result12); // when not providing idempotency key it should return different keys
-    check!(result11 != result21);
-    check!(result11 != result31);
-    check!(result21 == result22); // same idempotency key should lead to the same result
-    check!(result31 == result32);
+    assert_ne!(result11, result12); // when not providing idempotency key it should return different keys
+    assert_ne!(result11, result21);
+    assert_ne!(result11, result31);
+    assert_eq!(result21, result22); // same idempotency key should lead to the same result
+    assert_eq!(result31, result32);
 
     Ok(())
 }

@@ -24,6 +24,8 @@ use crate::Value;
 use uuid::Uuid;
 
 #[cfg(any(feature = "host", feature = "client"))]
+pub use into::ConvertToValueAndType;
+#[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValue;
 #[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValueAndType;
@@ -54,6 +56,10 @@ impl std::fmt::Display for ValueAndType {
 impl ValueAndType {
     pub fn new(value: Value, typ: AnalysedType) -> Self {
         Self { value, typ }
+    }
+
+    pub fn convert_to_value_and_type(self) -> ValueAndType {
+        self
     }
 
     pub fn into_list_items(self) -> Option<Vec<ValueAndType>> {

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::{check, let_assert};
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
@@ -88,11 +87,11 @@ async fn http_client(
     drop(rx);
     http_server.abort();
 
-    check!(
-        result
-            == vec![Value::String(
-                "200 response is test-header test-body".to_string()
-            )]
+    assert_eq!(
+        result,
+        vec![Value::String(
+            "200 response is test-header test-body".to_string()
+        )]
     );
     Ok(())
 }
@@ -160,11 +159,11 @@ async fn http_client_using_reqwest(
     drop(executor);
     http_server.abort();
 
-    check!(result == vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
-    check!(
-        captured_body
-            == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
-                .to_string()
+    assert_eq!(result, vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
+    assert_eq!(
+        captured_body,
+        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
+            .to_string()
     );
     Ok(())
 }
@@ -231,11 +230,11 @@ async fn http_client_using_reqwest_async(
     drop(executor);
     http_server.abort();
 
-    check!(result == vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
-    check!(
-        captured_body
-            == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
-                .to_string()
+    assert_eq!(result, vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
+    assert_eq!(
+        captured_body,
+        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
+            .to_string()
     );
 
     Ok(())
@@ -307,44 +306,46 @@ async fn http_client_using_reqwest_async_parallel(
     drop(executor);
     http_server.abort();
 
-    let_assert!(Value::List(lst) = &result[0]);
-    check!(lst.len() == 32);
-    check!(
-        captured_body
-            == vec![
-                r#"{"name":"Something","amount":0,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":1,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":10,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":11,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":12,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":13,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":14,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":15,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":16,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":17,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":18,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":19,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":2,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":20,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":21,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":22,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":23,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":24,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":25,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":26,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":27,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":28,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":29,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":3,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":30,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":31,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":4,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":5,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":6,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":7,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":8,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":9,"comments":["Hello","World"]}"#.to_string(),
-            ]
+    let Value::List(lst) = &result[0] else {
+        panic!("Expected List, got {:?}", &result[0])
+    };
+    assert_eq!(lst.len(), 32);
+    assert_eq!(
+        captured_body,
+        vec![
+            r#"{"name":"Something","amount":0,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":1,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":10,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":11,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":12,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":13,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":14,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":15,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":16,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":17,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":18,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":19,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":2,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":20,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":21,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":22,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":23,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":24,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":25,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":26,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":27,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":28,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":29,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":3,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":30,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":31,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":4,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":5,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":6,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":7,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":8,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":9,"comments":["Hello","World"]}"#.to_string(),
+        ]
     );
 
     Ok(())
@@ -450,7 +451,7 @@ async fn http_response_request_chaining(
     drop(executor);
     drop(rx);
 
-    check!(result.is_ok());
+    assert!(result.is_ok());
 
     Ok(())
 }

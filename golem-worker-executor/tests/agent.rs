@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::let_assert;
-use assert2::{assert, check};
+
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -57,12 +56,13 @@ async fn agent_self_rpc_is_not_allowed(
         )
         .await?;
 
-    let_assert!(
-        Err(WorkerExecutorError::InvocationFailed {
-            error: WorkerError::Unknown(error_details),
-            ..
-        }) = result
-    );
+    let Err(WorkerExecutorError::InvocationFailed {
+        error: WorkerError::Unknown(ref error_details),
+        ..
+    }) = result
+    else {
+        panic!("unexpected: {:?}", result);
+    };
     assert!(error_details.contains("RPC calls to the same agent are not supported"));
 
     Ok(())
@@ -99,7 +99,7 @@ async fn agent_await_parallel_rpc_calls(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result.is_ok());
+    assert!(result.is_ok());
     Ok(())
 }
 

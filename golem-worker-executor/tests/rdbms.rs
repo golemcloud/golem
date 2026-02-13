@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::check;
+use pretty_assertions::assert_eq;
 use golem_common::base_model::agent::AgentId;
 use golem_common::model::agent::DataValue;
 use golem_common::model::component::ComponentId;
@@ -325,7 +325,7 @@ async fn rdbms_postgres_crud(
     let worker_id = workers_1[0].0.clone();
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     let worker_ids_1: Vec<WorkerId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
     let worker_ids_3: Vec<WorkerId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
@@ -424,7 +424,7 @@ async fn rdbms_postgres_idempotency(
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    check!(result2 == result1);
+    assert_eq!(result2, result1);
 
     let select_tests = postgres_select_statements(table_name, expected_values);
 
@@ -452,7 +452,7 @@ async fn rdbms_postgres_idempotency(
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    check!(result2 == result1);
+    assert_eq!(result2, result1);
 
     let delete =
         StatementTest::execute_test("DELETE FROM test_users_idem".to_string(), vec![], None);
@@ -484,7 +484,7 @@ async fn rdbms_postgres_idempotency(
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    check!(result2 == result1);
+    assert_eq!(result2, result1);
 
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -507,7 +507,7 @@ async fn rdbms_postgres_idempotency(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     Ok(())
 }
@@ -611,7 +611,7 @@ async fn postgres_transaction_recovery_test(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     let worker_ids: Vec<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
@@ -647,7 +647,7 @@ async fn postgres_transaction_recovery_test(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     Ok(())
 }
@@ -1001,7 +1001,7 @@ async fn rdbms_mysql_crud(
     let worker_id = workers_1[0].0.clone();
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     let worker_ids_1: Vec<WorkerId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
     let worker_ids_3: Vec<WorkerId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
@@ -1100,7 +1100,7 @@ async fn rdbms_mysql_idempotency(
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    check!(result2 == result1);
+    assert_eq!(result2, result1);
 
     let select_tests = mysql_select_statements(table_name, expected_values);
     let test = RdbmsTest::new(select_tests.clone(), None);
@@ -1124,7 +1124,7 @@ async fn rdbms_mysql_idempotency(
         test.clone(),
     )
     .await?;
-    check!(result2 == result1);
+    assert_eq!(result2, result1);
 
     let delete =
         StatementTest::execute_test("DELETE FROM test_users_idem".to_string(), vec![], None);
@@ -1156,7 +1156,7 @@ async fn rdbms_mysql_idempotency(
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    check!(result2 == result1);
+    assert_eq!(result2, result1);
 
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -1179,7 +1179,7 @@ async fn rdbms_mysql_idempotency(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     Ok(())
 }
@@ -1278,7 +1278,7 @@ async fn mysql_transaction_recovery_test(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     let worker_ids: Vec<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
@@ -1314,7 +1314,7 @@ async fn mysql_transaction_recovery_test(
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
+    assert!(oplog_json.is_ok());
 
     Ok(())
 }
@@ -1619,7 +1619,7 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
 
     let error = get_test_result_error(result1);
 
-    check!(error.contains("There was a problem to create 'golem_transactions' table"));
+    assert!(error.contains("There was a problem to create 'golem_transactions' table"));
 
     Ok(())
 }
@@ -1770,7 +1770,7 @@ fn check_test_result(worker_id: &WorkerId, result: DataValue, test: RdbmsTest) {
                         "result {fn_name} for worker {worker_id}: expected String, got {other:?}"
                     ),
                 };
-                check!(
+                assert!(
                     !result_str.is_empty(),
                     "result {fn_name} for worker {worker_id} is non-empty"
                 );
@@ -1778,21 +1778,18 @@ fn check_test_result(worker_id: &WorkerId, result: DataValue, test: RdbmsTest) {
         }
         Value::Result(Ok(None)) => {
             if test.has_expected() {
-                check!(
-                    false,
+                panic!(
                     "result {fn_name} for worker {worker_id} is Ok(None) but expected a value"
                 );
             }
         }
         Value::Result(Err(err)) => {
-            check!(
-                false,
+            panic!(
                 "result {fn_name} for worker {worker_id} is Err: {err:?}"
             );
         }
         other => {
-            check!(
-                false,
+            panic!(
                 "result {fn_name} for worker {worker_id} unexpected: {other:?}"
             );
         }
@@ -1879,8 +1876,9 @@ async fn workers_interrupt_test(
     }
 
     for (worker_id, status) in workers_results {
-        check!(
-            status == WorkerStatus::Idle,
+        assert_eq!(
+            status,
+            WorkerStatus::Idle,
             "status for worker {worker_id} is Idle"
         );
     }
