@@ -27,8 +27,7 @@ use openapiv3::{
     ReferenceOr, RequestBody, Response, Schema, SchemaData, SchemaKind, SecurityScheme, StatusCode,
     StringFormat, StringType, Type, VariantOrUnknownOrEmpty,
 };
-use std::collections::{BTreeMap, HashMap};
-use std::env::var;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
@@ -237,29 +236,30 @@ fn get_full_path_and_variables<'a>(
     let mut input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> = Vec::new();
 
     // constructor params is in the order of the original agent constructor
-    let constructor_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> = constructor_parameter
-        .map(|params| {
-            params
-                .iter()
-                .filter_map(|p| match p {
-                    ConstructorParameter::Path {
-                        parameter_type,
-                        path_segment_index
-                    } => Some((path_segment_index, parameter_type)),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let constructor_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> =
+        constructor_parameter
+            .map(|params| {
+                params
+                    .iter()
+                    .filter_map(|p| match p {
+                        ConstructorParameter::Path {
+                            parameter_type,
+                            path_segment_index,
+                        } => Some((path_segment_index, parameter_type)),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
     // method params is in the order of the original agent method signature,
-    let method_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)>= method_params
+    let method_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> = method_params
         .map(|params| {
             params
                 .iter()
                 .filter_map(|p| match p {
                     MethodParameter::Path {
                         parameter_type,
-                        path_segment_index
+                        path_segment_index,
                     } => Some((path_segment_index, parameter_type)),
                     _ => None,
                 })
@@ -287,9 +287,14 @@ fn get_full_path_and_variables<'a>(
 
     agent_input_params.extend(agent_method_input_params);
 
-    let with_names:  Vec<(&'a str, &'a SafeIndex, &'a PathSegmentType)> = agent_input_params.iter().zip(
-        input_path_variable_types.iter().map(|(index, var_type)| (index, var_type))
-    )    .map(|(param, (index, var_type))| (param.name.as_str(), *index, *var_type))
+    let with_names: Vec<(&'a str, &'a SafeIndex, &'a PathSegmentType)> = agent_input_params
+        .iter()
+        .zip(
+            input_path_variable_types
+                .iter()
+                .map(|(index, var_type)| (index, var_type)),
+        )
+        .map(|(param, (index, var_type))| (param.name.as_str(), *index, *var_type))
         .collect();
 
     let mut path_params_and_types: Vec<(&'a str, &'a PathSegmentType)> = Vec::new();
@@ -303,9 +308,10 @@ fn get_full_path_and_variables<'a>(
             }
 
             PathSegment::Variable | PathSegment::CatchAll => {
-                let (name, _, var_type) = with_names.iter().find(
-                    |(_, index, _)| *index == &path_variable_index,
-                ).expect("Failed to find path variable index in agent parameters");
+                let (name, _, var_type) = with_names
+                    .iter()
+                    .find(|(_, index, _)| *index == &path_variable_index)
+                    .expect("Failed to find path variable index in agent parameters");
 
                 path_segment_string.push(format!("{{{}}}", name));
                 path_params_and_types.push((name, *var_type));

@@ -21,7 +21,7 @@ pub struct OpenApiHandler;
 impl OpenApiHandler {
     pub async fn generate_spec<'a>(
         spec_details: &[(&'a AgentType, &'a RichCompiledRoute)],
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<HttpApiOpenApiSpec, String> {
         let routes: Vec<_> = spec_details
             .iter()
             .map(|(agent_type, rich_route)| RichCompiledRouteWithAgentType {
@@ -30,8 +30,6 @@ impl OpenApiHandler {
             })
             .collect();
 
-        let spec = HttpApiOpenApiSpec::from_routes(&routes)?;
-
-        serde_json::to_value(spec.0).map_err(|err| format!("Failed to serialize OpenAPI spec: {err}"))
+        HttpApiOpenApiSpec::from_routes(&routes)
     }
 }

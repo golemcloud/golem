@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::custom_api::openapi::HttpApiOpenApiSpec;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::BinarySource;
@@ -106,7 +107,7 @@ pub enum ResponseBody {
     NoBody,
     ComponentModelJsonBody { body: golem_wasm::ValueAndType },
     UnstructuredBinaryBody { body: BinarySource },
-    Json { body: serde_json::Value },
+    OpenApiSchema { body: HttpApiOpenApiSpec },
 }
 
 impl fmt::Debug for ResponseBody {
@@ -118,9 +119,10 @@ impl fmt::Debug for ResponseBody {
                 .field("body", body)
                 .finish(),
             ResponseBody::UnstructuredBinaryBody { .. } => f.write_str("UnstructuredBinaryBody"),
-            ResponseBody::Json { body } => {
-                f.debug_struct("Json").field("body", body).finish()
-            }
+            ResponseBody::OpenApiSchema { body } => f
+                .debug_struct("OpenApiSchema")
+                .field("body", &body.0)
+                .finish(),
         }
     }
 }

@@ -147,7 +147,7 @@ impl RequestHandler {
                             Ok(value) => Ok(RouteExecutionResult {
                                 status: StatusCode::OK,
                                 headers: HashMap::new(),
-                                body: ResponseBody::Json { body: value },
+                                body: ResponseBody::OpenApiSchema { body: value },
                             }),
                             Err(e) => {
                                 Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: e })
@@ -195,6 +195,13 @@ fn route_execution_result_to_response(
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
 
-        ResponseBody::PlainText { body } => Ok(response_builder.body(body)),
+        ResponseBody::OpenApiSchema { body } => {
+            let body_json = serde_json::to_value(&body.0)
+                .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
+
+            let body = poem::Body::from_json(body_json).map_err(anyhow::Error::from)?;
+
+            Ok(response_builder.body(body))
+        }
     }
 }

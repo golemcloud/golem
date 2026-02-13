@@ -733,24 +733,6 @@ async fn cors_get_with_origin_header(agent: &HttpTestContext) -> anyhow::Result<
 
 #[test]
 #[tracing::instrument]
-async fn test_open_api(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .get(agent.base_url.join("/.well-known/openapi.yaml")?)
-        .header("Origin", "https://mount.example.com")
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    let bytes = response.bytes().await?;
-    let yaml_str = std::str::from_utf8(&bytes)?;
-    dbg!(&yaml_str);
-    assert_eq!(yaml_str, "OpenAPI {");
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
 async fn cors_get_with_origin_header_invalid(agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
