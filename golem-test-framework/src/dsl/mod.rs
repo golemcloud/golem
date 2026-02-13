@@ -304,7 +304,11 @@ pub trait TestDsl {
         let entries = self.get_oplog(worker_id, OplogIndex::INITIAL).await?;
 
         for entry in entries {
-            debug_render_oplog_entry(&entry.entry);
+            debug!(
+                "#{}:\n{}",
+                entry.oplog_index,
+                debug_render_oplog_entry(&entry.entry)
+            );
         }
 
         Ok(())

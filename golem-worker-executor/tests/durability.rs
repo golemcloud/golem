@@ -19,7 +19,7 @@ use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::{stream, StreamExt};
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicSnapshotData};
 use golem_common::model::WorkerId;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
@@ -611,5 +611,249 @@ async fn automatic_snapshot_periodic(
         snapshot_count <= SNAPSHOT_TEST_INVOCATIONS,
         "Expected at most {SNAPSHOT_TEST_INVOCATIONS} snapshots, got {snapshot_count}"
     );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ts_default_json_snapshot_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_constructor_parameter_echo",
+        )
+        .store()
+        .await?;
+    let worker_id = WorkerId {
+        component_id: component.id,
+        worker_name: "snapshot-counter-agent(\"ts-recovery\")".to_string(),
+    };
+
+    for _ in 0..5 {
+        executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
+                vec![],
+            )
+            .await??;
+    }
+
+    let result_before = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{get}",
+            vec![],
+        )
+        .await??;
+
+    assert_eq!(
+        result_before,
+        vec![Value::F64(5.0)],
+        "Counter should be 5 after 5 increments"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshots: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(params) => Some(params.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !snapshots.is_empty(),
+        "Expected at least one snapshot before restart, got 0"
+    );
+
+    for (i, snapshot) in snapshots.iter().enumerate() {
+        match &snapshot.data {
+            PublicSnapshotData::Json(json_data) => {
+                let state = json_data
+                    .data
+                    .get("state")
+                    .unwrap_or_else(|| panic!("Snapshot {i} JSON missing 'state' field"));
+                assert!(
+                    state.get("count").is_some(),
+                    "Snapshot {i} JSON state missing 'count' field"
+                );
+                let count = state["count"].as_f64().unwrap_or_else(|| {
+                    panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
+                });
+                assert!(
+                    count >= 1.0 && count <= 5.0,
+                    "Snapshot {i} count should be between 1 and 5, got {count}"
+                );
+            }
+            PublicSnapshotData::Raw(raw) => {
+                panic!(
+                    "Expected JSON snapshot but got Raw with mime_type '{}'",
+                    raw.mime_type
+                );
+            }
+        }
+    }
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result_after = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{get}",
+            vec![],
+        )
+        .await??;
+
+    assert_eq!(
+        result_before, result_after,
+        "TS agent state should be preserved across restart via default JSON snapshot recovery"
+    );
+
+    let increment_after = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
+            vec![],
+        )
+        .await??;
+
+    assert_eq!(
+        increment_after,
+        vec![Value::F64(6.0)],
+        "Counter should continue from 6 after snapshot recovery"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_constructor_parameter_echo",
+        )
+        .store()
+        .await?;
+    let worker_id = WorkerId {
+        component_id: component.id,
+        worker_name: "snapshot-counter-agent(\"ts-multi-restart\")".to_string(),
+    };
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
+                vec![],
+            )
+            .await??;
+    }
+
+    let oplog1 = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshots1: Vec<_> = oplog1
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(params) => Some(params.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !snapshots1.is_empty(),
+        "Expected at least one snapshot after first round of increments"
+    );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
+                vec![],
+            )
+            .await??;
+    }
+
+    let oplog2 = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshots2: Vec<_> = oplog2
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(params) => Some(params.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        snapshots2.len() > snapshots1.len(),
+        "Expected more snapshots after second round of increments"
+    );
+
+    for (i, snapshot) in snapshots2.iter().enumerate() {
+        match &snapshot.data {
+            PublicSnapshotData::Json(json_data) => {
+                let state = json_data
+                    .data
+                    .get("state")
+                    .unwrap_or_else(|| panic!("Snapshot {i} JSON missing 'state' field"));
+                assert!(
+                    state.get("count").is_some(),
+                    "Snapshot {i} JSON state missing 'count' field"
+                );
+                let count = state["count"].as_f64().unwrap_or_else(|| {
+                    panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
+                });
+                assert!(
+                    count >= 1.0 && count <= 6.0,
+                    "Snapshot {i} count should be between 1 and 6, got {count}"
+                );
+            }
+            PublicSnapshotData::Raw(raw) => {
+                panic!(
+                    "Expected JSON snapshot but got Raw with mime_type '{}'",
+                    raw.mime_type
+                );
+            }
+        }
+    }
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{get}",
+            vec![],
+        )
+        .await??;
+
+    assert_eq!(
+        result,
+        vec![Value::F64(6.0)],
+        "Counter should be 6 after two rounds of 3 increments across restarts"
+    );
+
+    drop(executor);
     Ok(())
 }
