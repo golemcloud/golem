@@ -149,11 +149,11 @@ export class CliReplInterop {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    const state = createAgentStreamState(child, Date.now());
+    const state = createAgentStreamState(child);
     this.agentStreams.set(key, state);
 
-    child.stdout?.on('data', state.onStdout);
-    child.stderr?.on('data', state.onStderr);
+    child.stdout?.pipe(process.stdout);
+    child.stderr?.pipe(process.stderr);
 
     child.once('error', () => {
       void this.stopAgentStreamByKey(key);
@@ -238,40 +238,12 @@ type CommandHook = {
 
 type AgentStreamState = {
   stop: () => void;
-  onStdout: (chunk: Buffer) => void;
-  onStderr: (chunk: Buffer) => void;
 };
 
-function createAgentStreamState(
-  child: ChildProcessWithoutNullStreams,
-  invokeStartedAtMs: number,
-): AgentStreamState {
-  let stdoutBuffer = '';
-  let stderrBuffer = '';
-
-  const writeStdoutLine = (line: string) => {
-    process.stdout.write(`${pc.green('|')} ${line}\n`);
-  };
-
-  const writeStderrLine = (line: string) => {
-    process.stderr.write(`${pc.red('|')} ${line}\n`);
-  };
-
-  const onStdout = (chunk: Buffer) => {
-    stdoutBuffer = appendAndWriteLines(stdoutBuffer, chunk, (line) =>
-      filterStdoutLine(line, invokeStartedAtMs, writeStdoutLine),
-    );
-  };
-
-  const onStderr = (chunk: Buffer) => {
-    stderrBuffer = appendAndWriteLines(stderrBuffer, chunk, (line) =>
-      writeStderrLine(line),
-    );
-  };
-
+function createAgentStreamState(child: ChildProcessWithoutNullStreams): AgentStreamState {
   const stop = () => {
-    child.stdout?.off('data', onStdout);
-    child.stderr?.off('data', onStderr);
+    child.stdout?.unpipe(process.stdout);
+    child.stderr?.unpipe(process.stderr);
     child.removeAllListeners('error');
     child.removeAllListeners('exit');
     if (child.exitCode === null && !child.killed) {
@@ -279,28 +251,7 @@ function createAgentStreamState(
     }
   };
 
-  return { stop, onStdout, onStderr };
-}
-
-function appendAndWriteLines(
-  buffer: string,
-  chunk: Buffer,
-  writeLine: (line: string) => void,
-): string {
-  buffer += chunk.toString();
-  const parts = buffer.split('\n');
-  const remainder = parts.pop() ?? '';
-
-  for (const part of parts) {
-    const line = part.endsWith('\r') ? part.slice(0, -1) : part;
-    if (line.length > 0) {
-      writeLine(line);
-    } else {
-      writeLine('');
-    }
-  }
-
-  return remainder;
+  return { stop };
 }
 
 function getAgentStreamKey(request: base.AgentInvocationRequest): string {
@@ -327,28 +278,6 @@ function writeStreamSeparator() {
   const width = process.stdout.isTTY ? process.stdout.columns : 80;
   if (!width || width <= 0) return;
   process.stdout.write(pc.dim('~'.repeat(width)) + '\n');
-}
-
-function filterStdoutLine(
-  line: string,
-  invokeStartedAtMs: number,
-  writeLine: (line: string) => void,
-) {
-  if (line.startsWith('Selected app:')) return;
-  if (line.startsWith('Connecting to agent')) return;
-
-  if (line.startsWith('[')) {
-    const endBracket = line.indexOf(']');
-    if (endBracket > 1) {
-      const timestampText = line.slice(1, endBracket);
-      const timestamp = Date.parse(timestampText);
-      if (!Number.isNaN(timestamp) && timestamp < invokeStartedAtMs - 1000) {
-        return;
-      }
-    }
-  }
-
-  writeLine(line);
 }
 
 const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
