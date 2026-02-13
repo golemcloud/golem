@@ -5861,7 +5861,6 @@ name = "integration-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert2",
  "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",

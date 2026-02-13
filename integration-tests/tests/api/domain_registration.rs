@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateDomainRegistrationError,
     RegistryServiceGetDomainRegistrationError,
     RegistryServiceListEnvironmentDomainRegistrationsError,
 };
+use pretty_assertions::assert_eq;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
@@ -44,20 +44,20 @@ async fn register_and_fetch_domain(deps: &EnvBasedTestDependencies) -> anyhow::R
         )
         .await?;
 
-    assert!(domain_registration.domain == domain);
+    assert_eq!(domain_registration.domain, domain);
 
     {
         let fetched_domain_registration = client
             .get_domain_registration(&domain_registration.id.0)
             .await?;
-        assert!(fetched_domain_registration == domain_registration);
+        assert_eq!(fetched_domain_registration, domain_registration);
     }
 
     {
         let result = client
             .list_environment_domain_registrations(&env.id.0)
             .await?;
-        assert!(result.values == vec![domain_registration]);
+        assert_eq!(result.values, vec![domain_registration]);
     }
 
     Ok(())
@@ -84,11 +84,12 @@ async fn delete_domain(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 
     {
         let result = client.get_domain_registration(&domain.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetDomainRegistrationError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
@@ -122,22 +123,24 @@ async fn other_users_cannot_see_domain(deps: &EnvBasedTestDependencies) -> anyho
 
     {
         let result = client_2.get_domain_registration(&domain.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetDomainRegistrationError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = client_2
             .list_environment_domain_registrations(&env.id.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceListEnvironmentDomainRegistrationsError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -175,11 +178,12 @@ async fn registering_domains_twice_fails(deps: &EnvBasedTestDependencies) -> any
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateDomainRegistrationError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -222,7 +226,7 @@ async fn domain_can_be_reused_after_deletion(
         )
         .await?;
 
-    assert!(second_domain_registration.domain == domain);
+    assert_eq!(second_domain_registration.domain, domain);
 
     Ok(())
 }

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
 };
+use pretty_assertions::assert_eq;
 use golem_common::model::Empty;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
@@ -59,7 +59,7 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
     // check user can fetch plugin
     {
         let fetched_plugin = client.get_plugin_by_id(&plugin.id.0).await?;
-        assert!(fetched_plugin == plugin);
+        assert_eq!(fetched_plugin, plugin);
     }
 
     // check other user cannot fetch plugin
@@ -67,11 +67,12 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
         let user_2 = deps.user().await?;
         let client_2 = user_2.registry_service_client().await;
         let result = client_2.get_plugin_by_id(&plugin.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetPluginByIdError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // delete plugin
@@ -80,11 +81,12 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
     // fetching plugin after deletion fails with 404
     {
         let result = client.get_plugin_by_id(&plugin.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetPluginByIdError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -142,7 +144,7 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             .into_iter()
             .map(|p| p.id)
             .collect::<HashSet<_>>();
-        assert!(plugin_ids == HashSet::from_iter(vec![app_plugin.id, library_plugin.id]));
+        assert_eq!(plugin_ids, HashSet::from_iter(vec![app_plugin.id, library_plugin.id]));
     }
 
     Ok(())
@@ -180,11 +182,12 @@ async fn fails_with_bad_request_if_user_creates_oplog_processor_from_invalid_com
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreatePluginError::Error400(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -236,11 +239,12 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreatePluginError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -276,11 +280,12 @@ async fn fails_with_bad_request_when_creating_plugin_if_component_user_does_not_
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreatePluginError::Error400(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }

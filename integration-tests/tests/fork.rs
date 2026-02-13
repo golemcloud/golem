@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::assert;
+
 use axum::extract::Path;
 use axum::routing::get;
 use axum::{Json, Router};

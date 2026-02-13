@@ -359,8 +359,17 @@ impl FileSystemComponentWriter {
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
         let revision = self.get_latest_revision(component_id).await;
+        self.get_component_metadata_at_revision(component_id, revision)
+            .await
+    }
+
+    pub async fn get_component_metadata_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto> {
         let metadata = self.load_metadata(component_id, revision).await?;
-        let component: golem_common::model::component::ComponentDto = metadata.into();
+        let component: ComponentDto = metadata.into();
         Ok(component)
     }
 }

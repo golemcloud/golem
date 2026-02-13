@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCurrentLoginTokenError, RegistryServiceGetAccountError,
 };
+use pretty_assertions::assert_eq;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
 
@@ -31,7 +31,7 @@ async fn can_get_information_about_own_token(
 
     {
         let token_info = client.current_login_token().await?;
-        assert!(token_info.account_id == user.account_id)
+        assert_eq!(token_info.account_id, user.account_id)
     }
 
     Ok(())
@@ -50,12 +50,12 @@ async fn deleting_account_revokes_tokens(deps: &EnvBasedTestDependencies) -> any
 
     {
         let result = client.current_login_token().await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceCurrentLoginTokenError::Error401(_))) = result);
+        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceCurrentLoginTokenError::Error401(_)))));
     }
 
     {
         let result = client.get_account(&user.account_id.0).await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceGetAccountError::Error401(_))) = result);
+        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceGetAccountError::Error401(_)))));
     }
 
     Ok(())

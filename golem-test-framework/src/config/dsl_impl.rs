@@ -182,6 +182,18 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(component)
     }
 
+    async fn get_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto> {
+        let client = self.deps.registry_service().client(&self.token).await;
+        let component = client
+            .get_component_revision(&component_id.0, revision.get())
+            .await?;
+        Ok(component)
+    }
+
     async fn update_component_with(
         &self,
         component_id: &ComponentId,

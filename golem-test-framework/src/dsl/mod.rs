@@ -115,6 +115,12 @@ pub trait TestDsl {
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto>;
 
+    async fn get_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto>;
+
     async fn update_component(
         &self,
         component_id: &ComponentId,
@@ -343,7 +349,10 @@ pub trait TestDsl {
             .await?;
         match invoke_result {
             Ok(mut values) if values.len() == 1 => {
-                let component = self.get_latest_component_revision(component_id).await?;
+                let worker_metadata = self.get_worker_metadata(&worker_id).await?;
+                let component = self
+                    .get_component_at_revision(component_id, worker_metadata.component_revision)
+                    .await?;
                 let agent_type = component
                     .metadata
                     .find_agent_type_by_wrapper_name(&agent_id.agent_type)
@@ -353,7 +362,13 @@ pub trait TestDsl {
                     .methods
                     .iter()
                     .find(|method| method.name == method_name)
-                    .ok_or_else(|| anyhow!("Agent method not found: {}", method_name))?;
+                    .ok_or_else(|| {
+                        debug!("Agent method not found: {}", method_name);
+                        debug!("In agent type: {:#?}", agent_type);
+                        debug!("Got for worker-id: {worker_id} with component revision {}", worker_metadata.component_revision);
+
+                        anyhow!("Agent method not found: {}", method_name)
+                    })?;
 
                 let result = match values.remove(0) {
                     Value::Result(Ok(Some(data_value_value))) => {
@@ -450,7 +465,11 @@ pub trait TestDsl {
         let entries = self.get_oplog(worker_id, OplogIndex::INITIAL).await?;
 
         for entry in entries {
-            debug_render_oplog_entry(&entry.entry);
+            debug!(
+                "#{}:\n{}",
+                entry.oplog_index,
+                debug_render_oplog_entry(&entry.entry)
+            );
         }
 
         Ok(())

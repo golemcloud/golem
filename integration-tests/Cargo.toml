@@ -21,7 +21,6 @@ golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
-assert2 = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }

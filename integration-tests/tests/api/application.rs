@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateApplicationError,
     RegistryServiceGetAccountApplicationError, RegistryServiceListAccountApplicationsError,
     RegistryServiceUpdateApplicationError,
 };
 use golem_common::model::application::{ApplicationCreation, ApplicationUpdate};
+use pretty_assertions::assert_eq;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use std::collections::HashSet;
@@ -38,7 +38,7 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
         let result = client
             .get_account_application(&user.account_id.0, &app_1.name.0)
             .await?;
-        assert!(result == app_1);
+        assert_eq!(result, app_1);
     }
 
     {
@@ -47,11 +47,11 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
             .await?
             .values;
 
-        assert!(apps.len() == 2);
+        assert_eq!(apps.len(), 2);
 
         let app_ids = apps.into_iter().map(|a| a.id).collect::<HashSet<_>>();
 
-        assert!(app_ids == HashSet::from_iter([app_1.id, app_2.id]));
+        assert_eq!(app_ids, HashSet::from_iter([app_1.id, app_2.id]));
     }
 
     client
@@ -62,11 +62,12 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
         let result = client
             .get_account_application(&user.account_id.0, &app_2.name.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetAccountApplicationError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
@@ -75,11 +76,11 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
             .await?
             .values;
 
-        assert!(apps.len() == 1);
+        assert_eq!(apps.len(), 1);
 
         let app_ids = apps.into_iter().map(|a| a.id).collect::<Vec<_>>();
 
-        assert!(app_ids == vec![app_1.id]);
+        assert_eq!(app_ids, vec![app_1.id]);
     }
 
     Ok(())
@@ -99,12 +100,12 @@ async fn other_users_cannot_get_applications(
         let result = client
             .get_account_application(&user_1.account_id.0, &app.name.0)
             .await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceGetAccountApplicationError::Error404(_))) = result);
+        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceGetAccountApplicationError::Error404(_)))));
     }
 
     {
         let result = client.list_account_applications(&user_1.account_id.0).await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceListAccountApplicationsError::Error403(_))) = result);
+        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceListAccountApplicationsError::Error403(_)))));
     }
 
     Ok(())
@@ -132,18 +133,19 @@ async fn deleting_account_hides_applications(
         let result = admin_client
             .list_account_applications(&user.account_id.0)
             .await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceListAccountApplicationsError::Error403(_))) = result);
+        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceListAccountApplicationsError::Error403(_)))));
     }
 
     {
         let result = admin_client
             .get_account_application(&user.account_id.0, &app.name.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetAccountApplicationError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
     Ok(())
 }
@@ -169,11 +171,12 @@ async fn cannot_create_two_applications_with_same_name(
                 },
             )
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceCreateApplicationError::Error409(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // try to rename environment to conflicting name
@@ -188,11 +191,12 @@ async fn cannot_create_two_applications_with_same_name(
             )
             .await;
 
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceUpdateApplicationError::Error409(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // delete the environment, now creating a new one will succeed

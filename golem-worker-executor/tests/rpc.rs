@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use pretty_assertions::assert_eq;
 use golem_common::base_model::agent::ElementValue;
 use golem_common::model::agent::{AgentId, AgentTypeName, DataValue, ElementValues};
 use golem_common::model::component_metadata::{
@@ -29,6 +28,7 @@ use golem_wasm::{FromValue, IntoValueAndType, UuidRecord, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
 use test_r::{inherit_test_dep, test};
@@ -132,11 +132,15 @@ async fn rust_rpc_missing_target(
             &component.id,
             &parent_agent_id,
             "call_ts_agent",
-            data_value!(),
+            data_value!("example"),
         )
-        .await?;
+        .await;
 
-    // TODO: this test case is currently not working as expected; once that is fixed we should assert on a user-friendly failure message
+    assert!(call_result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("Agent type not registered"));
 
     Ok(())
 }

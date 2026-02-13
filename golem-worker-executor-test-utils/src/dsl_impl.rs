@@ -174,6 +174,17 @@ impl TestDsl for TestWorkerExecutor {
             .await
     }
 
+    async fn get_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto> {
+        self.deps
+            .component_writer
+            .get_component_metadata_at_revision(component_id, revision)
+            .await
+    }
+
     async fn update_component_with(
         &self,
         component_id: &ComponentId,

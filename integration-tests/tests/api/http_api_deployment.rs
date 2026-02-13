@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateHttpApiDeploymentError,
     RegistryServiceDeleteHttpApiDeploymentError, RegistryServiceGetHttpApiDeploymentError,
@@ -24,6 +23,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation, HttpApiDeploymentUpdate,
 };
+use pretty_assertions::assert_eq;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::collections::BTreeMap;
@@ -54,11 +54,12 @@ async fn create_http_api_deployment_for_nonexitant_domain(
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateHttpApiDeploymentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -85,27 +86,27 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    assert!(http_api_deployment.domain == http_api_deployment_creation.domain);
+    assert_eq!(http_api_deployment.domain, http_api_deployment_creation.domain);
 
     {
         let fetched_http_api_deployment = client
             .get_http_api_deployment(&http_api_deployment.id.0)
             .await?;
-        assert!(fetched_http_api_deployment == http_api_deployment);
+        assert_eq!(fetched_http_api_deployment, http_api_deployment);
     }
 
     {
         let fetched_http_api_deployment = client
             .get_http_api_deployment_in_environment(&env.id.0, &http_api_deployment.domain.0)
             .await?;
-        assert!(fetched_http_api_deployment == http_api_deployment);
+        assert_eq!(fetched_http_api_deployment, http_api_deployment);
     }
 
     {
         let result = client
             .list_http_api_deployments_in_environment(&env.id.0)
             .await?;
-        assert!(result.values == vec![http_api_deployment]);
+        assert_eq!(result.values, vec![http_api_deployment]);
     }
 
     Ok(())
@@ -152,12 +153,13 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         .update_http_api_deployment(&http_api_deployment.id.0, &http_api_deployment_update)
         .await?;
 
-    assert!(updated_http_api_deployment.id == http_api_deployment.id);
-    assert!(updated_http_api_deployment.revision == http_api_deployment.revision.next()?);
-    assert!(
-        updated_http_api_deployment.webhooks_url == http_api_deployment_update.webhook_url.unwrap()
+    assert_eq!(updated_http_api_deployment.id, http_api_deployment.id);
+    assert_eq!(updated_http_api_deployment.revision, http_api_deployment.revision.next()?);
+    assert_eq!(
+        updated_http_api_deployment.webhooks_url,
+        http_api_deployment_update.webhook_url.unwrap()
     );
-    assert!(updated_http_api_deployment.agents == http_api_deployment_update.agents.unwrap());
+    assert_eq!(updated_http_api_deployment.agents, http_api_deployment_update.agents.unwrap());
 
     {
         let fetched_http_api_deployment = client
@@ -166,7 +168,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
                 http_api_deployment.revision.into(),
             )
             .await?;
-        assert!(fetched_http_api_deployment == http_api_deployment);
+        assert_eq!(fetched_http_api_deployment, http_api_deployment);
     }
 
     {
@@ -176,28 +178,28 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
                 updated_http_api_deployment.revision.into(),
             )
             .await?;
-        assert!(fetched_http_api_deployment == updated_http_api_deployment);
+        assert_eq!(fetched_http_api_deployment, updated_http_api_deployment);
     }
 
     {
         let fetched_http_api_deployment = client
             .get_http_api_deployment(&http_api_deployment.id.0)
             .await?;
-        assert!(fetched_http_api_deployment == updated_http_api_deployment);
+        assert_eq!(fetched_http_api_deployment, updated_http_api_deployment);
     }
 
     {
         let fetched_http_api_deployment = client
             .get_http_api_deployment_in_environment(&env.id.0, &http_api_deployment.domain.0)
             .await?;
-        assert!(fetched_http_api_deployment == updated_http_api_deployment);
+        assert_eq!(fetched_http_api_deployment, updated_http_api_deployment);
     }
 
     {
         let result = client
             .list_http_api_deployments_in_environment(&env.id.0)
             .await?;
-        assert!(result.values == vec![updated_http_api_deployment]);
+        assert_eq!(result.values, vec![updated_http_api_deployment]);
     }
 
     Ok(())
@@ -236,29 +238,31 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         let result = client
             .get_http_api_deployment(&http_api_deployment.id.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetHttpApiDeploymentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = client
             .get_http_api_deployment_in_environment(&env.id.0, &http_api_deployment.domain.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetHttpApiDeploymentInEnvironmentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = client
             .list_http_api_deployments_in_environment(&env.id.0)
             .await?;
-        assert!(result.values == vec![]);
+        assert_eq!(result.values, vec![]);
     }
 
     Ok(())
@@ -292,11 +296,12 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateHttpApiDeploymentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -344,11 +349,12 @@ async fn updates_with_wrong_revision_number_are_rejected(
         .update_http_api_deployment(&http_api_deployment.id.0, &http_api_deployment_update)
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceUpdateHttpApiDeploymentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -386,8 +392,8 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    assert!(http_api_deployment_2.id == http_api_deployment_1.id);
-    assert!(http_api_deployment_2.revision == http_api_deployment_1.revision.next()?.next()?);
+    assert_eq!(http_api_deployment_2.id, http_api_deployment_1.id);
+    assert_eq!(http_api_deployment_2.revision, http_api_deployment_1.revision.next()?.next()?);
 
     client
         .delete_http_api_deployment(
@@ -432,14 +438,14 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
         let fetched_http_api_deployment = client
             .get_http_api_deployment_in_deployment(&env.id.0, deployment.revision.into(), &domain.0)
             .await?;
-        assert!(fetched_http_api_deployment == http_api_deployment);
+        assert_eq!(fetched_http_api_deployment, http_api_deployment);
     }
 
     {
         let fetched_http_api_deployments = client
             .list_http_api_deployments_in_deployment(&env.id.0, deployment.revision.into())
             .await?;
-        assert!(fetched_http_api_deployments.values == vec![http_api_deployment]);
+        assert_eq!(fetched_http_api_deployments.values, vec![http_api_deployment]);
     }
 
     Ok(())
@@ -475,11 +481,12 @@ async fn cannot_access_http_api_deployment_from_another_user(
 
     let result = client_b.get_http_api_deployment(&deployment.id.0).await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceGetHttpApiDeploymentError::Error404(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -550,11 +557,12 @@ async fn delete_with_wrong_revision_is_rejected(
         .delete_http_api_deployment(&deployment.id.0, wrong_revision.into())
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceDeleteHttpApiDeploymentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -589,11 +597,12 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
         .delete_http_api_deployment(&deployment.id.0, deployment.revision.into())
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceDeleteHttpApiDeploymentError::Error404(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
