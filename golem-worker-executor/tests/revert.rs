@@ -291,21 +291,25 @@ async fn revert_auto_update(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .name("it:agent-update")
         .unique()
         .store()
         .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker(&component.id, "revert_auto_update")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
     executor.log_output(&worker_id).await?;
 
     let updated_component = executor
-        .update_component(&component.id, "update-test-v2-11")
+        .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
 
     info!(
@@ -318,8 +322,8 @@ async fn revert_auto_update(
         .await?;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     executor
         .revert(
@@ -331,8 +335,8 @@ async fn revert_auto_update(
         .await?;
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     info!("result: {result1:?}");
     let metadata = executor.get_worker_metadata(&worker_id).await?;
@@ -342,8 +346,8 @@ async fn revert_auto_update(
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0. After the revert, calling f2 again returns a random number.
     // The traces of the update should be gone.
-    assert_eq!(result1[0], 0u64.into_value());
-    assert_ne!(result2[0], 0u64.into_value());
+    assert_eq!(result1, data_value!(0u64));
+    assert_ne!(result2, data_value!(0u64));
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 0));
 

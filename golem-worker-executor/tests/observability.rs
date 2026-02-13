@@ -25,7 +25,7 @@ use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{IntoValueAndType, Value};
+
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -212,16 +212,16 @@ async fn get_oplog_with_api_changing_updates(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .name("it:agent-update")
         .unique()
         .store()
         .await?;
-    let worker_id = executor
-        .start_worker(&component.id, "get_oplog_with_api_changing_updates")
-        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor.start_agent(&component.id, agent_id.clone()).await?;
 
     let updated_component = executor
-        .update_component(&component.id, "update-test-v2")
+        .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
     info!(
         "Updated component to version {}",
@@ -229,20 +229,20 @@ async fn get_oplog_with_api_changing_updates(
     );
 
     executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?;
 
     executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?;
 
     executor
         .auto_update_worker(&worker_id, updated_component.revision)
         .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "f4", data_value!())
+        .await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
@@ -252,11 +252,11 @@ async fn get_oplog_with_api_changing_updates(
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
-    assert_eq!(result[0], Value::U64(11));
+    assert_eq!(result, data_value!(11u64));
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 11);
+    assert_eq!(oplog.len(), 14);
 
     Ok(())
 }
@@ -272,30 +272,30 @@ async fn get_oplog_starting_with_updated_component(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .name("it:agent-update")
         .unique()
         .store()
         .await?;
     let updated_component = executor
-        .update_component(&component.id, "update-test-v2")
+        .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
     info!(
         "Updated component to version {}",
         updated_component.revision
     );
 
-    let worker_id = executor
-        .start_worker(&component.id, "get_oplog_starting_with_updated_component")
-        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "f4", data_value!())
+        .await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
-    assert_eq!(result[0], Value::U64(11));
-    assert_eq!(oplog.len(), 4);
+    assert_eq!(result, data_value!(11u64));
+    assert_eq!(oplog.len(), 10);
 
     Ok(())
 }

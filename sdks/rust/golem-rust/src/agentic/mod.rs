@@ -41,5 +41,6 @@ mod resolved_agent;
 mod schema;
 mod unstructured_binary;
 mod unstructured_text;
+mod principal_serde;
 mod webhook;
 mod wit_utils;

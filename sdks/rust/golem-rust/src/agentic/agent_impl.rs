@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::{agent_registry, get_principal, get_resolved_agent, register_principal};
+use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
@@ -20,10 +21,16 @@ use crate::{
     agentic::{
         with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
     },
-    golem_agentic::exports::golem::agent::guest::{
-        AgentError, AgentType, DataValue, Guest, Principal,
-    },
+    golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
+
+fn serialize_principal(p: &Principal) -> Vec<u8> {
+    serde_json::to_vec(p).expect("Failed to serialize principal to JSON")
+}
+
+fn deserialize_principal(bytes: &[u8]) -> Result<Principal, String> {
+    serde_json::from_slice(bytes).map_err(|e| format!("Failed to deserialize principal: {e}"))
+}
 
 pub struct Component;
 
@@ -110,19 +117,40 @@ impl LoadSnapshotGuest for Component {
 
         let version = bytes[0];
 
-        if version != 1 {
-            return Err(format!("Unsupported snapshot version: {}", version));
-        }
+        let (principal, agent_snapshot) = match version {
+            1 => {
+                let agent_snapshot = bytes[1..].to_vec();
+                let principal = get_principal().unwrap_or(Principal::Anonymous);
+                (principal, agent_snapshot)
+            }
+            2 => {
+                if bytes.len() < 5 {
+                    return Err("Version 2 snapshot too short for principal length".into());
+                }
+                let principal_len =
+                    u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                let principal_start = 5;
+                let principal_end = principal_start + principal_len;
+                if bytes.len() < principal_end {
+                    return Err("Version 2 snapshot too short for principal data".into());
+                }
+                let principal =
+                    deserialize_principal(&bytes[principal_start..principal_end])?;
+                let agent_snapshot = bytes[principal_end..].to_vec();
+                (principal, agent_snapshot)
+            }
+            _ => {
+                return Err(format!("Unsupported snapshot version: {}", version));
+            }
+        };
 
-        let agent_snapshot = bytes[1..].to_vec();
+        register_principal(&principal);
 
         let id = std::env::var("GOLEM_AGENT_ID")
             .expect("GOLEM_AGENT_ID environment variable must be set");
 
         let (agent_type_name, agent_parameters, _) =
             parse_agent_id(&id).map_err(|e| e.to_string())?;
-
-        let principal = get_principal().expect("Failed to get initialized principal");
 
         with_agent_initiator(
             |initiator| async move { initiator.initiate(agent_parameters, principal).await },
@@ -152,12 +180,16 @@ impl SaveSnapshotGuest for Component {
                 .await
                 .expect("Failed to save agent snapshot");
 
-            let total_length = 1 + agent_snapshot.len();
+            let principal = get_principal().unwrap_or(Principal::Anonymous);
+            let principal_bytes = serialize_principal(&principal);
 
+            // Version 2 format: [version=2][principal_len:u32 BE][principal_bytes][agent_snapshot]
+            let total_length = 1 + 4 + principal_bytes.len() + agent_snapshot.len();
             let mut full_snapshot = Vec::with_capacity(total_length);
 
-            full_snapshot.push(1);
-
+            full_snapshot.push(2);
+            full_snapshot.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
+            full_snapshot.extend_from_slice(&principal_bytes);
             full_snapshot.extend_from_slice(&agent_snapshot);
 
             full_snapshot
