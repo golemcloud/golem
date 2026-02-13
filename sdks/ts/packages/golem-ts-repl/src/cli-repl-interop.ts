@@ -139,7 +139,7 @@ export class CliReplInterop {
     }
 
     const parameters = safeJsonStringify(request.parameters);
-    const args = ['agent', 'repl-stream', request.agentTypeName, parameters];
+    const args = ['agent', 'repl-stream', '--logs-only', request.agentTypeName, parameters];
     if (request.phantomId) {
       args.push(request.phantomId);
     }
