@@ -464,7 +464,7 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates the agent client class
     fn generate_ts_class(&self, writer: &mut TsWriter, config_var: &str) -> anyhow::Result<()> {
-        let class_name = self.agent_type.type_name.0.to_upper_camel_case();
+        let class_name = &self.agent_type.type_name.0;
 
         writer.write_doc(&self.agent_type.description);
         writer.begin_export_class(&class_name);
