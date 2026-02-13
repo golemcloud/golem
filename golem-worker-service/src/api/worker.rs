@@ -1295,14 +1295,12 @@ impl WorkerApi {
             })?;
 
         let worker_id =
-            WorkerId::from_worker_name_string(component_id, worker_id).map_err(
-                |error| {
-                    ApiEndpointError::BadRequest(Json(ErrorsBody {
-                        errors: vec![format!("Invalid worker id: {error}")],
-                        cause: None,
-                    }))
-                },
-            )?;
+            WorkerId::from_worker_name_string(component_id, worker_id).map_err(|error| {
+                ApiEndpointError::BadRequest(Json(ErrorsBody {
+                    errors: vec![format!("Invalid worker id: {error}")],
+                    cause: None,
+                }))
+            })?;
         Ok((worker_id, latest_component))
     }
 

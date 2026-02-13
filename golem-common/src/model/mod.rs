@@ -143,7 +143,7 @@ impl WorkerId {
     ) -> Result<WorkerId, String> {
         let id = id.as_ref();
 
-        match crate::model::agent::normalize_agent_id_text(id) {
+        match AgentId::normalize_text(id) {
             Ok(normalized) => {
                 if normalized.len() > Self::WORKER_ID_MAX_LENGTH {
                     return Err(format!(
