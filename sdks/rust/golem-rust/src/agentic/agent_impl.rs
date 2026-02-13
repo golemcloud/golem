@@ -98,6 +98,7 @@ impl LoadSnapshotGuest for Component {
         snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
     ) -> Result<(), String> {
         let bytes = snapshot.data;
+        let is_json = snapshot.mime_type == "application/json";
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
@@ -111,13 +112,15 @@ impl LoadSnapshotGuest for Component {
             return Err("Snapshot is empty".into());
         }
 
-        let version = bytes[0];
-
-        if version != 1 {
-            return Err(format!("Unsupported snapshot version: {}", version));
-        }
-
-        let agent_snapshot = bytes[1..].to_vec();
+        let agent_snapshot = if is_json {
+            bytes
+        } else {
+            let version = bytes[0];
+            if version != 1 {
+                return Err(format!("Unsupported snapshot version: {}", version));
+            }
+            bytes[1..].to_vec()
+        };
 
         let id = std::env::var("GOLEM_AGENT_ID")
             .expect("GOLEM_AGENT_ID environment variable must be set");
@@ -148,24 +151,25 @@ impl SaveSnapshotGuest for Component {
     #[allow(clippy::await_holding_refcell_ref)]
     fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
         with_agent_instance_async(|resolved_agent| async move {
-            let agent_snapshot = resolved_agent
+            let snapshot_data = resolved_agent
                 .agent
                 .borrow()
                 .save_snapshot_base()
                 .await
                 .expect("Failed to save agent snapshot");
 
-            let total_length = 1 + agent_snapshot.len();
-
-            let mut full_snapshot = Vec::with_capacity(total_length);
-
-            full_snapshot.push(1);
-
-            full_snapshot.extend_from_slice(&agent_snapshot);
+            let data = if snapshot_data.mime_type == "application/json" {
+                snapshot_data.data
+            } else {
+                let mut full_snapshot = Vec::with_capacity(1 + snapshot_data.data.len());
+                full_snapshot.push(1);
+                full_snapshot.extend_from_slice(&snapshot_data.data);
+                full_snapshot
+            };
 
             crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                data: full_snapshot,
-                mime_type: "application/octet-stream".to_string(),
+                data,
+                mime_type: snapshot_data.mime_type,
             }
         })
     }

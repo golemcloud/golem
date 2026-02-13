@@ -42,4 +42,5 @@ mod schema;
 mod unstructured_binary;
 mod unstructured_text;
 mod webhook;
+pub mod snapshot_auto;
 mod wit_utils;
