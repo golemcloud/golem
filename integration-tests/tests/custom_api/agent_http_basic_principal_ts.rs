@@ -70,7 +70,7 @@ async fn basic_principal_auto_injection(agent: &HttpTestContext) -> anyhow::Resu
 
     assert_eq!(
         body,
-        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": "1.0" })
+        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": 1.0 })
     );
 
     let response = agent
@@ -78,7 +78,7 @@ async fn basic_principal_auto_injection(agent: &HttpTestContext) -> anyhow::Resu
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agent/echo-principal/foo-value/2")?,
+                .join("/http-agents/test-agent/echo-principal-last/foo-value/2")?,
         )
         .send()
         .await?;
@@ -87,7 +87,7 @@ async fn basic_principal_auto_injection(agent: &HttpTestContext) -> anyhow::Resu
 
     assert_eq!(
         body,
-        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": "2.0" })
+        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": 2.0 })
     );
 
     Ok(())
