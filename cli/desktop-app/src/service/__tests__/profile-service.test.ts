@@ -11,17 +11,16 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
 
-import { ProfileService } from "../profile";
+import { profileService } from "../profile";
 
 const mockedInvoke = invoke as MockedFunction<typeof invoke>;
 
 describe("ProfileService CLI commands", () => {
-  let service: ProfileService;
+  const service = profileService;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockedInvoke.mockResolvedValue("[]");
-    service = new ProfileService();
   });
 
   describe("getProfiles", () => {

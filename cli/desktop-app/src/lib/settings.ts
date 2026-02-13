@@ -182,6 +182,4 @@ export class SettingsService {
   }
 }
 
-export const storeService = new SettingsService();
-// For backward compatibility
-export const settingsService = storeService;
+export const settingsService = new SettingsService();

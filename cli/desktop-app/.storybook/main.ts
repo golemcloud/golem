@@ -31,7 +31,6 @@ const config: StorybookConfig = {
         mocksDir,
         "tauri-plugin-store.ts",
       ),
-      "@tauri-apps/plugin-http": path.resolve(mocksDir, "tauri-plugin-http.ts"),
       "@tauri-apps/plugin-websocket": path.resolve(
         mocksDir,
         "tauri-plugin-websocket.ts",

@@ -10,7 +10,7 @@ import {
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { CreateApplication } from "../index";
+import CreateApplication from "../index";
 
 // Mock dependencies
 const mockNavigate = vi.fn();

@@ -6,19 +6,6 @@ import { Button } from "@/components/ui/button";
 import { canInvokeHttpHandler } from "@/lib/http-handler";
 import { RecursiveParameterInput } from "@/components/invoke/RecursiveParameterInput";
 
-export const nonStringPrimitives = [
-  "S64",
-  "S32",
-  "S16",
-  "S8",
-  "U64",
-  "U32",
-  "U16",
-  "U8",
-  "Bool",
-  "Enum",
-];
-
 export const DynamicForm = ({
   functionDetails,
   onInvoke,

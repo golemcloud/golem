@@ -1,6 +1,6 @@
 import { SettingsLayout } from "@/layouts/settings-layout";
 
-export const SettingsPage = () => {
+const SettingsPage = () => {
   return <SettingsLayout />;
 };
 

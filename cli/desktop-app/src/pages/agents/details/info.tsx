@@ -83,7 +83,7 @@ const UpdateLog: React.FC<{ update: Update }> = ({ update }) => {
   );
 };
 
-export const PluginStatus: React.FC<PluginStatusProps> = ({
+const PluginStatus: React.FC<PluginStatusProps> = ({
   activePlugins,
   componentRevision,
   status,

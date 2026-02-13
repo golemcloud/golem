@@ -3,7 +3,7 @@
  * Clean recursive implementation for comprehensive WIT type support
  */
 
-import { Parameter, Typ } from "@/types/component";
+import { Typ } from "@/types/component";
 
 /**
  * Main conversion function with recursive type handling
@@ -299,11 +299,4 @@ export function convertPayloadToWaveArgs(payload: {
 
 export function convertValuesToWaveArgs(values: unknown[]): string[] {
   return values.map(value => convertBasicValue(value));
-}
-
-export function convertToWaveFormatWithType(
-  value: unknown,
-  parameter?: Parameter,
-): string {
-  return convertValueWithType(value, parameter?.typ);
 }

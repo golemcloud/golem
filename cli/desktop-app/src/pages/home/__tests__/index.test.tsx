@@ -10,7 +10,7 @@ import {
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { Home } from "../index";
+import Home from "../index";
 import { App } from "@/lib/settings";
 
 // Mock dependencies
