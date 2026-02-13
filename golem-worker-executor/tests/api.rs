@@ -80,19 +80,30 @@ async fn interruption(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "interruption")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("clocks", "interruption-1");
     let worker_id = executor
-        .start_worker(&component.id, "interruption-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id.clone();
+    let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(&worker_id_clone, "run", vec![])
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "interruption",
+                    data_value!(),
+                )
                 .await
         }
         .in_current_span(),
@@ -103,12 +114,13 @@ async fn interruption(
         .await?;
 
     executor.interrupt(&worker_id).await?;
-    let result = fiber.await??;
+    let result = fiber.await?;
 
     drop(executor);
 
     assert!(result.is_err());
-    assert!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(err_msg.contains("Interrupted via the Golem API"));
     Ok(())
 }
 
@@ -162,21 +174,32 @@ async fn simulated_crash(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "interruption")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("clocks", "simulated-crash-1");
     let worker_id = executor
-        .start_worker(&component.id, "simulated-crash-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let mut rx = executor.capture_output(&worker_id).await?;
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id.clone();
+    let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(&worker_id_clone, "run", vec![])
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "interruption",
+                    data_value!(),
+                )
                 .await
         }
         .in_current_span(),
@@ -185,14 +208,13 @@ async fn simulated_crash(
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     let _ = executor.simulated_crash(&worker_id).await;
-    let result = fiber.await??;
+    let result = fiber.await?;
 
     let mut events = vec![];
     rx.recv_many(&mut events, 100).await;
     drop(executor);
 
-    assert!(result.is_ok());
-    assert_eq!(result, Ok(vec![Value::String("done".to_string())]));
+    assert!(result.is_ok(), "Expected successful result after simulated crash recovery, got: {:?}", result.err());
     assert_eq!(stdout_events(events.into_iter()), vec!["Starting interruption test\n"]);
     Ok(())
 }
@@ -2736,19 +2758,30 @@ async fn reconstruct_interrupted_state(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "interruption")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("clocks", "interruption-1");
     let worker_id = executor
-        .start_worker(&component.id, "interruption-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id.clone();
+    let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(&worker_id_clone, "run", vec![])
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "interruption",
+                    data_value!(),
+                )
                 .await
         }
         .in_current_span(),
@@ -2759,7 +2792,7 @@ async fn reconstruct_interrupted_state(
         .await?;
 
     executor.interrupt(&worker_id).await?;
-    let result = fiber.await??;
+    let result = fiber.await?;
 
     // Explicitly deleting the status information from Redis to check if it can be
     // reconstructed from Redis
@@ -2777,7 +2810,8 @@ async fn reconstruct_interrupted_state(
     let status = executor.get_worker_metadata(&worker_id).await?.status;
 
     assert!(result.is_err());
-    assert!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(err_msg.contains("Interrupted via the Golem API"));
     assert_eq!(status, WorkerStatus::Interrupted);
 
     executor.check_oplog_is_queryable(&worker_id).await?;

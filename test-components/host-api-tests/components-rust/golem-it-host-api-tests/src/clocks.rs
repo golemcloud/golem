@@ -18,6 +18,7 @@ pub trait Clocks {
 
     fn use_std_time_apis(&self) -> StdTimeApisResult;
     fn sleep_for(&self, seconds: f64) -> f64;
+    fn interruption(&self) -> String;
 }
 
 pub struct ClocksImpl {
@@ -52,5 +53,14 @@ impl Clocks for ClocksImpl {
         sleep(Duration::from_millis((seconds * 1000.0) as u64));
         let elapsed = instant1.elapsed().as_secs_f64();
         elapsed
+    }
+
+    fn interruption(&self) -> String {
+        println!("Starting interruption test");
+        for _ in 0..100 {
+            sleep(Duration::from_millis(100));
+        }
+
+        "done".to_string()
     }
 }
