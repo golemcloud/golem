@@ -14,8 +14,8 @@ use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema, HttpMethod};
 use golem_common::model::agent::{AgentConstructor, DataSchema, NamedElementSchema};
 use golem_service_base::custom_api::{
-    MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
-    SecuritySchemeDetails,
+    ConstructorParameter, MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType,
+    RequestBodySchema, SecuritySchemeDetails,
 };
 use golem_service_base::model::SafeIndex;
 use golem_wasm::analysis::AnalysedType;
@@ -28,6 +28,7 @@ use openapiv3::{
     StringFormat, StringType, Type, VariantOrUnknownOrEmpty,
 };
 use std::collections::{BTreeMap, HashMap};
+use std::env::var;
 use std::sync::Arc;
 
 const GOLEM_DISABLED_EXTENSION: &str = "x-golem-disabled";
@@ -216,6 +217,7 @@ fn get_full_path_and_variables<'a>(
     agent_constructor: &'a AgentConstructor,
     agent_method: Option<&'a AgentMethod>,
     path_segments: &'a [PathSegment],
+    constructor_parameter: Option<&'a Vec<ConstructorParameter>>,
     method_params: Option<&'a Vec<MethodParameter>>,
 ) -> (String, Vec<(&'a str, &'a PathSegmentType)>) {
     if path_segments
@@ -232,82 +234,118 @@ fn get_full_path_and_variables<'a>(
         );
     }
 
-    //
-    let method_path_indices: HashMap<SafeIndex, &'a PathSegmentType> = method_params
+    let mut input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> = Vec::new();
+
+    // constructor params is in the order of the original agent constructor
+    let constructor_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)> = constructor_parameter
+        .map(|params| {
+            params
+                .iter()
+                .filter_map(|p| match p {
+                    ConstructorParameter::Path {
+                        parameter_type,
+                        path_segment_index
+                    } => Some((path_segment_index, parameter_type)),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // method params is in the order of the original agent method signature,
+    let method_input_path_variable_types: Vec<(&'a SafeIndex, &'a PathSegmentType)>= method_params
         .map(|params| {
             params
                 .iter()
                 .filter_map(|p| match p {
                     MethodParameter::Path {
-                        path_segment_index,
                         parameter_type,
-                    } => Some((*path_segment_index, parameter_type)),
+                        path_segment_index
+                    } => Some((path_segment_index, parameter_type)),
                     _ => None,
                 })
                 .collect()
         })
         .unwrap_or_default();
 
+    input_path_variable_types.extend(constructor_input_path_variable_types);
+    input_path_variable_types.extend(method_input_path_variable_types);
+
     let mut agent_input_params = match &agent_constructor.input_schema {
         DataSchema::Tuple(named_element_schema) => named_element_schema.elements.iter().collect(),
         DataSchema::Multimodal(_) => vec![],
     };
-    
+
     let agent_method_input_params: Vec<&NamedElementSchema> = match agent_method {
         None => vec![],
         Some(agent_method) => match &agent_method.input_schema {
-            DataSchema::Tuple(named_element_schemas) => named_element_schemas.elements.iter().collect(),
+            DataSchema::Tuple(named_element_schemas) => {
+                named_element_schemas.elements.iter().collect()
+            }
             DataSchema::Multimodal(_) => vec![],
         },
     };
 
     agent_input_params.extend(agent_method_input_params);
 
+    let with_names:  Vec<(&'a str, &'a SafeIndex, &'a PathSegmentType)> = agent_input_params.iter().zip(
+        input_path_variable_types.iter().map(|(index, var_type)| (index, var_type))
+    )    .map(|(param, (index, var_type))| (param.name.as_str(), *index, *var_type))
+        .collect();
+
     let mut path_params_and_types: Vec<(&'a str, &'a PathSegmentType)> = Vec::new();
     let mut path_segment_string: Vec<String> = Vec::new();
+    let mut path_variable_index = SafeIndex::new(0);
 
-    for (idx, segment) in path_segments.iter().enumerate() {
+    for segment in path_segments.iter() {
         match segment {
             PathSegment::Literal { value } => {
                 path_segment_string.push(value.to_string());
             }
 
             PathSegment::Variable | PathSegment::CatchAll => {
-                if let Some(param_type) = method_path_indices.get(&SafeIndex::new(idx as u32)) {
-                    let name = agent_input_params
-                        .get(idx)
-                        .map(|e| e.name.as_str())
-                        .expect(format!(
-                            "Path is {:?}, Expected to find parameter name for path segment at index {idx}.  {:?}", path_segments, param_type
-                        ).as_str());
+                let (name, _, var_type) = with_names.iter().find(
+                    |(_, index, _)| *index == &path_variable_index,
+                ).expect("Failed to find path variable index in agent parameters");
 
-                    path_segment_string.push(format!("{{{}}}", name));
-                    path_params_and_types.push((name, *param_type));
-                }
+                path_segment_string.push(format!("{{{}}}", name));
+                path_params_and_types.push((name, *var_type));
+                path_variable_index += 1
             }
         }
     }
 
-    (path_segment_string.join("/"), path_params_and_types)
+    let path_str = format!("/{}", path_segment_string.join("/"));
+
+    (path_str, path_params_and_types)
 }
 
 fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     route: &T,
     paths: &mut BTreeMap<String, PathItem>,
 ) -> Result<(), String> {
-    let method_params = match route.binding() {
+    let constructor_parameters = match route.binding() {
+        RichRouteBehaviour::CallAgent(behaviour) => Some(&behaviour.constructor_parameters),
+        _ => None,
+    };
+
+    let method_parameters = match route.binding() {
         RichRouteBehaviour::CallAgent(behaviour) => Some(&behaviour.method_parameters),
         _ => None,
     };
 
-    let (path_str, path_params_raw) =
-        get_full_path_and_variables(route.agent_constructor(), route.associated_agent_method(), route.path(), method_params);
+    let (path_str, path_params_raw) = get_full_path_and_variables(
+        route.agent_constructor(),
+        route.associated_agent_method(),
+        route.path(),
+        constructor_parameters,
+        method_parameters,
+    );
 
     let path_item = paths.entry(path_str).or_default();
     let mut operation = Operation::default();
 
-    let query_params_raw = get_query_variable_and_types(method_params);
-    let header_params_raw = get_header_variable_and_types(method_params);
+    let query_params_raw = get_query_variable_and_types(method_parameters);
+    let header_params_raw = get_header_variable_and_types(method_parameters);
 
     add_parameters(
         &mut operation,
