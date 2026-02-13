@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isEmptyType, isOptionalWithQuestionMark, isPrincipal, TypeInfoInternal } from '../../typeInfoInternal';
+import {
+  isEmptyType,
+  isOptionalWithQuestionMark,
+  isPrincipal,
+  TypeInfoInternal,
+} from '../../typeInfoInternal';
 
 import * as Either from '../../../newTypes/either';
 import * as WitValue from '../../mapping/values/WitValue';
@@ -85,7 +90,7 @@ export function deserializeDataValue(
             }
 
             if (isPrincipal(parameterType)) {
-              return Either.right(principal)
+              return Either.right(principal);
             }
 
             throw new Error(

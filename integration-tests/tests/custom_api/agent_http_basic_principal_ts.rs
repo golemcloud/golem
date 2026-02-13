@@ -54,7 +54,7 @@ async fn basic_principal_auto_injection(agent: &HttpTestContext) -> anyhow::Resu
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "value": "anonymous" }));
+    assert_eq!(body, json!({ "value": {"anonymous": null} }));
 
     let response = agent
         .client
@@ -70,7 +70,7 @@ async fn basic_principal_auto_injection(agent: &HttpTestContext) -> anyhow::Resu
 
     assert_eq!(
         body,
-        json!({ "value": "anonymous", "foo": "foo-value", "bar": "1" })
+        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": "1.0" })
     );
 
     let response = agent
@@ -87,7 +87,7 @@ async fn basic_principal_auto_injection(agent: &HttpTestContext) -> anyhow::Resu
 
     assert_eq!(
         body,
-        json!({ "value": "anonymous", "foo": "foo-value", "bar": "2" })
+        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": "2.0" })
     );
 
     Ok(())
