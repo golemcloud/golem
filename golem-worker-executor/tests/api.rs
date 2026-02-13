@@ -1102,78 +1102,6 @@ async fn component_env_and_worker_env_priority(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn optional_parameters(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "option-service")
-        .store()
-        .await?;
-    let worker_id = executor
-        .start_worker(&component.id, "optional-service-1")
-        .await?;
-
-    let echo_some = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{echo}",
-            vec![Some("Hello").into_value_and_type()],
-        )
-        .await??;
-
-    let echo_none = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{echo}",
-            vec![None::<String>.into_value_and_type()],
-        )
-        .await??;
-
-    let todo_some = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{todo}",
-            vec![Record(vec![
-                ("name", "todo".into_value_and_type()),
-                ("description", Some("description").into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await??;
-
-    let todo_none = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{todo}",
-            vec![Record(vec![
-                ("name", "todo".into_value_and_type()),
-                ("description", Some("description").into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await??;
-
-    assert_eq!(
-        echo_some,
-        vec![Value::Option(Some(Box::new(Value::String(
-            "Hello".to_string()
-        ))))]
-    );
-    assert_eq!(echo_none, vec![Value::Option(None)]);
-    assert_eq!(todo_some, vec![Value::String("todo".to_string())]);
-    assert_eq!(todo_none, vec![Value::String("todo".to_string())]);
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
 async fn delete_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1183,19 +1111,18 @@ async fn delete_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "option-service")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let counter_id = agent_id!("counter", "delete-worker-1");
     let worker_id = executor
-        .start_worker(&component.id, "delete-worker-1")
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{echo}",
-            vec![Some("Hello").into_value_and_type()],
-        )
+    executor
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
 
     let metadata1 = executor.get_worker_metadata(&worker_id).await;
@@ -1252,7 +1179,8 @@ async fn get_workers(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "option-service")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
@@ -1260,21 +1188,18 @@ async fn get_workers(
     let mut worker_ids = vec![];
 
     for i in 0..workers_count {
+        let agent_id = agent_id!("counter", format!("test-worker-{i}"));
         let worker_id = executor
-            .start_worker(&component.id, &format!("test-worker-{i}"))
+            .start_agent(&component.id, agent_id.clone())
             .await?;
 
-        worker_ids.push(worker_id);
+        worker_ids.push((worker_id, agent_id));
     }
 
-    for worker_id in worker_ids.clone() {
-        let _ = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:it/api.{echo}",
-                vec![Some("Hello").into_value_and_type()],
-            )
-            .await??;
+    for (worker_id, agent_id) in worker_ids.clone() {
+        executor
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
 
         get_check(
             &component.id,
@@ -1292,7 +1217,7 @@ async fn get_workers(
         &component.id,
         Some(WorkerFilter::new_name(
             StringFilterComparator::Like,
-            "test".to_string(),
+            "test-worker".to_string(),
         )),
         workers_count,
         &executor,
@@ -1302,7 +1227,7 @@ async fn get_workers(
     get_check(
         &component.id,
         Some(
-            WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string())
+            WorkerFilter::new_name(StringFilterComparator::Like, "test-worker".to_string())
                 .and(
                     WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle).or(
                         WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
@@ -1320,7 +1245,7 @@ async fn get_workers(
 
     get_check(
         &component.id,
-        Some(WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string()).not()),
+        Some(WorkerFilter::new_name(StringFilterComparator::Like, "test-worker".to_string()).not()),
         0,
         &executor,
     )
@@ -1360,7 +1285,7 @@ async fn get_workers(
         assert_eq!(values3.len(), 0);
     }
 
-    for worker_id in worker_ids {
+    for (worker_id, _) in worker_ids {
         executor.delete_worker(&worker_id).await?;
     }
 
@@ -1379,15 +1304,22 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "option-service")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let agent_id = agent_id!("failing-counter", "fewer-than-expected-parameters-1");
     let worker_id = executor
-        .start_worker(&component.id, "fewer-than-expected-parameters-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let failure = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{echo}", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "it:agent-counters/failing-counter.{add}",
+            vec![],
+        )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1406,21 +1338,21 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "option-service")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let agent_id = agent_id!("counter", "more-than-expected-parameters-1");
     let worker_id = executor
-        .start_worker(&component.id, "more-than-expected-parameters-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let failure = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api.{echo}",
-            vec![
-                Some("Hello").into_value_and_type(),
-                "extra parameter".into_value_and_type(),
-            ],
+            "it:agent-counters/counter.{increment}",
+            vec!["extra parameter".into_value_and_type()],
         )
         .await?;
 
@@ -2937,11 +2869,14 @@ async fn invoke_with_non_existing_function(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "option-service")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let counter_id = agent_id!("counter", "invoke-with-non-existing-function");
     let worker_id = executor
-        .start_worker(&component.id, "invoke_with_non_existing_function")
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
     // First we invoke a function that does not exist and expect a failure
@@ -2951,20 +2886,11 @@ async fn invoke_with_non_existing_function(
 
     // Then we invoke an existing function, to prove the worker should not be in failed state
     let success = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{echo}",
-            vec![Some("Hello").into_value_and_type()],
-        )
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
 
     assert!(failure.is_err());
-    assert_eq!(
-        success,
-        Ok(vec![Value::Option(Some(Box::new(Value::String(
-            "Hello".to_string()
-        ))))])
-    );
+    assert_eq!(success.into_return_value(), Some(Value::U32(1)));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -2981,34 +2907,32 @@ async fn invoke_with_wrong_parameters(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "option-service")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let counter_id = agent_id!("counter", "invoke-with-wrong-parameters");
     let worker_id = executor
-        .start_worker(&component.id, "invoke_with_non_existing_function")
+        .start_agent(&component.id, counter_id.clone())
         .await?;
 
     // First we invoke an existing function with wrong parameters
     let failure = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{echo}", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "it:agent-counters/counter.{increment}",
+            vec!["unexpected".into_value_and_type()],
+        )
         .await?;
 
     // Then we invoke an existing function, to prove the worker should not be in failed state
     let success = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{echo}",
-            vec![Some("Hello").into_value_and_type()],
-        )
+        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
 
     assert!(failure.is_err());
-    assert_eq!(
-        success,
-        Ok(vec![Value::Option(Some(Box::new(Value::String(
-            "Hello".to_string()
-        ))))])
-    );
+    assert_eq!(success.into_return_value(), Some(Value::U32(1)));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -3498,28 +3422,27 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "option-service")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+
+    let agent_id = agent_id!("failing-counter", "wrong-parameter-type-1");
     let worker_id = executor
-        .start_worker(&component.id, "wrong-parameter-type-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let failure = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api.{echo}",
-            vec![100u64.into_value_and_type()],
+            "it:agent-counters/failing-counter.{add}",
+            vec!["not-a-number".into_value_and_type()],
         )
         .await?;
 
     let success = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{echo}",
-            vec![Some("x").into_value_and_type()],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
+        .await;
 
     // TODO: the parameter type mismatch causes printing to fail due to a corrupted WasmValue.
     // executor.check_oplog_is_queryable(&worker_id).await;

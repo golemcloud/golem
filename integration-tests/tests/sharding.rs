@@ -24,7 +24,7 @@ mod tests {
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-    use golem_wasm::IntoValueAndType;
+
     use rand::prelude::*;
     use rand::rng;
     use std::collections::HashSet;
@@ -368,7 +368,8 @@ mod tests {
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
             let component = admin
-                .component(&env.id, "option-service")
+                .component(&env.id, "it_agent_counters_release")
+                .name("it:agent-counters")
                 .store()
                 .await
                 .unwrap();
@@ -378,7 +379,7 @@ mod tests {
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let worker_name = format!("sharding-test-{i}");
+                let worker_name = format!("counter(\"sharding-test-{i}\")");
                 let worker_id = admin
                     .start_worker(&component.id, &worker_name)
                     .await
@@ -409,8 +410,8 @@ mod tests {
                                 .invoke_and_await_with_key(
                                     &worker_id,
                                     &idempotency_key,
-                                    "golem:it/api.{echo}",
-                                    vec![Some("Hello".to_string()).into_value_and_type()],
+                                    "it:agent-counters/counter.{increment}",
+                                    vec![],
                                 )
                                 .await,
                         )
