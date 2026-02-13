@@ -1,4 +1,5 @@
 use golem_rust::{agent_definition, agent_implementation};
+use serde::{Deserialize, Serialize};
 
 #[agent_definition(snapshotting = "enabled")]
 trait SnapshotCounter {
@@ -49,5 +50,35 @@ impl SnapshotCounter for SnapshotCounterImpl {
         } else {
             Err(format!("Invalid snapshot size: {}", bytes.len()))
         }
+    }
+}
+
+#[agent_definition(snapshotting = "enabled")]
+trait JsonSnapshotCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    fn get(&self) -> u32;
+}
+
+#[derive(Serialize, Deserialize)]
+struct JsonSnapshotCounterImpl {
+    count: u32,
+    #[serde(skip)]
+    _id: String,
+}
+
+#[agent_implementation]
+impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id, count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn get(&self) -> u32 {
+        self.count
     }
 }
