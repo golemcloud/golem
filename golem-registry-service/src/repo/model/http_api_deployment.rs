@@ -149,14 +149,7 @@ impl HttpApiDeploymentRevisionRecord {
                 .value()
                 .agents
                 .iter()
-                .map(|(k, v)| {
-                    (
-                        k.0.clone(),
-                        diff::HttpApiDeploymentAgentOptions {
-                            security_scheme: v.security_scheme.as_ref().map(|v| v.0.clone()),
-                        },
-                    )
-                })
+                .map(|(k, v)| (k.0.clone(), v.to_diffable()))
                 .collect(),
         }
     }

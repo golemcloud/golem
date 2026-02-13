@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod handler;
-mod identity_provider;
-mod identity_provider_metadata;
-pub mod model;
-mod open_id_client;
-pub mod session_store;
+import process from 'node:process';
+import { Writable } from 'node:stream';
 
-pub use identity_provider::*;
-pub use open_id_client::*;
+export function flushStream(stream: Writable): Promise<void> {
+  return new Promise((resolve) => {
+    if (!stream.writableNeedDrain) {
+      resolve();
+      return;
+    }
+    stream.once('drain', resolve);
+  });
+}
+
+export async function flushStdIO(): Promise<void> {
+  await Promise.all([flushStream(process.stdout), flushStream(process.stderr)]);
+}

@@ -12,17 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
 use super::router::Router;
 use crate::config::RouteResolverConfig;
-use crate::custom_api::{OidcCallbackBehaviour, RichRouteBehaviour};
+use crate::custom_api::{
+    OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
+};
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::{
-    CompiledRoute, CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema,
+    CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteSecurity,
+    SecuritySchemeDetails,
+};
+use golem_service_base::custom_api::{
+    CompiledRoute
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -153,10 +161,21 @@ impl RouteResolver {
         &self,
         domain: &Domain,
     ) -> Result<Router<Arc<RichCompiledRoute>>, ()> {
-        let finalized_routes = match self.get_enriched_routes_for_domain(domain).await {
+        let compiled_routes = self.api_definition_lookup.get(domain).await;
+
+        let compiled_routes = match compiled_routes {
+            Ok(value) => value,
+            Err(ApiDefinitionLookupError::UnknownSite(_)) => return Ok(Router::new()),
+            Err(ApiDefinitionLookupError::InternalError(err)) => {
+                tracing::warn!("Failed to build router for domain {domain}: {err:?}");
+                return Err(());
+            }
+        };
+
+        let finalized_routes = match Self::finalize_routes(compiled_routes).await {
             Ok(value) => value,
             Err(err) => {
-                tracing::warn!("Failed to get enriched routes for domain {domain}: {err:?}");
+                tracing::warn!("Failed to finalize routes for domain {domain}: {err:?}");
                 return Err(());
             }
         };
@@ -176,15 +195,7 @@ impl RouteResolver {
         let mut enriched_routes = Vec::with_capacity(compiled_routes.routes.len());
 
         for route in compiled_routes.routes {
-            let security_scheme = if let Some(security_scheme_id) = route.security_scheme {
-                let security_scheme = security_schemes
-                    .get(&security_scheme_id)
-                    .ok_or(format!("Security scheme {security_scheme_id} not found"))?
-                    .clone();
-                Some(security_scheme)
-            } else {
-                None
-            };
+            let security = compile_route_security(&security_schemes, route.security)?;
 
             let enriched = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
@@ -197,7 +208,7 @@ impl RouteResolver {
                 path: route.path,
                 body: route.body,
                 behavior: route.behavior.into(),
-                security_scheme,
+                security,
                 cors: route.cors,
             };
 
@@ -227,7 +238,7 @@ impl RouteResolver {
                 behavior: RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour {
                     security_scheme: scheme.clone(),
                 }),
-                security_scheme: None,
+                security: RichRouteSecurity::None,
                 cors: CorsOptions {
                     allowed_patterns: Vec::new(),
                 },
@@ -249,4 +260,26 @@ fn authority_from_request(request: &poem::Request) -> Result<Domain, String> {
 
 fn split_path(s: &str) -> impl Iterator<Item = &str> {
     s.trim_matches('/').split('/')
+}
+
+fn compile_route_security(
+    security_schemes: &HashMap<SecuritySchemeId, Arc<SecuritySchemeDetails>>,
+    security: RouteSecurity,
+) -> Result<RichRouteSecurity, String> {
+    match security {
+        RouteSecurity::None => Ok(RichRouteSecurity::None),
+        RouteSecurity::SessionFromHeader(inner) => Ok(RichRouteSecurity::SessionFromHeader(inner)),
+        RouteSecurity::SecurityScheme(inner) => {
+            let security_scheme_id = inner.security_scheme_id;
+
+            let security_scheme = security_schemes
+                .get(&security_scheme_id)
+                .ok_or(format!("Security scheme {security_scheme_id} not found"))?
+                .clone();
+
+            Ok(RichRouteSecurity::SecurityScheme(
+                RichSecuritySchemeRouteSecurity { security_scheme },
+            ))
+        }
+    }
 }

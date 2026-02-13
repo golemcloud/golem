@@ -17,7 +17,7 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
-use crate::{declare_revision, declare_structs, newtype_uuid};
+use crate::{declare_revision, declare_structs, declare_unions, newtype_uuid};
 use chrono::DateTime;
 use std::collections::BTreeMap;
 
@@ -25,15 +25,39 @@ newtype_uuid!(HttpApiDeploymentId);
 
 declare_revision!(HttpApiDeploymentRevision);
 
+declare_unions! {
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub enum HttpApiDeploymentAgentSecurity {
+        TestSessionHeader(TestSessionHeaderAgentSecurity),
+        SecurityScheme(SecuritySchemeAgentSecurity)
+    }
+}
+
 declare_structs! {
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    /// Header that can be used to provide the oidc session directly to the agent through http apis.
+    /// Failure to provide the header will result in a 401 response.
+    pub struct TestSessionHeaderAgentSecurity {
+        pub header_name: String
+    }
+
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    /// OIDC security scheme in the environment that should be used for the agent.
+    /// If the requested security scheme does not exist in the environment, the route will be disabled at runtime.
+    pub struct SecuritySchemeAgentSecurity {
+        pub security_scheme: SecuritySchemeName
+    }
+
     #[derive(Default)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-    #[cfg_attr(feature = "full", desert(transparent))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct HttpApiDeploymentAgentOptions {
-        /// Security scheme to use for all agent methods that require auth.
-        /// Failure to provide a security scheme for an agent that requires one will lead to a deployment failure.
-        /// If the requested security scheme does not exist in the environment, the route will be disabled at runtime.
-        pub security_scheme: Option<SecuritySchemeName>,
+        /// Security option to use for all agent methods that require auth.
+        /// Failure to provide a security option for an agent that requires one will lead to a deployment failure.
+        pub security: Option<HttpApiDeploymentAgentSecurity>
     }
 
     pub struct HttpApiDeploymentCreation {

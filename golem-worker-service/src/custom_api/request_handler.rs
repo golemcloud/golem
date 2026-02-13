@@ -16,8 +16,9 @@ use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
+use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
-use super::security::handler::OidcHandler;
+use super::session_from_header_security::apply_session_from_header_security_middleware;
 use super::webhoooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RichCompiledRoute, RouteExecutionResult};
 use crate::custom_api::RichRequest;
@@ -87,6 +88,12 @@ impl RequestHandler {
             .oidc_handler
             .apply_oidc_incoming_middleware(request, resolved_route)
             .await?
+        {
+            return Ok(short_circuit);
+        }
+
+        if let Some(short_circuit) =
+            apply_session_from_header_security_middleware(request, resolved_route)?
         {
             return Ok(short_circuit);
         }

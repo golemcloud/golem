@@ -29,6 +29,7 @@ use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeIm
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -52,13 +53,19 @@ impl From<InProgressDeployedRegisteredAgentType> for DeployedRegisteredAgentType
 
 #[derive(Debug)]
 pub struct DeploymentContext {
+    pub environment: Environment,
     pub components: BTreeMap<ComponentName, Component>,
     pub http_api_deployments: BTreeMap<Domain, HttpApiDeployment>,
 }
 
 impl DeploymentContext {
-    pub fn new(components: Vec<Component>, http_api_deployments: Vec<HttpApiDeployment>) -> Self {
+    pub fn new(
+        environment: Environment,
+        components: Vec<Component>,
+        http_api_deployments: Vec<HttpApiDeployment>,
+    ) -> Self {
         Self {
+            environment,
             components: components
                 .into_iter()
                 .map(|c| (c.component_name.clone(), c))
@@ -202,6 +209,7 @@ impl DeploymentContext {
                 );
 
                 add_agent_method_http_routes(
+                    &self.environment,
                     deployment,
                     &registered_agent_type.agent_type,
                     &registered_agent_type.implemented_by,

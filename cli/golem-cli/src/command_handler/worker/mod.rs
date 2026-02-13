@@ -16,7 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+    AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::worker::stream::WorkerConnection;
@@ -25,7 +25,10 @@ use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
-use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
+use crate::log::{
+    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    LogColorize, LogIndent,
+};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
     agent_interface_name, function_params_types, show_exported_agent_constructors,
@@ -33,7 +36,7 @@ use crate::model::component::{
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{format_export, log_error, log_fuzzy_match, log_text_view, log_warn};
+use crate::model::text::fmt::{format_export, log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
     AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
@@ -105,7 +108,7 @@ impl WorkerCommandHandler {
                 idempotency_key,
                 no_stream,
                 stream_args,
-                deploy_args,
+                post_deploy_args,
             } => {
                 self.cmd_invoke(
                     worker_name,
@@ -115,7 +118,7 @@ impl WorkerCommandHandler {
                     idempotency_key,
                     no_stream,
                     stream_args,
-                    deploy_args,
+                    post_deploy_args,
                 )
                 .await
             }
@@ -155,12 +158,14 @@ impl WorkerCommandHandler {
                 mode,
                 target_revision,
                 r#await,
+                disable_wakeup,
             } => {
                 self.cmd_update(
                     worker_name,
                     mode.unwrap_or(AgentUpdateMode::Automatic),
                     target_revision,
                     r#await,
+                    disable_wakeup,
                 )
                 .await
             }
@@ -252,7 +257,7 @@ impl WorkerCommandHandler {
         idempotency_key: Option<IdempotencyKey>,
         no_stream: bool,
         stream_args: StreamArgs,
-        deploy_args: Option<DeployArgs>,
+        post_deploy_args: Option<PostDeployArgs>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -293,7 +298,7 @@ impl WorkerCommandHandler {
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
-                deploy_args.as_ref(),
+                post_deploy_args.as_ref(),
             )
             .await?;
 
@@ -851,6 +856,7 @@ impl WorkerCommandHandler {
         mode: AgentUpdateMode,
         target_revision: Option<ComponentRevision>,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
@@ -897,6 +903,7 @@ impl WorkerCommandHandler {
             mode,
             target_revision,
             await_update,
+            disable_wakeup,
         )
         .await?;
 
@@ -1242,6 +1249,7 @@ impl WorkerCommandHandler {
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, false)
@@ -1276,6 +1284,7 @@ impl WorkerCommandHandler {
                     update_mode,
                     target_revision,
                     false,
+                    disable_wakeup,
                 )
                 .await;
 
@@ -1322,6 +1331,7 @@ impl WorkerCommandHandler {
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Triggering update",
@@ -1349,6 +1359,7 @@ impl WorkerCommandHandler {
                         AgentUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
                     },
                     target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await
@@ -1367,9 +1378,9 @@ impl WorkerCommandHandler {
                 Ok(())
             }
             Err(error) => {
-                log_error_action("Failed", "to trigger update for agent, error:");
+                log_failed_to("trigger update for agent");
                 let _indent = LogIndent::new();
-                logln(format!("{error}"));
+                log_error(error.to_string());
                 Err(anyhow!(error))
             }
         }
@@ -1444,7 +1455,7 @@ impl WorkerCommandHandler {
                     log_error_action(
                         "Agent update",
                         format!(
-                            "to revision {} succeeded at {}: {}",
+                            "to revision {} failed at {}: {}",
                             failure.target_revision.to_string().log_color_highlight(),
                             failure.timestamp.to_string().log_color_highlight(),
                             error
@@ -1456,9 +1467,7 @@ impl WorkerCommandHandler {
                         "Agent update",
                         "is not pending anymore, but no outcome has been found",
                     );
-                    return Err(anyhow!(
-                "Unexpected agent state: update is not pending anymore, but no outcome has been found"
-                ));
+                    return Err(anyhow!("Unexpected agent state: update is not pending anymore, but no outcome has been found"));
                 }
             }
         }

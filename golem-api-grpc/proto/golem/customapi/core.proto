@@ -162,7 +162,7 @@ message CompiledRoute {
   repeated PathSegment path = 3;
   RequestBodySchema body = 4;
   RouteBehaviour behavior = 5;
-  optional golem.registry.SecuritySchemeId security_scheme = 6;
+  RouteSecurity security = 6;
   CorsOptions cors = 7;
 }
 
@@ -205,6 +205,24 @@ message RouteBehaviour {
 
   message WebhookCallback {
     golem.component.ComponentId component_id = 1;
+  }
+}
+
+message RouteSecurity {
+  oneof kind {
+    None none = 1;
+    SessionFromHeader session_from_header = 2;
+    SecurityScheme security_scheme = 3;
+  }
+
+  message None {}
+
+  message SessionFromHeader {
+    string header_name = 1;
+  }
+
+  message SecurityScheme {
+    golem.registry.SecuritySchemeId security_scheme_id = 1;
   }
 }
 

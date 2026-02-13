@@ -47,7 +47,7 @@ impl From<RedisError> for SessionStoreError {
 pub trait SessionStore: Send + Sync {
     async fn store_pending_oidc_login(
         &self,
-        state: String,
+        state: &str,
         login: PendingOidcLogin,
     ) -> Result<(), SessionStoreError>;
 
@@ -95,7 +95,7 @@ impl RedisSessionStore {
 impl SessionStore for RedisSessionStore {
     async fn store_pending_oidc_login(
         &self,
-        state: String,
+        state: &str,
         login: PendingOidcLogin,
     ) -> Result<(), SessionStoreError> {
         let record = records::PendingOidcLoginRecord::from(login);
@@ -106,7 +106,7 @@ impl SessionStore for RedisSessionStore {
             .redis
             .with("session_store", "store_pending_oidc_login")
             .set(
-                Self::redis_key_for_pending(&state),
+                Self::redis_key_for_pending(state),
                 serialized,
                 Some(self.pending_login_expiration.clone()),
                 None,
@@ -150,17 +150,12 @@ impl SessionStore for RedisSessionStore {
         session_id: &SessionId,
         session: OidcSession,
     ) -> Result<(), SessionStoreError> {
+        let ttl_secs = (session.expires_at - chrono::Utc::now()).num_milliseconds();
+        let expiration = Expiration::PX(ttl_secs.max(1));
+
         let record = records::OidcSessionRecord::try_from(session)?;
         let serialized = golem_common::serialization::serialize(&record)
             .map_err(|e| anyhow!("OidcSessionRecord serialization error: {e}"))?;
-
-        let now = chrono::Utc::now();
-        let ttl_secs = (record.expires_at - now).num_seconds();
-        let expiration = if ttl_secs > 0 {
-            Expiration::EX(ttl_secs)
-        } else {
-            Expiration::EX(1)
-        };
 
         let _: () = self
             .redis
@@ -325,7 +320,7 @@ impl SqliteSessionStore {
 impl SessionStore for SqliteSessionStore {
     async fn store_pending_oidc_login(
         &self,
-        state: String,
+        state: &str,
         login: PendingOidcLogin,
     ) -> Result<(), SessionStoreError> {
         let record = records::PendingOidcLoginRecord::from(login);
@@ -391,11 +386,11 @@ impl SessionStore for SqliteSessionStore {
         session_id: &SessionId,
         session: OidcSession,
     ) -> Result<(), SessionStoreError> {
+        let expires_at = session.expires_at.timestamp();
+
         let record = records::OidcSessionRecord::try_from(session)?;
         let serialized = golem_common::serialization::serialize(&record)
             .map_err(|e| SessionStoreError::InternalError(anyhow::anyhow!(e)))?;
-
-        let expires_at = record.expires_at.timestamp();
 
         self
             .pool
@@ -443,7 +438,7 @@ impl SessionStore for SqliteSessionStore {
 mod records {
     use super::SessionStoreError;
     use crate::custom_api::model::OidcSession;
-    use crate::custom_api::security::model::PendingOidcLogin;
+    use crate::custom_api::oidc::model::PendingOidcLogin;
     use anyhow::anyhow;
     use chrono::{DateTime, Utc};
     use desert_rust::BinaryCodec;
@@ -551,7 +546,7 @@ mod records {
 mod tests {
     use super::records;
     use crate::custom_api::OidcSession;
-    use crate::custom_api::security::model::PendingOidcLogin;
+    use crate::custom_api::oidc::model::PendingOidcLogin;
     use chrono::{TimeDelta, Utc};
     use golem_common::model::security_scheme::SecuritySchemeId;
     use openidconnect::core::CoreIdTokenClaims;

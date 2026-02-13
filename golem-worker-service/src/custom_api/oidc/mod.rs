@@ -12,26 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_definition_lookup;
-pub mod call_agent;
-mod cors;
-pub mod error;
+pub mod handler;
+mod identity_provider;
+mod identity_provider_metadata;
 pub mod model;
-pub mod oidc;
-mod openapi;
-pub mod poem_endpoint;
-pub mod request_handler;
-mod rich_request;
-pub mod route_resolver;
-pub mod router;
-mod session_from_header_security;
-pub mod webhoooks;
+mod open_id_client;
+pub mod session_store;
 
-use self::poem_endpoint::CustomApiPoemEndpoint;
-use crate::bootstrap::Services;
-pub use model::*;
-pub use rich_request::RichRequest;
+use chrono::Duration;
+pub use identity_provider::*;
+pub use open_id_client::*;
 
-pub fn make_custom_api_endpoint(services: &Services) -> CustomApiPoemEndpoint {
-    CustomApiPoemEndpoint::new(services.request_handler.clone())
-}
+// FIXME: make this configurable as part of security scheme
+const OIDC_SESSION_EXPIRY: Duration = Duration::hours(8);

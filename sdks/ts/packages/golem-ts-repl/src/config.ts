@@ -13,10 +13,21 @@
 // limitations under the License.
 
 import { env } from 'node:process';
+import fs from 'node:fs';
+import util from 'node:util';
 
 export type Config = {
+  binary: string;
+  appMainDir: string;
   agents: Record<string, AgentConfig>;
   historyFile: string;
+  cliCommandsMetadataJsonPath: string;
+};
+
+export type ProcessArgs = {
+  script?: string;
+  scriptPath?: string;
+  disableAutoImports: boolean;
 };
 
 export type AgentConfig = {
@@ -30,7 +41,7 @@ export type GolemServer =
   | { type: 'cloud'; token: string }
   | { type: 'custom'; url: string; token: string };
 
-export type ClientConfiguration = {
+export type ClientConfig = {
   server: GolemServer;
   application: ApplicationName;
   environment: EnvironmentName;
@@ -39,17 +50,78 @@ export type ClientConfiguration = {
 export type ApplicationName = string;
 export type EnvironmentName = string;
 
-export type ConfigureClient = (config: ClientConfiguration) => void;
+export type ConfigureClient = (config: ClientConfig) => void;
 
-export function clientConfigurationFromEnv(): ClientConfiguration {
+export type CliCommandsConfig = {
+  binary: string;
+  appMainDir: string;
+  clientConfig: ClientConfig;
+  commandMetadata: CliCommandMetadata;
+};
+
+export type CliCommandMetadata = {
+  path: string[];
+  name: string;
+  displayName?: string | null;
+  about?: string | null;
+  longAbout?: string | null;
+  hidden: boolean;
+  visibleAliases: string[];
+  args: CliArgMetadata[];
+  subcommands: CliCommandMetadata[];
+};
+
+export type CliArgMetadata = {
+  id: string;
+  help?: string | null;
+  longHelp?: string | null;
+  valueNames: string[];
+  valueHint: string;
+  possibleValues: CliPossibleValueMetadata[];
+  action: string;
+  numArgs?: string | null;
+  isPositional: boolean;
+  isRequired: boolean;
+  isGlobal: boolean;
+  isHidden: boolean;
+  index?: number | null;
+  long: string[];
+  short: string[];
+  defaultValues: string[];
+  takesValue: boolean;
+};
+
+export type CliPossibleValueMetadata = {
+  name: string;
+  help?: string | null;
+  hidden: boolean;
+  aliases: string[];
+};
+
+export function clientConfigFromEnv(): ClientConfig {
   return {
-    server: clientServerConfigurationFromEnv(),
+    server: clientServerConfigFromEnv(),
     application: requiredEnvVar('GOLEM_REPL_APPLICATION'),
     environment: requiredEnvVar('GOLEM_REPL_ENVIRONMENT'),
   };
 }
 
-function clientServerConfigurationFromEnv(): GolemServer {
+export function cliCommandsConfigFromBaseConfig(
+  config: Config,
+  clientConfig: ClientConfig,
+): CliCommandsConfig {
+  const commandMetadataContents = fs.readFileSync(config.cliCommandsMetadataJsonPath, 'utf8');
+  const commandMetadata = JSON.parse(commandMetadataContents) as CliCommandMetadata;
+
+  return {
+    binary: config.binary,
+    appMainDir: config.appMainDir,
+    clientConfig,
+    commandMetadata,
+  };
+}
+
+function clientServerConfigFromEnv(): GolemServer {
   const server_kind = requiredEnvVar('GOLEM_REPL_SERVER_KIND');
   switch (server_kind) {
     case 'local':
@@ -76,4 +148,42 @@ function requiredEnvVar(name: string): string {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+export function loadProcessArgs(): ProcessArgs {
+  const normalizedArgs = process.argv
+    .slice(2)
+    .map((arg) => (arg === '-script-file' ? '--script-file' : arg));
+
+  const { values } = util.parseArgs({
+    args: normalizedArgs,
+    options: {
+      script: { type: 'string' },
+      'script-file': { type: 'string' },
+      'disable-auto-imports': { type: 'boolean' },
+    },
+    allowPositionals: true,
+  });
+
+  if (values.script !== undefined) {
+    return {
+      script: values.script,
+      scriptPath: undefined,
+      disableAutoImports: values['disable-auto-imports'] ?? false,
+    };
+  }
+
+  if (values['script-file'] !== undefined) {
+    return {
+      script: fs.readFileSync(values['script-file'], 'utf8'),
+      scriptPath: values['script-file'],
+      disableAutoImports: values['disable-auto-imports'] ?? false,
+    };
+  }
+
+  return {
+    script: undefined,
+    scriptPath: undefined,
+    disableAutoImports: values['disable-auto-imports'] ?? false,
+  };
 }

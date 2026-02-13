@@ -359,6 +359,13 @@ inherits = "dev"
 incremental = false
 strip = "debuginfo"
 
+[profile.dev-release]
+inherits = "release"
+opt-level = 1
+codegen-units = 256
+incremental = true
+debug = true
+
 [profile.release]
 panic = "abort"
 

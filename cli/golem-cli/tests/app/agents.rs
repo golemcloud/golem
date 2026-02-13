@@ -2,6 +2,7 @@ use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
 use crate::stubgen::test_data_path;
 use crate::Tracing;
 use anyhow::Context;
+use assert2::assert;
 use goldenfile::Mint;
 use golem_cli::fs;
 use golem_templates::model::GuestLanguage;
@@ -119,7 +120,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::Rust).unwrap();
 
-    let outputs = ctx.cli([cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
@@ -819,7 +820,7 @@ async fn test_common_dep_plugs_errors() {
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(!outputs.success());
-    assert2::assert!(outputs.stderr_contains_ordered(
+    assert!(outputs.stdout_contains_ordered(
         [
             "error: an error occurred when building the composition graph: multiple plugs found for export golem:web-search/types@1.0.0, only use one of them:",
             "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm",
@@ -946,14 +947,16 @@ async fn test_component_env_var_substitution() {
         .await;
     assert!(!outputs.success());
 
-    assert!(outputs.stderr_contains_ordered([
+    assert!(outputs.stdout_contains_ordered([
         "key:       COMPOSED",
         "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "Failed to substitute environment variable(s) (VERY_CUSTOM_ENV_VAR_SECRET_1, VERY_CUSTOM_ENV_VAR_SECRET_3) for COMPOSED",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_1",
         "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}",
+        "Failed to substitute environment variable(s) (VERY_CUSTOM_ENV_VAR_SECRET_1) for VERY_CUSTOM_ENV_VAR_SECRET_1",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_2",
         "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
-        "Failed to prepare environment variables for component: app:weather-agent",
+        "Failed to substitute environment variable(s) (VERY_CUSTOM_ENV_VAR_SECRET_3) for VERY_CUSTOM_ENV_VAR_SECRET_2"
     ]));
 
     // After providing the missing env vars, deploy should work

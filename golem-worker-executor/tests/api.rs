@@ -958,7 +958,7 @@ async fn component_env_variables_update(
         .await?;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let env = executor

@@ -14,7 +14,9 @@
 
 use super::deployment_context::InProgressDeployedRegisteredAgentType;
 use super::http_parameter_conversion::build_http_agent_method_parameters;
-use crate::model::api_definition::UnboundCompiledRoute;
+use crate::model::api_definition::{
+    UnboundCompiledRoute, UnboundRouteSecurity, UnboundSecuritySchemeRouteSecurity,
+};
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::base_model::component::ComponentId;
@@ -25,17 +27,21 @@ use golem_common::model::agent::{
     SystemVariable,
 };
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentOptions};
+use golem_common::model::environment::Environment;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity,
+};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
-    RoutesWithAgentType, WebhookCallbackBehaviour,
+    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OriginPattern,
+    PathSegment, RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour, OpenApiSpecBehaviour, RoutesWithAgentType
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
 
 pub fn add_agent_method_http_routes(
+    environment: &Environment,
     deployment: &HttpApiDeployment,
     agent: &AgentType,
     implementer: &RegisteredAgentTypeImplementer,
@@ -112,29 +118,16 @@ pub fn add_agent_method_http_routes(
                 .map(|p| compile_agent_path_segment(agent, implementer, p))
                 .collect();
 
-            let mut auth_required = false;
-            if let Some(auth_details) = &http_mount.auth_details {
-                auth_required = auth_details.required;
-            }
-            if let Some(auth_details) = &http_endpoint.auth_details {
-                auth_required = auth_details.required;
-            }
-
-            let security_scheme = if auth_required {
-                let security_scheme = ok_or_continue!(
-                    deployment_agent_options.security_scheme.clone().ok_or(
-                        DeployValidationError::NoSecuritySchemeConfigured(agent.type_name.clone())
-                    ),
-                    errors
-                );
-
-                Some(security_scheme)
-            } else {
-                None
-            };
-
-            // TODO: check whether a security scheme with this name currently exists in the environment
-            // and emit a warning to the cli if it doesn't.
+            let security = ok_or_continue!(
+                resolve_route_security(
+                    environment,
+                    deployment_agent_options,
+                    agent,
+                    http_mount,
+                    http_endpoint,
+                ),
+                errors
+            );
 
             let compiled = UnboundCompiledRoute {
                 route_id,
@@ -152,7 +145,7 @@ pub fn add_agent_method_http_routes(
                     method_parameters,
                     expected_agent_response: agent_method.output_schema.clone(),
                 }),
-                security_scheme,
+                security,
                 cors,
             };
 
@@ -235,7 +228,7 @@ pub fn add_cors_preflight_http_routes(
                     allowed_origins,
                     allowed_methods,
                 }),
-                security_scheme: None,
+                security: UnboundRouteSecurity::None,
                 cors: CorsOptions {
                     allowed_patterns: vec![],
                 },
@@ -271,7 +264,7 @@ pub fn add_webhook_callback_routes(
             behaviour: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: agent_type.implemented_by.component_id,
             }),
-            security_scheme: None,
+            security: UnboundRouteSecurity::None,
             cors: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -591,6 +584,52 @@ fn parse_literal_only_path_segments(input: &str) -> Vec<PathSegment> {
             value: segment.to_string(),
         })
         .collect()
+}
+
+fn resolve_route_security(
+    environment: &Environment,
+    deployment_agent_options: &HttpApiDeploymentAgentOptions,
+    agent: &AgentType,
+    http_mount: &HttpMountDetails,
+    http_endpoint: &HttpEndpointDetails,
+) -> Result<UnboundRouteSecurity, DeployValidationError> {
+    let mut auth_required = false;
+
+    if let Some(auth_details) = &http_mount.auth_details {
+        auth_required = auth_details.required;
+    }
+
+    if let Some(auth_details) = &http_endpoint.auth_details {
+        auth_required = auth_details.required;
+    }
+
+    match (auth_required, &deployment_agent_options.security) {
+        (true, Some(HttpApiDeploymentAgentSecurity::SecurityScheme(inner))) => {
+            let security_scheme = inner.security_scheme.clone();
+
+            // TODO: check whether a security scheme with this name currently exists in the environment
+            // and emit a warning to the cli if it doesn't.
+
+            Ok(UnboundRouteSecurity::SecurityScheme(
+                UnboundSecuritySchemeRouteSecurity { security_scheme },
+            ))
+        }
+        (true, Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(inner))) => {
+            if !environment.security_overrides {
+                return Err(DeployValidationError::SecurityOverrideDisabled);
+            }
+
+            Ok(UnboundRouteSecurity::SessionFromHeader(
+                SessionFromHeaderRouteSecurity {
+                    header_name: inner.header_name.clone(),
+                },
+            ))
+        }
+        (true, None) => Err(DeployValidationError::NoSecuritySchemeConfigured(
+            agent.type_name.clone(),
+        )),
+        (false, _) => Ok(UnboundRouteSecurity::None),
+    }
 }
 
 #[cfg(test)]

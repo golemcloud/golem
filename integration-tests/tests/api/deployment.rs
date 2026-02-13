@@ -234,7 +234,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let expected_hash =
-        Hash::from_str("a578db91bcc1305e81cf305ba68009b06e556235a74c65cc7bbf3715c0cd5c76")?;
+        Hash::from_str("1507945cb1afd9b890cf09560d348a6f2ccd1bac9ee477106efe28b822817cfb")?;
 
     let expected_plan = DeploymentPlan {
         current_revision: None,
@@ -252,7 +252,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             revision: http_api_deployment.revision,
             domain: domain.clone(),
             hash: Hash::from_str(
-                "e56e7b639dd6373669c2f5a8c3f51ba13a15b3aa08dd737067a547fd52144f09",
+                "2a084ee9c82c6d29ebc558c014bc0eb9739e72b945d6d57690c5ef657c29b39a",
             )?,
         }],
     };

@@ -18,6 +18,7 @@ use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
+use clap::ValueEnum;
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::account::AccountId;
@@ -54,7 +55,8 @@ impl Display for WorkerName {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
 pub enum AgentUpdateMode {
     Automatic,
     Manual,

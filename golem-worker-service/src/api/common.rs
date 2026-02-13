@@ -54,12 +54,12 @@ pub enum ApiEndpointError {
     Unauthorized(Json<ErrorBody>),
     #[oai(status = 403)]
     Forbidden(Json<ErrorBody>),
-    #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
     #[oai(status = 404)]
     NotFound(Json<ErrorBody>),
     #[oai(status = 409)]
-    AlreadyExists(Json<ErrorBody>),
+    Conflict(Json<ErrorBody>),
+    #[oai(status = 422)]
+    LimitExceeded(Json<ErrorBody>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBodyWithOptionalWorkerError>),
 }
@@ -68,11 +68,11 @@ impl ApiErrorDetails for ApiEndpointError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {
             Self::BadRequest(_) => "BadRequest",
-            Self::NotFound(_) => "NotFound",
-            Self::AlreadyExists(_) => "AlreadyExists",
-            Self::LimitExceeded(_) => "LimitExceeded",
-            Self::Forbidden(_) => "Forbidden",
             Self::Unauthorized(_) => "Unauthorized",
+            Self::Forbidden(_) => "Forbidden",
+            Self::NotFound(_) => "NotFound",
+            Self::Conflict(_) => "Conflict",
+            Self::LimitExceeded(_) => "LimitExceeded",
             Self::InternalError(_) => "InternalError",
         }
     }
@@ -81,7 +81,7 @@ impl ApiErrorDetails for ApiEndpointError {
         match &self {
             Self::BadRequest(_) => true,
             Self::NotFound(_) => true,
-            Self::AlreadyExists(_) => true,
+            Self::Conflict(_) => true,
             Self::LimitExceeded(_) => true,
             Self::Forbidden(_) => true,
             Self::Unauthorized(_) => true,
@@ -97,7 +97,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::InternalError(_) => None,
             Self::Forbidden(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
-            Self::AlreadyExists(inner) => inner.cause.take(),
+            Self::Conflict(inner) => inner.cause.take(),
         }
     }
 }
@@ -138,8 +138,8 @@ impl ApiEndpointError {
         }))
     }
 
-    pub fn already_exists<T: SafeDisplay>(error: T) -> Self {
-        Self::AlreadyExists(Json(ErrorBody {
+    pub fn conflict<T: SafeDisplay>(error: T) -> Self {
+        Self::Conflict(Json(ErrorBody {
             error: error.to_safe_string(),
             cause: None,
         }))
@@ -258,7 +258,7 @@ impl From<RegistryServiceError> for ApiEndpointError {
             RegistryServiceError::Unauthorized(_) => Self::unauthorized(value),
             RegistryServiceError::LimitExceeded(_) => Self::limit_exceeded(value),
             RegistryServiceError::NotFound(_) => Self::not_found(value),
-            RegistryServiceError::AlreadyExists(_) => Self::already_exists(value),
+            RegistryServiceError::AlreadyExists(_) => Self::conflict(value),
             RegistryServiceError::InternalServerError(_) => Self::internal(value),
             RegistryServiceError::CouldNotAuthenticate(_) => Self::unauthorized(value),
             RegistryServiceError::InternalClientError(_) => Self::internal(value),
@@ -280,6 +280,8 @@ impl From<RequestHandlerError> for ApiEndpointError {
                 RouteResolverError::CouldNotGetDomainFromRequest(_)
                 | RouteResolverError::MalformedPath(_),
             ) => Self::bad_request(value),
+
+            RequestHandlerError::OidcSchemeMismatch => Self::conflict(value),
 
             RequestHandlerError::ResolvingRouteFailed(RouteResolverError::NoMatchingRoute) => {
                 Self::not_found(value)

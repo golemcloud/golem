@@ -701,6 +701,11 @@ impl Application {
         self.repl_root_dir(language).join("repl-metadata.json")
     }
 
+    pub fn repl_cli_commands_metadata_json(&self, language: GuestLanguage) -> PathBuf {
+        self.repl_root_dir(language)
+            .join("repl-cli-commands-metadata.json")
+    }
+
     pub fn repl_history_file(&self, language: ReplLanguage) -> PathBuf {
         self.temp_dir()
             .join("repl-history")
@@ -1741,7 +1746,8 @@ mod app_builder {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
-        HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
+        HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
+        SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
     use indexmap::IndexMap;
     use itertools::Itertools;
@@ -2066,7 +2072,7 @@ mod app_builder {
                                         (
                                             k,
                                             HttpApiDeploymentAgentOptions {
-                                                security_scheme: v.security_scheme
+                                                security: resolve_agent_security(validation, &v)
                                             }
                                         )
                                     )
@@ -2612,6 +2618,34 @@ mod app_builder {
             ));
         }
         !is_empty
+    }
+
+    fn resolve_agent_security(
+        validation: &mut ValidationBuilder,
+        agent_options: &app_raw::HttpApiDeploymentAgentOptions,
+    ) -> Option<HttpApiDeploymentAgentSecurity> {
+        match (
+            &agent_options.security_scheme,
+            &agent_options.test_session_header_name,
+        ) {
+            (Some(_), Some(_)) => {
+                validation.add_error(
+                    "Only one of securityScheme and testSessionHeaderName may be provided".into(),
+                );
+                None
+            }
+            (Some(security_scheme), None) => Some(HttpApiDeploymentAgentSecurity::SecurityScheme(
+                SecuritySchemeAgentSecurity {
+                    security_scheme: security_scheme.clone(),
+                },
+            )),
+            (None, Some(test_session_header_name)) => Some(
+                HttpApiDeploymentAgentSecurity::TestSessionHeader(TestSessionHeaderAgentSecurity {
+                    header_name: test_session_header_name.clone(),
+                }),
+            ),
+            (None, None) => None,
+        }
     }
 }
 
