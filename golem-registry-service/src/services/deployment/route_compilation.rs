@@ -32,9 +32,9 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity,
 };
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour, OriginPattern,
-    PathSegment, RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
+    OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -235,7 +235,9 @@ pub fn add_webhook_callback_routes(
             .collect();
 
         // final segment for promise id
-        typed_segments.push(PathSegment::Variable);
+        typed_segments.push(PathSegment::Variable {
+            display_name: "promise-id".to_string(),
+        });
 
         let compiled = UnboundCompiledRoute {
             route_id,
@@ -254,6 +256,32 @@ pub fn add_webhook_callback_routes(
 
         compiled_routes.push(compiled);
     }
+}
+
+pub fn add_openapi_spec_routes(
+    domain: &Domain,
+    current_route_id: &mut i32,
+    compiled_routes: &mut Vec<UnboundCompiledRoute>,
+) {
+    let route_id = *current_route_id;
+    *current_route_id = current_route_id.checked_add(1).unwrap();
+
+    compiled_routes.push(UnboundCompiledRoute {
+        route_id,
+        domain: domain.clone(),
+        method: HttpMethod::Get(Empty {}),
+        // Note: This is currently a fixed path,
+        // but it can be part of the http api deployment configuration
+        path: vec![PathSegment::Literal {
+            value: "openapi.json".to_string(),
+        }],
+        body: RequestBodySchema::Unused,
+        behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}),
+        security: UnboundRouteSecurity::None,
+        cors: CorsOptions {
+            allowed_patterns: Vec::new(),
+        },
+    });
 }
 
 pub fn build_agent_http_api_deployment_details(
@@ -311,7 +339,7 @@ pub fn build_agent_http_api_deployment_details(
         .chain(agent_webhook_suffix)
         .map(|segment| match segment {
             PathSegment::Literal { value } => Ok(value),
-            PathSegment::Variable | PathSegment::CatchAll => Err(
+            PathSegment::Variable { .. } | PathSegment::CatchAll { .. } => Err(
                 DeployValidationError::HttpApiDeploymentInvalidAgentWebhookSegmentType {
                     agent_type: agent_type_name.clone(),
                 },
@@ -466,11 +494,15 @@ fn compile_agent_path_segment(
     use golem_common::model::agent::PathSegment as AgentPathSegment;
 
     match path_segment {
-        AgentPathSegment::Literal(lit) => PathSegment::Literal {
-            value: lit.value.clone(),
+        AgentPathSegment::Literal(inner) => PathSegment::Literal {
+            value: inner.value.clone(),
         },
-        AgentPathSegment::PathVariable(_) => PathSegment::Variable,
-        AgentPathSegment::RemainingPathVariable(_) => PathSegment::CatchAll,
+        AgentPathSegment::PathVariable(inner) => PathSegment::Variable {
+            display_name: inner.variable_name.clone(),
+        },
+        AgentPathSegment::RemainingPathVariable(inner) => PathSegment::CatchAll {
+            display_name: inner.variable_name.clone(),
+        },
         AgentPathSegment::SystemVariable(system_var) => {
             let literal = match system_var.value {
                 SystemVariable::AgentType => agent.type_name.0.clone(),

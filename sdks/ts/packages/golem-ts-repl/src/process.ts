@@ -28,3 +28,15 @@ export function flushStream(stream: Writable): Promise<void> {
 export async function flushStdIO(): Promise<void> {
   await Promise.all([flushStream(process.stdout), flushStream(process.stderr)]);
 }
+
+let terminalWidth = process.stdout.isTTY ? process.stdout.columns : 80;
+
+if (process.stdout.isTTY) {
+  process.stdout.on('resize', () => {
+    terminalWidth = process.stdout.columns;
+  });
+}
+
+export function getTerminalWidth(): number {
+  return terminalWidth;
+}

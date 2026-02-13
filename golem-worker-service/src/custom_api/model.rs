@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::custom_api::openapi::HttpApiOpenApiSpec;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::BinarySource;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, SecuritySchemeDetails,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
+    SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
 use http::Method;
@@ -75,6 +76,7 @@ pub enum RichRouteBehaviour {
     CallAgent(CallAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
+    OpenApiSpec(OpenApiSpecBehaviour),
     OidcCallback(OidcCallbackBehaviour),
 }
 
@@ -84,6 +86,7 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
             RouteBehaviour::CallAgent(inner) => Self::CallAgent(inner),
             RouteBehaviour::CorsPreflight(inner) => Self::CorsPreflight(inner),
             RouteBehaviour::WebhookCallback(inner) => Self::WebhookCallback(inner),
+            RouteBehaviour::OpenApiSpec(inner) => Self::OpenApiSpec(inner),
         }
     }
 }
@@ -116,6 +119,7 @@ pub enum ResponseBody {
     NoBody,
     ComponentModelJsonBody { body: golem_wasm::ValueAndType },
     UnstructuredBinaryBody { body: BinarySource },
+    OpenApiSchema { spec: Arc<HttpApiOpenApiSpec> },
 }
 
 impl fmt::Debug for ResponseBody {
@@ -127,6 +131,10 @@ impl fmt::Debug for ResponseBody {
                 .field("body", body)
                 .finish(),
             ResponseBody::UnstructuredBinaryBody { .. } => f.write_str("UnstructuredBinaryBody"),
+            ResponseBody::OpenApiSchema { spec } => f
+                .debug_struct("OpenApiSchema")
+                .field("spec", &spec.0)
+                .finish(),
         }
     }
 }

@@ -18,6 +18,7 @@ mod cors;
 pub mod error;
 pub mod model;
 pub mod oidc;
+mod openapi;
 pub mod poem_endpoint;
 pub mod request_handler;
 mod rich_request;

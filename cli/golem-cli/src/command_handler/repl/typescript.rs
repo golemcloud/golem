@@ -276,6 +276,7 @@ impl TypeScriptRepl {
                 const repl = new Repl({{
                   binary: {binary},
                   appMainDir: {app_main_dir},
+                  streamLogs: {stream},
                   agents: {{
                   {agents_config}
                   }},
@@ -287,6 +288,7 @@ impl TypeScriptRepl {
             ",
             binary = js_string_literal(command_name())?,
             app_main_dir = js_string_literal(args.app_main_dir.display().to_string())?,
+            stream = args.stream_logs.to_string(),
             repl_history_file_path = js_string_literal(args.repl_history_file_path.display().to_string())?,
             repl_cli_commands_metadata_json_path =
                 js_string_literal(args.repl_cli_commands_metadata_json_path.display().to_string())?,

@@ -49,13 +49,13 @@ impl<T> RadixNode<T> {
                 PathSegment::Literal { value } => {
                     node = node.literals.entry(value.clone()).or_default();
                 }
-                PathSegment::Variable => {
+                PathSegment::Variable { .. } => {
                     let entry = node
                         .variable
                         .get_or_insert_with(|| Box::new(RadixNode::default()));
                     node = entry.as_mut();
                 }
-                PathSegment::CatchAll => {
+                PathSegment::CatchAll { .. } => {
                     if i != path.len() - 1 {
                         return Err(InsertionError::Conflict);
                     }
@@ -84,10 +84,10 @@ impl<T> RadixNode<T> {
                 PathSegment::Literal { value } => {
                     node = node.literals.get(value)?;
                 }
-                PathSegment::Variable => {
+                PathSegment::Variable { .. } => {
                     node = node.variable.as_ref()?.as_ref();
                 }
-                PathSegment::CatchAll => {
+                PathSegment::CatchAll { .. } => {
                     node = node.catch_all.as_ref()?.as_ref();
                     break;
                 }
@@ -150,9 +150,13 @@ mod test {
 
     fn parse_segment(segment: &str) -> PathSegment {
         if segment == "*" {
-            PathSegment::Variable
+            PathSegment::Variable {
+                display_name: "unused".to_string(),
+            }
         } else if segment == "**" {
-            PathSegment::CatchAll
+            PathSegment::CatchAll {
+                display_name: "unused".to_string(),
+            }
         } else {
             PathSegment::Literal {
                 value: segment.to_string(),

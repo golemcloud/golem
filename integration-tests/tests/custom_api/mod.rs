@@ -16,6 +16,7 @@ mod agent_http_basic_principal_ts;
 mod agent_http_routes_rust;
 mod agent_http_routes_ts;
 mod http_test_context;
+mod openapi_generation;
 
 use golem_test_framework::config::EnvBasedTestDependencies;
 use test_r::inherit_test_dep;

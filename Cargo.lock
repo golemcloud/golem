@@ -5870,6 +5870,7 @@ dependencies = [
  "bytes 1.11.0",
  "clap",
  "futures-concurrency",
+ "goldenfile",
  "golem-api-grpc",
  "golem-client",
  "golem-common",

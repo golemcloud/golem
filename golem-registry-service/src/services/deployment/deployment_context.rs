@@ -18,8 +18,9 @@ use crate::model::api_definition::UnboundCompiledRoute;
 use crate::model::component::Component;
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::route_compilation::{
-    add_agent_method_http_routes, add_cors_preflight_http_routes, add_webhook_callback_routes,
-    build_agent_http_api_deployment_details, make_invalid_agent_mount_error_maker,
+    add_agent_method_http_routes, add_cors_preflight_http_routes, add_openapi_spec_routes,
+    add_webhook_callback_routes, build_agent_http_api_deployment_details,
+    make_invalid_agent_mount_error_maker,
 };
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -230,6 +231,12 @@ impl DeploymentContext {
                     &mut deployment_routes,
                 );
             }
+
+            add_openapi_spec_routes(
+                &deployment.domain,
+                &mut current_route_id,
+                &mut deployment_routes,
+            );
 
             add_cors_preflight_http_routes(
                 deployment,

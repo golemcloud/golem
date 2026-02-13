@@ -14,7 +14,6 @@
 
 import {
   cliCommandsConfigFromBaseConfig,
-  ClientConfig,
   clientConfigFromEnv,
   Config,
   ConfigureClient,
@@ -30,11 +29,13 @@ import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
-import { flushStdIO } from './process';
+import { flushStdIO, getTerminalWidth } from './process';
+import * as base from './base';
+import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
 
 export class Repl {
   private readonly config: Config;
-  private readonly clientConfig: ClientConfig;
+  private readonly clientConfig: base.Configuration;
   private readonly cli: CliReplInterop;
   private readonly processArgs: ProcessArgs;
   private languageService: LanguageService | undefined;
@@ -43,9 +44,26 @@ export class Repl {
   constructor(config: Config) {
     this.config = config;
     this.processArgs = loadProcessArgs();
-    this.clientConfig = clientConfigFromEnv();
-    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
     this.overrideSnippetForNextEval = undefined;
+
+    const clientConfig = clientConfigFromEnv();
+    this.clientConfig = clientConfig;
+
+    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
+    const cli = this.cli;
+    clientConfig.aroundInvokeHook = {
+      async beforeInvoke(request: AgentInvocationRequest): Promise<void> {
+        cli.startAgentStream(request);
+      },
+
+      async afterInvoke(
+        request: AgentInvocationRequest,
+        result: JsonResult<AgentInvocationResult, any>,
+      ): Promise<void> {
+        void result;
+        await cli.stopAgentStream(request);
+      },
+    };
   }
 
   private getLanguageService(): LanguageService {
@@ -147,7 +165,7 @@ export class Repl {
 
           logSnippetInfo(
             formatAsTable(entries, {
-              maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
+              maxLineLength: getTerminalWidth() - INFO_PREFIX_LENGTH,
             }),
           );
         }
@@ -238,7 +256,7 @@ export class Repl {
     const languageService = this.getLanguageService();
     const lines: string[] = [];
     lines.push('');
-    lines.push(pc.bold('Available agents:'));
+    lines.push(pc.bold('Available agents client types:'));
 
     for (const agentTypeName of agentNames) {
       const methods = languageService.getClientMethodSignatures(agentTypeName);
@@ -354,7 +372,7 @@ function logSnippetInfo(message: string | string[]) {
   });
 
   if (maxLineLength > 0) {
-    replMessageSink.writeText(pc.dim('~'.repeat(terminalWidth)));
+    replMessageSink.writeText(pc.dim('~'.repeat(getTerminalWidth())));
   }
 }
 
@@ -402,14 +420,6 @@ export function formatAsTable(
 }
 
 const MAX_COMPLETION_ENTRIES = 50;
-
-let terminalWidth = process.stdout.isTTY ? process.stdout.columns : 80;
-
-if (process.stdout.isTTY) {
-  process.stdout.on('resize', () => {
-    terminalWidth = process.stdout.columns;
-  });
-}
 
 function formatEvalError(error: unknown) {
   if (error instanceof Error) {
