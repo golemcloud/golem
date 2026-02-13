@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import childProcess, { ChildProcessByStdio } from 'node:child_process';
-import { Readable } from 'node:stream';
+import childProcess, { ChildProcessWithoutNullStreams } from 'node:child_process';
 import repl from 'node:repl';
 import pc from 'picocolors';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
@@ -147,10 +146,10 @@ export class CliReplInterop {
 
     const child = childProcess.spawn(this.config.binary, args, {
       cwd: this.config.appMainDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    const state = createAgentStreamState(child);
+    const state = createAgentStreamState(child, Date.now());
     this.agentStreams.set(key, state);
 
     child.stdout?.on('data', state.onStdout);
@@ -243,24 +242,29 @@ type AgentStreamState = {
 };
 
 function createAgentStreamState(
-  child: ChildProcessByStdio<null, Readable, Readable>,
+  child: ChildProcessWithoutNullStreams,
+  invokeStartedAtMs: number,
 ): AgentStreamState {
   let stdoutBuffer = '';
   let stderrBuffer = '';
 
-  const writeLine = (stream: NodeJS.WritableStream, line: string) => {
-    stream.write(`${pc.green('|')} ${line}\n`);
+  const writeStdoutLine = (line: string) => {
+    process.stdout.write(`${pc.green('|')} ${line}\n`);
+  };
+
+  const writeStderrLine = (line: string) => {
+    process.stderr.write(`${pc.red('|')} ${line}\n`);
   };
 
   const onStdout = (chunk: Buffer) => {
     stdoutBuffer = appendAndWriteLines(stdoutBuffer, chunk, (line) =>
-      writeLine(process.stdout, line),
+      filterStdoutLine(line, invokeStartedAtMs, writeStdoutLine),
     );
   };
 
   const onStderr = (chunk: Buffer) => {
     stderrBuffer = appendAndWriteLines(stderrBuffer, chunk, (line) =>
-      writeLine(process.stderr, line),
+      writeStderrLine(line),
     );
   };
 
@@ -316,6 +320,28 @@ function safeJsonStringify(value: unknown): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function filterStdoutLine(
+  line: string,
+  invokeStartedAtMs: number,
+  writeLine: (line: string) => void,
+) {
+  if (line.startsWith('Selected app:')) return;
+  if (line.startsWith('Connecting to agent')) return;
+
+  if (line.startsWith('[')) {
+    const endBracket = line.indexOf(']');
+    if (endBracket > 1) {
+      const timestampText = line.slice(1, endBracket);
+      const timestamp = Date.parse(timestampText);
+      if (!Number.isNaN(timestamp) && timestamp < invokeStartedAtMs - 1000) {
+        return;
+      }
+    }
+  }
+
+  writeLine(line);
 }
 
 const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
