@@ -287,7 +287,5 @@ fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>
 #[derive(Clone)]
 struct DomainHttpApi {
     router: Router<Arc<RichCompiledRoute>>,
-    // invariant: will always be some if router contains any entries requesting
-    // an http api.
     openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }
