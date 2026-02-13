@@ -1175,6 +1175,8 @@ pub mod worker {
             agent_type_name: String,
             /// Agent parameters in UntypedDataValue JSON format
             parameters: String,
+            /// Idempotency key, used for filtering
+            idempotency_key: IdempotencyKey,
             /// Phantom ID
             phantom_id: Option<Uuid>,
             #[command(flatten)]

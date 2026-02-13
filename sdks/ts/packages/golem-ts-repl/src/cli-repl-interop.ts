@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import childProcess, { ChildProcessWithoutNullStreams } from 'node:child_process';
+import childProcess, { ChildProcess } from 'node:child_process';
 import repl from 'node:repl';
 import pc from 'picocolors';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
 import { flushStdIO } from './process';
 import * as base from './base';
+import * as uuid from 'uuid';
 
 export class CliReplInterop {
   private readonly config: CliCommandsConfig;
@@ -139,21 +140,32 @@ export class CliReplInterop {
     }
 
     const parameters = safeJsonStringify(request.parameters);
-    const args = ['agent', 'repl-stream', '--logs-only', request.agentTypeName, parameters];
+
+    const idempotencyKey = request.idempotencyKey ?? uuid.v4().toString();
+    if (!request.idempotencyKey) {
+      request.idempotencyKey = idempotencyKey;
+    }
+
+    const args = [
+      'agent',
+      'repl-stream',
+      '--quiet',
+      '--logs-only',
+      request.agentTypeName,
+      parameters,
+      idempotencyKey,
+    ];
     if (request.phantomId) {
       args.push(request.phantomId);
     }
 
     const child = childProcess.spawn(this.config.binary, args, {
       cwd: this.config.appMainDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'inherit',
     });
 
     const state = createAgentStreamState(child);
     this.agentStreams.set(key, state);
-
-    child.stdout?.pipe(process.stdout);
-    child.stderr?.pipe(process.stderr);
 
     child.once('error', () => {
       void this.stopAgentStreamByKey(key);
@@ -240,10 +252,8 @@ type AgentStreamState = {
   stop: () => void;
 };
 
-function createAgentStreamState(child: ChildProcessWithoutNullStreams): AgentStreamState {
+function createAgentStreamState(child: ChildProcess): AgentStreamState {
   const stop = () => {
-    child.stdout?.unpipe(process.stdout);
-    child.stderr?.unpipe(process.stderr);
     child.removeAllListeners('error');
     child.removeAllListeners('exit');
     if (child.exitCode === null && !child.killed) {

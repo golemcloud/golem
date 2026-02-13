@@ -153,11 +153,18 @@ impl WorkerCommandHandler {
             AgentSubcommand::ReplStream {
                 agent_type_name,
                 parameters,
+                idempotency_key,
                 phantom_id,
                 stream_args,
             } => {
-                self.cmd_repl_stream(agent_type_name, parameters, phantom_id, stream_args)
-                    .await
+                self.cmd_repl_stream(
+                    agent_type_name,
+                    parameters,
+                    idempotency_key,
+                    phantom_id,
+                    stream_args,
+                )
+                .await
             }
             AgentSubcommand::Interrupt {
                 agent_id: worker_name,
@@ -458,13 +465,39 @@ impl WorkerCommandHandler {
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        self.stream(worker_name.agent_id, stream_args).await
+
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Connecting",
+            format!("to agent {}", format_worker_name_match(&worker_name_match)),
+        );
+
+        let connection = WorkerConnection::new(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &component.id,
+            worker_name.0.clone(),
+            stream_args.into(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+            None,
+        )
+        .await?;
+
+        connection.run_forever().await;
+
+        Ok(())
     }
 
     async fn cmd_repl_stream(
         &self,
         agent_type_name: String,
         parameters: String,
+        idempotency_key: IdempotencyKey,
         phantom_id: Option<Uuid>,
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
@@ -501,7 +534,26 @@ impl WorkerCommandHandler {
         let agent_id = AgentId::new(agent_type_name, typed_parameters, phantom_id);
         let worker_name = WorkerName(agent_id.to_string());
 
-        self.stream(worker_name, stream_args).await
+        let worker_name_match = self.match_worker_name(worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        let connection = WorkerConnection::new(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &component.id,
+            worker_name.0.clone(),
+            stream_args.into(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+            Some(idempotency_key),
+        )
+        .await?;
+
+        connection.run_forever().await;
+
+        Ok(())
     }
 
     async fn cmd_simulate_crash(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
@@ -1244,34 +1296,6 @@ impl WorkerCommandHandler {
         }
 
         Ok(result)
-    }
-
-    async fn stream(&self, worker_name: WorkerName, stream_args: StreamArgs) -> anyhow::Result<()> {
-        let worker_name_match = self.match_worker_name(worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
-        log_action(
-            "Connecting",
-            format!("to agent {}", format_worker_name_match(&worker_name_match)),
-        );
-
-        let connection = WorkerConnection::new(
-            self.ctx.worker_service_url().clone(),
-            self.ctx.auth_token().await?,
-            &component.id,
-            worker_name.0.clone(),
-            stream_args.into(),
-            self.ctx.allow_insecure(),
-            self.ctx.format(),
-            None,
-        )
-        .await?;
-
-        connection.run_forever().await;
-
-        Ok(())
     }
 
     pub async fn worker_metadata(
