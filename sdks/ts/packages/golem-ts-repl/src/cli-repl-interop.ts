@@ -16,7 +16,7 @@ import childProcess, { ChildProcess } from 'node:child_process';
 import repl from 'node:repl';
 import pc from 'picocolors';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
-import { flushStdIO } from './process';
+import { flushStdIO, getTerminalWidth } from './process';
 import * as base from './base';
 import * as uuid from 'uuid';
 
@@ -318,8 +318,8 @@ function delay(ms: number): Promise<void> {
 }
 
 function writeStreamSeparator() {
-  const width = process.stdout.isTTY ? process.stdout.columns : 80;
-  if (!width || width <= 0) return;
+  const width = getTerminalWidth();
+  if (width <= 0) return;
   process.stdout.write(pc.dim('~'.repeat(width)) + '\n');
 }
 

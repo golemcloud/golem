@@ -29,7 +29,7 @@ import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
-import { flushStdIO } from './process';
+import { flushStdIO, getTerminalWidth } from './process';
 import * as base from './base';
 import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
 
@@ -165,7 +165,7 @@ export class Repl {
 
           logSnippetInfo(
             formatAsTable(entries, {
-              maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
+              maxLineLength: getTerminalWidth() - INFO_PREFIX_LENGTH,
             }),
           );
         }
@@ -372,7 +372,7 @@ function logSnippetInfo(message: string | string[]) {
   });
 
   if (maxLineLength > 0) {
-    replMessageSink.writeText(pc.dim('~'.repeat(terminalWidth)));
+    replMessageSink.writeText(pc.dim('~'.repeat(getTerminalWidth())));
   }
 }
 
@@ -420,14 +420,6 @@ export function formatAsTable(
 }
 
 const MAX_COMPLETION_ENTRIES = 50;
-
-let terminalWidth = process.stdout.isTTY ? process.stdout.columns : 80;
-
-if (process.stdout.isTTY) {
-  process.stdout.on('resize', () => {
-    terminalWidth = process.stdout.columns;
-  });
-}
 
 function formatEvalError(error: unknown) {
   if (error instanceof Error) {
