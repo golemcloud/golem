@@ -29,7 +29,6 @@ exclude = [
     "test-components/app-and-library",
     "test-components/shopping-cart",
     "test-components/durability-overhead",
-    "test-components/failing-component",
     "test-components/host-api-tests",
     "test-components/http-tests",
     "test-components/ifs-update",

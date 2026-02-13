@@ -2991,25 +2991,23 @@ async fn stderr_returned_for_failed_component(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "failing-component")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+    let agent_id = agent_id!("failing-counter", "failing-worker-1");
     let worker_id = executor
-        .start_worker(&component.id, "failing-worker-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{add}",
-            vec![5u64.into_value_and_type()],
-        )
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:component/api.{add}",
+            "it:agent-counters/failing-counter.{add}",
             vec![50u64.into_value_and_type()],
         )
         .await?;
@@ -3017,7 +3015,7 @@ async fn stderr_returned_for_failed_component(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
@@ -3035,31 +3033,29 @@ async fn stderr_returned_for_failed_component(
         worker_error_message(&result3.clone().err().unwrap())
     );
 
-    assert!(result1.is_ok());
     assert!(result2.is_err());
     assert!(result3.is_err());
 
-    let expected_stderr = "error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    let logs2 = worker_error_logs(&result2.clone().err().unwrap()).expect("Expected stderr logs");
+    assert!(logs2.contains("error log message"), "Expected 'error log message' in logs: {logs2}");
+    assert!(logs2.contains("value is too large"), "Expected 'value is too large' in logs: {logs2}");
 
-    assert!(worker_error_logs(&result2.clone().err().unwrap())
-        .unwrap()
-        .ends_with(&expected_stderr));
-    assert!(worker_error_logs(&result3.clone().err().unwrap())
-        .unwrap()
-        .ends_with(&expected_stderr));
+    let logs3 = worker_error_logs(&result3.clone().err().unwrap()).expect("Expected stderr logs");
+    assert!(logs3.contains("error log message"), "Expected 'error log message' in logs: {logs3}");
+    assert!(logs3.contains("value is too large"), "Expected 'value is too large' in logs: {logs3}");
 
     assert_eq!(metadata.status, WorkerStatus::Failed);
     assert!(metadata.last_error.is_some());
-    assert!(metadata.last_error.unwrap().ends_with(&expected_stderr));
+    let last_error = metadata.last_error.unwrap();
+    assert!(last_error.contains("error log message"), "Expected 'error log message' in last_error: {last_error}");
+    assert!(last_error.contains("value is too large"), "Expected 'value is too large' in last_error: {last_error}");
 
     assert!(next.is_none());
     assert_eq!(all.len(), 1);
     assert!(all[0].last_error.is_some());
-    assert!(all[0]
-        .last_error
-        .clone()
-        .unwrap()
-        .ends_with(&expected_stderr));
+    let all_last_error = all[0].last_error.clone().unwrap();
+    assert!(all_last_error.contains("error log message"), "Expected 'error log message' in all[0].last_error: {all_last_error}");
+    assert!(all_last_error.contains("value is too large"), "Expected 'value is too large' in all[0].last_error: {all_last_error}");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())

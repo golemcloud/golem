@@ -14,6 +14,7 @@
 
 use crate::Tracing;
 use pretty_assertions::{assert_eq, assert_ne};
+use golem_common::agent_id;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
@@ -158,35 +159,35 @@ async fn revert_failed_worker(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "failing-component")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+    let agent_id = agent_id!("failing-counter", "revert_failed_worker");
     let worker_id = executor
-        .start_worker(&component.id, "revert_failed_worker")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{add}",
-            vec![5u64.into_value_and_type()],
-        )
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:component/api.{add}",
+            "it:agent-counters/failing-counter.{add}",
             vec![50u64.into_value_and_type()],
         )
         .await?;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
         .await?;
 
     executor
@@ -199,15 +200,14 @@ async fn revert_failed_worker(
         .await?;
 
     let result4 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert!(result1.is_ok());
     assert!(result2.is_err());
     assert!(result3.is_err());
-    assert!(result4.is_ok());
+    assert!(result4.is_ok(), "Expected get after revert to succeed: {:?}", result4);
 
     Ok(())
 }
@@ -220,29 +220,29 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "failing-component")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+    let agent_id = agent_id!("failing-counter", "revert_failed_worker");
     let worker_id = executor
-        .start_worker(&component.id, "revert_failed_worker")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{add}",
-            vec![5u64.into_value_and_type()],
-        )
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:component/api.{add}",
+            "it:agent-counters/failing-counter.{add}",
             vec![50u64.into_value_and_type()],
         )
         .await?;
@@ -266,12 +266,11 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
         .await?;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert!(result1.is_ok());
     assert!(result2.is_err());
     {
         let Err(WorkerExecutorError::InvocationFailed { stderr, .. }) = result3 else {

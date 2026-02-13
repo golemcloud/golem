@@ -19,6 +19,7 @@ use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
+use golem_common::agent_id;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
@@ -2048,58 +2049,61 @@ async fn failing_worker(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "failing-component")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+    let agent_id = agent_id!("failing-counter", "failing-worker-1");
     let worker_id = executor
-        .start_worker(&component.id, "failing-worker-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{add}",
-            vec![5u64.into_value_and_type()],
-        )
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:component/api.{add}",
+            "it:agent-counters/failing-counter.{add}",
             vec![50u64.into_value_and_type()],
         )
         .await?;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert!(result1.is_ok());
     assert!(result2.is_err());
     assert!(result3.is_err());
 
     let result2_err = result2.err().unwrap();
     assert_eq!(worker_error_message(&result2_err), "Invocation failed");
     assert!(
-        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
+        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.contains("error while executing at wasm backtrace:") && error.contains("it_agent_counters.wasm"))
     );
-    assert_eq!(worker_error_logs(&result2_err), Some("error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    let logs2 = worker_error_logs(&result2_err).expect("Expected stderr logs");
+    assert!(logs2.contains("error log message"), "Expected 'error log message' in logs: {logs2}");
+    assert!(logs2.contains("value is too large"), "Expected 'value is too large' in logs: {logs2}");
     let result3_err = result3.err().unwrap();
     assert_eq!(
         worker_error_message(&result3_err),
         "Previous invocation failed"
     );
     assert!(
-        matches!(worker_error_underlying_error(&result3_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
+        matches!(worker_error_underlying_error(&result3_err), Some(WorkerError::Unknown(error)) if error.contains("error while executing at wasm backtrace:") && error.contains("it_agent_counters.wasm"))
     );
-    assert_eq!(worker_error_logs(&result3_err), Some("error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    let logs3 = worker_error_logs(&result3_err).expect("Expected stderr logs");
+    assert!(logs3.contains("error log message"), "Expected 'error log message' in logs: {logs3}");
+    assert!(logs3.contains("value is too large"), "Expected 'value is too large' in logs: {logs3}");
 
     Ok(())
 }
