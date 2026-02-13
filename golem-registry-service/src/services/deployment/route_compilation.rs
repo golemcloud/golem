@@ -336,7 +336,7 @@ pub fn add_openapi_spec_routes(
             continue;
         }
 
-        // Note: This is currently a fixed path, 
+        // Note: This is currently a fixed path,
         // but it can be part of the http api deployment configuration
         let path = vec![
             PathSegment::Literal {

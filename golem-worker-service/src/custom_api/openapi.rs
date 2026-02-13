@@ -359,7 +359,7 @@ fn get_parameters<'a>(
     let mut header_params = Vec::new();
 
     for (name, path_segment_type) in path_params_raw {
-        let schema = create_schema_from_path_segment_type(&path_segment_type);
+        let schema = create_schema_from_path_segment_type(path_segment_type);
         path_params.push(ParameterSchema { name, schema });
     }
 
