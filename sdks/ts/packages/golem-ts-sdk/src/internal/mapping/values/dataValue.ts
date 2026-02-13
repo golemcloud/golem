@@ -12,12 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  isEmptyType,
-  isOptionalWithQuestionMark,
-  isPrincipal,
-  TypeInfoInternal,
-} from '../../typeInfoInternal';
+import { isEmptyType, isOptionalWithQuestionMark, TypeInfoInternal } from '../../typeInfoInternal';
 
 import * as Either from '../../../newTypes/either';
 import * as WitValue from '../../mapping/values/WitValue';
@@ -69,18 +64,16 @@ export function deserializeDataValue(
 ): Either.Either<any[], string> {
   switch (dataValue.tag) {
     case 'tuple':
-      const inputElements = dataValue.val;
-      const inputElementsLen = inputElements.length;
+      const elements = dataValue.val;
+      const elementsCount = elements.length;
 
-      // An index that's incremented corresponding to the schema
-      // The index is incremented for each type unless it is of type `Principal`
-      let schemaBasedIndex = 0;
+      let dataValueElementIdx = 0;
 
       return Either.all(
         paramTypes.map((parameterDetail) => {
           const parameterType = parameterDetail.type;
 
-          if (schemaBasedIndex >= inputElementsLen) {
+          if (dataValueElementIdx >= elementsCount) {
             if (isOptionalWithQuestionMark(parameterType)) {
               return Either.right(undefined);
             }
@@ -89,16 +82,12 @@ export function deserializeDataValue(
               return Either.right(undefined);
             }
 
-            if (isPrincipal(parameterType)) {
-              return Either.right(principal);
-            }
-
             throw new Error(
               `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
             );
           }
 
-          const elementValue = inputElements[schemaBasedIndex];
+          const elementValue = elements[dataValueElementIdx];
 
           switch (parameterType.tag) {
             case 'multimodal':
@@ -130,7 +119,7 @@ export function deserializeDataValue(
                 );
               }
 
-              schemaBasedIndex += 1;
+              dataValueElementIdx += 1;
 
               return UnstructuredText.fromDataValue(
                 unstructuredTextParamName,
@@ -139,7 +128,7 @@ export function deserializeDataValue(
               );
 
             case 'unstructured-binary':
-              const binaryParameterDetail = paramTypes[schemaBasedIndex];
+              const binaryParameterDetail = paramTypes[dataValueElementIdx];
 
               if (elementValue.tag !== 'unstructured-binary') {
                 throw new Error(
@@ -157,7 +146,7 @@ export function deserializeDataValue(
                 );
               }
 
-              schemaBasedIndex += 1;
+              dataValueElementIdx += 1;
 
               return UnstructuredBinary.fromDataValue(
                 binaryParameterDetail.name,
@@ -172,7 +161,7 @@ export function deserializeDataValue(
                 );
               }
 
-              schemaBasedIndex += 1;
+              dataValueElementIdx += 1;
 
               return Either.right(WitValue.toTsValue(elementValue.val, parameterType.val));
           }

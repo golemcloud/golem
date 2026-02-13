@@ -50,10 +50,6 @@ export function isOptionalWithQuestionMark(typeInfoInternal: TypeInfoInternal): 
   return false;
 }
 
-export function isPrincipal(typeInfoInternal: TypeInfoInternal): boolean {
-  return typeInfoInternal.tag === 'principal';
-}
-
 export function isEmptyType(typeInfoInternal: TypeInfoInternal): boolean {
   if (typeInfoInternal.tag === 'analysed') {
     const analysed = typeInfoInternal.val;

@@ -32,7 +32,6 @@ impl Debug for HttpTestContext {
 
 pub async fn test_context_internal(
     deps: &EnvBasedTestDependencies,
-    agent_and_http_options: Vec<(AgentTypeName, HttpApiDeploymentAgentOptions)>,
     component_name: &str,
     package_name: &str,
 ) -> anyhow::Result<HttpTestContext> {
@@ -58,7 +57,20 @@ pub async fn test_context_internal(
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agents: BTreeMap::from_iter(agent_and_http_options),
+        agents: BTreeMap::from_iter([
+            (
+                AgentTypeName("http-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("cors-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("webhook-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+        ]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 

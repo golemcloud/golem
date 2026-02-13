@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};
-use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use reqwest::Url;
@@ -28,20 +26,6 @@ inherit_test_dep!(EnvBasedTestDependencies);
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     test_context_internal(
         deps,
-        vec![
-            (
-                AgentTypeName("http-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("cors-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("webhook-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-        ],
         "golem_it_agent_http_routes_ts",
         "golem-it:agent-http-routes-ts",
     )
