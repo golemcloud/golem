@@ -22,7 +22,7 @@ use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -46,19 +46,23 @@ async fn fork_interrupted_worker(
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8586;
 
-    let source_worker_name = Uuid::new_v4().to_string();
-
     let http_server = run_http_server(&response, host_http_port);
 
-    let component = user.component(&env.id, "http-client-2").store().await?;
+    let component = user
+        .component(&env.id, "golem_it_http_tests_release")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
+    let source_agent_id = agent_id!("http-client2");
     let worker_id = user
-        .start_worker_with(&component.id, source_worker_name.as_str(), env, vec![])
+        .start_agent_with(&component.id, source_agent_id.clone(), env, vec![])
         .await?;
 
-    let target_worker_name = Uuid::new_v4().to_string();
+    let target_agent_id = phantom_agent_id!("http-client2", Uuid::new_v4());
+    let target_worker_name = target_agent_id.to_string();
 
     let target_worker_id = WorkerId {
         component_id: component.id,
@@ -67,13 +71,13 @@ async fn fork_interrupted_worker(
 
     user.log_output(&worker_id).await?;
 
-    user.invoke(
-        &worker_id,
-        "golem:it/api.{start-polling}",
-        vec!["first".into_value_and_type()],
+    user.invoke_agent(
+        &component.id,
+        &source_agent_id,
+        "start_polling",
+        data_value!("first"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
     user.wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await?;
@@ -201,16 +205,21 @@ async fn fork_running_worker_2(
     let host_http_port = 8587;
     let http_server = run_http_server(&response, host_http_port);
 
-    let component = user.component(&env.id, "http-client-2").store().await?;
+    let component = user
+        .component(&env.id, "golem_it_http_tests_release")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let source_worker_name = Uuid::new_v4().to_string();
+    let source_agent_id = agent_id!("http-client2");
     let source_worker_id = user
-        .start_worker_with(&component.id, source_worker_name.as_str(), env, vec![])
+        .start_agent_with(&component.id, source_agent_id.clone(), env, vec![])
         .await?;
 
-    let target_worker_name = Uuid::new_v4().to_string();
+    let target_agent_id = phantom_agent_id!("http-client2", Uuid::new_v4());
+    let target_worker_name = target_agent_id.to_string();
 
     let target_worker_id = WorkerId {
         component_id: component.id,
@@ -219,13 +228,13 @@ async fn fork_running_worker_2(
 
     user.log_output(&source_worker_id).await?;
 
-    user.invoke(
-        &source_worker_id,
-        "golem:it/api.{start-polling}",
-        vec!["first".into_value_and_type()],
+    user.invoke_agent(
+        &component.id,
+        &source_agent_id,
+        "start_polling",
+        data_value!("first"),
     )
-    .await
-    .collapse()?;
+    .await?;
 
     user.wait_for_status(
         &source_worker_id,

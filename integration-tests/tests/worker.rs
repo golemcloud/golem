@@ -34,7 +34,7 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
     WorkerFilter, WorkerId, WorkerResourceDescription, WorkerStatus,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{
     update_counts, TestDsl, TestDslExtended, WorkerInvocationResultOps, WorkerLogEventStream,
@@ -604,7 +604,8 @@ async fn get_running_workers(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
-        .component(&env.id, "http-client-2")
+        .component(&env.id, "golem_it_http_tests_release")
+        .name("golem-it:http-tests")
         .unique()
         .store()
         .await?;
@@ -647,29 +648,27 @@ async fn get_running_workers(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let workers_count = 15;
-    let mut worker_ids = HashSet::new();
+    let mut workers: Vec<(WorkerId, golem_common::model::agent::AgentId)> = Vec::new();
 
-    for i in 0..workers_count {
+    for _i in 0..workers_count {
+        let aid = phantom_agent_id!("http-client2", Uuid::new_v4());
         let worker_id = user
-            .start_worker_with(
-                &component.id,
-                &format!("worker-http-client-{i}"),
-                env.clone(),
-                vec![],
-            )
+            .start_agent_with(&component.id, aid.clone(), env.clone(), vec![])
             .await?;
 
-        worker_ids.insert(worker_id);
+        workers.push((worker_id, aid));
     }
 
-    for worker_id in &worker_ids {
-        user.invoke(
-            worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["stop".into_value_and_type()],
+    let worker_ids: HashSet<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
+
+    for (worker_id, aid) in &workers {
+        user.invoke_agent(
+            &component.id,
+            aid,
+            "start_polling",
+            data_value!("stop"),
         )
-        .await
-        .collapse()?;
+        .await?;
 
         user.wait_for_status(worker_id, WorkerStatus::Running, Duration::from_secs(10))
             .await?;
@@ -1698,25 +1697,30 @@ async fn worker_suspends_when_running_out_of_fuel(
         .in_current_span()
     });
 
-    let component = user.component(&env.id, "http-client").store().await?;
+    let component = user
+        .component(&env.id, "golem_it_http_tests_release")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
+    let http_agent_id = agent_id!("http-client");
     let worker_id = user
-        .start_worker_with(&component.id, "http-client-1", env, vec![])
+        .start_agent_with(&component.id, http_agent_id.clone(), env, vec![])
         .await?;
 
     let invoker_task = tokio::spawn({
         let user = user.clone();
-        let worker_id = worker_id.clone();
+        let component_id = component.id.clone();
+        let agent_id = http_agent_id.clone();
         async move {
             loop {
-                user.invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-                    .await
-                    .collapse()
-                    .unwrap();
+                let _ = user
+                    .invoke_and_await_agent(&component_id, &agent_id, "run", data_value!())
+                    .await;
             }
         }
     });

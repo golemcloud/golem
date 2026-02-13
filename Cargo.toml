@@ -28,13 +28,10 @@ exclude = [
     "cli/desktop-app/src-tauri",
     "test-components/app-and-library",
     "test-components/shopping-cart",
-    "test-components/write-stdout",
     "test-components/durability-overhead",
     "test-components/failing-component",
     "test-components/host-api-tests",
-    "test-components/http-client",
-    "test-components/http-client-2",
-    "test-components/http-client-3",
+    "test-components/http-tests",
     "test-components/ifs-update",
     "test-components/ifs-update-inside-exported-function",
     "test-components/interruption",
@@ -53,10 +50,6 @@ exclude = [
     "test-components/update-test-v3-sdk",
     "test-components/update-test-v4",
     "test-components/update-test-env-var",
-    "test-components/wasi-config",
-    "test-components/write-stderr",
-    "test-components/write-stdout",
-    "test-components/rdbms-service",
     "sdks/golem-rust"
 ]
 

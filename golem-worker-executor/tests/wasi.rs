@@ -58,22 +58,29 @@ async fn write_stdout(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "write-stdout")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("logging", "write-stdout-1");
     let worker_id = executor
-        .start_worker(&component.id, "write-stdout-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "write-stdout", data_value!())
+        .await?;
 
     let mut events = vec![];
     let start_time = Instant::now();
@@ -98,22 +105,29 @@ async fn write_stderr(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "write-stderr")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("logging", "write-stderr-1");
     let worker_id = executor
-        .start_worker(&component.id, "write-stderr-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "write-stderr", data_value!())
+        .await?;
 
     let mut events = vec![];
     let start_time = Instant::now();
@@ -1109,6 +1123,8 @@ async fn http_client_response_persisted_between_invocations(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1138,20 +1154,25 @@ async fn http_client_response_persisted_between_invocations(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_debug",
+        )
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await(&worker_id, "golem:it/api.{send-request}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "send_request", data_value!())
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1161,16 +1182,14 @@ async fn http_client_response_persisted_between_invocations(
     let _rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{process-response}", vec![])
+        .invoke_and_await_agent(&component.id, &agent_id, "process_response", data_value!())
         .await?;
 
     http_server.abort();
 
     assert_eq!(
         result,
-        Ok(vec![Value::String(
-                "200 response is test-header test-body".to_string()
-            )])
+        data_value!("200 response is test-header test-body")
     );
 
     Ok(())
@@ -1183,6 +1202,8 @@ async fn http_client_interrupting_response_stream(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1228,30 +1249,37 @@ async fn http_client_interrupting_response_stream(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_debug",
+        )
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id.clone();
+    let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
         async move {
             let _ = executor_clone
-                .invoke_and_await_with_key(
-                    &worker_id_clone,
+                .invoke_and_await_agent_with_key(
+                    &component_id_clone,
+                    &agent_id_clone,
                     &key_clone,
-                    "golem:it/api.{slow-body-stream}",
-                    vec![],
+                    "slow_body_stream",
+                    data_value!(),
                 )
                 .await;
         }
@@ -1273,7 +1301,13 @@ async fn http_client_interrupting_response_stream(
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
+            &key,
+            "slow_body_stream",
+            data_value!(),
+        )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1281,7 +1315,7 @@ async fn http_client_interrupting_response_stream(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, Ok(vec![Value::U64(100 * 1024)]));
+    assert_eq!(result, data_value!(100u64 * 1024u64));
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
     assert_eq!(idempotency_keys.len(), 2);
@@ -1297,6 +1331,8 @@ async fn http_client_interrupting_response_stream_async(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1342,30 +1378,37 @@ async fn http_client_interrupting_response_stream_async(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-3")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_debug",
+        )
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client3");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2-async", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id.clone();
+    let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
         async move {
             let _ = executor_clone
-                .invoke_and_await_with_key(
-                    &worker_id_clone,
+                .invoke_and_await_agent_with_key(
+                    &component_id_clone,
+                    &agent_id_clone,
                     &key_clone,
-                    "golem:it/api.{slow-body-stream}",
-                    vec![],
+                    "slow_body_stream",
+                    data_value!(),
                 )
                 .await;
         }
@@ -1386,7 +1429,13 @@ async fn http_client_interrupting_response_stream_async(
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
+            &key,
+            "slow_body_stream",
+            data_value!(),
+        )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1394,7 +1443,7 @@ async fn http_client_interrupting_response_stream_async(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, Ok(vec![Value::U64(100 * 1024)]));
+    assert_eq!(result, data_value!(100u64 * 1024u64));
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
     assert_eq!(idempotency_keys.len(), 2);

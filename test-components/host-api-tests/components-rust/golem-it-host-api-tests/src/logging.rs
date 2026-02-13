@@ -11,6 +11,8 @@ pub trait Logging {
     fn some_random_entries(&self);
     fn forever_random_entries_with_log(&self);
     fn run_high_volume(&self);
+    fn write_stdout(&self);
+    fn write_stderr(&self);
 }
 
 pub struct LoggingImpl {
@@ -67,6 +69,14 @@ impl Logging for LoggingImpl {
         for n in 1..=100 {
             println!("Iteration {n}");
         }
+    }
+
+    fn write_stdout(&self) {
+        println!("Sample text written to the output");
+    }
+
+    fn write_stderr(&self) {
+        eprintln!("Sample text written to the error output");
     }
 }
 

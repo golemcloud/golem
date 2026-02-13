@@ -1702,7 +1702,11 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     // case: WASM can be parsed, but wasmtime does not support it
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(&context.default_environment_id, "write-stdout")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
@@ -1755,7 +1759,11 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(&context.default_environment_id, "write-stdout")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
@@ -1850,26 +1858,24 @@ async fn long_running_poll_loop_works_as_expected(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-0", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -1949,26 +1955,24 @@ async fn long_running_poll_loop_http_failures_are_retried(
         start_http_poll_server(response.clone(), poll_count.clone(), None).await;
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-0", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["stop now".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("stop now"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -2058,26 +2062,24 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-3")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client3");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-0", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -2131,24 +2133,22 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-1", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(20))
@@ -2185,12 +2185,8 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["second".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("second"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(20))
@@ -2273,24 +2269,22 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-2", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -2358,25 +2352,23 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-3", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -2438,25 +2430,23 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-4", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -2573,25 +2563,23 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "poll-loop-component-5", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
@@ -2829,41 +2817,39 @@ async fn invocation_queue_is_persistent(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "invocation-queue-is-persistent", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["done".into_value_and_type()],
-        )
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("done"))
+        .await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await?;
 
     executor
-        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?;
 
     executor
-        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?;
 
     executor
-        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?;
 
     executor.interrupt(&worker_id).await?;
 
@@ -2881,8 +2867,8 @@ async fn invocation_queue_is_persistent(
     let executor = start(deps, &context).await?;
 
     executor
-        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
-        .await??;
+        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?;
 
     // executor.log_output(&worker_id).await?;
 
@@ -2895,12 +2881,12 @@ async fn invocation_queue_is_persistent(
     }
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-count}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_count", data_value!())
+        .await?;
 
     http_server.abort();
 
-    assert_eq!(result, vec![Value::U64(4)]);
+    assert_eq!(result, data_value!(4u64));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
