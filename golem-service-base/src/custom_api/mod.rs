@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// pub mod openapi;
 mod protobuf;
 pub mod router;
 
@@ -40,17 +39,16 @@ pub type RouteId = i32;
 #[desert(evolution())]
 pub enum PathSegment {
     Literal { value: String },
-    Variable,
-    // Invariant: may only occur as the last element
-    CatchAll,
+    Variable { display_name: String },
+    CatchAll { display_name: String },
 }
 
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PathSegment::Literal { value } => f.write_str(value),
-            PathSegment::Variable => f.write_str("*"),
-            PathSegment::CatchAll => f.write_str("**"),
+            PathSegment::Variable { display_name } => f.write_str(&format!("{{{display_name}}}")),
+            PathSegment::CatchAll { display_name } => f.write_str(&format!("{{*{display_name}}}")),
         }
     }
 }
@@ -75,8 +73,8 @@ pub enum PathSegmentType {
     Enum(golem_wasm::analysis::TypeEnum),
 }
 
-impl From<PathSegmentType> for AnalysedType {
-    fn from(value: PathSegmentType) -> Self {
+impl From<&PathSegmentType> for AnalysedType {
+    fn from(value: &PathSegmentType) -> Self {
         match value {
             PathSegmentType::Str => analysed_type::str(),
             PathSegmentType::Chr => analysed_type::chr(),
@@ -91,7 +89,7 @@ impl From<PathSegmentType> for AnalysedType {
             PathSegmentType::U8 => analysed_type::u8(),
             PathSegmentType::S8 => analysed_type::s8(),
             PathSegmentType::Bool => analysed_type::bool(),
-            PathSegmentType::Enum(inner) => AnalysedType::Enum(inner),
+            PathSegmentType::Enum(inner) => AnalysedType::Enum(inner.clone()),
         }
     }
 }
@@ -144,16 +142,16 @@ pub enum QueryOrHeaderType {
 impl From<QueryOrHeaderType> for AnalysedType {
     fn from(value: QueryOrHeaderType) -> Self {
         match value {
-            QueryOrHeaderType::Primitive(inner) => inner.into(),
+            QueryOrHeaderType::Primitive(inner) => (&inner).into(),
             QueryOrHeaderType::Option { name, owner, inner } => AnalysedType::Option(TypeOption {
                 name,
                 owner,
-                inner: Box::new(AnalysedType::from(*inner)),
+                inner: Box::new(AnalysedType::from(&*inner)),
             }),
             QueryOrHeaderType::List { name, owner, inner } => AnalysedType::List(TypeList {
                 name,
                 owner,
-                inner: Box::new(AnalysedType::from(*inner)),
+                inner: Box::new(AnalysedType::from(&*inner)),
             }),
         }
     }
@@ -248,6 +246,7 @@ pub enum RouteBehaviour {
     CallAgent(CallAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
+    OpenApiSpec(OpenApiSpecBehaviour),
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -275,6 +274,10 @@ pub struct CorsPreflightBehaviour {
 pub struct WebhookCallbackBehaviour {
     pub component_id: ComponentId,
 }
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct OpenApiSpecBehaviour {}
 
 #[derive(Debug, Clone)]
 pub enum RouteSecurity {

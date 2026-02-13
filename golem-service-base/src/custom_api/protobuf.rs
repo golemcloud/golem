@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{CompiledRoute, CompiledRoutes, RouteSecurity};
+use super::{CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteSecurity};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
@@ -208,6 +208,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                         .try_into()?,
                 }))
             }
+            Kind::OpenApiSpec(_) => Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {})),
         }
     }
 }
@@ -262,6 +263,11 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     proto::golem::customapi::route_behaviour::WebhookCallback {
                         component_id: Some(component_id.into()),
                     },
+                )),
+            },
+            RouteBehaviour::OpenApiSpec(_) => Self {
+                kind: Some(Kind::OpenApiSpec(
+                    proto::golem::customapi::route_behaviour::OpenApiSpec {},
                 )),
             },
         }
@@ -594,11 +600,15 @@ impl TryFrom<proto::golem::customapi::PathSegment> for PathSegment {
         use proto::golem::customapi::path_segment::Kind;
 
         match value.kind.ok_or("PathSegment.kind missing")? {
-            Kind::Literal(lit) => Ok(PathSegment::Literal { value: lit.value }),
+            Kind::Literal(inner) => Ok(PathSegment::Literal { value: inner.value }),
 
-            Kind::Variable(_) => Ok(PathSegment::Variable),
+            Kind::Variable(inner) => Ok(PathSegment::Variable {
+                display_name: inner.display_name,
+            }),
 
-            Kind::CatchAll(_) => Ok(PathSegment::CatchAll),
+            Kind::CatchAll(inner) => Ok(PathSegment::CatchAll {
+                display_name: inner.display_name,
+            }),
         }
     }
 }
@@ -612,9 +622,13 @@ impl From<PathSegment> for proto::golem::customapi::PathSegment {
                 Kind::Literal(proto::golem::customapi::path_segment::Literal { value })
             }
 
-            PathSegment::Variable => Kind::Variable(golem_api_grpc::proto::golem::common::Empty {}),
+            PathSegment::Variable { display_name } => {
+                Kind::Variable(proto::golem::customapi::path_segment::Variable { display_name })
+            }
 
-            PathSegment::CatchAll => Kind::CatchAll(golem_api_grpc::proto::golem::common::Empty {}),
+            PathSegment::CatchAll { display_name } => {
+                Kind::CatchAll(proto::golem::customapi::path_segment::CatchAll { display_name })
+            }
         };
 
         Self { kind: Some(kind) }

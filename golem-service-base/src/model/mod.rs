@@ -410,6 +410,11 @@ impl<T> std::ops::Index<SafeIndex> for [T] {
         &self[usize::from(index)]
     }
 }
+impl std::ops::AddAssign<u32> for SafeIndex {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
+    }
+}
 
 #[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]

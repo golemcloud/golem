@@ -24,8 +24,11 @@ use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
 use golem_service_base::custom_api::CorsPreflightBehaviour;
+use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
+use http::StatusCode;
 use poem::{Request, Response};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{Instrument, debug};
 
@@ -123,6 +126,19 @@ impl RequestHandler {
                     .await
             }
 
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}) => {
+                let spec = resolved_route
+                    .openapi_spec
+                    .clone()
+                    .ok_or(RequestHandlerError::OpenApiSpecGenerationFailed)?;
+
+                Ok(RouteExecutionResult {
+                    status: StatusCode::OK,
+                    headers: HashMap::new(),
+                    body: ResponseBody::OpenApiSchema { spec },
+                })
+            }
+
             RichRouteBehaviour::WebhookCallback(behaviour) => {
                 self.webhook_callback_handler
                     .handle_webhook_callback_behaviour(request, resolved_route, behaviour)
@@ -157,5 +173,14 @@ fn route_execution_result_to_response(
         ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
+
+        ResponseBody::OpenApiSchema { spec: body } => {
+            let body_json = serde_json::to_value(&body.0)
+                .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
+
+            let body = poem::Body::from_json(body_json).map_err(anyhow::Error::from)?;
+
+            Ok(response_builder.body(body))
+        }
     }
 }

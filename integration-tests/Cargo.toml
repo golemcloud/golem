@@ -45,6 +45,7 @@ uuid = { workspace = true, features = ["v4"] }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
+goldenfile = { workspace = true }
 test-r = { workspace = true }
 wac-graph = { workspace = true }
 
