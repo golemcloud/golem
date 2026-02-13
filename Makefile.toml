@@ -155,10 +155,6 @@ array_push ${components} rpc
 array_push ${components} runtime-service
 array_push ${components} scheduled-invocation
 array_push ${components} update-test-env-var
-array_push ${components} update-test-v2-11
-array_push ${components} update-test-v3-11
-array_push ${components} update-test-v3-sdk
-array_push ${components} update-test-v4
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"

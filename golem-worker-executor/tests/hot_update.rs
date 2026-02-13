@@ -618,7 +618,8 @@ async fn manual_update_on_idle_without_save_snapshot(
     // Explanation: We are trying to update v1 to v3 using snapshots, but v1 does not
     // export a save function, so the update attempt fails and the worker continues running
     // the original version which we can invoke.
-    assert_eq!(result, data_value!(5u64));
+    // f3 returns args.len() + env_vars.len(); agents get an extra GOLEM_AGENT_ID env var
+    assert_eq!(result, data_value!(6u64));
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 
@@ -783,7 +784,8 @@ async fn manual_update_on_idle_with_failing_load(
 
     // Explanation: We try to update v2 to v4, but v4's load function always fails. So
     // the component must stay on v2, on which we can invoke f3.
-    assert_eq!(result, data_value!(5u64));
+    // f3 returns args.len() + env_vars.len(); agents get an extra GOLEM_AGENT_ID env var
+    assert_eq!(result, data_value!(6u64));
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 

@@ -34,11 +34,6 @@ exclude = [
     "test-components/oplog-processor",
     "test-components/runtime-service",
     "test-components/scheduled-invocation",
-    "test-components/update-test-v1",
-    "test-components/update-test-v2-11",
-    "test-components/update-test-v3-11",
-    "test-components/update-test-v3-sdk",
-    "test-components/update-test-v4",
     "test-components/update-test-env-var",
     "sdks/golem-rust"
 ]

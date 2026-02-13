@@ -317,6 +317,10 @@ async fn revert_auto_update(
         updated_component.revision
     );
 
+    // Get the oplog index right after initialization (before the update)
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let after_init_index = oplog.last().unwrap().oplog_index;
+
     executor
         .auto_update_worker(&worker_id, updated_component.revision)
         .await?;
@@ -325,11 +329,13 @@ async fn revert_auto_update(
         .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
         .await?;
 
+    // Revert to just after initialization (not INITIAL), because agents cannot
+    // be invoked if their initialization is reverted.
     executor
         .revert(
             &worker_id,
             RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
-                last_oplog_index: OplogIndex::INITIAL,
+                last_oplog_index: after_init_index,
             }),
         )
         .await?;
@@ -344,8 +350,8 @@ async fn revert_auto_update(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
-    // the current state which is 0. After the revert, calling f2 again returns a random number.
-    // The traces of the update should be gone.
+    // the current state which is 0. After the revert to just after init, calling f2 again
+    // returns a random number. The traces of the update should be gone.
     assert_eq!(result1, data_value!(0u64));
     assert_ne!(result2, data_value!(0u64));
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
