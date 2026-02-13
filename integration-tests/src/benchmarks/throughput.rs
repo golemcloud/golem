@@ -947,7 +947,7 @@ impl ThroughputBenchmark {
         delete_workers(&iteration.user, &iteration.direct_rust_worker_ids).await;
         delete_workers(&iteration.user, &iteration.rust_agent_worker_ids).await;
         delete_workers(&iteration.user, &iteration.ts_agent_worker_ids).await;
-        // delete_workers(&iteration.user, &iteration.ts_agent_worker_ids_for_rib).await;
+        delete_workers(&iteration.user, &iteration.ts_agent_worker_ids_for_http).await;
         delete_workers(
             &iteration.user,
             &iteration
