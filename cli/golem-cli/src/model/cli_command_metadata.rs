@@ -93,7 +93,7 @@ impl CliCommandMetadata {
                         .as_ref()
                         .map(|f| f.exclude_command(&metadata))
                         .unwrap_or(false))
-                    .then(|| metadata)
+                    .then_some(metadata)
                 })
                 .flatten();
                 path.pop();
