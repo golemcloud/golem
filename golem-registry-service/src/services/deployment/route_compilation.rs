@@ -338,11 +338,9 @@ pub fn add_openapi_spec_routes(
 
         // Note: This is currently a fixed path,
         // but it can be part of the http api deployment configuration
-        let path = vec![
-            PathSegment::Literal {
-                value: "openapi.json".to_string(),
-            },
-        ];
+        let path = vec![PathSegment::Literal {
+            value: "openapi.json".to_string(),
+        }];
 
         let method = HttpMethod::Get(Empty {});
         let key = (method.clone(), path.clone());

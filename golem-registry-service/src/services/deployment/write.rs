@@ -236,7 +236,7 @@ impl DeploymentWriteService {
             .unwrap_or(DeploymentRevision::INITIAL);
 
         tracing::info!("Creating deployment for environment: {environment_id}");
-        
+
         let (components, http_api_deployments) = tokio::try_join!(
             self.component_service
                 .list_staged_components_for_environment(&environment, auth)
