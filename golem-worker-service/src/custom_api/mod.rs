@@ -22,7 +22,6 @@ pub mod poem_endpoint;
 pub mod request_handler;
 mod rich_request;
 pub mod route_resolver;
-pub mod router;
 mod session_from_header_security;
 pub mod webhoooks;
 

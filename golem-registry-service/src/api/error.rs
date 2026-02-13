@@ -450,6 +450,7 @@ impl From<DeploymentWriteError> for ApiError {
             }
 
             DeploymentWriteError::DeploymentValidationFailed(failed_validations) => {
+                // Conflict is probably a better fit
                 Self::BadRequest(Json(ErrorsBody {
                     errors: failed_validations
                         .into_iter()

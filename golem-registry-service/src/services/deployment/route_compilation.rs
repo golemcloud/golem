@@ -20,6 +20,7 @@ use crate::model::api_definition::{
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::Empty;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
     HttpMethod, HttpMountDetails, NamedElementSchemas, RegisteredAgentTypeImplementer,
@@ -49,7 +50,7 @@ pub fn add_agent_method_http_routes(
     constructor_parameters: Vec<ConstructorParameter>,
     deployment_agent_options: &HttpApiDeploymentAgentOptions,
     current_route_id: &mut i32,
-    compiled_routes: &mut HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
+    compiled_routes: &mut Vec<UnboundCompiledRoute>,
     errors: &mut Vec<DeployValidationError>,
 ) {
     for agent_method in agent_methods {
@@ -148,16 +149,7 @@ pub fn add_agent_method_http_routes(
                 cors,
             };
 
-            {
-                let key = (http_endpoint.http_method.clone(), path_segments);
-                if let std::collections::hash_map::Entry::Vacant(e) = compiled_routes.entry(key) {
-                    e.insert(compiled);
-                } else {
-                    errors.push(make_route_validation_error(
-                        "Duplicate route detected".into(),
-                    ));
-                }
-            }
+            compiled_routes.push(compiled);
         }
     }
 }
@@ -165,7 +157,7 @@ pub fn add_agent_method_http_routes(
 pub fn add_cors_preflight_http_routes(
     deployment: &HttpApiDeployment,
     current_route_id: &mut i32,
-    compiled_routes: &mut HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
+    compiled_routes: &mut Vec<UnboundCompiledRoute>,
 ) {
     struct PreflightMapEntry {
         allowed_methods: BTreeSet<HttpMethod>,
@@ -183,7 +175,7 @@ pub fn add_cors_preflight_http_routes(
 
     let mut preflight_map: HashMap<Vec<PathSegment>, PreflightMapEntry> = HashMap::new();
 
-    for (_, compiled_route) in compiled_routes.iter() {
+    for compiled_route in compiled_routes.iter() {
         if !compiled_route.cors.allowed_patterns.is_empty() {
             let entry = preflight_map
                 .entry(compiled_route.path.clone())
@@ -205,34 +197,24 @@ pub fn add_cors_preflight_http_routes(
         },
     ) in preflight_map
     {
-        let key = (HttpMethod::Options(Empty {}), path_segments.clone());
-        if compiled_routes.contains_key(&key) {
-            // Skip synthetic OPTIONS if user already defined one
-            // TODO: Emit to the cli as warning
-            continue;
-        }
-
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
 
-        compiled_routes.insert(
-            key,
-            UnboundCompiledRoute {
-                route_id,
-                domain: deployment.domain.clone(),
-                method: HttpMethod::Options(Empty {}),
-                path: path_segments,
-                body: RequestBodySchema::Unused,
-                behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
-                    allowed_origins,
-                    allowed_methods,
-                }),
-                security: UnboundRouteSecurity::None,
-                cors: CorsOptions {
-                    allowed_patterns: vec![],
-                },
+        compiled_routes.push(UnboundCompiledRoute {
+            route_id,
+            domain: deployment.domain.clone(),
+            method: HttpMethod::Options(Empty {}),
+            path: path_segments,
+            body: RequestBodySchema::Unused,
+            behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
+                allowed_origins,
+                allowed_methods,
+            }),
+            security: UnboundRouteSecurity::None,
+            cors: CorsOptions {
+                allowed_patterns: vec![],
             },
-        );
+        });
     }
 }
 
@@ -240,7 +222,7 @@ pub fn add_webhook_callback_routes(
     deployment: &HttpApiDeployment,
     agent_type: &InProgressDeployedRegisteredAgentType,
     current_route_id: &mut i32,
-    compiled_routes: &mut HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
+    compiled_routes: &mut Vec<UnboundCompiledRoute>,
 ) {
     if let Some((_, segments)) = &agent_type.webhook_domain_and_segments {
         let route_id = *current_route_id;
@@ -251,6 +233,7 @@ pub fn add_webhook_callback_routes(
             .cloned()
             .map(|value| PathSegment::Literal { value })
             .collect();
+
         // final segment for promise id
         typed_segments.push(PathSegment::Variable);
 
@@ -269,7 +252,7 @@ pub fn add_webhook_callback_routes(
             },
         };
 
-        compiled_routes.insert((compiled.method.clone(), compiled.path.clone()), compiled);
+        compiled_routes.push(compiled);
     }
 }
 
@@ -310,10 +293,18 @@ pub fn build_agent_http_api_deployment_details(
 
     let agent_webhook_prefix: Vec<PathSegment> =
         parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_url);
-    let agent_webhook_suffix = agent_http_mount
+
+    let mut agent_webhook_suffix: Vec<PathSegment> = agent_http_mount
         .webhook_suffix
         .iter()
-        .map(|s| compile_agent_path_segment(agent_type, implementer, s));
+        .map(|s| compile_agent_path_segment(agent_type, implementer, s))
+        .collect();
+
+    if agent_webhook_suffix.is_empty() {
+        agent_webhook_suffix.push(PathSegment::Literal {
+            value: agent_type_name.to_wit_naming().0,
+        });
+    }
 
     let agent_webhook = agent_webhook_prefix
         .into_iter()
@@ -395,18 +386,7 @@ fn make_invalid_agent_route_error_maker(
     agent: &AgentType,
     agent_method: &AgentMethod,
 ) -> impl Fn(String) -> DeployValidationError {
-    let rendered_method = match &http_endpoint.http_method {
-        HttpMethod::Get(_) => "GET".to_string(),
-        HttpMethod::Head(_) => "HEAD".to_string(),
-        HttpMethod::Post(_) => "POST".to_string(),
-        HttpMethod::Put(_) => "PUT".to_string(),
-        HttpMethod::Delete(_) => "DELETE".to_string(),
-        HttpMethod::Connect(_) => "CONNECT".to_string(),
-        HttpMethod::Options(_) => "OPTIONS".to_string(),
-        HttpMethod::Trace(_) => "TRACE".to_string(),
-        HttpMethod::Patch(_) => "PATCH".to_string(),
-        HttpMethod::Custom(custom) => custom.value.clone(),
-    };
+    let rendered_method = render_http_method(&http_endpoint.http_method);
 
     let rendered_path: String = render_agent_http_path(
         http_mount
@@ -436,6 +416,21 @@ pub fn make_invalid_agent_mount_error_maker(
         path: rendered_path.clone(),
         agent_type: agent.type_name.clone(),
         error: msg,
+    }
+}
+
+pub fn render_http_method(method: &HttpMethod) -> String {
+    match &method {
+        HttpMethod::Get(_) => "GET".to_string(),
+        HttpMethod::Head(_) => "HEAD".to_string(),
+        HttpMethod::Post(_) => "POST".to_string(),
+        HttpMethod::Put(_) => "PUT".to_string(),
+        HttpMethod::Delete(_) => "DELETE".to_string(),
+        HttpMethod::Connect(_) => "CONNECT".to_string(),
+        HttpMethod::Options(_) => "OPTIONS".to_string(),
+        HttpMethod::Trace(_) => "TRACE".to_string(),
+        HttpMethod::Patch(_) => "PATCH".to_string(),
+        HttpMethod::Custom(custom) => custom.value.clone(),
     }
 }
 

@@ -15,7 +15,6 @@
 use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
-use super::router::Router;
 use crate::config::RouteResolverConfig;
 use crate::custom_api::{
     OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
@@ -25,6 +24,7 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::SecuritySchemeId;
+use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
     CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteSecurity,
     SecuritySchemeDetails,
@@ -142,7 +142,7 @@ impl RouteResolver {
             }
         };
 
-        Ok(Router::build_router(finalized_routes))
+        Ok(build_router(finalized_routes))
     }
 
     async fn finalize_routes(
@@ -189,6 +189,9 @@ impl RouteResolver {
                 })
                 .collect();
 
+            // This route could be ambiguous with other agent routes,
+            // in which case it will fail to add to the router.
+            // This is too late to show an error to the user, so just continue as best we can in that case.
             let callback_route = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
                 environment_id: compiled_routes.environment_id,
@@ -244,4 +247,18 @@ fn compile_route_security(
             ))
         }
     }
+}
+
+pub fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>> {
+    let mut router = Router::new();
+
+    for route in routes {
+        let route_id = route.route_id;
+
+        if !router.add_route(route.method.clone(), route.path.clone(), Arc::new(route)) {
+            tracing::warn!("Failed to add route with route_id {route_id}");
+        }
+    }
+
+    router
 }
