@@ -260,14 +260,14 @@ pub fn add_webhook_callback_routes(
 fn build_openapi_spec_for_component(
     component_id: &ComponentId,
     agents: &[&InProgressDeployedRegisteredAgentType],
-    compiled_routes: &HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
+    compiled_routes: &Vec<UnboundCompiledRoute>,
 ) -> Vec<RoutesWithAgentType> {
     let mut result = Vec::new();
 
     for agent in agents {
         let mut routes = Vec::new();
 
-        for route in compiled_routes.values() {
+        for route in compiled_routes {
             if let RouteBehaviour::CallAgent(call) = &route.behaviour
                 && call.component_id == *component_id
                 && call.agent_type == agent.agent_type.type_name
@@ -288,7 +288,7 @@ pub fn add_openapi_spec_routes(
     deployment: &HttpApiDeployment,
     registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
     current_route_id: &mut i32,
-    compiled_routes: &mut HashMap<(HttpMethod, Vec<PathSegment>), UnboundCompiledRoute>,
+    compiled_routes: &mut Vec<UnboundCompiledRoute>,
 ) {
     let mut component_agents: BTreeMap<ComponentId, Vec<&InProgressDeployedRegisteredAgentType>> =
         BTreeMap::new();
@@ -319,30 +319,22 @@ pub fn add_openapi_spec_routes(
         }];
 
         let method = HttpMethod::Get(Empty {});
-        let key = (method.clone(), path.clone());
-
-        if compiled_routes.contains_key(&key) {
-            continue;
-        }
 
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
 
-        compiled_routes.insert(
-            key,
-            UnboundCompiledRoute {
-                route_id,
-                domain: deployment.domain.clone(),
-                method,
-                path,
-                body: RequestBodySchema::Unused,
-                behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }),
-                security: UnboundRouteSecurity::None,
-                cors: CorsOptions {
-                    allowed_patterns: Vec::new(),
-                },
+        compiled_routes.push(UnboundCompiledRoute {
+            route_id,
+            domain: deployment.domain.clone(),
+            method,
+            path,
+            body: RequestBodySchema::Unused,
+            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { open_api_spec }),
+            security: UnboundRouteSecurity::None,
+            cors: CorsOptions {
+                allowed_patterns: Vec::new(),
             },
-        );
+        });
     }
 }
 

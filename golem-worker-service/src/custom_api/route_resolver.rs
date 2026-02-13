@@ -24,8 +24,8 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::SecuritySchemeId;
-use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::CompiledRoute;
+use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
     CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteSecurity,
     SecuritySchemeDetails,
