@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "ignore": ["src/components/Modal.tsx", "src/test/setup.ts", ".storybook/**"],
+  "ignoreDependencies": ["tailwindcss-animate"],
+  "ignoreExportsUsedInFile": true
+}

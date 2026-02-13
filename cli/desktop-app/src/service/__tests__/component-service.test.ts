@@ -21,16 +21,14 @@ vi.mock("@/lib/settings", () => ({
 }));
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
 vi.mock("@tauri-apps/plugin-fs", () => ({
-  readDir: vi
-    .fn()
-    .mockResolvedValue([
-      {
-        name: "components-ts",
-        isDirectory: true,
-        isFile: false,
-        isSymlink: false,
-      },
-    ]),
+  readDir: vi.fn().mockResolvedValue([
+    {
+      name: "components-ts",
+      isDirectory: true,
+      isFile: false,
+      isSymlink: false,
+    },
+  ]),
 }));
 vi.mock("@tauri-apps/api/path", () => ({
   join: vi.fn((...args: string[]) => Promise.resolve(args.join("/"))),

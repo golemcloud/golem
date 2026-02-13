@@ -20,7 +20,7 @@ import {
 } from "@/lib/http-handler";
 import { InvokeParams } from "./InvokeLayout";
 
-export interface SectionCardProps {
+interface SectionCardProps {
   title: string;
   description: string;
   value: string;

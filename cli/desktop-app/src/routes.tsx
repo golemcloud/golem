@@ -5,7 +5,7 @@ import { RouteObject } from "react-router-dom";
 import AgentInfo from "@/pages/agents/details/info.tsx";
 import AgentInvoke from "@/pages/agents/details/invoke.tsx";
 import { lazy } from "react";
-import { Home } from "@/pages/home";
+import Home from "@/pages/home";
 import AppLayout from "@/layouts/app-layout";
 import CreateApplication from "@/pages/app-create";
 import SettingsPage from "@/pages/settings";
@@ -67,10 +67,8 @@ const ApiLayout = lazy(() =>
   })),
 );
 const Plugins = lazy(() => import("@/pages/components/details/plugin"));
-const ComponentLayout = lazy(() =>
-  import("@/pages/components/details/component-layout").then(module => ({
-    default: module.ComponentLayout,
-  })),
+const ComponentLayout = lazy(
+  () => import("@/pages/components/details/component-layout"),
 );
 const AgentLayout = lazy(() =>
   import("@/pages/agents/details/agent-layout").then(module => ({
@@ -79,7 +77,7 @@ const AgentLayout = lazy(() =>
 );
 
 // Route configuration constants for ease of maintenance
-export const ROUTES = {
+const ROUTES = {
   HOME: "",
   APP_CREATE: "/app-create",
   APP: "/app/:appId",

@@ -49,7 +49,7 @@ const formatRelativeTime = (date: Date): string => {
 
 // Using the App interface from settingsService
 
-export const Home = () => {
+const Home = () => {
   const navigate = useNavigate();
   const [isOpeningApp, setIsOpeningApp] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");

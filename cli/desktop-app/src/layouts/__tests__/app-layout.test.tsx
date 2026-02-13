@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useParams } from "react-router-dom";
 import React from "react";
-import { AppLayout } from "../app-layout";
+import AppLayout from "../app-layout";
 
 // Mock components
 vi.mock("@/components/errorBoundary", () => ({

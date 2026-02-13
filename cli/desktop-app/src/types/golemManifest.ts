@@ -22,7 +22,7 @@ export interface Component extends ComponentProperties, ComponentProfiles {
   template?: string;
 }
 
-export interface ComponentProperties {
+interface ComponentProperties {
   sourceWit?: string;
   generatedWit?: string;
   componentWasm?: string;
@@ -36,7 +36,7 @@ export interface ComponentProperties {
   env?: Record<string, string>;
 }
 
-export interface ComponentProfiles {
+interface ComponentProfiles {
   profiles?: Record<string, ComponentProperties>;
   defaultProfile?: string;
 }
@@ -55,28 +55,28 @@ export type ComponentDependency =
   | WasmDependencyPath
   | WasmDependencyUrl;
 
-export interface WasmRpcDependency {
+interface WasmRpcDependency {
   type: "wasm-rpc" | "wasm" | "wasm-rpc-static";
   target: string;
 }
 
-export interface WasmDependencyPath {
+interface WasmDependencyPath {
   type: "wasm";
   path: string;
 }
 
-export interface WasmDependencyUrl {
+interface WasmDependencyUrl {
   type: "wasm";
   url: string;
 }
 
-export interface InitialComponentFile {
+interface InitialComponentFile {
   sourcePath: string;
   targetPath: string;
   permissions?: "read-only" | "read-write";
 }
 
-export interface PluginInstallation {
+interface PluginInstallation {
   name: string;
   version: string;
   parameters?: Record<string, string>;
@@ -134,7 +134,7 @@ export interface HttpApiRouteBinding {
   response?: string;
 }
 
-export interface HttpApiDeployment {
+interface HttpApiDeployment {
   host: string;
   subdomain?: string;
   definition?: string[];
