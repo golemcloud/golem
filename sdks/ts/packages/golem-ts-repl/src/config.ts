@@ -20,6 +20,7 @@ import * as base from './base';
 export type Config = {
   binary: string;
   appMainDir: string;
+  streamLogs: boolean;
   agents: Record<string, AgentConfig>;
   historyFile: string;
   cliCommandsMetadataJsonPath: string;

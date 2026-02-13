@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import childProcess from 'node:child_process';
+import childProcess, { ChildProcessByStdio } from 'node:child_process';
+import { Readable } from 'node:stream';
 import repl from 'node:repl';
+import pc from 'picocolors';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
 import { flushStdIO } from './process';
 import * as base from './base';
@@ -24,6 +26,7 @@ export class CliReplInterop {
   private readonly commandsByName: Map<string, ReplCliCommand>;
   private readonly cli: GolemCli;
   private builtinCommands: string[];
+  private readonly agentStreams: Map<string, AgentStreamState>;
 
   constructor(config: CliCommandsConfig) {
     this.config = config;
@@ -35,6 +38,7 @@ export class CliReplInterop {
       clientConfig: this.config.clientConfig,
     });
     this.builtinCommands = [];
+    this.agentStreams = new Map();
   }
 
   defineCommands(replServer: repl.REPLServer) {
@@ -129,6 +133,51 @@ export class CliReplInterop {
     process.exit(75);
   }
 
+  startAgentStream(request: base.AgentInvocationRequest) {
+    const key = getAgentStreamKey(request);
+    if (this.agentStreams.has(key)) {
+      return;
+    }
+
+    const parameters = safeJsonStringify(request.parameters);
+    const args = ['agent', 'repl-stream', request.agentTypeName, parameters];
+    if (request.phantomId) {
+      args.push(request.phantomId);
+    }
+
+    const child = childProcess.spawn(this.config.binary, args, {
+      cwd: this.config.appMainDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const state = createAgentStreamState(child);
+    this.agentStreams.set(key, state);
+
+    child.stdout?.on('data', state.onStdout);
+    child.stderr?.on('data', state.onStderr);
+
+    child.once('error', () => {
+      void this.stopAgentStreamByKey(key);
+    });
+    child.once('exit', () => {
+      void this.stopAgentStreamByKey(key);
+    });
+  }
+
+  async stopAgentStream(request: base.AgentInvocationRequest) {
+    const key = getAgentStreamKey(request);
+    await this.stopAgentStreamByKey(key);
+  }
+
+  private async stopAgentStreamByKey(key: string) {
+    const state = this.agentStreams.get(key);
+    if (!state) return;
+    await delay(100);
+    if (this.agentStreams.get(key) !== state) return;
+    this.agentStreams.delete(key);
+    state.stop();
+  }
+
   private async runReplCliCommand(
     command: ReplCliCommand,
     rawArgs: string,
@@ -186,6 +235,88 @@ type CommandHook = {
   adaptArgs: (args: string[]) => string[];
   handleResult: (args: string[], result: { ok: boolean; code: number | null }) => Promise<void>;
 };
+
+type AgentStreamState = {
+  stop: () => void;
+  onStdout: (chunk: Buffer) => void;
+  onStderr: (chunk: Buffer) => void;
+};
+
+function createAgentStreamState(
+  child: ChildProcessByStdio<null, Readable, Readable>,
+): AgentStreamState {
+  let stdoutBuffer = '';
+  let stderrBuffer = '';
+
+  const writeLine = (stream: NodeJS.WritableStream, line: string) => {
+    stream.write(`${pc.green('|')} ${line}\n`);
+  };
+
+  const onStdout = (chunk: Buffer) => {
+    stdoutBuffer = appendAndWriteLines(stdoutBuffer, chunk, (line) =>
+      writeLine(process.stdout, line),
+    );
+  };
+
+  const onStderr = (chunk: Buffer) => {
+    stderrBuffer = appendAndWriteLines(stderrBuffer, chunk, (line) =>
+      writeLine(process.stderr, line),
+    );
+  };
+
+  const stop = () => {
+    child.stdout?.off('data', onStdout);
+    child.stderr?.off('data', onStderr);
+    child.removeAllListeners('error');
+    child.removeAllListeners('exit');
+    if (child.exitCode === null && !child.killed) {
+      child.kill();
+    }
+  };
+
+  return { stop, onStdout, onStderr };
+}
+
+function appendAndWriteLines(
+  buffer: string,
+  chunk: Buffer,
+  writeLine: (line: string) => void,
+): string {
+  buffer += chunk.toString();
+  const parts = buffer.split('\n');
+  const remainder = parts.pop() ?? '';
+
+  for (const part of parts) {
+    const line = part.endsWith('\r') ? part.slice(0, -1) : part;
+    if (line.length > 0) {
+      writeLine(line);
+    } else {
+      writeLine('');
+    }
+  }
+
+  return remainder;
+}
+
+function getAgentStreamKey(request: base.AgentInvocationRequest): string {
+  return [
+    request.agentTypeName,
+    safeJsonStringify(request.parameters),
+    request.phantomId ?? '',
+  ].join('|');
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
   deploy: {

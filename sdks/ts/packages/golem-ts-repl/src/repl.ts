@@ -47,26 +47,23 @@ export class Repl {
     this.overrideSnippetForNextEval = undefined;
 
     const clientConfig = clientConfigFromEnv();
+    this.clientConfig = clientConfig;
+
+    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
+    const cli = this.cli;
     clientConfig.aroundInvokeHook = {
       async beforeInvoke(request: AgentInvocationRequest): Promise<void> {
-        console.log({
-          request,
-        });
+        cli.startAgentStream(request);
       },
 
       async afterInvoke(
         request: AgentInvocationRequest,
         result: JsonResult<AgentInvocationResult, any>,
       ): Promise<void> {
-        console.log({
-          request,
-          result,
-        });
+        void result;
+        await cli.stopAgentStream(request);
       },
     };
-    this.clientConfig = clientConfig;
-
-    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
   }
 
   private getLanguageService(): LanguageService {
