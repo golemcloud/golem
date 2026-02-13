@@ -16,12 +16,12 @@ use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
-use super::openapi_handler::OpenApiHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::security::handler::OidcHandler;
 use super::webhoooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RichCompiledRoute, RouteExecutionResult};
 use crate::custom_api::RichRequest;
+use crate::custom_api::openapi::generate_open_api_spec;
 use anyhow::anyhow;
 use golem_common::base_model::agent::AgentType;
 use golem_service_base::custom_api::CorsPreflightBehaviour;
@@ -143,7 +143,7 @@ impl RequestHandler {
                             })
                             .collect();
 
-                        match OpenApiHandler::generate_spec(&selected_routes).await {
+                        match generate_open_api_spec(&selected_routes).await {
                             Ok(value) => Ok(RouteExecutionResult {
                                 status: StatusCode::OK,
                                 headers: HashMap::new(),
