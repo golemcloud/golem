@@ -31,7 +31,7 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
 
 #[test]
 #[tracing::instrument]
-async fn string_path_var_rust(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(

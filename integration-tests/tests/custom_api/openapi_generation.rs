@@ -22,7 +22,7 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(EnvBasedTestDependencies);
 
 // This is based on the http rust agent in test components
-const EXPECTED_OPENAPI_YAML: &str = include_str!("data/expected-open-api.yaml");
+const EXPECTED_OPENAPI_YAML: &str = include_str!("test-data/expected-open-api.yaml");
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
