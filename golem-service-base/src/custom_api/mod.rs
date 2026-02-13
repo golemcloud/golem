@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod protobuf;
+pub mod router;
 
 use crate::model::SafeIndex;
 use base64::Engine;
