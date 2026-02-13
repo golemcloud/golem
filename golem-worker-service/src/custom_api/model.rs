@@ -106,7 +106,7 @@ pub enum ResponseBody {
     NoBody,
     ComponentModelJsonBody { body: golem_wasm::ValueAndType },
     UnstructuredBinaryBody { body: BinarySource },
-    PlainText { body: String },
+    Json { body: serde_json::Value },
 }
 
 impl fmt::Debug for ResponseBody {
@@ -118,8 +118,8 @@ impl fmt::Debug for ResponseBody {
                 .field("body", body)
                 .finish(),
             ResponseBody::UnstructuredBinaryBody { .. } => f.write_str("UnstructuredBinaryBody"),
-            ResponseBody::PlainText { body } => {
-                f.debug_struct("PlainText").field("body", body).finish()
+            ResponseBody::Json { body } => {
+                f.debug_struct("Json").field("body", body).finish()
             }
         }
     }

@@ -144,10 +144,10 @@ impl RequestHandler {
                             .collect();
 
                         match OpenApiHandler::generate_spec(&selected_routes).await {
-                            Ok(yaml) => Ok(RouteExecutionResult {
+                            Ok(value) => Ok(RouteExecutionResult {
                                 status: StatusCode::OK,
                                 headers: HashMap::new(),
-                                body: ResponseBody::PlainText { body: yaml },
+                                body: ResponseBody::Json { body: value },
                             }),
                             Err(e) => {
                                 Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: e })

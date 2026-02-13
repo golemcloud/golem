@@ -45,8 +45,6 @@ async fn string_path_var_rust(agent: &HttpTestContext) -> anyhow::Result<()> {
 
     let body: serde_json::Value = response.json().await?;
 
-    dbg!(&body);
-    assert!(false);
     assert_eq!(body, json!({ "value": "foo" }));
     Ok(())
 }

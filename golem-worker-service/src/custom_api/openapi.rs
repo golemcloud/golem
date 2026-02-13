@@ -813,15 +813,22 @@ fn determine_agent_response_with_status_code<T: HttpApiRoute + ?Sized>(
             responses.insert(404, DeterminedResponseBodySchema::NoBody);
         }
         RichRouteBehaviour::OpenApiSpec(_) => {
-            let schema = create_schema_from_analysed_type(&AnalysedType::Str(
-                golem_wasm::analysis::TypeStr {},
-            ));
+            let schema = openapiv3::Schema {
+                schema_data: Default::default(),
+                schema_kind: SchemaKind::Type(Type::Object(ObjectType {
+                    properties: Default::default(),
+                    required: Default::default(),
+                    additional_properties: Some(AdditionalProperties::Any(true)),
+                    min_properties: None,
+                    max_properties: None,
+                })),
+            };
 
             responses.insert(
                 200,
                 DeterminedResponseBodySchema::Known {
                     schema: Box::new(schema),
-                    content_type: "text/plain".to_string(),
+                    content_type: "application/json".to_string(),
                 },
             );
         }

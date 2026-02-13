@@ -340,10 +340,7 @@ pub fn add_openapi_spec_routes(
         // but it can be part of the http api deployment configuration
         let path = vec![
             PathSegment::Literal {
-                value: ".well-known".to_string(),
-            },
-            PathSegment::Literal {
-                value: "openapi.yaml".to_string(),
+                value: "openapi.json".to_string(),
             },
         ];
 
