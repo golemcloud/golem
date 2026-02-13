@@ -119,7 +119,7 @@ pub enum ResponseBody {
     NoBody,
     ComponentModelJsonBody { body: golem_wasm::ValueAndType },
     UnstructuredBinaryBody { body: BinarySource },
-    OpenApiSchema { body: HttpApiOpenApiSpec },
+    OpenApiSchema { body: Box<HttpApiOpenApiSpec> },
 }
 
 impl fmt::Debug for ResponseBody {

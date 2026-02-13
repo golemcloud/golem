@@ -154,7 +154,9 @@ impl RequestHandler {
                             Ok(value) => Ok(RouteExecutionResult {
                                 status: StatusCode::OK,
                                 headers: HashMap::new(),
-                                body: ResponseBody::OpenApiSchema { body: value },
+                                body: ResponseBody::OpenApiSchema {
+                                    body: Box::new(value),
+                                },
                             }),
                             Err(e) => {
                                 Err(RequestHandlerError::OpenApiSpecGenerationFailed { error: e })

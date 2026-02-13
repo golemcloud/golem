@@ -214,11 +214,11 @@ fn collect_path_variable_types<'a>(
         .map(|params| {
             params
                 .iter()
-                .filter_map(|p| match p {
+                .map(|p| match p {
                     ConstructorParameter::Path {
                         parameter_type,
                         path_segment_index,
-                    } => Some((path_segment_index, parameter_type)),
+                    } => (path_segment_index, parameter_type),
                 })
                 .collect::<Vec<_>>()
         })
