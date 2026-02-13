@@ -54,6 +54,7 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -540,7 +541,29 @@ impl AppCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let agent_types = environment
+        let agent_types = self.list_agent_types(&environment).await?;
+
+        self.ctx.log_handler().log_view(&agent_types);
+
+        Ok(())
+    }
+
+    pub async fn cmd_diagnose(
+        &self,
+        component_names: OptionalComponentNames,
+    ) -> anyhow::Result<()> {
+        self.diagnose(
+            component_names.component_name,
+            &ApplicationComponentSelectMode::All,
+        )
+        .await
+    }
+
+    pub async fn list_agent_types(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<Vec<DeployedRegisteredAgentType>> {
+        environment
             .with_current_deployment_revision_or_default_warn(
                 |current_deployment_revision| async move {
                     Ok(self
@@ -557,22 +580,7 @@ impl AppCommandHandler {
                         .values)
                 },
             )
-            .await?;
-
-        self.ctx.log_handler().log_view(&agent_types);
-
-        Ok(())
-    }
-
-    pub async fn cmd_diagnose(
-        &self,
-        component_names: OptionalComponentNames,
-    ) -> anyhow::Result<()> {
-        self.diagnose(
-            component_names.component_name,
-            &ApplicationComponentSelectMode::All,
-        )
-        .await
+            .await
     }
 
     async fn deploy_by_version(

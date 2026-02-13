@@ -14,7 +14,6 @@
 
 import {
   cliCommandsConfigFromBaseConfig,
-  ClientConfig,
   clientConfigFromEnv,
   Config,
   ConfigureClient,
@@ -31,10 +30,12 @@ import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
 import { flushStdIO } from './process';
+import * as base from './base';
+import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
 
 export class Repl {
   private readonly config: Config;
-  private readonly clientConfig: ClientConfig;
+  private readonly clientConfig: base.Configuration;
   private readonly cli: CliReplInterop;
   private readonly processArgs: ProcessArgs;
   private languageService: LanguageService | undefined;
@@ -43,9 +44,29 @@ export class Repl {
   constructor(config: Config) {
     this.config = config;
     this.processArgs = loadProcessArgs();
-    this.clientConfig = clientConfigFromEnv();
-    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
     this.overrideSnippetForNextEval = undefined;
+
+    const clientConfig = clientConfigFromEnv();
+    clientConfig.aroundInvokeHook = {
+      async beforeInvoke(request: AgentInvocationRequest): Promise<void> {
+        console.log({
+          request,
+        });
+      },
+
+      async afterInvoke(
+        request: AgentInvocationRequest,
+        result: JsonResult<AgentInvocationResult, any>,
+      ): Promise<void> {
+        console.log({
+          request,
+          result,
+        });
+      },
+    };
+    this.clientConfig = clientConfig;
+
+    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
   }
 
   private getLanguageService(): LanguageService {

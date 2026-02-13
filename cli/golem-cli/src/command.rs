@@ -1085,6 +1085,7 @@ pub mod worker {
     use golem_client::model::ScanCursor;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::IdempotencyKey;
+    use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
     pub enum AgentSubcommand {
@@ -1164,6 +1165,18 @@ pub mod worker {
         Stream {
             #[command(flatten)]
             agent_id: AgentIdArgs,
+            #[command(flatten)]
+            stream_args: StreamArgs,
+        },
+        /// Like stream, but for helping Bridge SDK-based REPLs
+        #[clap(hide = true)]
+        ReplStream {
+            /// AgentTypeName
+            agent_type_name: String,
+            /// Agent parameters in UntypedDataValue JSON format
+            parameters: String,
+            /// Phantom ID
+            phantom_id: Option<Uuid>,
             #[command(flatten)]
             stream_args: StreamArgs,
         },

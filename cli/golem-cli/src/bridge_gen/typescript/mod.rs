@@ -617,6 +617,7 @@ impl TypeScriptBridgeGenerator {
         method_def: &AgentMethod,
     ) -> anyhow::Result<()> {
         let get_server_config_fn = self.build_get_server_config_fn();
+        let get_around_invoke_hook_fn = self.build_get_around_invoke_hook_fn();
         let get_method_request_fn = self.build_get_method_request_fn(method_def);
         let encode_args_fn = self.build_encode_args_fn(method_def)?;
         let decode_result_fn = self.build_decode_result_fn(method_def)?;
@@ -634,10 +635,12 @@ impl TypeScriptBridgeGenerator {
                     {},
                     {},
                     {},
-                    {}
+                    {},
+                    {},
                 )
             ",
                 get_server_config_fn.trim(),
+                get_around_invoke_hook_fn.trim(),
                 get_method_request_fn.trim(),
                 encode_args_fn.trim(),
                 decode_result_fn.trim(),
@@ -647,10 +650,17 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
-    /// Builds the function that extracts the configured server for the remote mtehod implementation
+    /// Builds the function that extracts the configured server for the remote method implementation
     fn build_get_server_config_fn(&self) -> String {
         let mut get_server_config = TsAnonymousFunctionWriter::new();
         get_server_config.write_line("return this.__getConfig().server;");
+        get_server_config.build()
+    }
+
+    /// Builds the function that extracts the configured around invoke hook for the remote method implementation
+    fn build_get_around_invoke_hook_fn(&self) -> String {
+        let mut get_server_config = TsAnonymousFunctionWriter::new();
+        get_server_config.write_line("return this.__getConfig().aroundInvokeHook;");
         get_server_config.build()
     }
 

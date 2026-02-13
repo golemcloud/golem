@@ -124,7 +124,7 @@ export interface AgentInvocationResult {
 export async function invokeAgent(
     server: GolemServer,
     request: AgentInvocationRequest,
-    aroundInvokeHook?: AroundInvokeHook,
+    aroundInvokeHook: AroundInvokeHook | undefined = undefined,
 ): Promise<AgentInvocationResult> {
     let baseUrl: string;
     let token: string;
@@ -203,17 +203,22 @@ export type RemoteMethod<Args extends any[], R> = {
 
 export function createRemoteMethod<Args extends any[], R>(
     getServer: () => GolemServer,
+    aroundInvokeHook: () => AroundInvokeHook | undefined,
     getRequest: () => AgentInvocationRequest,
     encode: (args: Args) => DataValue,
-    decode: (result: AgentInvocationResult) => R
+    decode: (result: AgentInvocationResult) => R,
 ): RemoteMethod<Args, R> {
     const result = async function (...args: Args): Promise<R> {
-        const invokeResult = await invokeAgent(getServer(), {
-            ...getRequest(),
-            methodParameters: encode(args),
-            mode: "await",
-            scheduleAt: undefined
-        })
+        const invokeResult = await invokeAgent(
+            getServer(),
+            {
+                ...getRequest(),
+                methodParameters: encode(args),
+                mode: "await",
+                scheduleAt: undefined
+            },
+            aroundInvokeHook()
+        )
         return decode(invokeResult);
     }
     result.trigger = function (...args: Args): void {

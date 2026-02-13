@@ -14,8 +14,9 @@
 
 import childProcess from 'node:child_process';
 import repl from 'node:repl';
-import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig, ClientConfig } from './config';
+import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
 import { flushStdIO } from './process';
+import * as base from './base';
 
 export class CliReplInterop {
   private readonly config: CliCommandsConfig;
@@ -250,9 +251,9 @@ function findArgCompletionHook(arg: CliArgMetadata): CompletionHook | undefined 
 class GolemCli {
   private readonly binaryName: string;
   private readonly cwd: string;
-  private readonly clientConfig: ClientConfig;
+  private readonly clientConfig: base.Configuration;
 
-  constructor(opts: { binary: string; cwd: string; clientConfig: ClientConfig }) {
+  constructor(opts: { binary: string; cwd: string; clientConfig: base.Configuration }) {
     this.binaryName = opts.binary;
     this.cwd = opts.cwd;
     this.clientConfig = opts.clientConfig;

@@ -15,6 +15,7 @@
 import { env } from 'node:process';
 import fs from 'node:fs';
 import util from 'node:util';
+import * as base from './base';
 
 export type Config = {
   binary: string;
@@ -36,26 +37,12 @@ export type AgentConfig = {
   package: any;
 };
 
-export type GolemServer =
-  | { type: 'local' }
-  | { type: 'cloud'; token: string }
-  | { type: 'custom'; url: string; token: string };
-
-export type ClientConfig = {
-  server: GolemServer;
-  application: ApplicationName;
-  environment: EnvironmentName;
-};
-
-export type ApplicationName = string;
-export type EnvironmentName = string;
-
-export type ConfigureClient = (config: ClientConfig) => void;
+export type ConfigureClient = (config: base.Configuration) => void;
 
 export type CliCommandsConfig = {
   binary: string;
   appMainDir: string;
-  clientConfig: ClientConfig;
+  clientConfig: base.Configuration;
   commandMetadata: CliCommandMetadata;
 };
 
@@ -98,7 +85,7 @@ export type CliPossibleValueMetadata = {
   aliases: string[];
 };
 
-export function clientConfigFromEnv(): ClientConfig {
+export function clientConfigFromEnv(): base.Configuration {
   return {
     server: clientServerConfigFromEnv(),
     application: requiredEnvVar('GOLEM_REPL_APPLICATION'),
@@ -108,7 +95,7 @@ export function clientConfigFromEnv(): ClientConfig {
 
 export function cliCommandsConfigFromBaseConfig(
   config: Config,
-  clientConfig: ClientConfig,
+  clientConfig: base.Configuration,
 ): CliCommandsConfig {
   const commandMetadataContents = fs.readFileSync(config.cliCommandsMetadataJsonPath, 'utf8');
   const commandMetadata = JSON.parse(commandMetadataContents) as CliCommandMetadata;
@@ -121,7 +108,7 @@ export function cliCommandsConfigFromBaseConfig(
   };
 }
 
-function clientServerConfigFromEnv(): GolemServer {
+function clientServerConfigFromEnv(): base.GolemServer {
   const server_kind = requiredEnvVar('GOLEM_REPL_SERVER_KIND');
   switch (server_kind) {
     case 'local':
