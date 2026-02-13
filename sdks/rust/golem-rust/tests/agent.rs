@@ -63,7 +63,7 @@ mod tests {
         fn num(&self, i: String) -> u32;
 
         #[allow(unused)]
-        fn identity(i: T) -> T;
+        fn identity(&self, i: T) -> T;
     }
 
     #[agent_implementation]
@@ -76,7 +76,7 @@ mod tests {
             1
         }
 
-        fn identity(i: String) -> String {
+        fn identity(&self, i: String) -> String {
             i
         }
     }
@@ -88,12 +88,10 @@ mod tests {
         fn new(init: UserId) -> Self;
 
         #[allow(unused)]
-        fn foo(param: String) -> String;
+        fn foo(&self, param: String) -> String;
 
         #[allow(unused)]
-        fn bar(param: String) -> String {
-            Self::foo(param)
-        }
+        fn bar(&self, param: String) -> String;
         fn baz(&self, param: String) -> String;
     }
 
@@ -103,12 +101,12 @@ mod tests {
             AgentWithStaticMethodsImpl
         }
 
-        fn foo(param: String) -> String {
+        fn foo(&self, param: String) -> String {
             param
         }
 
-        fn bar(param: String) -> String {
-            Self::foo(param)
+        fn bar(&self, param: String) -> String {
+            self.foo(param)
         }
 
         fn baz(&self, param: String) -> String {
@@ -134,10 +132,10 @@ mod tests {
         fn new(init: UserId) -> Self;
 
         #[allow(unused)]
-        fn foo() -> String;
+        fn foo(&self) -> String;
 
         #[allow(unused)]
-        fn bar(param: String) -> String;
+        fn bar(&self, param: String) -> String;
     }
 
     struct AgentWithOnlyStaticMethodsImpl;
@@ -147,10 +145,10 @@ mod tests {
         fn new(_init: UserId) -> Self {
             AgentWithOnlyStaticMethodsImpl
         }
-        fn foo() -> String {
-            Self::bar("foo".to_string())
+        fn foo(&self) -> String {
+            self.bar("foo".to_string())
         }
-        fn bar(param: String) -> String {
+        fn bar(&self, param: String) -> String {
             param
         }
     }
@@ -160,7 +158,7 @@ mod tests {
         fn new(init: UserId) -> Self;
 
         #[allow(unused)]
-        fn foo() -> String;
+        fn foo(&self) -> String;
         fn bar(&self) -> String;
     }
 
@@ -172,7 +170,7 @@ mod tests {
         fn new(_init: UserId) -> FooImpl {
             FooImpl
         }
-        fn foo() -> String {
+        fn foo(&self) -> String {
             "foo".to_string()
         }
         fn bar(&self) -> String {
