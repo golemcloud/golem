@@ -83,15 +83,17 @@ async fn pending_login_store_and_take(
 ) -> anyhow::Result<()> {
     let login = sample_pending_login();
 
+    let state = Uuid::now_v7().to_string();
+
     store
-        .store_pending_oidc_login("state1", login.clone())
+        .store_pending_oidc_login(&state, login.clone())
         .await?;
 
-    let fetched = store.take_pending_oidc_login("state1").await?.unwrap();
+    let fetched = store.take_pending_oidc_login(&state).await?.unwrap();
 
     assert_eq!(fetched.original_uri, login.original_uri);
 
-    let missing = store.take_pending_oidc_login("state1").await.unwrap();
+    let missing = store.take_pending_oidc_login(&state).await.unwrap();
 
     assert!(missing.is_none());
 
@@ -104,13 +106,13 @@ async fn pending_login_expires(
 ) -> anyhow::Result<()> {
     let login = sample_pending_login();
 
-    store
-        .store_pending_oidc_login("state_expired", login)
-        .await?;
+    let state = Uuid::now_v7().to_string();
+
+    store.store_pending_oidc_login(&state, login).await?;
 
     sleep(Duration::from_millis(200)).await;
 
-    let fetched = store.take_pending_oidc_login("state_expired").await?;
+    let fetched = store.take_pending_oidc_login(&state).await?;
 
     assert!(fetched.is_none());
 
@@ -159,6 +161,9 @@ async fn authenticated_session_expiry(
 async fn multiple_pending_logins(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
+    let state1 = Uuid::now_v7().to_string();
+    let state2 = Uuid::now_v7().to_string();
+
     let login1 = sample_pending_login();
     let login2 = PendingOidcLogin {
         scheme_id: login1.scheme_id,
@@ -167,16 +172,16 @@ async fn multiple_pending_logins(
     };
 
     store
-        .store_pending_oidc_login("state1", login1.clone())
+        .store_pending_oidc_login(&state1, login1.clone())
         .await?;
 
     store
-        .store_pending_oidc_login("state2", login2.clone())
+        .store_pending_oidc_login(&state2, login2.clone())
         .await?;
 
-    let fetched1 = store.take_pending_oidc_login("state1").await?.unwrap();
+    let fetched1 = store.take_pending_oidc_login(&state1).await?.unwrap();
 
-    let fetched2 = store.take_pending_oidc_login("state2").await?.unwrap();
+    let fetched2 = store.take_pending_oidc_login(&state2).await?.unwrap();
 
     assert_eq!(fetched1.original_uri, login1.original_uri);
     assert_eq!(fetched2.original_uri, login2.original_uri);
@@ -239,16 +244,17 @@ async fn get_nonexistent_authenticated_session_returns_none(
 async fn pending_login_multiple_take_attempts(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
+    let state = Uuid::now_v7().to_string();
     let login = sample_pending_login();
 
     store
-        .store_pending_oidc_login("state_multi", login.clone())
+        .store_pending_oidc_login(&state, login.clone())
         .await?;
 
-    let first_take = store.take_pending_oidc_login("state_multi").await?;
+    let first_take = store.take_pending_oidc_login(&state).await?;
     assert!(first_take.is_some(), "First take should return the login");
 
-    let second_take = store.take_pending_oidc_login("state_multi").await?;
+    let second_take = store.take_pending_oidc_login(&state).await?;
     assert!(second_take.is_none(), "Second take should return None");
 
     Ok(())
