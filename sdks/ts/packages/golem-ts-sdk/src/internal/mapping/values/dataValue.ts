@@ -68,6 +68,7 @@ export function deserializeDataValue(
       const inputElementsLen = inputElements.length;
 
       // An index that's incremented corresponding to the schema
+      // The index is incremented for each type unless it is of type `Principal`
       let schemaBasedIndex = 0;
 
       return Either.all(
