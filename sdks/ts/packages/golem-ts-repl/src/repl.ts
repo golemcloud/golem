@@ -238,7 +238,7 @@ export class Repl {
     const languageService = this.getLanguageService();
     const lines: string[] = [];
     lines.push('');
-    lines.push(pc.bold('Available agents:'));
+    lines.push(pc.bold('Available agents client types:'));
 
     for (const agentTypeName of agentNames) {
       const methods = languageService.getClientMethodSignatures(agentTypeName);

@@ -51,6 +51,7 @@ pub struct DeployConfig {
     pub force_build: Option<ForceBuildArg>,
     pub post_deploy_args: PostDeployArgs,
     pub repl_bridge_sdk_target: Option<GuestLanguage>,
+    pub skip_build: bool,
 }
 
 pub enum DeploySummary {

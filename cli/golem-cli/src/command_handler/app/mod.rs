@@ -335,6 +335,7 @@ impl AppCommandHandler {
                     force_build: Some(force_build),
                     post_deploy_args,
                     repl_bridge_sdk_target,
+                    skip_build: false,
                 })
                 .await
             }
@@ -740,9 +741,11 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::PrepareError)?;
 
-        self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
-            .await
-            .map_err(DeployError::BuildError)?;
+        if !config.skip_build {
+            self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
+                .await
+                .map_err(DeployError::BuildError)?;
+        }
 
         let Some(deploy_diff) = self
             .prepare_deployment(environment.clone())
