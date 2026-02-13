@@ -398,7 +398,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 }
                 PublicSnapshotData::Json(data) => {
                     let _ = writeln!(result, "{pad}MIME type:         application/json");
-                    let _ = writeln!(result, "{pad}JSON:              {}", data.data.to_string());
+                    let _ = writeln!(result, "{pad}JSON:              {}", data.data);
                 }
             }
         }
