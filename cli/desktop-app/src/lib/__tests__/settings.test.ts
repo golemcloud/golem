@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  SettingsService,
-  storeService,
-  settingsService,
-  type App,
-} from "../settings";
+import { SettingsService, settingsService, type App } from "../settings";
 import { exists } from "@tauri-apps/plugin-fs";
 
 // Mock dependencies
@@ -485,12 +480,8 @@ describe("SettingsService", () => {
   });
 
   describe("exported instances", () => {
-    it("should export storeService instance", () => {
-      expect(storeService).toBeInstanceOf(SettingsService);
-    });
-
-    it("should export settingsService as backward compatibility alias", () => {
-      expect(settingsService).toBe(storeService);
+    it("should export settingsService instance", () => {
+      expect(settingsService).toBeInstanceOf(SettingsService);
     });
   });
 

@@ -34,7 +34,7 @@ const LANGUAGE_OPTIONS = [
   { value: "ts", label: "TypeScript" },
 ];
 
-export const CreateApplication = () => {
+const CreateApplication = () => {
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
   const [formData, setFormData] = useState({

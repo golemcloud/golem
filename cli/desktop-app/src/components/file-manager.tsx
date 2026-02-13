@@ -11,7 +11,7 @@ import { ChevronDown, ChevronRight, File, Folder } from "lucide-react";
 import { cn, parseFileStructure } from "@/lib/utils";
 import { FileStructure } from "@/types/component.ts";
 
-export interface FileNode {
+interface FileNode {
   name: string;
   type: "file" | "folder";
   children?: FileNode[];

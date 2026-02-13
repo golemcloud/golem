@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { SettingsPage } from "../index";
+import SettingsPage from "../index";
 
 // Mock dependencies
 vi.mock("@/components/ui/card", () => ({

@@ -7,7 +7,14 @@ import {
   type MockedFunction,
 } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { FileNode, FolderStructure } from "../file-manager";
+import { FolderStructure } from "../file-manager";
+
+interface FileNode {
+  name: string;
+  type: "file" | "folder";
+  children?: FileNode[];
+  permissions?: string;
+}
 import { FileStructure } from "@/types/component";
 import * as utils from "@/lib/utils";
 
