@@ -38,6 +38,7 @@ describe("CLIService CLI commands", () => {
       name: "test",
       folderLocation: "/test/app",
       golemYamlLocation: "/test/app/golem.yaml",
+      lastOpened: "2023-12-01T10:00:00Z",
     });
   });
 
@@ -53,7 +54,7 @@ describe("CLIService CLI commands", () => {
     });
 
     it("throws when app not found", async () => {
-      mockedGetAppById.mockResolvedValue(null);
+      mockedGetAppById.mockResolvedValue(undefined);
       await expect(service.callCLI("app-1", "test", [])).rejects.toThrow(
         "App not found",
       );
@@ -99,7 +100,7 @@ describe("CLIService CLI commands", () => {
     });
 
     it("throws when app not found", async () => {
-      mockedGetAppById.mockResolvedValue(null);
+      mockedGetAppById.mockResolvedValue(undefined);
       await expect(service.callCLIRaw("app-1", "test", [])).rejects.toThrow(
         "App not found",
       );
