@@ -148,7 +148,6 @@ array_push ${components} agent-updates-v1/.wit
 array_push ${components} agent-updates-v2/.wit
 array_push ${components} benchmarks
 array_push ${components} component-transformer-example1/adapter
-array_push ${components} custom-durability
 array_push ${components} ifs-update
 array_push ${components} ifs-update-inside-exported-function
 array_push ${components} oplog-processor

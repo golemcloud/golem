@@ -19,9 +19,9 @@ use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::{stream, StreamExt};
+use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -81,23 +81,29 @@ async fn custom_durability_1(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "custom_durability")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("custom-durability", "custom-durability-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "custom-durability-1", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it-exports/golem-it-api.{callback}",
-            vec!["a".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "callback",
+            data_value!("a"),
         )
-        .await??;
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -105,20 +111,27 @@ async fn custom_durability_1(
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it-exports/golem-it-api.{callback}",
-            vec!["b".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "callback",
+            data_value!("b"),
         )
-        .await??;
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result1, vec![Value::String("0-a".to_string())]);
-    assert_eq!(result2, vec![Value::String("1-b".to_string())]);
+    assert_eq!(
+        result1.into_return_value(),
+        Some(Value::String("0-a".to_string()))
+    );
+    assert_eq!(
+        result2.into_return_value(),
+        Some(Value::String("1-b".to_string()))
+    );
     Ok(())
 }
 
@@ -177,61 +190,62 @@ async fn lazy_pollable(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "custom_durability")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("custom-durability", "lazy-pollable-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "custom-durability-1", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     signal_tx.send(()).unwrap();
 
-    let res1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it-exports/golem-it-api.{[constructor]lazy-pollable-test}",
-            vec![],
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "lazy_pollable_init",
+            data_value!(),
         )
-        .await??;
-
-    let res_handle_type = AnalysedType::Handle(TypeHandle {
-        name: None,
-        owner: None,
-        resource_id: AnalysedResourceId(0),
-        mode: AnalysedResourceMode::Borrowed,
-    });
-    let res = ValueAndType::new(res1[0].clone(), res_handle_type);
+        .await?;
 
     let s1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
-            vec![res.clone(), 1u32.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "lazy_pollable_test",
+            data_value!(1u32),
         )
-        .await??;
+        .await?;
 
     signal_tx.send(()).unwrap();
 
     let s2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
-            vec![res.clone(), 2u32.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "lazy_pollable_test",
+            data_value!(2u32),
         )
-        .await??;
+        .await?;
 
     signal_tx.send(()).unwrap();
 
     let s3 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
-            vec![res.clone(), 3u32.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "lazy_pollable_test",
+            data_value!(3u32),
         )
-        .await??;
+        .await?;
 
     signal_tx.send(()).unwrap();
 
@@ -241,19 +255,32 @@ async fn lazy_pollable(
     signal_tx.send(()).unwrap();
 
     let s4 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
-            vec![res.clone(), 3u32.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "lazy_pollable_test",
+            data_value!(3u32),
         )
-        .await??;
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     http_server.abort();
 
-    assert_eq!(s1, vec![Value::String("chunk-1-0\n".to_string())]);
-    assert_eq!(s2, vec![Value::String("chunk-1-1\n".to_string())]);
-    assert_eq!(s3, vec![Value::String("chunk-1-2\n".to_string())]);
-    assert_eq!(s4, vec![Value::String("chunk-3-0\n".to_string())]);
+    assert_eq!(
+        s1.into_return_value(),
+        Some(Value::String("chunk-1-0\n".to_string()))
+    );
+    assert_eq!(
+        s2.into_return_value(),
+        Some(Value::String("chunk-1-1\n".to_string()))
+    );
+    assert_eq!(
+        s3.into_return_value(),
+        Some(Value::String("chunk-1-2\n".to_string()))
+    );
+    assert_eq!(
+        s4.into_return_value(),
+        Some(Value::String("chunk-3-0\n".to_string()))
+    );
     Ok(())
 }

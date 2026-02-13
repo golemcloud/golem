@@ -1,6 +1,7 @@
 pub mod blob_store;
 pub mod clock;
 pub mod clocks;
+pub mod custom_durability;
 pub mod environment;
 pub mod file_system;
 pub mod golem_host_api;
