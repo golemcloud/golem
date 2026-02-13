@@ -51,28 +51,32 @@ impl TypeScriptRepl {
             self.generate_repl_package(&args).await?;
         }
 
-        let mut npx_args = vec!["tsx".to_string(), "repl.ts".to_string()];
+        let mut repl_args = vec!["tsx".to_string(), "repl.ts".to_string()];
 
         if args.disable_auto_imports {
-            npx_args.push("--disable-auto-imports".to_string());
+            repl_args.push("--disable-auto-imports".to_string());
+        }
+
+        if !args.stream_logs {
+            repl_args.push("--disable-stream".to_string());
         }
 
         if let Some(script) = &args.script {
             match script {
                 ReplScriptSource::Inline(script) => {
-                    npx_args.push("--script".to_string());
-                    npx_args.push(script.clone());
+                    repl_args.push("--script".to_string());
+                    repl_args.push(script.clone());
                 }
                 ReplScriptSource::FromFile(path) => {
-                    npx_args.push("--script-file".to_string());
-                    npx_args.push(fs::path_to_str(path)?.to_string());
+                    repl_args.push("--script-file".to_string());
+                    repl_args.push(fs::path_to_str(path)?.to_string());
                 }
             }
         }
 
         loop {
             let result = Command::new("npx")
-                .args(&npx_args)
+                .args(&repl_args)
                 .current_dir(&args.repl_root_dir)
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())

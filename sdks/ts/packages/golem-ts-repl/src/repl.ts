@@ -17,8 +17,8 @@ import {
   clientConfigFromEnv,
   Config,
   ConfigureClient,
-  loadProcessArgs,
-  ProcessArgs,
+  loadReplCliFlags,
+  ReplCliFlags,
 } from './config';
 import { CliReplInterop } from './cli-repl-interop';
 import { LanguageService } from './language-service';
@@ -37,13 +37,13 @@ export class Repl {
   private readonly config: Config;
   private readonly clientConfig: base.Configuration;
   private readonly cli: CliReplInterop;
-  private readonly processArgs: ProcessArgs;
+  private readonly replCliFlags: ReplCliFlags;
   private languageService: LanguageService | undefined;
   private overrideSnippetForNextEval: string | undefined;
 
   constructor(config: Config) {
     this.config = config;
-    this.processArgs = loadProcessArgs();
+    this.replCliFlags = loadReplCliFlags();
     this.overrideSnippetForNextEval = undefined;
 
     const clientConfig = clientConfigFromEnv();
@@ -51,9 +51,12 @@ export class Repl {
 
     this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
     const cli = this.cli;
+    const replCliFlags = this.replCliFlags;
     clientConfig.aroundInvokeHook = {
       async beforeInvoke(request: AgentInvocationRequest): Promise<void> {
-        cli.startAgentStream(request);
+        if (replCliFlags.streamLogs) {
+          cli.startAgentStream(request);
+        }
       },
 
       async afterInvoke(
@@ -68,9 +71,7 @@ export class Repl {
 
   private getLanguageService(): LanguageService {
     if (!this.languageService) {
-      this.languageService = new LanguageService(this.config, {
-        disableAutoImports: this.processArgs.disableAutoImports,
-      });
+      this.languageService = new LanguageService(this.config, this.replCliFlags);
     }
     return this.languageService;
   }
@@ -82,7 +83,7 @@ export class Repl {
   }): repl.REPLServer {
     const output = options?.output ?? process.stdout;
     const terminal = options?.terminal ?? Boolean((output as any).isTTY);
-    const prompt = this.processArgs.script
+    const prompt = this.replCliFlags.script
       ? ''
       : `${pc.cyan('golem-ts-repl')}` +
         `[${pc.bold(pc.green(this.clientConfig.application))}]` +
@@ -216,7 +217,7 @@ export class Repl {
   }
 
   private setupReplContext(replServer: repl.REPLServer) {
-    if (this.processArgs.disableAutoImports) {
+    if (this.replCliFlags.disableAutoImports) {
       return;
     }
 
@@ -243,12 +244,41 @@ export class Repl {
         this.showAutoImportClientInfo(replServer, true);
       },
     });
+    replServer.defineCommand('streamLogs', {
+      help: 'Show or toggle agent stream logging (on/off)',
+      action: (rawArgs: string) => {
+        const trimmed = rawArgs.trim();
+        if (!trimmed) {
+          logSnippetInfo(
+            `streamLogs is ${this.replCliFlags.streamLogs ? pc.green('on') : pc.red('off')}`,
+          );
+          replServer.displayPrompt();
+          return;
+        }
+
+        const normalized = trimmed.toLowerCase();
+        if (['on', 'true', '1', 'yes'].includes(normalized)) {
+          this.replCliFlags.streamLogs = true;
+        } else if (['off', 'false', '0', 'no'].includes(normalized)) {
+          this.replCliFlags.streamLogs = false;
+        } else {
+          logSnippetInfo('Usage: .streamLogs [on|off]');
+          replServer.displayPrompt();
+          return;
+        }
+
+        logSnippetInfo(
+          `streamLogs set to ${this.replCliFlags.streamLogs ? pc.green('on') : pc.red('off')}`,
+        );
+        replServer.displayPrompt();
+      },
+    });
 
     this.cli.defineCommands(replServer);
   }
 
   private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
-    if (this.processArgs.disableAutoImports) return;
+    if (this.replCliFlags.disableAutoImports) return;
 
     const agentNames = Object.keys(this.config.agents).sort((a, b) => a.localeCompare(b));
     if (agentNames.length === 0) return;
@@ -280,7 +310,7 @@ export class Repl {
   }
 
   async run() {
-    const script = this.processArgs.script;
+    const script = this.replCliFlags.script;
     const replServer = script
       ? this.newBaseReplServer({
           input: new PassThrough(),
@@ -309,7 +339,7 @@ export class Repl {
     let evalResult: { error: Error | null; result: unknown };
     try {
       const preparedScript = prepareScriptForEval(script);
-      const filename = this.processArgs.scriptPath ?? 'repl-script';
+      const filename = this.replCliFlags.scriptPath ?? 'repl-script';
       this.overrideSnippetForNextEval = script;
       evalResult = await new Promise((resolve) => {
         replServer.eval(preparedScript.script, replServer.context, filename, (err, result) => {

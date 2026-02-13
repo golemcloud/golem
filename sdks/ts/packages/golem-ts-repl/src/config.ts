@@ -20,16 +20,16 @@ import * as base from './base';
 export type Config = {
   binary: string;
   appMainDir: string;
-  streamLogs: boolean;
   agents: Record<string, AgentConfig>;
   historyFile: string;
   cliCommandsMetadataJsonPath: string;
 };
 
-export type ProcessArgs = {
+export type ReplCliFlags = {
   script?: string;
   scriptPath?: string;
   disableAutoImports: boolean;
+  streamLogs: boolean;
 };
 
 export type AgentConfig = {
@@ -138,7 +138,7 @@ function requiredEnvVar(name: string): string {
   return value;
 }
 
-export function loadProcessArgs(): ProcessArgs {
+export function loadReplCliFlags(): ReplCliFlags {
   const normalizedArgs = process.argv
     .slice(2)
     .map((arg) => (arg === '-script-file' ? '--script-file' : arg));
@@ -149,29 +149,26 @@ export function loadProcessArgs(): ProcessArgs {
       script: { type: 'string' },
       'script-file': { type: 'string' },
       'disable-auto-imports': { type: 'boolean' },
+      'disable-stream': { type: 'boolean' },
     },
     allowPositionals: true,
   });
 
-  if (values.script !== undefined) {
-    return {
-      script: values.script,
-      scriptPath: undefined,
-      disableAutoImports: values['disable-auto-imports'] ?? false,
-    };
-  }
+  const streamLogs = !(values['disable-stream'] ?? false);
+  const disableAutoImports = values['disable-auto-imports'] ?? false;
+  const scriptPath = values['script-file'];
 
-  if (values['script-file'] !== undefined) {
-    return {
-      script: fs.readFileSync(values['script-file'], 'utf8'),
-      scriptPath: values['script-file'],
-      disableAutoImports: values['disable-auto-imports'] ?? false,
-    };
-  }
+  const script =
+    values.script !== undefined
+      ? values.script
+      : scriptPath !== undefined
+        ? fs.readFileSync(scriptPath, 'utf8')
+        : undefined;
 
   return {
-    script: undefined,
-    scriptPath: undefined,
-    disableAutoImports: values['disable-auto-imports'] ?? false,
+    script,
+    scriptPath,
+    disableAutoImports,
+    streamLogs,
   };
 }
