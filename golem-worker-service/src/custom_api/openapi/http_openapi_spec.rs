@@ -140,7 +140,9 @@ fn add_route_to_paths(
             &inner.constructor_parameters,
             &inner.method_parameters,
         ),
-        RichRouteBehaviour::WebhookCallback(_) => vec![("promise-id", false, &PathSegmentType::Str)],
+        RichRouteBehaviour::WebhookCallback(_) => {
+            vec![("promise-id", false, &PathSegmentType::Str)]
+        }
         _ => Vec::new(),
     };
     let query_params_raw = match &route.behavior {
@@ -206,7 +208,8 @@ fn create_schema_from_path_segment_type(
     let analysed_type = AnalysedType::from(path_segment_type);
     let mut schema = create_schema_from_analysed_type(&analysed_type);
     if is_catchall_segment {
-        schema.schema_data.description = Some("Parameter represents the remaining path, including slashes.".to_string())
+        schema.schema_data.description =
+            Some("Parameter represents the remaining path, including slashes.".to_string())
     }
     schema
 }
