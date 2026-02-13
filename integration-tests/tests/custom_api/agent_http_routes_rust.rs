@@ -31,7 +31,7 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
 
 #[test]
 #[tracing::instrument]
-async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn string_path_var_rust(agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -44,6 +44,9 @@ async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
+
+    dbg!(&body);
+    assert!(false);
     assert_eq!(body, json!({ "value": "foo" }));
     Ok(())
 }
@@ -727,6 +730,24 @@ async fn cors_get_with_origin_header(agent: &HttpTestContext) -> anyhow::Result<
     let vary = response.headers().get("vary").unwrap().to_str()?;
     assert_eq!(vary, "Origin");
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_open_api(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(agent.base_url.join("/.well-known/openapi.yaml")?)
+        .header("Origin", "https://mount.example.com")
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let bytes = response.bytes().await?;
+    let yaml_str = std::str::from_utf8(&bytes)?;
+    dbg!(&yaml_str);
+    assert_eq!(yaml_str, "OpenAPI {");
     Ok(())
 }
 

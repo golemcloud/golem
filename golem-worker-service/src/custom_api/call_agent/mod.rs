@@ -156,9 +156,15 @@ impl CallAgentHandler {
                     path_segment_index,
                     parameter_type,
                 } => {
+
+                    dbg!("mannnn....??");
+                    dbg!(*path_segment_index);
+                    dbg!(&resolved_route.captured_path_parameters);
+
                     let raw = resolved_route.captured_path_parameters
                         [usize::from(*path_segment_index)]
                     .clone();
+
 
                     parse_path_segment_value(raw, parameter_type)?
                 }

@@ -12,7 +12,7 @@
 
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::{AgentMethod, AgentType, ElementSchema, HttpMethod};
-use golem_common::model::agent::DataSchema;
+use golem_common::model::agent::{AgentConstructor, DataSchema, NamedElementSchema};
 use golem_service_base::custom_api::{
     MethodParameter, PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
     SecuritySchemeDetails,
@@ -40,6 +40,7 @@ pub trait HttpApiRoute {
     fn binding(&self) -> &RichRouteBehaviour;
     fn request_body_schema(&self) -> &RequestBodySchema;
     fn associated_agent_method(&self) -> Option<&AgentMethod>;
+    fn agent_constructor(&self) -> &AgentConstructor;
 }
 
 pub struct RichCompiledRouteWithAgentType<'a> {
@@ -78,6 +79,10 @@ impl<'a> HttpApiRoute for RichCompiledRouteWithAgentType<'a> {
             }
             _ => None,
         }
+    }
+
+    fn agent_constructor(&self) -> &AgentConstructor {
+        &self.agent_type.constructor
     }
 }
 
@@ -208,6 +213,7 @@ fn get_header_variable_and_types(
 }
 
 fn get_full_path_and_variables<'a>(
+    agent_constructor: &'a AgentConstructor,
     agent_method: Option<&'a AgentMethod>,
     path_segments: &'a [PathSegment],
     method_params: Option<&'a Vec<MethodParameter>>,
@@ -226,6 +232,7 @@ fn get_full_path_and_variables<'a>(
         );
     }
 
+    //
     let method_path_indices: HashMap<SafeIndex, &'a PathSegmentType> = method_params
         .map(|params| {
             params
@@ -241,10 +248,20 @@ fn get_full_path_and_variables<'a>(
         })
         .unwrap_or_default();
 
-    let input_parameter_names = agent_method.and_then(|x| match &x.input_schema {
-        DataSchema::Tuple(named_element_schemas) => Some(&named_element_schemas.elements),
-        DataSchema::Multimodal(_) => None,
-    });
+    let mut agent_input_params = match &agent_constructor.input_schema {
+        DataSchema::Tuple(named_element_schema) => named_element_schema.elements.iter().collect(),
+        DataSchema::Multimodal(_) => vec![],
+    };
+    
+    let agent_method_input_params: Vec<&NamedElementSchema> = match agent_method {
+        None => vec![],
+        Some(agent_method) => match &agent_method.input_schema {
+            DataSchema::Tuple(named_element_schemas) => named_element_schemas.elements.iter().collect(),
+            DataSchema::Multimodal(_) => vec![],
+        },
+    };
+
+    agent_input_params.extend(agent_method_input_params);
 
     let mut path_params_and_types: Vec<(&'a str, &'a PathSegmentType)> = Vec::new();
     let mut path_segment_string: Vec<String> = Vec::new();
@@ -257,10 +274,12 @@ fn get_full_path_and_variables<'a>(
 
             PathSegment::Variable | PathSegment::CatchAll => {
                 if let Some(param_type) = method_path_indices.get(&SafeIndex::new(idx as u32)) {
-                    let name = input_parameter_names
-                        .and_then(|elements| elements.get(idx))
+                    let name = agent_input_params
+                        .get(idx)
                         .map(|e| e.name.as_str())
-                        .expect("Path segment must have parameter name");
+                        .expect(format!(
+                            "Path is {:?}, Expected to find parameter name for path segment at index {idx}.  {:?}", path_segments, param_type
+                        ).as_str());
 
                     path_segment_string.push(format!("{{{}}}", name));
                     path_params_and_types.push((name, *param_type));
@@ -282,7 +301,7 @@ fn add_route_to_paths<T: HttpApiRoute + ?Sized>(
     };
 
     let (path_str, path_params_raw) =
-        get_full_path_and_variables(route.associated_agent_method(), route.path(), method_params);
+        get_full_path_and_variables(route.agent_constructor(), route.associated_agent_method(), route.path(), method_params);
 
     let path_item = paths.entry(path_str).or_default();
     let mut operation = Operation::default();
