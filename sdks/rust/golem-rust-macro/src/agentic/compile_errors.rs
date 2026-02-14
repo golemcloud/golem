@@ -74,3 +74,17 @@ pub fn endpoint_on_constructor_method_error(span: Span) -> proc_macro2::TokenStr
         "#[endpoint] attribute is not allowed on constructor methods. Please remove the #[endpoint] attribute from this method."
     ).to_compile_error()
 }
+
+pub fn invalid_static_method_in_agent_error(
+    span: Span,
+    method_name: &str,
+) -> proc_macro2::TokenStream {
+    syn::Error::new(
+        span,
+        format!(
+            "Static method `{}` is not allowed in agent traits. Only constructor methods (returning `Self`) are permitted as static methods. Please remove it or convert this to an instance method.",
+            method_name
+        ),
+    )
+    .to_compile_error()
+}
