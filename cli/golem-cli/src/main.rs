@@ -65,12 +65,82 @@ mod hooks {
 }
 
 fn main() -> ExitCode {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed to build tokio runtime for golem-cli main")
-        .block_on(CommandHandler::handle_args(
-            std::env::args_os(),
-            Arc::new(NoHooks {}),
-        ))
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+
+    // Quick check: does --serve or --serve-port appear in args?
+    let has_serve = args.iter().any(|a| a == "--serve");
+    let serve_port = args
+        .windows(2)
+        .find(|w| w[0] == "--serve-port")
+        .and_then(|w| w[1].to_str()?.parse::<u16>().ok());
+
+    if has_serve || serve_port.is_some() {
+        // MCP server mode
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build tokio runtime");
+
+        let binary = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "golem-cli".to_string());
+
+        let work_dir =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        // Collect global flags to forward (exclude --serve and --serve-port)
+        let mut global_flags = Vec::new();
+        let mut skip_next = false;
+        for arg in &args[1..] {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            let s = arg.to_string_lossy();
+            if s == "--serve" {
+                continue;
+            }
+            if s == "--serve-port" {
+                skip_next = true;
+                continue;
+            }
+            if s.starts_with("--serve-port=") {
+                continue;
+            }
+            global_flags.push(s.to_string());
+        }
+
+        let result = if let Some(port) = serve_port {
+            rt.block_on(golem_cli::mcp_server::start_http_server(
+                port,
+                binary,
+                work_dir,
+                global_flags,
+            ))
+        } else {
+            rt.block_on(golem_cli::mcp_server::start_stdio_server(
+                binary,
+                work_dir,
+                global_flags,
+            ))
+        };
+
+        match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("MCP server error: {}", e);
+                ExitCode::FAILURE
+            }
+        }
+    } else {
+        // Normal CLI mode
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build tokio runtime for golem-cli main")
+            .block_on(CommandHandler::handle_args(
+                std::env::args_os(),
+                Arc::new(NoHooks {}),
+            ))
+    }
 }

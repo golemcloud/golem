@@ -30,6 +30,7 @@ harness = false
 
 [dependencies]
 golem-templates = { workspace = true }
+rust-mcp-sdk = { version = "0.8", features = ["hyper-server"] }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-rib = { workspace = true }

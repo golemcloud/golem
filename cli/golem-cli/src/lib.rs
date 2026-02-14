@@ -14,15 +14,12 @@
 
 use clap_verbosity_flag::Verbosity;
 use golem_common::tracing::directive;
-use golem_common::tracing::directive::{debug, warn};
+use golem_common::tracing::directive::warn;
 use shadow_rs::shadow;
-use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
 pub mod auth;
-pub mod bridge_gen;
-pub mod client;
 pub mod command;
 pub mod command_handler;
 pub mod config;
@@ -33,8 +30,8 @@ pub mod fs;
 pub mod fuzzy;
 pub mod log;
 pub mod model;
-pub mod process;
 pub mod validation;
+pub mod mcp_server;
 pub mod wasm_rpc_stubgen;
 
 #[allow(unused)]
@@ -74,14 +71,6 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
         filter = filter.add_directive(warn("opentelemetry_sdk"));
         filter = filter.add_directive(warn("opentelemetry"));
         filter = filter.add_directive(warn("poem"));
-        filter = filter.add_directive(
-            // Special case: only show sqlx debug logs on TRACE level
-            if level == tracing::Level::TRACE {
-                debug("sqlx")
-            } else {
-                warn("sqlx")
-            },
-        );
 
         if pretty_mode {
             let subscriber = subscriber
@@ -103,8 +92,6 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
             tracing::subscriber::set_global_default(subscriber)
                 .expect("setting default subscriber failed");
         };
-
-        LogTracer::init().expect("failed to initialize log tracer");
     }
 }
 
@@ -116,7 +103,7 @@ mod tests {
     use clap::{ArgAction, Command, CommandFactory};
 
     #[test]
-    fn dump_commands() {
+    fn dump_commands_v_1_2() {
         let command = GolemCliCommand::command();
         dump_command(0, &command);
     }
