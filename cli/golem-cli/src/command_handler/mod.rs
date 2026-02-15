@@ -31,6 +31,7 @@ use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
+use crate::command_handler::mcp::McpHandler;
 use crate::command_handler::partial_match::ErrorHandler;
 use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
@@ -59,6 +60,7 @@ mod component;
 mod environment;
 pub(crate) mod interactive;
 mod log;
+mod mcp;
 mod partial_match;
 mod plugin;
 mod profile;
@@ -392,6 +394,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::Cloud { subcommand } => {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
+            GolemCliSubcommand::Serve { port } => self.ctx.mcp_handler().cmd_serve(port).await,
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
         }
     }
@@ -424,6 +427,7 @@ pub trait Handlers {
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
+    fn mcp_handler(&self) -> McpHandler;
     fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
@@ -493,6 +497,10 @@ impl Handlers for Arc<Context> {
 
     fn log_handler(&self) -> LogHandler {
         LogHandler::new(self.clone())
+    }
+
+    fn mcp_handler(&self) -> McpHandler {
+        McpHandler::new(self.clone())
     }
 
     // TODO: atomic:

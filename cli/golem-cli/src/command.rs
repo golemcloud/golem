@@ -794,6 +794,12 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
+    /// Start an MCP server exposing CLI commands as tools
+    Serve {
+        /// Port for the MCP server
+        #[arg(long, default_value = "3000")]
+        port: u16,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell

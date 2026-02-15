@@ -259,6 +259,7 @@ rusoto_elbv2 = "0.48.0"
 rusoto_route53 = "0.48.0"
 rusoto_sts = "0.48.0"
 rustc-hash = "2.1.1"
+rust-mcp-sdk = "0.8.3"
 rustls = { version = "0.23.23", features = ["ring"] }
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
