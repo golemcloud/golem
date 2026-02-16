@@ -249,7 +249,9 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Skipping deployment, no changes detected, UP-TO-DATE"));
+    assert!(outputs.stdout_contains(
+        "Finished deployment planning, no changes are required for the environment [UP-TO-DATE]"
+    ));
 }
 
 // TODO: atomic: re-enable IF we will have any builtin subcommands for golem app

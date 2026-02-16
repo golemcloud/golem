@@ -14,7 +14,6 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use pretty_assertions::{assert_eq, assert_ne};
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use axum::Router;
@@ -28,6 +27,7 @@ use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
+use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -357,7 +357,10 @@ async fn golem_rust_atomic_region(
     let events = http_server.get_events();
     info!("events:\n - {}", events.join("\n - "));
 
-    assert_eq!(events, vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
+    assert_eq!(
+        events,
+        vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]
+    );
 
     Ok(())
 }
@@ -679,7 +682,10 @@ async fn idempotency_keys_in_ephemeral_workers(
         .store()
         .await?;
 
-    let agent_id = agent_id!("host-function-tests", "idempotency_keys_in_ephemeral_workers");
+    let agent_id = agent_id!(
+        "host-function-tests",
+        "idempotency_keys_in_ephemeral_workers"
+    );
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

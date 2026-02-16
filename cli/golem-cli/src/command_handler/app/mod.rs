@@ -15,7 +15,9 @@
 use crate::app::error::CustomCommandError;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
-use crate::command::shared_args::{BuildArgs, DeployArgs, ForceBuildArg, OptionalComponentNames};
+use crate::command::shared_args::{
+    BuildArgs, ForceBuildArg, OptionalComponentNames, PostDeployArgs,
+};
 use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
@@ -28,17 +30,21 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent, LogOutput,
-    Output,
+    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
+    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
+    logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{
     ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
 };
-use crate::model::deploy::DeployConfig;
+use crate::model::deploy::{
+    DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
+    PostDeploySummary,
+};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
 use crate::model::text::diff::log_unified_diff;
-use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
+use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
@@ -48,6 +54,7 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -279,20 +286,28 @@ impl AppCommandHandler {
             build_config
         };
 
-        self.build(
-            &build_config,
-            component_name.component_name,
-            &ApplicationComponentSelectMode::CurrentDir,
-        )
-        .await
+        let result = self
+            .build(
+                &build_config,
+                component_name.component_name,
+                &ApplicationComponentSelectMode::CurrentDir,
+            )
+            .await;
+
+        logln("");
+        logged_finished_or_failed_to(result, "building", "build application")
     }
 
     pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
-        self.clean(
-            component_name.component_name,
-            &ApplicationComponentSelectMode::CurrentDir,
-        )
-        .await
+        let result = self
+            .clean(
+                component_name.component_name,
+                &ApplicationComponentSelectMode::CurrentDir,
+            )
+            .await;
+
+        logln("");
+        logged_finished_or_failed_to(result, "cleaning", "clean application")
     }
 
     pub async fn cmd_deploy(
@@ -303,23 +318,133 @@ impl AppCommandHandler {
         version: Option<String>,
         revision: Option<DeploymentRevision>,
         force_build: ForceBuildArg,
-        deploy_args: DeployArgs,
+        post_deploy_args: PostDeployArgs,
         repl_bridge_sdk_target: Option<GuestLanguage>,
     ) -> anyhow::Result<()> {
-        if let Some(version) = version {
-            self.deploy_by_version(version, plan, deploy_args).await
-        } else if let Some(revision) = revision {
-            self.deploy_by_revision(revision, plan, deploy_args).await
-        } else {
-            self.deploy(DeployConfig {
-                plan,
-                stage,
-                approve_staging_steps,
-                force_build: Some(force_build),
-                deploy_args,
-                repl_bridge_sdk_target,
-            })
-            .await
+        let deploy_result = {
+            if let Some(version) = version {
+                self.deploy_by_version(version, plan, post_deploy_args)
+                    .await
+            } else if let Some(revision) = revision {
+                self.deploy_by_revision(revision, plan, post_deploy_args)
+                    .await
+            } else {
+                self.deploy(DeployConfig {
+                    plan,
+                    stage,
+                    approve_staging_steps,
+                    force_build: Some(force_build),
+                    post_deploy_args,
+                    repl_bridge_sdk_target,
+                    skip_build: false,
+                })
+                .await
+            }
+        };
+
+        logln("");
+        log_action("Summary", "");
+        let _indent = LogIndent::new();
+
+        fn logged_post_deploy_result(post_deploy_result: PostDeployResult) -> anyhow::Result<()> {
+            match post_deploy_result {
+                Ok(ok) => {
+                    match ok {
+                        PostDeploySummary::NoRequestedChanges => {
+                            // NOP
+                        }
+                        PostDeploySummary::NoDeployment => {
+                            log_warn_action(
+                                "Skipped",
+                                "post deployment steps, the environment has no deployment yet",
+                            );
+                        }
+                        PostDeploySummary::AgentUpdateOk => {
+                            log_finished_ok("post deployment steps, updated all agents");
+                        }
+                        PostDeploySummary::AgentRedeployOk => {
+                            log_finished_ok("post deployment steps, redeployed all agents");
+                        }
+                        PostDeploySummary::AgentDeleteOk => {
+                            log_finished_ok("post deployment steps, deleted all agents");
+                        }
+                    }
+                    Ok(())
+                }
+                Err(err) => match err {
+                    PostDeployError::PrepareError(err) => {
+                        logged_failed_to(err, "prepare deployment steps")
+                    }
+                    PostDeployError::AgentUpdateError(err) => {
+                        logged_failed_to(err, "update agents")
+                    }
+                    PostDeployError::AgentRedeployError(err) => {
+                        logged_failed_to(err, "redeploy agents")
+                    }
+                    PostDeployError::AgentDeleteError(err) => {
+                        logged_failed_to(err, "delete agents")
+                    }
+                },
+            }
+        }
+
+        match deploy_result {
+            Ok(ok) => match ok {
+                DeploySummary::PlanOk => {
+                    log_finished_ok("planning");
+                    Ok(())
+                }
+                DeploySummary::PlanUpToDate => {
+                    log_finished_up_to_date(
+                        "deployment planning, no changes are required for the environment",
+                    );
+                    Ok(())
+                }
+                DeploySummary::StagingOk => {
+                    log_finished_ok("staging");
+                    Ok(())
+                }
+                DeploySummary::DeployOk(post_deploy) => {
+                    log_finished_ok("deploying");
+                    logged_post_deploy_result(post_deploy)
+                }
+                DeploySummary::DeployUpToDate(post_deploy_result) => {
+                    log_finished_up_to_date(
+                        "deployment planning, no changes are required for the environment",
+                    );
+                    logged_post_deploy_result(post_deploy_result)
+                }
+                DeploySummary::RollbackOk(post_deploy_result) => {
+                    log_finished_ok("rollback");
+                    logged_post_deploy_result(post_deploy_result)
+                }
+                DeploySummary::RollbackUpToDate(post_deploy_result) => {
+                    log_finished_up_to_date(
+                        "rollback planning, no changes are required for the environment",
+                    );
+                    logged_post_deploy_result(post_deploy_result)
+                }
+            },
+            Err(err) => match err {
+                DeployError::Cancelled => {
+                    log_warn_action("Cancelled", "deploying");
+                    Err(anyhow!(NonSuccessfulExit))
+                }
+                DeployError::BuildError(err) => {
+                    logged_failed_to(err, "build application for deployment")
+                }
+                DeployError::PrepareError(err) => logged_failed_to(err, "prepare deployment"),
+                DeployError::PlanError(err) => logged_failed_to(err, "plan"),
+                DeployError::EnvironmentCheckError(err) => {
+                    logged_failed_to(err, "check environment")
+                }
+                DeployError::StagingError(err) => logged_failed_to(err, "stage"),
+                DeployError::DeployError(err) => logged_failed_to(err, "deploy"),
+                DeployError::RollbackError(err) => {
+                    log_failed_to("rollback");
+                    Err(err)
+                }
+            },
         }
     }
 
@@ -379,6 +504,7 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         update_mode: AgentUpdateMode,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
@@ -386,7 +512,7 @@ impl AppCommandHandler {
         let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
-            .update_workers_by_components(&components, update_mode, await_update)
+            .update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
@@ -415,24 +541,7 @@ impl AppCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let agent_types = environment
-            .with_current_deployment_revision_or_default_warn(
-                |current_deployment_revision| async move {
-                    Ok(self
-                        .ctx
-                        .golem_clients()
-                        .await?
-                        .environment
-                        .list_deployment_agent_types(
-                            &environment.environment_id.0,
-                            current_deployment_revision.into(),
-                        )
-                        .await
-                        .map_service_error()?
-                        .values)
-                },
-            )
-            .await?;
+        let agent_types = self.list_agent_types(&environment).await?;
 
         self.ctx.log_handler().log_view(&agent_types);
 
@@ -450,27 +559,59 @@ impl AppCommandHandler {
         .await
     }
 
+    pub async fn list_agent_types(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<Vec<DeployedRegisteredAgentType>> {
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    Ok(self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .list_deployment_agent_types(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                        )
+                        .await
+                        .map_service_error()?
+                        .values)
+                },
+            )
+            .await
+    }
+
     async fn deploy_by_version(
         &self,
         version: String,
         plan: bool,
-        deploy_args: DeployArgs,
-    ) -> anyhow::Result<()> {
+        post_deploy_args: PostDeployArgs,
+    ) -> DeployResult {
         let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
-            .await?;
+            .await
+            .map_err(DeployError::PrepareError)?;
 
-        let _ = environment.current_deployment_or_err()?;
+        let _ = environment
+            .current_deployment_or_err()
+            .map_err(DeployError::PrepareError)?;
 
-        let clients = self.ctx.golem_clients().await?;
+        let clients = self
+            .ctx
+            .golem_clients()
+            .await
+            .map_err(DeployError::PrepareError)?;
 
         let deployments = clients
             .environment
             .list_deployments(&environment.environment_id.0, Some(&version))
             .await
-            .map_service_error()?
+            .map_service_error()
+            .map_err(DeployError::PrepareError)?
             .values;
 
         if deployments.is_empty() {
@@ -478,15 +619,15 @@ impl AppCommandHandler {
                 "Deployment with version {} not found!",
                 version.log_color_error_highlight()
             ));
-            self.show_available_deployments(&environment).await?;
-            bail!(NonSuccessfulExit);
+            self.safe_show_available_deployments(&environment).await;
+            return Err(DeployError::PrepareError(anyhow!(NonSuccessfulExit)));
         } else if deployments.len() > 1 {
             log_error(format!(
                 "Multiple deployment found with version {}, use deployment revision instead!",
                 version.log_color_error_highlight()
             ));
             self.ctx.log_handler().log_view(&deployments);
-            bail!(NonSuccessfulExit);
+            return Err(DeployError::PrepareError(anyhow!(NonSuccessfulExit)));
         }
 
         self.deploy_by_revision(
@@ -495,7 +636,7 @@ impl AppCommandHandler {
                 .map(|d| d.revision)
                 .expect("No deployments"),
             plan,
-            deploy_args,
+            post_deploy_args,
         )
         .await
     }
@@ -504,72 +645,83 @@ impl AppCommandHandler {
         &self,
         target_revision: DeploymentRevision,
         plan: bool,
-        deploy_args: DeployArgs,
-    ) -> anyhow::Result<()> {
+        post_deploy_args: PostDeployArgs,
+    ) -> DeployResult {
         let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-            .await?;
+            .await
+            .map_err(DeployError::PrepareError)?;
 
         let Some(rollback_diff) = self
             .prepare_rollback(environment.clone(), target_revision)
-            .await?
+            .await
+            .map_err(DeployError::PrepareError)?
         else {
-            if plan {
-                log_skipping_up_to_date("planning, no changes detected");
-            } else {
-                log_skipping_up_to_date("deployment, no changes detected");
-
-                if let Some(current_deployment) =
-                    environment.server_environment.current_deployment.as_ref()
-                {
-                    self.apply_deploy_args(
-                        &environment.environment_id,
-                        current_deployment.deployment_revision,
-                        &deploy_args,
-                    )
-                    .await?;
+            return {
+                if plan {
+                    Ok(DeploySummary::PlanUpToDate)
+                } else {
+                    Ok(DeploySummary::RollbackUpToDate(
+                        self.apply_post_deploy_args(
+                            &environment.environment_id,
+                            environment
+                                .server_environment
+                                .current_deployment
+                                .as_ref()
+                                .map(|d| d.deployment_revision),
+                            &post_deploy_args,
+                        )
+                        .await,
+                    ))
                 }
-            }
-
-            return Ok(());
+            };
         };
 
         if plan {
-            return Ok(());
+            return Ok(DeploySummary::PlanOk);
         }
 
-        if !self.ctx.interactive_handler().confirm_deploy_by_plan(
-            &rollback_diff.environment.application_name,
-            &rollback_diff.environment.environment_name,
-            &self
-                .ctx
-                .manifest_environment()
-                .map(|env| env.environment.to_formatted_server_context())
-                .unwrap_or("???".to_string()),
-        )? {
-            return Ok(());
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_deploy_by_plan(
+                &rollback_diff.environment.application_name,
+                &rollback_diff.environment.environment_name,
+                &self
+                    .ctx
+                    .manifest_environment()
+                    .map(|env| env.environment.to_formatted_server_context())
+                    .unwrap_or("???".to_string()),
+            )
+            .map_err(DeployError::PrepareError)?
+        {
+            return Err(DeployError::Cancelled);
         }
 
         self.ctx
             .environment_handler()
             .ensure_environment_deployment_options(&environment)
-            .await?;
+            .await
+            .map_err(DeployError::EnvironmentCheckError)?;
 
-        let current_deployment = self.rollback_environment(&rollback_diff).await?;
+        let current_deployment = self
+            .rollback_environment(&rollback_diff)
+            .await
+            .map_err(DeployError::DeployError)?;
 
-        self.apply_deploy_args(
-            &current_deployment.environment_id,
-            current_deployment.revision,
-            &deploy_args,
-        )
-        .await?;
-
-        Ok(())
+        Ok(DeploySummary::RollbackOk(
+            self.apply_post_deploy_args(
+                &current_deployment.environment_id,
+                Some(current_deployment.revision),
+                &post_deploy_args,
+            )
+            .await,
+        ))
     }
 
-    pub async fn deploy(&self, config: DeployConfig) -> anyhow::Result<()> {
+    pub async fn deploy(&self, config: DeployConfig) -> DeployResult {
         let build_config = {
             let mut build_config = BuildConfig::new().with_skip_up_to_date_checks(
                 config
@@ -581,7 +733,7 @@ impl AppCommandHandler {
 
             if let Some(repl_bridge_sdk_target) = config.repl_bridge_sdk_target {
                 let app_ctx = self.ctx.app_context_lock().await;
-                let app_ctx = app_ctx.some_or_err()?;
+                let app_ctx = app_ctx.some_or_err().map_err(DeployError::PrepareError)?;
                 build_config = build_config.with_repl_bridge_sdk_target(
                     app_ctx.new_repl_bridge_sdk_target(repl_bridge_sdk_target),
                 );
@@ -594,71 +746,87 @@ impl AppCommandHandler {
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-            .await?;
+            .await
+            .map_err(DeployError::PrepareError)?;
 
-        self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
-            .await?;
+        if !config.skip_build {
+            self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
+                .await
+                .map_err(DeployError::BuildError)?;
+        }
 
-        let Some(deploy_diff) = self.prepare_deployment(environment.clone()).await? else {
-            if config.plan {
-                log_skipping_up_to_date("planning, no changes detected");
-            } else {
-                log_skipping_up_to_date("deployment, no changes detected");
-
-                if let Some(current_deployment) =
-                    environment.server_environment.current_deployment.as_ref()
-                {
-                    self.apply_deploy_args(
-                        &environment.environment_id,
-                        current_deployment.deployment_revision,
-                        &config.deploy_args,
-                    )
-                    .await?;
+        let Some(deploy_diff) = self
+            .prepare_deployment(environment.clone())
+            .await
+            .map_err(DeployError::PrepareError)?
+        else {
+            return {
+                if config.plan {
+                    Ok(DeploySummary::PlanUpToDate)
+                } else {
+                    Ok(DeploySummary::DeployUpToDate(
+                        self.apply_post_deploy_args(
+                            &environment.environment_id,
+                            environment
+                                .server_environment
+                                .current_deployment
+                                .as_ref()
+                                .map(|d| d.deployment_revision),
+                            &config.post_deploy_args,
+                        )
+                        .await,
+                    ))
                 }
-            }
-
-            return Ok(());
+            };
         };
 
         if config.plan {
-            return Ok(());
+            return Ok(DeploySummary::PlanOk);
         }
 
-        if !self.ctx.interactive_handler().confirm_deploy_by_plan(
-            &deploy_diff.environment.application_name,
-            &deploy_diff.environment.environment_name,
-            &self
-                .ctx
-                .manifest_environment()
-                .map(|env| env.environment.to_formatted_server_context())
-                .unwrap_or("???".to_string()),
-        )? {
-            return Ok(());
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_deploy_by_plan(
+                &deploy_diff.environment.application_name,
+                &deploy_diff.environment.environment_name,
+                &self
+                    .ctx
+                    .manifest_environment()
+                    .map(|env| env.environment.to_formatted_server_context())
+                    .unwrap_or("???".to_string()),
+            )
+            .map_err(DeployError::PrepareError)?
+        {
+            return Err(DeployError::Cancelled);
         }
 
         self.ctx
             .environment_handler()
             .ensure_environment_deployment_options(&environment)
-            .await?;
+            .await
+            .map_err(DeployError::EnvironmentCheckError)?;
 
         self.apply_changes_to_stage(config.approve_staging_steps, &deploy_diff)
-            .await?;
+            .await
+            .map_err(DeployError::StagingError)?;
         if config.stage {
-            return Ok(());
+            return Ok(DeploySummary::StagingOk);
         }
 
         let current_deployment = self
             .apply_staged_changes_to_environment(&deploy_diff)
-            .await?;
+            .await
+            .map_err(DeployError::DeployError)?;
 
-        self.apply_deploy_args(
-            &current_deployment.environment_id,
-            current_deployment.revision,
-            &config.deploy_args,
-        )
-        .await?;
-
-        Ok(())
+        Ok(DeploySummary::DeployOk(
+            self.apply_post_deploy_args(
+                &current_deployment.environment_id,
+                Some(current_deployment.revision),
+                &config.post_deploy_args,
+            )
+            .await,
+        ))
     }
 
     async fn prepare_deployment(
@@ -1389,14 +1557,18 @@ impl AppCommandHandler {
         Ok(result)
     }
 
-    async fn apply_deploy_args(
+    async fn apply_post_deploy_args(
         &self,
         environment_id: &EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        deploy_args: &DeployArgs,
-    ) -> anyhow::Result<()> {
-        if !deploy_args.is_any_set(self.ctx.deploy_args()) {
-            return Ok(());
+        deployment_revision: Option<DeploymentRevision>,
+        post_deploy_args: &PostDeployArgs,
+    ) -> PostDeployResult {
+        let Some(deployment_revision) = deployment_revision else {
+            return Ok(PostDeploySummary::NoDeployment);
+        };
+
+        if !post_deploy_args.is_any_set(self.ctx.deploy_args()) {
+            return Ok(PostDeploySummary::NoRequestedChanges);
         }
 
         let env_deploy_args = self.ctx.deploy_args();
@@ -1404,30 +1576,39 @@ impl AppCommandHandler {
         let components = self
             .ctx
             .golem_clients()
-            .await?
+            .await
+            .map_err(PostDeployError::PrepareError)?
             .environment
             .get_deployment_components(&environment_id.0, deployment_revision.into())
-            .await?
+            .await
+            .map_service_error()
+            .map_err(PostDeployError::PrepareError)?
             .values;
 
-        if let Some(update_mode) = &deploy_args.update_agents {
+        if let Some(update_mode) = &post_deploy_args.update_agents {
             self.ctx
                 .component_handler()
-                .update_workers_by_components(&components, *update_mode, true)
-                .await?;
-        } else if deploy_args.redeploy_agents(env_deploy_args) {
+                .update_workers_by_components(&components, *update_mode, true, false)
+                .await
+                .map(|()| PostDeploySummary::AgentUpdateOk)
+                .map_err(PostDeployError::AgentUpdateError)
+        } else if post_deploy_args.redeploy_agents(env_deploy_args) {
             self.ctx
                 .component_handler()
                 .redeploy_workers_by_components(&components)
-                .await?;
-        } else if deploy_args.delete_agents(env_deploy_args) {
+                .await
+                .map(|()| PostDeploySummary::AgentRedeployOk)
+                .map_err(PostDeployError::AgentRedeployError)
+        } else if post_deploy_args.delete_agents(env_deploy_args) {
             self.ctx
                 .component_handler()
                 .delete_workers(&components)
-                .await?;
+                .await
+                .map(|()| PostDeploySummary::AgentDeleteOk)
+                .map_err(PostDeployError::AgentDeleteError)
+        } else {
+            Ok(PostDeploySummary::NoRequestedChanges)
         }
-
-        Ok(())
     }
 
     pub async fn get_server_application(
@@ -1917,5 +2098,11 @@ impl AppCommandHandler {
         self.ctx.log_handler().log_view(&deployments);
 
         Ok(())
+    }
+
+    async fn safe_show_available_deployments(&self, environment: &ResolvedEnvironmentIdentity) {
+        if let Some(err) = self.show_available_deployments(environment).await.err() {
+            log_error(format!("Failed to show available deployments: {}", err));
+        }
     }
 }

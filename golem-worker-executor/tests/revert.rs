@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use crate::Tracing;
-use pretty_assertions::{assert_eq, assert_ne};
-use golem_common::{agent_id, data_value};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::OplogIndex;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use log::info;
+use pretty_assertions::{assert_eq, assert_ne};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -174,7 +174,11 @@ async fn revert_failed_worker(
 
     assert!(result2.is_err());
     assert!(result3.is_err());
-    assert!(result4.is_ok(), "Expected get after revert to succeed: {:?}", result4);
+    assert!(
+        result4.is_ok(),
+        "Expected get after revert to succeed: {:?}",
+        result4
+    );
 
     Ok(())
 }
@@ -236,9 +240,18 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
 
     assert!(result2.is_err());
     {
-        let err3 = format!("{}", result3.err().expect("Expected get after revert to fail"));
-        assert!(err3.contains("value is too large"), "Expected 'value is too large' in error: {err3}");
-        assert!(!err3.contains("Oplog"), "Unexpected 'Oplog' in error: {err3}");
+        let err3 = format!(
+            "{}",
+            result3.expect_err("Expected get after revert to fail")
+        );
+        assert!(
+            err3.contains("value is too large"),
+            "Expected 'value is too large' in error: {err3}"
+        );
+        assert!(
+            !err3.contains("Oplog"),
+            "Unexpected 'Oplog' in error: {err3}"
+        );
     }
 
     Ok(())
@@ -258,7 +271,10 @@ async fn revert_auto_update(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -283,7 +299,7 @@ async fn revert_auto_update(
     let after_init_index = oplog.last().unwrap().oplog_index;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result1 = executor

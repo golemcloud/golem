@@ -16,11 +16,11 @@ use crate::Tracing;
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
-use golem_common::model::{IdempotencyKey, RetryConfig};
+use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
@@ -65,10 +65,7 @@ async fn http_client(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -92,10 +89,7 @@ async fn http_client(
     drop(rx);
     http_server.abort();
 
-    assert_eq!(
-        result,
-        data_value!("200 response is test-header test-body")
-    );
+    assert_eq!(result, data_value!("200 response is test-header test-body"));
     Ok(())
 }
 
@@ -141,10 +135,7 @@ async fn http_client_using_reqwest(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -167,11 +158,15 @@ async fn http_client_using_reqwest(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, data_value!("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"));
+    assert_eq!(
+        result,
+        data_value!(
+            "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
+        )
+    );
     assert_eq!(
         captured_body,
-        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
-            .to_string()
+        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}".to_string()
     );
     Ok(())
 }
@@ -218,10 +213,7 @@ async fn http_client_using_reqwest_async(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -243,11 +235,15 @@ async fn http_client_using_reqwest_async(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, data_value!("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"));
+    assert_eq!(
+        result,
+        data_value!(
+            "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
+        )
+    );
     assert_eq!(
         captured_body,
-        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
-            .to_string()
+        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}".to_string()
     );
 
     Ok(())
@@ -294,10 +290,7 @@ async fn http_client_using_reqwest_async_parallel(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -310,12 +303,7 @@ async fn http_client_using_reqwest_async_parallel(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "run_parallel",
-            data_value!(32u16),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "run_parallel", data_value!(32u16))
         .await?;
     let mut captured_body = captured_body.lock().unwrap().clone();
     captured_body.sort();
@@ -325,9 +313,7 @@ async fn http_client_using_reqwest_async_parallel(
     drop(executor);
     http_server.abort();
 
-    let return_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let return_value = result.into_return_value().expect("Expected a return value");
     let golem_wasm::Value::List(lst) = &return_value else {
         panic!("Expected List, got {:?}", &return_value)
     };
@@ -409,10 +395,7 @@ async fn outgoing_http_contains_idempotency_key(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -421,23 +404,12 @@ async fn outgoing_http_contains_idempotency_key(
 
     let agent_id = agent_id!("http-client2");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());
     let result = executor
-        .invoke_and_await_agent_with_key(
-            &component.id,
-            &agent_id,
-            &key,
-            "run",
-            data_value!(),
-        )
+        .invoke_and_await_agent_with_key(&component.id, &agent_id, &key, "run", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;

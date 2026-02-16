@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use pretty_assertions::assert_eq;
 use golem_common::base_model::agent::AgentId;
 use golem_common::model::agent::DataValue;
 use golem_common::model::component::ComponentId;
@@ -23,13 +22,14 @@ use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::time::Duration;
@@ -1778,20 +1778,14 @@ fn check_test_result(worker_id: &WorkerId, result: DataValue, test: RdbmsTest) {
         }
         Value::Result(Ok(None)) => {
             if test.has_expected() {
-                panic!(
-                    "result {fn_name} for worker {worker_id} is Ok(None) but expected a value"
-                );
+                panic!("result {fn_name} for worker {worker_id} is Ok(None) but expected a value");
             }
         }
         Value::Result(Err(err)) => {
-            panic!(
-                "result {fn_name} for worker {worker_id} is Err: {err:?}"
-            );
+            panic!("result {fn_name} for worker {worker_id} is Err: {err:?}");
         }
         other => {
-            panic!(
-                "result {fn_name} for worker {worker_id} unexpected: {other:?}"
-            );
+            panic!("result {fn_name} for worker {worker_id} unexpected: {other:?}");
         }
     }
 }

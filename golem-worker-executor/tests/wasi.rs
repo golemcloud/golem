@@ -23,12 +23,9 @@ use golem_common::agent_id;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
-use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
-use golem_test_framework::dsl::{
-    drain_connection, stderr_events, stdout_events, TestDsl,
-};
+use golem_test_framework::dsl::{drain_connection, stderr_events, stdout_events, TestDsl};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -93,7 +90,10 @@ async fn write_stdout(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(stdout_events(events.into_iter()), vec!["Sample text written to the output\n"]);
+    assert_eq!(
+        stdout_events(events.into_iter()),
+        vec!["Sample text written to the output\n"]
+    );
     Ok(())
 }
 
@@ -140,7 +140,10 @@ async fn write_stderr(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(stderr_events(events.into_iter()), vec!["Sample text written to the error output\n"]);
+    assert_eq!(
+        stderr_events(events.into_iter()),
+        vec!["Sample text written to the error output\n"]
+    );
 
     Ok(())
 }
@@ -286,10 +289,10 @@ async fn file_write_read_delete(
     assert_eq!(
         result,
         Value::Record(vec![
-                Value::Option(None),
-                Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-                Value::Option(None)
-            ])
+            Value::Option(None),
+            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
+            Value::Option(None)
+        ])
     );
 
     Ok(())
@@ -347,12 +350,12 @@ async fn initial_file_read_write(
     assert_eq!(
         result,
         Value::Tuple(vec![
-                Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
-                Value::Option(None),
-                Value::Option(None),
-                Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
-                Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-            ])
+            Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
+            Value::Option(None),
+            Value::Option(None),
+            Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
+            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
+        ])
     );
 
     Ok(())
@@ -398,9 +401,7 @@ async fn initial_file_listing_through_api(
         .await?;
 
     let agent_id = agent_id!("file-read-write", "initial-file-listing-1");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id)
-        .await?;
+    let worker_id = executor.start_agent(&component.id, agent_id).await?;
 
     let result = executor.get_file_system_node(&worker_id, "/").await?;
 
@@ -417,28 +418,28 @@ async fn initial_file_listing_through_api(
     assert_eq!(
         result,
         vec![
-                FlatComponentFileSystemNode {
-                    name: "bar".to_string(),
-                    last_modified: 0,
-                    kind: FlatComponentFileSystemNodeKind::Directory,
-                    permissions: None,
-                    size: None
-                },
-                FlatComponentFileSystemNode {
-                    name: "baz.txt".to_string(),
-                    last_modified: 0,
-                    kind: FlatComponentFileSystemNodeKind::File,
-                    permissions: Some(ComponentFilePermissions::ReadWrite),
-                    size: Some(4),
-                },
-                FlatComponentFileSystemNode {
-                    name: "foo.txt".to_string(),
-                    last_modified: 0,
-                    kind: FlatComponentFileSystemNodeKind::File,
-                    permissions: Some(ComponentFilePermissions::ReadOnly),
-                    size: Some(4)
-                },
-            ]
+            FlatComponentFileSystemNode {
+                name: "bar".to_string(),
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::Directory,
+                permissions: None,
+                size: None
+            },
+            FlatComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(ComponentFilePermissions::ReadWrite),
+                size: Some(4),
+            },
+            FlatComponentFileSystemNode {
+                name: "foo.txt".to_string(),
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(ComponentFilePermissions::ReadOnly),
+                size: Some(4)
+            },
+        ]
     );
 
     let result = executor.get_file_system_node(&worker_id, "/bar").await?;
@@ -456,12 +457,12 @@ async fn initial_file_listing_through_api(
     assert_eq!(
         result,
         vec![FlatComponentFileSystemNode {
-                name: "baz.txt".to_string(),
-                last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadWrite),
-                size: Some(4),
-            },]
+            name: "baz.txt".to_string(),
+            last_modified: 0,
+            kind: FlatComponentFileSystemNodeKind::File,
+            permissions: Some(ComponentFilePermissions::ReadWrite),
+            size: Some(4),
+        },]
     );
 
     let result = executor
@@ -481,12 +482,12 @@ async fn initial_file_listing_through_api(
     assert_eq!(
         result,
         vec![FlatComponentFileSystemNode {
-                name: "baz.txt".to_string(),
-                last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadWrite),
-                size: Some(4),
-            },]
+            name: "baz.txt".to_string(),
+            last_modified: 0,
+            kind: FlatComponentFileSystemNodeKind::File,
+            permissions: Some(ComponentFilePermissions::ReadWrite),
+            size: Some(4),
+        },]
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -598,9 +599,9 @@ async fn directories(
     assert_eq!(
         fields[1],
         Value::List(vec![Value::Record(vec![
-                Value::String("/test".to_string()),
-                Value::Bool(true)
-            ])])
+            Value::String("/test".to_string()),
+            Value::Bool(true)
+        ])])
     ); // contents of /
 
     // contents of /test
@@ -610,19 +611,19 @@ async fn directories(
     assert_eq!(
         *list,
         vec![
-                Value::Record(vec![
-                    Value::String("/test/dir1".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Record(vec![
-                    Value::String("/test/dir2".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Record(vec![
-                    Value::String("/test/hello.txt".to_string()),
-                    Value::Bool(false)
-                ]),
-            ]
+            Value::Record(vec![
+                Value::String("/test/dir1".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/dir2".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/hello.txt".to_string()),
+                Value::Bool(false)
+            ]),
+        ]
     );
     assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
@@ -682,9 +683,9 @@ async fn directories_replay(
     assert_eq!(
         fields[1],
         Value::List(vec![Value::Record(vec![
-                Value::String("/test".to_string()),
-                Value::Bool(true)
-            ])])
+            Value::String("/test".to_string()),
+            Value::Bool(true)
+        ])])
     ); // contents of /
 
     // contents of /test
@@ -694,19 +695,19 @@ async fn directories_replay(
     assert_eq!(
         *list,
         vec![
-                Value::Record(vec![
-                    Value::String("/test/dir1".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Record(vec![
-                    Value::String("/test/dir2".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Record(vec![
-                    Value::String("/test/hello.txt".to_string()),
-                    Value::Bool(false)
-                ]),
-            ]
+            Value::Record(vec![
+                Value::String("/test/dir1".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/dir2".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/hello.txt".to_string()),
+                Value::Bool(false)
+            ]),
+        ]
     );
     assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
@@ -763,7 +764,10 @@ async fn file_write_read(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+    );
 
     Ok(())
 }
@@ -806,12 +810,7 @@ async fn file_update_1(
 
     {
         let content_before_update = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -833,18 +832,13 @@ async fn file_update_1(
             .await?;
 
         executor
-            .auto_update_worker(&worker_id, updated_component.revision)
+            .auto_update_worker(&worker_id, updated_component.revision, false)
             .await?;
     };
 
     {
         let content_after_update = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -856,12 +850,7 @@ async fn file_update_1(
 
     {
         let content_after_crash = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -875,12 +864,7 @@ async fn file_update_1(
 
     {
         let content_after_reload = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -892,12 +876,7 @@ async fn file_update_1(
 
     {
         let content_after_crash = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -919,23 +898,21 @@ async fn file_update_1(
             .await?;
 
         executor
-            .manual_update_worker(&worker_id, updated_component.revision)
+            .manual_update_worker(&worker_id, updated_component.revision, false)
             .await?;
     };
 
     {
         let content_after_manual_update = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_manual_update, Value::String("restored".to_string()));
+        assert_eq!(
+            content_after_manual_update,
+            Value::String("restored".to_string())
+        );
     }
 
     executor
@@ -944,12 +921,7 @@ async fn file_update_1(
 
     {
         let content_after_reload = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -961,12 +933,7 @@ async fn file_update_1(
 
     {
         let content_after_crash = executor
-            .invoke_and_await_agent(
-                &component.id,
-                &agent_id,
-                "get_file_content",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1070,7 +1037,7 @@ async fn file_update_in_the_middle_of_exported_function(
             .await?;
 
         executor
-            .auto_update_worker(&worker_id, updated_component.revision)
+            .auto_update_worker(&worker_id, updated_component.revision, false)
             .await?;
     };
 
@@ -1090,9 +1057,9 @@ async fn file_update_in_the_middle_of_exported_function(
         assert_eq!(
             result,
             Value::Tuple(vec![
-                    Value::String("foo\n".to_string()),
-                    Value::String("bar\n".to_string())
-                ])
+                Value::String("foo\n".to_string()),
+                Value::String("bar\n".to_string())
+            ])
         );
     }
 
@@ -1207,10 +1174,7 @@ async fn http_client_response_persisted_between_invocations(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1240,10 +1204,7 @@ async fn http_client_response_persisted_between_invocations(
 
     http_server.abort();
 
-    assert_eq!(
-        result,
-        data_value!("200 response is test-header test-body")
-    );
+    assert_eq!(result, data_value!("200 response is test-header test-body"));
 
     Ok(())
 }
@@ -1302,10 +1263,7 @@ async fn http_client_interrupting_response_stream(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1321,7 +1279,7 @@ async fn http_client_interrupting_response_stream(
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
@@ -1431,10 +1389,7 @@ async fn http_client_interrupting_response_stream_async(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_debug",
-        )
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1450,7 +1405,7 @@ async fn http_client_interrupting_response_stream_async(
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
@@ -1536,7 +1491,7 @@ async fn sleep(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let component_id = component.id.clone();
+    let component_id = component.id;
     drop(executor);
     let executor = start(deps, &context).await?;
 
@@ -1870,7 +1825,7 @@ async fn sleep_and_awaiting_parallel_responses(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let component_id = component.id.clone();
+    let component_id = component.id;
     drop(executor);
     server.abort();
 
@@ -1940,7 +1895,7 @@ async fn sleep_below_threshold_between_http_responses(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
-    let component_id = component.id.clone();
+    let component_id = component.id;
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -2004,7 +1959,7 @@ async fn sleep_above_threshold_between_http_responses(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
-    let component_id = component.id.clone();
+    let component_id = component.id;
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -2020,7 +1975,10 @@ async fn sleep_above_threshold_between_http_responses(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     assert!(duration.as_secs() >= 14);
-    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string()));
+    assert_eq!(
+        result,
+        Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string())
+    );
     assert_eq!(healthcheck_result, Value::Bool(true));
 
     Ok(())
@@ -2052,7 +2010,7 @@ async fn resuming_sleep(
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let fiber = spawn(
         async move {
@@ -2072,7 +2030,7 @@ async fn resuming_sleep(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let component_id = component.id.clone();
+    let component_id = component.id;
     drop(executor);
     fiber.await??;
 
@@ -2134,12 +2092,24 @@ async fn failing_worker(
     assert!(result3.is_err());
 
     let err2 = format!("{}", result2.err().unwrap());
-    assert!(err2.contains("error log message"), "Expected 'error log message' in error: {err2}");
-    assert!(err2.contains("value is too large"), "Expected 'value is too large' in error: {err2}");
+    assert!(
+        err2.contains("error log message"),
+        "Expected 'error log message' in error: {err2}"
+    );
+    assert!(
+        err2.contains("value is too large"),
+        "Expected 'value is too large' in error: {err2}"
+    );
 
     let err3 = format!("{}", result3.err().unwrap());
-    assert!(err3.contains("error log message"), "Expected 'error log message' in error: {err3}");
-    assert!(err3.contains("value is too large"), "Expected 'value is too large' in error: {err3}");
+    assert!(
+        err3.contains("error log message"),
+        "Expected 'error log message' in error: {err3}"
+    );
+    assert!(
+        err3.contains("value is too large"),
+        "Expected 'value is too large' in error: {err3}"
+    );
 
     Ok(())
 }
@@ -2194,7 +2164,10 @@ async fn file_service_write_direct(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+    );
 
     Ok(())
 }
@@ -2375,7 +2348,10 @@ async fn file_hard_link(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string()))))));
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+    );
 
     Ok(())
 }
@@ -3030,7 +3006,7 @@ async fn ip_address_resolve(
         .store()
         .await?;
     let agent_id = agent_id!("networking", "ip-address-resolve-1");
-    let component_id = component.id.clone();
+    let component_id = component.id;
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3062,8 +3038,8 @@ async fn ip_address_resolve(
     let Value::List(entries2) = &result2 else {
         panic!("expected list, got {:?}", result2)
     };
-    assert!(entries1.len() > 0);
-    assert!(entries2.len() > 0);
+    assert!(!entries1.is_empty());
+    assert!(!entries2.is_empty());
 
     Ok(())
 }

@@ -29,9 +29,7 @@ use golem_common::model::component::{
     PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
-use golem_common::model::plugin_registration::{
-    PluginRegistrationCreation, PluginSpecDto,
-};
+use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginSpecDto};
 use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};

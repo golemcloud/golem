@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use pretty_assertions::assert_eq;
 use axum::routing::post;
 use axum::{Json, Router};
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
@@ -22,6 +21,7 @@ use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use golem_test_framework::dsl::TestDsl;
+use pretty_assertions::assert_eq;
 
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
@@ -195,7 +195,11 @@ async fn search_oplog_1(
 
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     for entry in entries {
-        println!("{}\n{}", entry.oplog_index, debug_render_oplog_entry(&entry.entry));
+        println!(
+            "{}\n{}",
+            entry.oplog_index,
+            debug_render_oplog_entry(&entry.entry)
+        );
     }
 
     assert_eq!(result1.len(), 2, "G1002"); // TODO: this is temporarily not working because of using the dynamic invoke API and not having structured information in the oplog
@@ -216,13 +220,18 @@ async fn get_oplog_with_api_changing_updates(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
         .await?;
     let agent_id = agent_id!("update-test");
-    let worker_id = executor.start_agent(&component.id, agent_id.clone()).await?;
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -241,7 +250,7 @@ async fn get_oplog_with_api_changing_updates(
         .await?;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -276,7 +285,10 @@ async fn get_oplog_starting_with_updated_component(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -290,7 +302,9 @@ async fn get_oplog_starting_with_updated_component(
     );
 
     let agent_id = agent_id!("update-test");
-    let worker_id = executor.start_agent(&component.id, agent_id.clone()).await?;
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let result = executor
         .invoke_and_await_agent(&component.id, &agent_id, "f4", data_value!())
@@ -363,12 +377,7 @@ async fn invocation_context_test(
         .await?;
 
     executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "test1",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test1", data_value!())
         .await?;
 
     let start = std::time::Instant::now();

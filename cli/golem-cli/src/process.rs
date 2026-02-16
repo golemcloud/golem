@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::PipedExitCode;
 use crate::log::{logln, LogColorize, LogIndent};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -26,6 +27,7 @@ use tracing::{enabled, Level};
 
 pub trait ExitStatusExt {
     fn check_exit_status(&self) -> anyhow::Result<()>;
+    fn pipe_exit_status(&self) -> anyhow::Result<()>;
 }
 
 impl ExitStatusExt for ExitStatus {
@@ -39,6 +41,14 @@ impl ExitStatusExt for ExitStatus {
                     .map(|code| code.to_string().log_color_error_highlight().to_string())
                     .unwrap_or_else(|| "?".to_string())
             )))
+        }
+    }
+
+    fn pipe_exit_status(&self) -> anyhow::Result<()> {
+        if self.success() {
+            Ok(())
+        } else {
+            Err(anyhow!(PipedExitCode(self.code().unwrap_or(1) as u8)))
         }
     }
 }

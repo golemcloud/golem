@@ -743,6 +743,7 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let latest_version = self
             .get_latest_component_revision(&worker_id.component_id)
@@ -757,6 +758,7 @@ impl TestDsl for TestWorkerExecutor {
                 target_revision: target_revision.into(),
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
+                disable_wakeup,
             })
             .await?
             .into_inner();
@@ -774,6 +776,7 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let latest_version = self
             .get_latest_component_revision(&worker_id.component_id)
@@ -788,6 +791,7 @@ impl TestDsl for TestWorkerExecutor {
                 target_revision: target_revision.into(),
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
+                disable_wakeup,
             })
             .await?
             .into_inner();

@@ -19,13 +19,13 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
 use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
+    log_action, log_error, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::text::diff::log_unified_diff;
-use crate::model::text::fmt::{log_error, log_text_view};
+use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::EnvironmentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{anyhow, bail};

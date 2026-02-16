@@ -26,10 +26,9 @@ use golem_api_grpc::proto::golem::worker::v1::worker_error::Error as WorkerGrpcE
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
-use golem_common::base_model::agent::UntypedDataValue;
 use golem_common::base_model::{PromiseId, WorkerId};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentError, AgentId, DataValue};
+use golem_common::model::agent::{AgentId, DataValue};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -53,7 +52,6 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{IdempotencyKey, OplogIndex, ScanCursor, WorkerFilter, WorkerStatus};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm::{FromValue, IntoValueAndType, Value, ValueAndType};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -423,12 +421,14 @@ pub trait TestDsl {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
     async fn manual_update_worker(
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
     async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()>;

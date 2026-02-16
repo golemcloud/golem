@@ -14,13 +14,13 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use pretty_assertions::assert_eq;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
+use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);

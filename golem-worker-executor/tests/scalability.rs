@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use pretty_assertions::assert_eq;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_common::model::agent::AgentId;
@@ -23,6 +22,7 @@ use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
+use pretty_assertions::assert_eq;
 use std::future::Future;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -100,7 +100,7 @@ async fn spawning_many_workers_that_sleep(
             {
                 spawn(async move {
                     let agent_id = agent_id(n);
-                    let worker_id = executor_clone
+                    let _worker_id = executor_clone
                         .start_agent(&component_id, agent_id.clone())
                         .await?;
 
@@ -144,7 +144,11 @@ async fn spawning_many_workers_that_sleep(
     let p95 = sorted[idx];
 
     assert!(p95 < 6000, "p95 ({p95}) should be < 6000");
-    assert!(total_duration.as_secs() < 10, "total duration ({:?}) should be < 10s", total_duration);
+    assert!(
+        total_duration.as_secs() < 10,
+        "total duration ({:?}) should be < 10s",
+        total_duration
+    );
 
     Ok(())
 }

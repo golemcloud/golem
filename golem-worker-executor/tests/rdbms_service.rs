@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use pretty_assertions::assert_eq;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::component::ComponentId;
@@ -30,6 +29,7 @@ use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::rdbms::{DbResult, DbRow, RdbmsError, RdbmsTransactionStatus};
 use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use mac_address::MacAddress;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::any::{Any, TypeId};
 use std::collections::{Bound, HashMap};
@@ -2988,8 +2988,7 @@ async fn rdbms_connection_err_test<T: RdbmsType>(
 
     let error = result.err().unwrap();
     assert_eq!(
-        error,
-        expected,
+        error, expected,
         "connection error for {db_address} - response error match"
     );
 }
@@ -3019,11 +3018,9 @@ async fn rdbms_query_err_test<T: RdbmsType>(
 
     let error = result.err().unwrap();
     assert_eq!(
-        error,
-        expected,
+        error, expected,
         "query {} (executed on {}) - result error match",
-        query,
-        pool_key
+        query, pool_key
     );
 
     let _ = rdbms.remove(&pool_key, &worker_id).await;
@@ -3052,11 +3049,9 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 
     let error = result.err().unwrap();
     assert_eq!(
-        error,
-        expected,
+        error, expected,
         "query {} (executed on {}) - result error match",
-        query,
-        pool_key
+        query, pool_key
     );
 
     let _ = rdbms.remove(&pool_key, &worker_id).await;
@@ -3072,10 +3067,16 @@ fn test_rdbms_pool_key_masked_address() {
     assert_eq!(key.masked_address(), "mysql://localhost:3306");
     let key =
         RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&def=xyz").unwrap();
-    assert_eq!(key.masked_address(), "postgres://user:*****@localhost:5432?abc=xyz&def=xyz");
+    assert_eq!(
+        key.masked_address(),
+        "postgres://user:*****@localhost:5432?abc=xyz&def=xyz"
+    );
     let key =
         RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&secret=xyz").unwrap();
-    assert_eq!(key.masked_address(), "postgres://user:*****@localhost:5432?abc=xyz&secret=*****");
+    assert_eq!(
+        key.masked_address(),
+        "postgres://user:*****@localhost:5432?abc=xyz&secret=*****"
+    );
 }
 
 #[test]

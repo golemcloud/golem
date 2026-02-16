@@ -16,10 +16,11 @@ use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::services::component::{ComponentError, ComponentService};
+use crate::services::deployment::route_compilation::render_http_method;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use futures::TryFutureExt;
-use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -30,6 +31,7 @@ use golem_common::model::{
     environment::EnvironmentId,
 };
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::custom_api::PathSegment;
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
@@ -146,6 +148,16 @@ pub enum DeployValidationError {
         agent_type: AgentTypeName,
         url: String,
     },
+    #[error("Overriding security scheme is only allowed if the environment level option is set")]
+    SecurityOverrideDisabled,
+    #[error("Http api for domain {domain} has multiple routes for pattern {rendered_method} {rendered_path}", rendered_method = render_http_method(method), rendered_path = itertools::join(path.iter().map(|p| p.to_string()), "/"))]
+    RouteIsAmbiguous {
+        domain: Domain,
+        method: HttpMethod,
+        path: Vec<PathSegment>,
+    },
+    #[error("Invalid http method: {method:?}")]
+    InvalidHttpMethod { method: HttpMethod },
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -246,7 +258,8 @@ impl DeploymentWriteService {
                 .map_err(DeploymentWriteError::from),
         )?;
 
-        let deployment_context = DeploymentContext::new(components, http_api_deployments);
+        let deployment_context =
+            DeploymentContext::new(environment, components, http_api_deployments);
 
         {
             let actual_hash = deployment_context.hash();
@@ -281,7 +294,11 @@ impl DeploymentWriteService {
 
         let deployment: CurrentDeployment = self
             .deployment_repo
-            .deploy(auth.account_id().0, record, environment.version_check)
+            .deploy(
+                auth.account_id().0,
+                record,
+                deployment_context.environment.version_check,
+            )
             .await
             .map_err(|err| match err {
                 DeployRepoError::ConcurrentModification => {

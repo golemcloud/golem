@@ -1060,6 +1060,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
+        let disable_wakeup = request.disable_wakeup;
+
         match request.mode() {
             UpdateMode::Automatic => {
                 let update_description = UpdateDescription::Automatic { target_revision };
@@ -1084,11 +1086,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     | WorkerStatus::Retrying
                     | WorkerStatus::Failed => {
                         // The worker is not active.
-                        //
-                        // We start activating it but block on a signal.
-                        // This way we eliminate the race condition of activating the worker, but have
-                        // time to inject the pending update oplog entry so the at the time the worker
-                        // really gets activated it is going to see it and perform the update.
 
                         debug!("Activating worker for update",);
                         let worker = Worker::get_or_create_suspended(
@@ -1106,8 +1103,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         debug!("Enqueuing update");
                         worker.enqueue_update(update_description.clone()).await;
 
-                        debug!("Resuming initialization to perform the update",);
-                        Worker::start_if_needed(worker.clone()).await?;
+                        if disable_wakeup {
+                            debug!("Skipping worker activation due to disable_wakeup flag");
+                        } else {
+                            debug!("Resuming initialization to perform the update",);
+                            Worker::start_if_needed(worker.clone()).await?;
+                        }
                     }
                     WorkerStatus::Running | WorkerStatus::Idle => {
                         // If the worker is already running we need to write to its oplog the
@@ -1161,6 +1162,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )
                 .await?;
                 worker.enqueue_manual_update(target_revision).await?;
+
+                if disable_wakeup {
+                    debug!("Skipping worker activation due to disable_wakeup flag");
+                } else {
+                    Worker::start_if_needed(worker.clone()).await?;
+                }
             }
         }
 

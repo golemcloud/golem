@@ -14,10 +14,8 @@
 
 use crate::Tracing;
 
-use golem_common::model::oplog::WorkerError;
 use golem_common::model::WorkerId;
 use golem_common::{agent_id, data_value};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
@@ -47,7 +45,7 @@ async fn agent_self_rpc_is_not_allowed(
         .store()
         .await?;
     let agent_id = agent_id!("self-rpc-agent", "worker-name");
-    let worker_id = executor
+    let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -56,7 +54,9 @@ async fn agent_self_rpc_is_not_allowed(
         .await;
 
     let err = result.expect_err("Expected an error");
-    assert!(err.to_string().contains("RPC calls to the same agent are not supported"));
+    assert!(err
+        .to_string()
+        .contains("RPC calls to the same agent are not supported"));
 
     Ok(())
 }

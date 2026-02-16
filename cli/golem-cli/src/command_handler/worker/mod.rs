@@ -16,7 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+    AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::worker::stream::WorkerConnection;
@@ -25,7 +25,10 @@ use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
-use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
+use crate::log::{
+    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
+    LogColorize, LogIndent,
+};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
     agent_interface_name, function_params_types, show_exported_agent_constructors,
@@ -33,7 +36,7 @@ use crate::model::component::{
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{format_export, log_error, log_fuzzy_match, log_text_view, log_warn};
+use crate::model::text::fmt::{format_export, log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
     AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
@@ -42,7 +45,7 @@ use crate::model::text::worker::{
     format_timestamp, format_worker_name_match, FileNodeView, WorkerCreateView, WorkerFilesView,
     WorkerGetView,
 };
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context as AnyhowContext};
 use colored::Colorize;
 
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
@@ -55,7 +58,7 @@ use golem_client::model::{
     ComponentDto, InvokeParameters, RevertWorkerTarget, UpdateWorkerRequest, WorkerCreationRequest,
 };
 use golem_client::model::{InvokeResult, ScanCursor};
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, DataValue, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -105,7 +108,7 @@ impl WorkerCommandHandler {
                 idempotency_key,
                 no_stream,
                 stream_args,
-                deploy_args,
+                post_deploy_args,
             } => {
                 self.cmd_invoke(
                     worker_name,
@@ -115,7 +118,7 @@ impl WorkerCommandHandler {
                     idempotency_key,
                     no_stream,
                     stream_args,
-                    deploy_args,
+                    post_deploy_args,
                 )
                 .await
             }
@@ -147,6 +150,22 @@ impl WorkerCommandHandler {
                 agent_id: worker_name,
                 stream_args,
             } => self.cmd_stream(worker_name, stream_args).await,
+            AgentSubcommand::ReplStream {
+                agent_type_name,
+                parameters,
+                idempotency_key,
+                phantom_id,
+                stream_args,
+            } => {
+                self.cmd_repl_stream(
+                    agent_type_name,
+                    parameters,
+                    idempotency_key,
+                    phantom_id,
+                    stream_args,
+                )
+                .await
+            }
             AgentSubcommand::Interrupt {
                 agent_id: worker_name,
             } => self.cmd_interrupt(worker_name).await,
@@ -155,12 +174,14 @@ impl WorkerCommandHandler {
                 mode,
                 target_revision,
                 r#await,
+                disable_wakeup,
             } => {
                 self.cmd_update(
                     worker_name,
                     mode.unwrap_or(AgentUpdateMode::Automatic),
                     target_revision,
                     r#await,
+                    disable_wakeup,
                 )
                 .await
             }
@@ -217,6 +238,8 @@ impl WorkerCommandHandler {
                 &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
                 None,
+                None,
+                false,
             )
             .await?;
 
@@ -252,7 +275,7 @@ impl WorkerCommandHandler {
         idempotency_key: Option<IdempotencyKey>,
         no_stream: bool,
         stream_args: StreamArgs,
-        deploy_args: Option<DeployArgs>,
+        post_deploy_args: Option<PostDeployArgs>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -293,7 +316,9 @@ impl WorkerCommandHandler {
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
-                deploy_args.as_ref(),
+                post_deploy_args.as_ref(),
+                None,
+                false,
             )
             .await?;
 
@@ -440,6 +465,7 @@ impl WorkerCommandHandler {
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
+
         let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
@@ -459,6 +485,69 @@ impl WorkerCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             None,
+        )
+        .await?;
+
+        connection.run_forever().await;
+
+        Ok(())
+    }
+
+    async fn cmd_repl_stream(
+        &self,
+        agent_type_name: String,
+        parameters: String,
+        idempotency_key: IdempotencyKey,
+        phantom_id: Option<Uuid>,
+        stream_args: StreamArgs,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        let parameters: UntypedJsonDataValue = serde_json::from_str(&parameters)
+            .with_context(|| "Failed to deserialize agent parameters".to_string())?;
+
+        let Some(agent_type) = self
+            .ctx
+            .app_handler()
+            .list_agent_types(&environment)
+            .await?
+            .into_iter()
+            .find(|t| t.agent_type.type_name.0 == agent_type_name)
+        else {
+            bail!("Agent type not found: {}", agent_type_name);
+        };
+
+        let agent_type_name = agent_type.agent_type.type_name;
+        let typed_parameters = DataValue::try_from_untyped_json(
+            parameters,
+            agent_type.agent_type.constructor.input_schema,
+        )
+        .map_err(|err| {
+            anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
+        })?;
+        let agent_id = AgentId::new(agent_type_name, typed_parameters, phantom_id);
+        let worker_name = WorkerName(agent_id.to_string());
+
+        let worker_name_match = self.match_worker_name(worker_name).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        let connection = WorkerConnection::new(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &component.id,
+            worker_name.0.clone(),
+            stream_args.into(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+            Some(idempotency_key),
         )
         .await?;
 
@@ -851,6 +940,7 @@ impl WorkerCommandHandler {
         mode: AgentUpdateMode,
         target_revision: Option<ComponentRevision>,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
@@ -897,6 +987,7 @@ impl WorkerCommandHandler {
             mode,
             target_revision,
             await_update,
+            disable_wakeup,
         )
         .await?;
 
@@ -1242,6 +1333,7 @@ impl WorkerCommandHandler {
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, false)
@@ -1276,6 +1368,7 @@ impl WorkerCommandHandler {
                     update_mode,
                     target_revision,
                     false,
+                    disable_wakeup,
                 )
                 .await;
 
@@ -1322,6 +1415,7 @@ impl WorkerCommandHandler {
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Triggering update",
@@ -1349,6 +1443,7 @@ impl WorkerCommandHandler {
                         AgentUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
                     },
                     target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await
@@ -1367,9 +1462,9 @@ impl WorkerCommandHandler {
                 Ok(())
             }
             Err(error) => {
-                log_error_action("Failed", "to trigger update for agent, error:");
+                log_failed_to("trigger update for agent");
                 let _indent = LogIndent::new();
-                logln(format!("{error}"));
+                log_error(error.to_string());
                 Err(anyhow!(error))
             }
         }
@@ -1444,7 +1539,7 @@ impl WorkerCommandHandler {
                     log_error_action(
                         "Agent update",
                         format!(
-                            "to revision {} succeeded at {}: {}",
+                            "to revision {} failed at {}: {}",
                             failure.target_revision.to_string().log_color_highlight(),
                             failure.timestamp.to_string().log_color_highlight(),
                             error
@@ -1456,9 +1551,7 @@ impl WorkerCommandHandler {
                         "Agent update",
                         "is not pending anymore, but no outcome has been found",
                     );
-                    return Err(anyhow!(
-                "Unexpected agent state: update is not pending anymore, but no outcome has been found"
-                ));
+                    return Err(anyhow!("Unexpected agent state: update is not pending anymore, but no outcome has been found"));
                 }
             }
         }
@@ -1754,13 +1847,13 @@ impl WorkerCommandHandler {
                         if selected_component_names.len() != 1 {
                             logln("");
                             log_error(
-                            format!("Multiple components were selected based on the current directory: {}",
-                                    selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
-                        );
+                                format!("Multiple components were selected based on the current directory: {}",
+                                        selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
+                            );
                             logln("");
                             logln(
-                            "Switch to a different directory with only one component or specify the full or partial component name as part of the agent name!",
-                        );
+                                "Switch to a different directory with only one component or specify the full or partial component name as part of the agent name!",
+                            );
                             logln("");
                             log_text_view(&WorkerNameHelp);
                             logln("");
@@ -1932,9 +2025,9 @@ impl WorkerCommandHandler {
                                 } => {
                                     logln("");
                                     log_error(format!(
-                                    "The requested application component name ({}) is ambiguous.",
-                                    component_name.0.log_color_error_highlight()
-                                ));
+                                        "The requested application component name ({}) is ambiguous.",
+                                        component_name.0.log_color_error_highlight()
+                                    ));
                                     logln("");
                                     logln("Did you mean one of");
                                     for option in highlighted_options {

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use pretty_assertions::assert_eq;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::component::ComponentId;
@@ -28,6 +27,7 @@ use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
+use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};

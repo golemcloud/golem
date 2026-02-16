@@ -19,6 +19,18 @@ impl Display for NonSuccessfulExit {
 
 impl Error for NonSuccessfulExit {}
 
+#[derive(Debug)]
+pub struct PipedExitCode(pub u8);
+
+impl Display for PipedExitCode {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> std::fmt::Result {
+        //NOP
+        Ok(())
+    }
+}
+
+impl Error for PipedExitCode {}
+
 #[derive(Clone, Copy, Debug, Display, EnumIter)]
 pub enum ShowClapHelpTarget {
     AppNew,
@@ -403,6 +415,10 @@ pub mod service {
                 },
                 WorkerError::Error409(error) => ServiceErrorResponse {
                     status_code: 409,
+                    message: error.error,
+                },
+                WorkerError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
                     message: error.error,
                 },
                 WorkerError::Error500(error) => {

@@ -1273,4 +1273,3 @@ pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
         )
         .await?)
 }
-

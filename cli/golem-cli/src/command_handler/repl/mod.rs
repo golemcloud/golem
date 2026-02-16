@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::context::ApplicationContext;
-use crate::command::shared_args::DeployArgs;
+use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::repl::rib::CliRibRepl;
 use crate::command_handler::repl::rust::RustRepl;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
@@ -23,8 +23,9 @@ use crate::fs;
 use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
+use crate::model::deploy::DeployConfig;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata};
+use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
 use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
 use anyhow::{anyhow, bail};
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -53,16 +54,19 @@ impl ReplHandler {
         language: Option<ReplLanguage>,
         component_name: Option<ComponentName>,
         component_revision: Option<ComponentRevision>,
-        deploy_args: Option<&DeployArgs>,
+        post_deploy_args: Option<&PostDeployArgs>,
         script: Option<String>,
         script_file: Option<PathBuf>,
         stream_logs: bool,
+        disable_auto_imports: bool,
     ) -> anyhow::Result<()> {
-        let script_input = {
+        let script = {
             if let Some(script) = script {
-                Some(script)
+                Some(ReplScriptSource::Inline(script))
             } else if let Some(script_path) = script_file {
-                Some(fs::read_to_string(script_path)?)
+                Some(ReplScriptSource::FromFile(fs::canonicalize_path(
+                    &script_path,
+                )?))
             } else {
                 None
             }
@@ -72,8 +76,8 @@ impl ReplHandler {
             self.rib_repl(
                 component_name,
                 component_revision,
-                deploy_args,
-                script_input,
+                post_deploy_args,
+                script,
                 stream_logs,
             )
             .await
@@ -82,14 +86,12 @@ impl ReplHandler {
                 bail!("Component name and revision is only supported for Rib REPL.");
             }
 
-            if deploy_args.is_some() {
-                bail!("Deploy arguments are only supported for Rib REPL.");
-            }
-
             self.bridge_repl(
                 language.and_then(|l| l.to_guest_language()),
-                script_input,
+                script,
                 stream_logs,
+                disable_auto_imports,
+                post_deploy_args,
             )
             .await
         }
@@ -98,8 +100,10 @@ impl ReplHandler {
     async fn bridge_repl(
         &self,
         language: Option<GuestLanguage>,
-        script: Option<String>,
+        script: Option<ReplScriptSource>,
         stream_logs: bool,
+        disable_auto_imports: bool,
+        post_deploy_args: Option<&PostDeployArgs>,
     ) -> anyhow::Result<()> {
         let language = match language {
             Some(language) => language,
@@ -134,6 +138,8 @@ impl ReplHandler {
             .await?;
 
         let args = {
+            let app_main_dir = fs::canonicalize_path(&std::env::current_dir()?)?;
+
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
 
@@ -155,26 +161,79 @@ impl ReplHandler {
             }
             let repl_history_file_path = fs::canonicalize_path(&repl_history_file_path)?;
 
+            let repl_cli_commands_metadata_json_path = app_ctx
+                .application()
+                .repl_cli_commands_metadata_json(language);
+            // TODO: cleanup
+            if !repl_cli_commands_metadata_json_path.exists() {
+                fs::write(&repl_cli_commands_metadata_json_path, "")?;
+            }
+            let repl_cli_commands_metadata_json_path =
+                fs::canonicalize_path(&repl_cli_commands_metadata_json_path)?;
+
+            let component_names = app_ctx.application().component_names().cloned().collect();
+
             BridgeReplArgs {
                 environment,
+                component_names,
                 script,
                 stream_logs,
+                disable_auto_imports,
+                app_main_dir,
                 repl_root_dir,
                 repl_root_bridge_sdk_dir,
                 repl_bridge_sdk_target,
                 repl_history_file_path,
+                repl_cli_commands_metadata_json_path,
             }
         };
 
-        self.ctx
-            .app_handler()
-            .build(
-                &BuildConfig::new()
-                    .with_repl_bridge_sdk_target(args.repl_bridge_sdk_target.clone()),
-                vec![],
-                &ApplicationComponentSelectMode::All,
-            )
-            .await?;
+        match post_deploy_args {
+            Some(post_deploy_args) => {
+                self.ctx
+                    .app_handler()
+                    .deploy(DeployConfig {
+                        plan: false,
+                        stage: false,
+                        approve_staging_steps: false,
+                        force_build: None,
+                        post_deploy_args: post_deploy_args.clone(),
+                        repl_bridge_sdk_target: Some(language),
+                        skip_build: false,
+                    })
+                    .await?;
+            }
+            None => {
+                // We explicitly trigger 'build', so we ensure that we have the REPL bridge SDKs
+                self.ctx
+                    .app_handler()
+                    .build(
+                        &BuildConfig::new()
+                            .with_repl_bridge_sdk_target(args.repl_bridge_sdk_target.clone()),
+                        vec![],
+                        &ApplicationComponentSelectMode::All,
+                    )
+                    .await?;
+
+                // We check for all components, but in practice we usually only have one, and the
+                // first missing one will trigger deployment for all components. We also skip
+                // building, as that was already done above.
+                for component_name in &args.component_names {
+                    self.ctx
+                        .component_handler()
+                        .component_by_name_with_auto_deploy(
+                            &args.environment,
+                            ComponentNameMatchKind::App,
+                            component_name,
+                            None,
+                            post_deploy_args,
+                            Some(language),
+                            true,
+                        )
+                        .await?;
+                }
+            }
+        }
 
         match language {
             GuestLanguage::Rust => RustRepl::new(self.ctx.clone()).run(args).await,
@@ -186,8 +245,8 @@ impl ReplHandler {
         &self,
         component_name: Option<ComponentName>,
         component_revision: Option<ComponentRevision>,
-        deploy_args: Option<&DeployArgs>,
-        script: Option<String>,
+        post_deploy_args: Option<&PostDeployArgs>,
+        script: Option<ReplScriptSource>,
         stream_logs: bool,
     ) -> anyhow::Result<()> {
         let selected_components = self
@@ -216,7 +275,9 @@ impl ReplHandler {
                 ComponentNameMatchKind::App,
                 &component_name,
                 component_revision.map(|r| r.into()),
-                deploy_args,
+                post_deploy_args,
+                None,
+                false,
             )
             .await?;
 

@@ -649,7 +649,12 @@ async fn golem_bug_1265_test(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "bug_golem1265", data_value!("test"))
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "bug_golem1265",
+            data_value!("test"),
+        )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;

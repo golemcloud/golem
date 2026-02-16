@@ -13,10 +13,24 @@
 // limitations under the License.
 
 import { env } from 'node:process';
+import fs from 'node:fs';
+import util from 'node:util';
+import * as base from './base';
 
 export type Config = {
+  binary: string;
+  appMainDir: string;
   agents: Record<string, AgentConfig>;
   historyFile: string;
+  cliCommandsMetadataJsonPath: string;
+};
+
+export type ReplCliFlags = {
+  script?: string;
+  scriptPath?: string;
+  disableAutoImports: boolean;
+  showTypeInfo: boolean;
+  streamLogs: boolean;
 };
 
 export type AgentConfig = {
@@ -25,31 +39,78 @@ export type AgentConfig = {
   package: any;
 };
 
-export type GolemServer =
-  | { type: 'local' }
-  | { type: 'cloud'; token: string }
-  | { type: 'custom'; url: string; token: string };
+export type ConfigureClient = (config: base.Configuration) => void;
 
-export type ClientConfiguration = {
-  server: GolemServer;
-  application: ApplicationName;
-  environment: EnvironmentName;
+export type CliCommandsConfig = {
+  binary: string;
+  appMainDir: string;
+  clientConfig: base.Configuration;
+  commandMetadata: CliCommandMetadata;
 };
 
-export type ApplicationName = string;
-export type EnvironmentName = string;
+export type CliCommandMetadata = {
+  path: string[];
+  name: string;
+  displayName?: string | null;
+  about?: string | null;
+  longAbout?: string | null;
+  hidden: boolean;
+  visibleAliases: string[];
+  args: CliArgMetadata[];
+  subcommands: CliCommandMetadata[];
+};
 
-export type ConfigureClient = (config: ClientConfiguration) => void;
+export type CliArgMetadata = {
+  id: string;
+  help?: string | null;
+  longHelp?: string | null;
+  valueNames: string[];
+  valueHint: string;
+  possibleValues: CliPossibleValueMetadata[];
+  action: string;
+  numArgs?: string | null;
+  isPositional: boolean;
+  isRequired: boolean;
+  isGlobal: boolean;
+  isHidden: boolean;
+  index?: number | null;
+  long: string[];
+  short: string[];
+  defaultValues: string[];
+  takesValue: boolean;
+};
 
-export function clientConfigurationFromEnv(): ClientConfiguration {
+export type CliPossibleValueMetadata = {
+  name: string;
+  help?: string | null;
+  hidden: boolean;
+  aliases: string[];
+};
+
+export function clientConfigFromEnv(): base.Configuration {
   return {
-    server: clientServerConfigurationFromEnv(),
+    server: clientServerConfigFromEnv(),
     application: requiredEnvVar('GOLEM_REPL_APPLICATION'),
     environment: requiredEnvVar('GOLEM_REPL_ENVIRONMENT'),
   };
 }
 
-function clientServerConfigurationFromEnv(): GolemServer {
+export function cliCommandsConfigFromBaseConfig(
+  config: Config,
+  clientConfig: base.Configuration,
+): CliCommandsConfig {
+  const commandMetadataContents = fs.readFileSync(config.cliCommandsMetadataJsonPath, 'utf8');
+  const commandMetadata = JSON.parse(commandMetadataContents) as CliCommandMetadata;
+
+  return {
+    binary: config.binary,
+    appMainDir: config.appMainDir,
+    clientConfig,
+    commandMetadata,
+  };
+}
+
+function clientServerConfigFromEnv(): base.GolemServer {
   const server_kind = requiredEnvVar('GOLEM_REPL_SERVER_KIND');
   switch (server_kind) {
     case 'local':
@@ -76,4 +137,45 @@ function requiredEnvVar(name: string): string {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+export function loadReplCliFlags(): ReplCliFlags {
+  const normalizedArgs = process.argv
+    .slice(2)
+    .map((arg) => (arg === '-script-file' ? '--script-file' : arg));
+
+  const { values } = util.parseArgs({
+    args: normalizedArgs,
+    options: {
+      script: { type: 'string' },
+      'script-file': { type: 'string' },
+      'disable-auto-imports': { type: 'boolean' },
+      'disable-type-info': { type: 'boolean' },
+      'disable-stream': { type: 'boolean' },
+    },
+    allowPositionals: true,
+  });
+
+  const streamLogs = !(values['disable-stream'] ?? false);
+  const disableAutoImports = values['disable-auto-imports'] ?? false;
+  const showTypeInfo = !(values['disable-type-info'] ?? false);
+  const scriptPath = values['script-file'];
+
+  const script = (() => {
+    if (values.script !== undefined) {
+      return values.script;
+    }
+    if (scriptPath !== undefined) {
+      fs.readFileSync(scriptPath, 'utf8');
+    }
+    return undefined;
+  })();
+
+  return {
+    script,
+    scriptPath,
+    disableAutoImports,
+    showTypeInfo,
+    streamLogs,
+  };
 }

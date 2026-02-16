@@ -18,19 +18,20 @@ use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
 use redis::AsyncCommands;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test};
+use test_r::inherit_test_dep;
 use tracing::info;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
+#[allow(dead_code)]
 async fn restore_from_recovery_golden_file(
     executor: &TestWorkerExecutor,
     context: &TestContext,
@@ -98,6 +99,7 @@ async fn restore_from_recovery_golden_file(
 /// should be called at the end of some test cases performing various operations on a worker.
 /// If the UPDATE_GOLDENFILES environment variable is not set, it does nothing. The generated
 /// files should be verified (if they can be recovered) in separate test cases.
+#[allow(dead_code)]
 pub async fn save_recovery_golden_file(
     executor: &TestWorkerExecutor,
     context: &TestContext,
@@ -131,6 +133,7 @@ pub async fn save_recovery_golden_file(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn wait_for_worker_recovery(
     executor: &TestWorkerExecutor,
     worker_id: &WorkerId,

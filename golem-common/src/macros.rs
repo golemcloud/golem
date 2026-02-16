@@ -445,6 +445,7 @@ macro_rules! error_forwarding {
 macro_rules! data_value {
     ($($element:expr),* $(,)?) => {
         {
+            #[allow(unused_imports)]
             use golem_wasm::ConvertToValueAndType as _;
             $crate::model::agent::DataValue::Tuple(
                 $crate::model::agent::ElementValues {

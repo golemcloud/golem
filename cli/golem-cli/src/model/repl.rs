@@ -15,6 +15,7 @@
 use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use golem_common::base_model::agent::AgentTypeName;
+use golem_common::model::component::ComponentName;
 use golem_templates::model::GuestLanguage;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -98,12 +99,22 @@ impl From<GuestLanguage> for ReplLanguage {
 #[derive(Clone, Debug)]
 pub struct BridgeReplArgs {
     pub environment: ResolvedEnvironmentIdentity,
-    pub script: Option<String>,
+    pub component_names: Vec<ComponentName>,
+    pub script: Option<ReplScriptSource>,
     pub stream_logs: bool,
+    pub disable_auto_imports: bool,
+    pub app_main_dir: PathBuf,
     pub repl_root_dir: PathBuf,
     pub repl_root_bridge_sdk_dir: PathBuf,
+    pub repl_cli_commands_metadata_json_path: PathBuf,
     pub repl_bridge_sdk_target: CustomBridgeSdkTarget,
     pub repl_history_file_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub enum ReplScriptSource {
+    Inline(String),
+    FromFile(PathBuf),
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

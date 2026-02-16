@@ -22,13 +22,14 @@ use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, DeployArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames,
+    BuildArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames, PostDeployArgs,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
+use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
@@ -60,6 +61,46 @@ pub struct GolemCliCommand {
 
     #[clap(subcommand)]
     pub subcommand: GolemCliSubcommand,
+}
+
+impl GolemCliCommand {
+    pub fn collect_metadata() -> CliCommandMetadata {
+        CliCommandMetadata::new(&Self::command())
+    }
+
+    pub fn collect_metadata_for_repl() -> CliCommandMetadata {
+        CliCommandMetadata::new_filtered(
+            &GolemCliCommand::command(),
+            &CliMetadataFilter {
+                command_path_prefix_exclude: vec![
+                    vec!["api"], // TODO: recheck after code-first routes is implemented
+                    vec!["clean"],
+                    vec!["cloud"],
+                    vec!["completion"],
+                    vec!["generate-bridge"],
+                    vec!["new"],
+                    vec!["plugin"],
+                    vec!["profile"],
+                    vec!["repl"],
+                    vec!["server"],
+                ],
+                arg_id_exclude: vec![
+                    "app_manifest_path",
+                    "cloud",
+                    "config_dir",
+                    "dev_mode",
+                    "disable_app_manifest_discovery",
+                    "environment",
+                    "local",
+                    "preset",
+                    "profile",
+                    "show_sensitive",
+                    "template_group",
+                ],
+                exclude_hidden: true,
+            },
+        )
+    }
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,
@@ -635,7 +676,7 @@ pub enum GolemCliSubcommand {
         /// Optional component revision to use, defaults to latest deployed component revision
         revision: Option<ComponentRevision>,
         #[command(flatten)]
-        deploy_args: Option<DeployArgs>,
+        post_deploy_args: Option<PostDeployArgs>,
         /// Optional script to run, when defined the repl will execute the script and exit
         #[clap(long, short, conflicts_with_all = ["script_file"])]
         script: Option<String>,
@@ -645,6 +686,9 @@ pub enum GolemCliSubcommand {
         /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
         #[clap(long)]
         disable_stream: bool,
+        /// Disables automatic importing of Bridge SDK clients
+        #[clap(long)]
+        disable_auto_imports: bool,
     },
     /// Deploy application
     Deploy {
@@ -666,7 +710,7 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         force_build: ForceBuildArg,
         #[command(flatten)]
-        deploy_args: DeployArgs,
+        post_deploy_args: PostDeployArgs,
         /// Internal flag for REPL reload
         #[arg(long, hide = true)]
         repl_bridge_sdk_target: Option<GuestLanguage>,
@@ -686,6 +730,9 @@ pub enum GolemCliSubcommand {
         /// Await the update to be completed
         #[arg(long, default_value_t = false)]
         r#await: bool,
+        /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+        #[arg(long, default_value_t = false)]
+        disable_wakeup: bool,
     },
     /// Redeploy all agents of the application using the latest version
     RedeployAgents {
@@ -834,7 +881,7 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args, Clone)]
-    pub struct DeployArgs {
+    pub struct PostDeployArgs {
         /// Update existing agents with auto or manual update mode
         #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents"])]
         pub update_agents: Option<AgentUpdateMode>,
@@ -846,8 +893,8 @@ pub mod shared_args {
         pub reset: bool,
     }
 
-    impl DeployArgs {
-        pub fn is_any_set(&self, env_args: &DeployArgs) -> bool {
+    impl PostDeployArgs {
+        pub fn is_any_set(&self, env_args: &PostDeployArgs) -> bool {
             env_args.update_agents.is_some()
                 || env_args.redeploy_agents
                 || env_args.reset
@@ -857,18 +904,18 @@ pub mod shared_args {
         }
 
         pub fn none() -> Self {
-            DeployArgs {
+            PostDeployArgs {
                 update_agents: None,
                 redeploy_agents: false,
                 reset: false,
             }
         }
 
-        pub fn delete_agents(&self, env_args: &DeployArgs) -> bool {
+        pub fn delete_agents(&self, env_args: &PostDeployArgs) -> bool {
             (env_args.reset || self.reset) && !self.redeploy_agents && self.update_agents.is_none()
         }
 
-        pub fn redeploy_agents(&self, env_args: &DeployArgs) -> bool {
+        pub fn redeploy_agents(&self, env_args: &PostDeployArgs) -> bool {
             (env_args.redeploy_agents || self.redeploy_agents)
                 && !self.reset
                 && self.update_agents.is_none()
@@ -947,6 +994,9 @@ pub mod component {
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
+            /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+            #[arg(long, default_value_t = false)]
+            disable_wakeup: bool,
         },
         /// Redeploy all agents of the selected component using the latest version
         RedeployAgents {
@@ -1028,13 +1078,14 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+        AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::IdempotencyKey;
+    use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
     pub enum AgentSubcommand {
@@ -1067,7 +1118,7 @@ pub mod worker {
             #[command(flatten)]
             stream_args: StreamArgs,
             #[command(flatten)]
-            deploy_args: Option<DeployArgs>,
+            post_deploy_args: Option<PostDeployArgs>,
         },
         /// Get agent metadata
         Get {
@@ -1117,6 +1168,20 @@ pub mod worker {
             #[command(flatten)]
             stream_args: StreamArgs,
         },
+        /// Like stream, but for helping Bridge SDK-based REPLs
+        #[clap(hide = true)]
+        ReplStream {
+            /// AgentTypeName
+            agent_type_name: String,
+            /// Agent parameters in UntypedDataValue JSON format
+            parameters: String,
+            /// Idempotency key, used for filtering
+            idempotency_key: IdempotencyKey,
+            /// Phantom ID
+            phantom_id: Option<Uuid>,
+            #[command(flatten)]
+            stream_args: StreamArgs,
+        },
         /// Updates an agent
         Update {
             #[command(flatten)]
@@ -1128,6 +1193,9 @@ pub mod worker {
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
+            /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+            #[arg(long, default_value_t = false)]
+            disable_wakeup: bool,
         },
         /// Interrupts a running agent
         Interrupt {

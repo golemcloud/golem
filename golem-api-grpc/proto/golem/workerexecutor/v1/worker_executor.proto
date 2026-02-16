@@ -328,6 +328,7 @@ message UpdateWorkerRequest {
   golem.worker.UpdateMode mode = 3;
   golem.common.EnvironmentId environment_id = 4;
   golem.auth.AuthCtx auth_ctx = 5;
+  bool disable_wakeup = 6;
 }
 
 message UpdateWorkerResponse {

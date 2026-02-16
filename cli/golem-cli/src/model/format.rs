@@ -12,17 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use clap::ValueEnum;
 use serde_derive::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize, Default)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize, Default, ValueEnum,
+)]
 #[serde(rename_all = "kebab-case")]
+#[clap(rename_all = "kebab-case")]
 pub enum Format {
     Json,
     #[serde(alias = "pretty")]
+    #[clap(alias = "pretty-json")]
     PrettyJson,
     Yaml,
     PrettyYaml,

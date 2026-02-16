@@ -8,7 +8,7 @@ use golem_common::model::{Timestamp, WorkerId};
 use golem_common::{agent_id, data_value};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{IntoValueAndType, ValueAndType};
+use golem_wasm::ValueAndType;
 use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
 use test_r::{inherit_test_dep, test};
 
@@ -458,7 +458,7 @@ async fn test_playback_and_fork(
     let playback_result = debug_executor.playback(first_boundary, None).await?;
 
     let forked_repo_id = agent_id!("repository", "forked-worker");
-    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id.clone(), &forked_repo_id)
+    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id, &forked_repo_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let fork_result = debug_executor.fork(&target_worker_id, first_boundary).await;
@@ -659,8 +659,8 @@ async fn run_repo_workflow(
         )
         .await?;
 
-    let worker_id = WorkerId::from_agent_id(component_id.clone(), repo_id)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let worker_id =
+        WorkerId::from_agent_id(*component_id, repo_id).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let oplogs = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 

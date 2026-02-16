@@ -115,7 +115,7 @@ describe('Http Agent class', () => {
     expect(simpleHttpAgent.httpMount).toEqual({
       pathPrefix: expectedPathPrefix,
       authDetails: { required: true },
-      phantomAgent: false,
+      phantomAgent: true,
       corsOptions: {
         allowedPatterns: ['https://app.acme.com', 'https://staging.acme.com'],
       },

@@ -16,14 +16,14 @@ use crate::app::context::{to_anyhow, ApplicationContext, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
-use crate::command::shared_args::{ComponentTemplateName, DeployArgs, OptionalComponentNames};
+use crate::command::shared_args::{ComponentTemplateName, OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
-use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
+use crate::log::{log_action, log_error, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::{
@@ -35,7 +35,7 @@ use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::text::component::ComponentGetView;
-use crate::model::text::fmt::{log_error, log_text_view};
+use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::worker::AgentUpdateMode;
@@ -96,9 +96,15 @@ impl ComponentCommandHandler {
                 component_name,
                 update_mode,
                 r#await,
+                disable_wakeup,
             } => {
-                self.cmd_update_workers(component_name.component_name, update_mode, r#await)
-                    .await
+                self.cmd_update_workers(
+                    component_name.component_name,
+                    update_mode,
+                    r#await,
+                    disable_wakeup,
+                )
+                .await
             }
             ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
@@ -355,9 +361,10 @@ impl ComponentCommandHandler {
         component_name: Option<ComponentName>,
         update_mode: AgentUpdateMode,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let components = self.components_for_deploy_args(component_name).await?;
-        self.update_workers_by_components(&components, update_mode, await_update)
+        self.update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
@@ -465,6 +472,7 @@ impl ComponentCommandHandler {
         components: &[ComponentDto],
         update: AgentUpdateMode,
         await_updates: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
@@ -484,13 +492,19 @@ impl ComponentCommandHandler {
                     update,
                     component.revision,
                     await_updates,
+                    disable_wakeup,
                 )
                 .await?;
             update_results.extend(result);
         }
 
         self.ctx.log_handler().log_view(&update_results);
-        Ok(())
+
+        if !update_results.failed.is_empty() {
+            bail!(NonSuccessfulExit)
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn redeploy_workers_by_components(
@@ -725,9 +739,11 @@ impl ComponentCommandHandler {
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
         component_revision_selection: Option<ComponentRevisionSelection<'_>>,
-        deploy_args: Option<&DeployArgs>,
+        post_deploy_args: Option<&PostDeployArgs>,
+        repl_bridge_sdk_target: Option<GuestLanguage>,
+        skip_build: bool,
     ) -> anyhow::Result<ComponentDto> {
-        if deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
+        if post_deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
             self.ctx
                 .app_handler()
                 .deploy(DeployConfig {
@@ -735,8 +751,11 @@ impl ComponentCommandHandler {
                     stage: false,
                     approve_staging_steps: false,
                     force_build: None,
-                    deploy_args: deploy_args.cloned().unwrap_or_else(DeployArgs::none),
-                    repl_bridge_sdk_target: None,
+                    post_deploy_args: post_deploy_args
+                        .cloned()
+                        .unwrap_or_else(PostDeployArgs::none),
+                    repl_bridge_sdk_target,
+                    skip_build,
                 })
                 .await?;
         }
@@ -789,8 +808,9 @@ impl ComponentCommandHandler {
                             stage: false,
                             approve_staging_steps: false,
                             force_build: None,
-                            deploy_args: DeployArgs::none(),
-                            repl_bridge_sdk_target: None,
+                            post_deploy_args: PostDeployArgs::none(),
+                            repl_bridge_sdk_target,
+                            skip_build,
                         })
                         .await?;
 
@@ -1278,7 +1298,8 @@ fn resolve_env_vars(
     component_name: &ComponentName,
     env: &BTreeMap<String, String>,
 ) -> anyhow::Result<BTreeMap<String, String>> {
-    let proc_env_vars = minijinja::value::Value::from(std::env::vars().collect::<HashMap<_, _>>());
+    let proc_env_map: HashMap<String, String> = std::env::vars().collect();
+    let proc_env_vars = minijinja::value::Value::from(proc_env_map.clone());
 
     let minijinja_env = {
         let mut env = minijinja::Environment::new();
@@ -1298,21 +1319,44 @@ fn resolve_env_vars(
                         resolved_env.insert(key.clone(), resolved_value);
                     }
                     Err(err) => {
-                        validation.with_context(
-                            vec![
-                                ("key", key.to_string()),
-                                ("template", value.to_string()),
-                                (
-                                    "error",
-                                    err.to_string().log_color_error_highlight().to_string(),
-                                ),
-                            ],
-                            |validation| {
-                                validation.add_error(
-                                    "Failed to substitute environment variable".to_string(),
-                                )
-                            },
-                        );
+                        let missing_env_vars =
+                            missing_env_vars(&minijinja_env, value, &proc_env_map, &err);
+                        let error_message = if missing_env_vars.is_empty() {
+                            format!(
+                                "Failed to substitute environment variable(s) for {}",
+                                key.log_color_highlight()
+                            )
+                        } else {
+                            format!(
+                                "Failed to substitute environment variable(s){}for {}",
+                                if missing_env_vars.is_empty() {
+                                    "".to_string()
+                                } else {
+                                    format!(
+                                        " ({}) ",
+                                        missing_env_vars
+                                            .iter()
+                                            .map(|key| key.log_color_highlight())
+                                            .join(", ")
+                                    )
+                                },
+                                key.log_color_highlight()
+                            )
+                        };
+                        let mut context = vec![
+                            ("key", key.to_string()),
+                            ("template", value.to_string()),
+                            (
+                                "error",
+                                err.to_string().log_color_error_highlight().to_string(),
+                            ),
+                        ];
+                        if !missing_env_vars.is_empty() {
+                            context.push(("missing", missing_env_vars.join(", ")));
+                        }
+                        validation.with_context(context, |validation| {
+                            validation.add_error(error_message)
+                        });
                     }
                 };
             }
@@ -1327,4 +1371,49 @@ fn resolve_env_vars(
         validation.build(resolved_env),
         None,
     )
+}
+
+fn missing_env_vars(
+    minijinja_env: &minijinja::Environment,
+    template: &str,
+    env_vars: &HashMap<String, String>,
+    err: &minijinja::Error,
+) -> Vec<String> {
+    fn is_known_var(
+        var: &str,
+        env_vars: &HashMap<String, String>,
+        global_vars: &HashSet<String>,
+    ) -> bool {
+        if env_vars.contains_key(var) || global_vars.contains(var) {
+            return true;
+        }
+
+        if let Some((root, _)) = var.split_once('.') {
+            return env_vars.contains_key(root) || global_vars.contains(root);
+        }
+
+        false
+    }
+
+    if err.kind() != minijinja::ErrorKind::UndefinedError {
+        return Vec::new();
+    }
+
+    let Ok(template) = minijinja_env.template_from_str(template) else {
+        return Vec::new();
+    };
+
+    let global_vars: HashSet<String> = minijinja_env
+        .globals()
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+    let mut missing: Vec<String> = template
+        .undeclared_variables(true)
+        .into_iter()
+        .filter(|var| !is_known_var(var, env_vars, &global_vars))
+        .collect();
+
+    missing.sort();
+    missing
 }

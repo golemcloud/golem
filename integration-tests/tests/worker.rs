@@ -25,27 +25,20 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, WorkerResourceId};
-use golem_common::model::worker::{
-    ExportedResourceMetadata, FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind,
-};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
 use golem_common::model::{
-    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
-    WorkerFilter, WorkerId, WorkerResourceDescription, WorkerStatus,
+    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, WorkerFilter,
+    WorkerId, WorkerStatus,
 };
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{
-    update_counts, TestDsl, TestDslExtended, WorkerInvocationResultOps, WorkerLogEventStream,
-};
+use golem_test_framework::dsl::{update_counts, TestDsl, TestDslExtended, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::analysis::analysed_type;
 use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
-use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -74,7 +67,7 @@ async fn dynamic_worker_creation(
         .store()
         .await?;
     let agent_id = agent_id!("environment", "dynamic-worker-creation-1");
-    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
+    let _worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let args = user
         .invoke_and_await_agent(&component.id, &agent_id, "get_arguments", data_value!())
@@ -416,7 +409,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
             )
             .await?;
 
-        assert!(values1.len() > 0); // Each page should contain at least one element, but it is not guaranteed that it has count elements
+        assert!(!values1.is_empty()); // Each page should contain at least one element, but it is not guaranteed that it has count elements
 
         let ids: HashSet<WorkerId> = values1.into_iter().map(|v| v.worker_id).collect();
         found_worker_ids.extend(ids);
@@ -598,7 +591,7 @@ async fn get_running_workers(
     }
     // At least one worker should be running; we cannot guarantee that all of them are running simultaneously
     assert!(enum_results.len() <= workers_count as usize);
-    assert!(enum_results.len() > 0);
+    assert!(!enum_results.is_empty());
 
     *response.lock().unwrap() = "stop".to_string();
 
@@ -640,7 +633,7 @@ async fn auto_update_on_idle(
         updated_component.revision
     );
 
-    user.auto_update_worker(&worker_id, updated_component.revision)
+    user.auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = user
@@ -692,7 +685,7 @@ async fn auto_update_on_idle_via_host_function(
         .store()
         .await?;
     let host_api_agent_id = agent_id!("golem-host-api", "updater-1");
-    let host_api_worker_id = user
+    let _host_api_worker_id = user
         .start_agent(&host_api_component.id, host_api_agent_id.clone())
         .await?;
 
@@ -921,7 +914,7 @@ async fn worker_recreation(
     user.delete_worker(&worker_id).await?;
 
     // Also if we explicitly create a new one
-    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
+    let _worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result3 = user
         .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
@@ -1246,7 +1239,7 @@ async fn worker_initial_files_after_automatic_worker_update(
         )
         .await?;
 
-    user.auto_update_worker(&worker_id, updated_component.revision)
+    user.auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result1 = user.get_file_contents(&worker_id, "/foo.txt").await?;
@@ -1503,7 +1496,7 @@ async fn worker_suspends_when_running_out_of_fuel(
 
     let invoker_task = tokio::spawn({
         let user = user.clone();
-        let component_id = component.id.clone();
+        let component_id = component.id;
         let agent_id = http_agent_id.clone();
         async move {
             loop {
@@ -1575,16 +1568,16 @@ async fn agent_update_constructor_signature(
         .await?;
 
     let agent1_id = agent_id!("counter-agent", "agent1");
-    let agent1 = user
-        .start_agent(&component.id, agent1_id.clone())
-        .await?;
+    let agent1 = user.start_agent(&component.id, agent1_id.clone()).await?;
     let result1a = user
         .invoke_and_await_agent(&component.id, &agent1_id, "increment", data_value!())
         .await?;
     assert_eq!(result1a.into_return_value(), Some(Value::U32(1)));
 
     let old_singleton_id = agent_id!("caller");
-    let old_singleton = user.start_agent(&component.id, old_singleton_id.clone()).await?;
+    let old_singleton = user
+        .start_agent(&component.id, old_singleton_id.clone())
+        .await?;
     user.log_output(&old_singleton).await?;
 
     let result1b = user
@@ -1601,16 +1594,14 @@ async fn agent_update_constructor_signature(
         .await?;
 
     let agent2_id = agent_id!("counter-agent", 123u64);
-    let agent2 = user
-        .start_agent(&component.id, agent2_id.clone())
-        .await?;
+    let agent2 = user.start_agent(&component.id, agent2_id.clone()).await?;
     let result2a = user
         .invoke_and_await_agent(&component.id, &agent2_id, "increment", data_value!())
         .await?;
     assert_eq!(result2a.into_return_value(), Some(Value::U32(1)));
 
     let new_singleton_id = agent_id!("new-caller");
-    let new_singleton = user
+    let _new_singleton = user
         .start_agent(&component.id, new_singleton_id.clone())
         .await?;
     let result2b = user

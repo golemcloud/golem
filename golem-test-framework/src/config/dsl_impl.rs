@@ -35,6 +35,7 @@ use golem_client::model::{
 use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::AgentError;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
@@ -65,7 +66,6 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::debug;
 use uuid::Uuid;
-use golem_common::model::agent::AgentError;
 
 #[derive(Clone)]
 pub struct TestUserContext<Deps> {
@@ -414,7 +414,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     .ok_or_else(|| {
                         debug!("Agent method not found: {}", method_name);
                         debug!("In agent type: {:#?}", agent_type);
-                        debug!("Got for worker-id: {worker_id} with component revision {}", worker_metadata.component_revision);
+                        debug!(
+                            "Got for worker-id: {worker_id} with component revision {}",
+                            worker_metadata.component_revision
+                        );
 
                         anyhow!("Agent method not found: {}", method_name)
                     })?;
@@ -427,7 +430,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                             untyped_data_value,
                             agent_method.output_schema.clone(),
                         )
-                            .map_err(|err| anyhow!("DataValue conversion error: {err}"))?)
+                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))?)
                     }
                     Value::Result(Err(Some(agent_error_value))) => {
                         Err(AgentError::from_value(*agent_error_value)
@@ -594,6 +597,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let client = self
             .deps
@@ -607,6 +611,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Automatic,
                     target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await?;
@@ -617,6 +622,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         worker_id: &WorkerId,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let client = self
             .deps
@@ -630,6 +636,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Manual,
                     target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
                 },
             )
             .await?;

@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::shared_args::{DeployArgs, ForceBuildArg};
+use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::model::worker::WorkerName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_templates::model::GuestLanguage;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +49,61 @@ pub struct DeployConfig {
     pub stage: bool,
     pub approve_staging_steps: bool,
     pub force_build: Option<ForceBuildArg>,
-    pub deploy_args: DeployArgs,
+    pub post_deploy_args: PostDeployArgs,
     pub repl_bridge_sdk_target: Option<GuestLanguage>,
+    pub skip_build: bool,
 }
+
+pub enum DeploySummary {
+    PlanOk,
+    PlanUpToDate,
+    StagingOk, // Only for internal testing purposes
+    DeployOk(PostDeployResult),
+    DeployUpToDate(PostDeployResult),
+    RollbackOk(PostDeployResult),
+    RollbackUpToDate(PostDeployResult),
+}
+
+#[derive(Error, Debug)]
+pub enum DeployError {
+    #[error("Cancelled")]
+    Cancelled,
+    #[error("Build error: {0}")]
+    BuildError(anyhow::Error),
+    #[error("Prepare error: {0}")]
+    PrepareError(anyhow::Error),
+    #[error("Plan error: {0}")]
+    PlanError(anyhow::Error),
+    #[error("Environment check error: {0}")]
+    EnvironmentCheckError(anyhow::Error),
+    #[error("Staging error: {0}")]
+    StagingError(anyhow::Error),
+    #[error("Deploy error: {0}")]
+    DeployError(anyhow::Error),
+    #[error("Rollback error: {0}")]
+    RollbackError(anyhow::Error),
+}
+
+pub type DeployResult = Result<DeploySummary, DeployError>;
+
+pub enum PostDeploySummary {
+    NoRequestedChanges,
+    NoDeployment,
+    AgentUpdateOk,
+    AgentRedeployOk,
+    AgentDeleteOk,
+}
+
+#[derive(Error, Debug)]
+pub enum PostDeployError {
+    #[error("Prepare error: {0}")]
+    PrepareError(anyhow::Error),
+    #[error("Agent update error: {0}")]
+    AgentUpdateError(anyhow::Error),
+    #[error("Agent redeploy error: {0}")]
+    AgentRedeployError(anyhow::Error),
+    #[error("Agent delete error: {0}")]
+    AgentDeleteError(anyhow::Error),
+}
+
+pub type PostDeployResult = Result<PostDeploySummary, PostDeployError>;

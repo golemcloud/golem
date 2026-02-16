@@ -14,7 +14,6 @@
 
 use crate::WorkerExecutorTestDependencies;
 use async_trait::async_trait;
-use pretty_assertions::assert_eq;
 use golem_common::config::RedisConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -27,6 +26,7 @@ use golem_worker_executor::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueS
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};

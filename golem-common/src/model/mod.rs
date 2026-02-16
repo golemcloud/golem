@@ -34,6 +34,7 @@ pub mod invocation_context;
 pub mod login;
 pub mod lucene;
 pub mod oplog;
+pub mod optional_field_update;
 pub mod plan;
 pub mod plugin_registration;
 pub mod poem;
@@ -133,6 +134,50 @@ impl WorkerId {
                 component_id,
                 worker_name: id.to_string(),
             })
+        }
+    }
+
+    pub fn from_worker_name_string<S: AsRef<str>>(
+        component_id: ComponentId,
+        id: S,
+    ) -> Result<WorkerId, String> {
+        let id = id.as_ref();
+
+        match AgentId::normalize_text(id) {
+            Ok(normalized) => {
+                if normalized.len() > Self::WORKER_ID_MAX_LENGTH {
+                    return Err(format!(
+                        "Agent id is too long: {}, max length: {}, agent id: {}",
+                        normalized.len(),
+                        Self::WORKER_ID_MAX_LENGTH,
+                        normalized,
+                    ));
+                }
+                Ok(WorkerId {
+                    component_id,
+                    worker_name: normalized,
+                })
+            }
+            Err(_) => {
+                if id.len() > Self::WORKER_ID_MAX_LENGTH {
+                    return Err(format!(
+                        "Legacy worker id is too long: {}, max length: {}, worker id: {}",
+                        id.len(),
+                        Self::WORKER_ID_MAX_LENGTH,
+                        id,
+                    ));
+                }
+                if id.contains('/') {
+                    return Err(format!(
+                        "Legacy worker id cannot contain '/', worker id: {}",
+                        id,
+                    ));
+                }
+                Ok(WorkerId {
+                    component_id,
+                    worker_name: id.to_string(),
+                })
+            }
         }
     }
 }

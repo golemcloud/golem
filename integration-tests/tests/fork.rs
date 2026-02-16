@@ -21,7 +21,7 @@ use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -409,8 +409,8 @@ async fn fork_idle_worker(
         .search_oplog(&target_worker_id, "G1001 AND NOT pending")
         .await?;
 
-    assert!(result1.len() > 0);
-    assert!(result2.len() > 0);
+    assert!(!result1.is_empty());
+    assert!(!result2.is_empty());
     assert!(result1.len() > result2.len());
 
     Ok(())
@@ -801,10 +801,7 @@ async fn fork_and_sync_with_promise(
     let uuid = Uuid::new_v4();
     let promise_agent_id = agent_id!("promise-agent", uuid.to_string());
     let _worker = user
-        .start_agent(
-            &component.id,
-            promise_agent_id.clone(),
-        )
+        .start_agent(&component.id, promise_agent_id.clone())
         .await?;
 
     let result1 = user

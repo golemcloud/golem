@@ -18,22 +18,18 @@ use axum::routing::get;
 use axum::Router;
 use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
-use golem_common::model::worker::{ExportedResourceMetadata, WorkerMetadataDto};
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
-    Timestamp, WorkerFilter, WorkerId, WorkerResourceDescription, WorkerStatus,
+    WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
-use golem_test_framework::dsl::{
-    drain_connection, stdout_event_matching, stdout_events, worker_error_logs, worker_error_message,
-};
+use golem_test_framework::dsl::{drain_connection, stdout_event_matching, stdout_events};
+use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
-use golem_wasm::analysis::{
-    analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeStr,
-};
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
@@ -89,7 +85,7 @@ async fn interruption(
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
@@ -187,7 +183,7 @@ async fn simulated_crash(
     let mut rx = executor.capture_output(&worker_id).await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
@@ -376,35 +372,6 @@ async fn dynamic_worker_creation(
     Ok(())
 }
 
-fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
-    match env.into_iter().next() {
-        Some(Value::Result(Ok(Some(inner)))) => match *inner {
-            Value::List(items) => {
-                let pairs = items
-                    .into_iter()
-                    .filter_map(|item| match item {
-                        Value::Tuple(values) if values.len() == 2 => {
-                            let mut iter = values.into_iter();
-                            let key = iter.next();
-                            let value = iter.next();
-                            match (key, value) {
-                                (Some(Value::String(key)), Some(Value::String(value))) => {
-                                    Some((key, value))
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<(String, String)>>();
-                HashMap::from_iter(pairs)
-            }
-            _ => panic!("Unexpected result value"),
-        },
-        _ => panic!("Unexpected result value"),
-    }
-}
-
 fn get_env_result_from_value(env: Value) -> HashMap<String, String> {
     match env {
         Value::Result(Ok(Some(inner))) => match *inner {
@@ -514,7 +481,7 @@ async fn promise(
         .await;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let promise_data_clone = promise_data.clone();
 
@@ -1082,7 +1049,7 @@ async fn component_env_variables_update(
         .await?;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let env = executor
@@ -1354,12 +1321,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
         .await?;
 
     let failure = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "add",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!())
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1430,7 +1392,7 @@ async fn get_worker_metadata(
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
@@ -1582,7 +1544,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
         .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
 
-    let worker_id = WorkerId::from_agent_id(component.id.clone(), &counter_id)
+    let worker_id = WorkerId::from_agent_id(component.id, &counter_id)
         .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
@@ -1725,7 +1687,9 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         .await?;
 
     let agent_id = agent_id!("clocks", "bad-wasm-2");
-    let worker_id = executor.try_start_agent(&component.id, agent_id.clone()).await??;
+    let worker_id = executor
+        .try_start_agent(&component.id, agent_id.clone())
+        .await??;
 
     // worker is idle. if we restart the server, it will get recovered
     drop(executor);
@@ -2666,7 +2630,7 @@ async fn reconstruct_interrupted_state(
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id.clone();
+    let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
@@ -3309,17 +3273,12 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
         .await?;
 
     let agent_id = agent_id!("failing-counter", "wrong-parameter-type-1");
-    let worker_id = executor
+    let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let failure = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "add",
-            data_value!("not-a-number"),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!("not-a-number"))
         .await;
 
     let success = executor

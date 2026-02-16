@@ -1,6 +1,5 @@
 use golem_wasm::analysis::analysed_type::{
-    case, f32, field, handle, list, record, result, result_err, str, u32, u64,
-    variant,
+    case, f32, field, handle, list, record, result, result_err, str, u32, u64, variant,
 };
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{
@@ -707,5 +706,3 @@ fn exports_shopping_cart_resource_versioned_component() {
 
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
-
-

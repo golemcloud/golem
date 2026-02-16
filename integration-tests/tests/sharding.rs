@@ -18,15 +18,16 @@ test_r::enable!();
 mod tests {
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::worker;
-    use golem_common::{agent_id, data_value};
     use golem_common::model::component::ComponentId;
     use golem_common::model::IdempotencyKey;
     use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+    use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
+    use golem_common::model::agent::AgentId;
     use rand::prelude::*;
     use rand::rng;
     use std::time::Duration;
@@ -34,7 +35,6 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::task::JoinSet;
     use tracing::{error, info, Instrument};
-    use golem_common::model::agent::AgentId;
 
     pub struct Tracing;
 
@@ -300,7 +300,7 @@ mod tests {
                     worker_command_tx
                         .send(WorkerCommand::InvokeAndAwaitWorkers {
                             name,
-                            component_id: component_id.clone(),
+                            component_id,
                             agent_ids: agent_ids.clone(),
                         })
                         .await
@@ -332,7 +332,8 @@ mod tests {
     #[async_trait]
     trait DepsOps {
         async fn reset(&self, number_of_shards: usize);
-        async fn create_component_and_start_workers(&self, n: usize) -> (ComponentId, Vec<AgentId>);
+        async fn create_component_and_start_workers(&self, n: usize)
+            -> (ComponentId, Vec<AgentId>);
         async fn invoke_and_await_workers(
             &self,
             component_id: &ComponentId,
@@ -367,7 +368,10 @@ mod tests {
             info!("Reset done");
         }
 
-        async fn create_component_and_start_workers(&self, n: usize) -> (ComponentId, Vec<AgentId>) {
+        async fn create_component_and_start_workers(
+            &self,
+            n: usize,
+        ) -> (ComponentId, Vec<AgentId>) {
             let admin = self.admin().await;
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
@@ -407,11 +411,11 @@ mod tests {
                 let self_clone = self.admin().await;
                 tasks.spawn({
                     let agent_id = agent_id.clone();
-                    let component_id = component_id.clone();
+                    let component_id = *component_id;
                     async move {
                         let idempotency_key = IdempotencyKey::fresh();
                         (
-                            component_id.clone(),
+                            component_id,
                             agent_id.clone(),
                             self_clone
                                 .invoke_and_await_agent_with_key(
@@ -435,9 +439,7 @@ mod tests {
                 match result {
                     Ok(_) => {
                         pending_count -= 1;
-                        info!(
-                            "Worker invoke success: {agent_id}, pending: {pending_count}",
-                        );
+                        info!("Worker invoke success: {agent_id}, pending: {pending_count}",);
                     }
                     Err(err) => {
                         error!("Worker invoke error: {agent_id}, {err:?}");
@@ -718,8 +720,11 @@ mod tests {
         mut command_rx: mpsc::Receiver<WorkerCommand>,
         event_tx: mpsc::Sender<WorkerEvent>,
     ) {
-        while let WorkerCommand::InvokeAndAwaitWorkers { name, component_id, agent_ids } =
-            command_rx.recv().await.unwrap()
+        while let WorkerCommand::InvokeAndAwaitWorkers {
+            name,
+            component_id,
+            agent_ids,
+        } = command_rx.recv().await.unwrap()
         {
             deps.invoke_and_await_workers(&component_id, &agent_ids)
                 .await

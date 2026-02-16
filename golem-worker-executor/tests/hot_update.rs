@@ -18,6 +18,7 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::WorkerStatus;
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{update_counts, TestDsl};
 
@@ -29,6 +30,7 @@ use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
@@ -153,7 +155,10 @@ async fn auto_update_on_running(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -193,7 +198,7 @@ async fn auto_update_on_running(
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     control.resume();
@@ -235,7 +240,10 @@ async fn auto_update_on_idle(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -255,7 +263,7 @@ async fn auto_update_on_idle(
     );
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -291,7 +299,10 @@ async fn failing_auto_update_on_idle(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -315,7 +326,7 @@ async fn failing_auto_update_on_idle(
         .await?;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -351,7 +362,10 @@ async fn auto_update_on_idle_with_non_diverging_history(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -381,7 +395,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .await?;
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -417,7 +431,10 @@ async fn failing_auto_update_on_running(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -461,7 +478,7 @@ async fn failing_auto_update_on_running(
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     control.resume();
@@ -509,7 +526,10 @@ async fn manual_update_on_idle(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v2_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -537,7 +557,7 @@ async fn manual_update_on_idle(
         .await?;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let after_update = executor
@@ -577,7 +597,10 @@ async fn manual_update_on_idle_without_save_snapshot(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -601,7 +624,7 @@ async fn manual_update_on_idle_without_save_snapshot(
         .await?;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -641,7 +664,10 @@ async fn auto_update_on_running_followed_by_manual(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -690,10 +716,10 @@ async fn auto_update_on_running_followed_by_manual(
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, updated_component_1.revision)
+        .auto_update_worker(&worker_id, updated_component_1.revision, false)
         .await?;
     executor
-        .manual_update_worker(&worker_id, updated_component_2.revision)
+        .manual_update_worker(&worker_id, updated_component_2.revision, false)
         .await?;
     control.resume();
 
@@ -744,7 +770,10 @@ async fn manual_update_on_idle_with_failing_load(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v2_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -768,7 +797,7 @@ async fn manual_update_on_idle_with_failing_load(
         .await?;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result = executor
@@ -807,7 +836,10 @@ async fn manual_update_on_idle_using_v11(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v2_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -835,7 +867,7 @@ async fn manual_update_on_idle_using_v11(
         .await?;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let after_update = executor
@@ -875,7 +907,10 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v2_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -903,7 +938,7 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
         .await?;
 
     executor
-        .manual_update_worker(&worker_id, updated_component.revision)
+        .manual_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let after_update = executor
@@ -939,7 +974,10 @@ async fn auto_update_on_idle_to_non_existing(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -959,7 +997,7 @@ async fn auto_update_on_idle_to_non_existing(
     );
 
     executor
-        .auto_update_worker(&worker_id, updated_component.revision)
+        .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
     let result1 = executor
@@ -968,7 +1006,7 @@ async fn auto_update_on_idle_to_non_existing(
 
     // Now we try to update to version target_version + 1, which does not exist.
     executor
-        .auto_update_worker(&worker_id, updated_component.revision.next()?)
+        .auto_update_worker(&worker_id, updated_component.revision.next()?, false)
         .await?;
 
     // We expect this update to fail, and the component to remain on `target_version` and remain
@@ -1003,7 +1041,10 @@ async fn update_component_revision_environment_variable(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
         .name("it:agent-update")
         .unique()
         .store()
@@ -1031,7 +1072,7 @@ async fn update_component_revision_environment_variable(
         .await?;
 
     executor
-        .auto_update_worker(&worker_id, updated_component_1.revision)
+        .auto_update_worker(&worker_id, updated_component_1.revision, false)
         .await?;
 
     {
@@ -1074,7 +1115,7 @@ async fn update_component_revision_environment_variable(
         .await?;
 
     executor
-        .manual_update_worker(&worker_id, updated_component_2.revision)
+        .manual_update_worker(&worker_id, updated_component_2.revision, false)
         .await?;
 
     {
@@ -1091,5 +1132,109 @@ async fn update_component_revision_environment_variable(
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let mut http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
+
+    // Invoke f1 with a blocking control point so the worker stays Running
+    let mut control = http_server.f1_control(100).await;
+    let executor_clone = executor.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "f1",
+                    data_value!(50u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait until the worker reaches the blocking point (Running state)
+    control.await_reached().await;
+
+    // Interrupt and resume concurrently: interrupt() blocks until the worker is
+    // actually interrupted, but the worker is waiting for the HTTP response,
+    // so we must resume the HTTP server in parallel to avoid a deadlock.
+    let executor_clone2 = executor.clone();
+    let worker_id_clone2 = worker_id.clone();
+    let interrupt_fiber = spawn(async move { executor_clone2.interrupt(&worker_id_clone2).await });
+    control.resume();
+    interrupt_fiber.await??;
+
+    // The invoke should fail due to interruption
+    let _ = fiber.await?;
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            WorkerStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    // Upload an updated component
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
+
+    // Request auto-update with disable_wakeup=true
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, true)
+        .await?;
+
+    // Give some time for any unintended wake-up to happen
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify the worker is still Interrupted (not woken up)
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    // The worker should still be interrupted since disable_wakeup was true
+    assert_eq!(metadata.status, WorkerStatus::Interrupted);
+    // The update should be pending, not yet applied
+    assert_eq!(update_counts(&metadata), (1, 0, 0));
+
     Ok(())
 }

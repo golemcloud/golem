@@ -97,12 +97,7 @@ async fn custom_durability_1(
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "callback",
-            data_value!("a"),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "callback", data_value!("a"))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -111,12 +106,7 @@ async fn custom_durability_1(
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "callback",
-            data_value!("b"),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "callback", data_value!("b"))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
