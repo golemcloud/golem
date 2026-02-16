@@ -2,7 +2,7 @@ use golem_rust::golem_ai::golem::llm::llm;
 use golem_rust::golem_ai::golem::llm::llm::{Config, ContentPart, Message, Role};
 use golem_rust::golem_ai::golem::web_search::types;
 use golem_rust::golem_ai::golem::web_search::web_search;
-use golem_rust::{agent_definition, agent_implementation, description, Schema};
+use golem_rust::{agent_definition, agent_implementation, description, Schema, endpoint};
 
 #[derive(Clone, Schema, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
@@ -11,11 +11,15 @@ pub struct SearchResult {
     snippet: String,
 }
 
-#[agent_definition]
+#[agent_definition(
+    mount = "/research",
+    phantom-agent = true
+)]
 pub trait ResearchAgent {
     fn new() -> Self;
 
     #[description("Research and summarize a topic")]
+    #[endpoint(get = "/?topic={topic}")]
     fn research(&self, topic: String) -> String;
 }
 

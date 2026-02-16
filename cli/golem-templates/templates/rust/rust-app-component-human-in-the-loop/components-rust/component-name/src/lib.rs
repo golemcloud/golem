@@ -1,8 +1,9 @@
 use golem_rust::{
     agent_definition, agent_implementation, await_promise_json, complete_promise_json,
-    create_promise, description, prompt, PromiseId, Schema
+    create_promise, description, prompt, PromiseId, Schema, endpoint
 };
 use std::collections::HashMap;
+use uuid::Uuid;
 
 type WorkflowId = String;
 
@@ -12,25 +13,31 @@ pub enum Decision {
     Rejected,
 }
 
-#[agent_definition]
-pub trait ApprovalWorkflow {
-    fn new(workflow_id: WorkflowId) -> Self;
+#[agent_definition(
+    mount = "/workflows",
+    phantom_agent = true
+)]
+pub trait WorkflowAgent {
+    fn new() -> Self;
 
     #[prompt("Start approval process")]
     #[description("Starts a workflow that requires human approval before continuing")]
     async fn start(&mut self) -> String;
 }
 
-struct ApprovalWorkflowImpl {
+struct WorkflowAgentImpl {
     id: WorkflowId,
 }
 
 #[agent_implementation]
-impl ApprovalWorkflow for ApprovalWorkflowImpl {
-    fn new(id: WorkflowId) -> Self {
-        Self { id }
+impl WorkflowAgent for WorkflowAgentImpl {
+    fn new() -> Self {
+        Self {
+            id: Uuid::new_v4().to_string()
+        }
     }
 
+    #[endpoint(post = "/")]
     async fn start(&mut self) -> String {
         // 1. Create a promise that represents waiting for human input
         let approval_promise_id = create_promise();
@@ -56,7 +63,9 @@ impl ApprovalWorkflow for ApprovalWorkflowImpl {
     }
 }
 
-#[agent_definition]
+#[agent_definition(
+    mount = "/humans/{username}"
+)]
 pub trait HumanAgent {
     fn new(username: String) -> Self;
 
@@ -66,10 +75,12 @@ pub trait HumanAgent {
 
     #[prompt("List pending approvals")]
     #[description("Lists all workflows that are waiting for this human's approval")]
+    #[endpoint(get = "/pending")]
     async fn list_pending_approvals(&mut self) -> Vec<WorkflowId>;
 
     #[prompt("Approve or reject a workflow")]
     #[description("Makes a decision on a workflow approval request")]
+    #[endpoint(post = "/decisions")]
     async fn decide_approval(&mut self, workflow_id: WorkflowId, decision: Decision) -> String;
 }
 

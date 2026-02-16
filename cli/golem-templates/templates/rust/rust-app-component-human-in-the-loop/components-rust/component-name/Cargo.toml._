@@ -15,4 +15,5 @@ log = { workspace = true }
 golem-rust = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 wstd = { workspace = true }

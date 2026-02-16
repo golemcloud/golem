@@ -1,59 +1,11 @@
 # golem-app-manifest-header
 
-# httpApi:
-#   definitions:
-#     component-name-api:
-#       version: '0.0.1'
-#       routes:
-#         - method: POST
-#           path: /component-name-api/{name}/tasks
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let name: string = request.path.name;
-#               let agent = tasks(name);
-#               let new-task = agent.create-task(request.body);
-#               { status: 200, body: { result: new-task }, headers: { Content-Type: "application/json" } }
-
-#         - method: OPTIONS
-#           path: /component-name-api/{name}/tasks
-#           binding:
-#             type: cors-preflight
-
-#         - method: GET
-#           path: /component-name-api/{name}/tasks
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let name: string = request.path.name;
-#               let agent = tasks(name);
-#               let tasks = agent.get-tasks();
-#               { status: 200, body: { result: tasks }, headers: { Content-Type: "application/json" } }
-
-#         - method: POST
-#           path: /component-name-api/{name}/tasks/{taskId}/complete
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let name: string = request.path.name;
-#               let taskId: u64 = request.path.taskId;
-#               let agent = tasks(name);
-#               let result = agent.complete-task(taskId);
-#               { status: 200, body: { result: result }, headers: { Content-Type: "application/json" } }
-
-#         - method: OPTIONS
-#           path: /component-name-api/{name}/tasks/{taskId}/complete
-#           binding:
-#             type: cors-preflight
-
-#   deployments:
-#     local:
-#       - domain: app-name.localhost:9006
-#         definitions:
-#           - component-name-api
+httpApi:
+  deployments:
+    local:
+    - domain: app-name.localhost:9006
+      agents:
+        task-agent: {}
 
 components:
   componentname:
