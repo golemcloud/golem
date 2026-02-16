@@ -85,6 +85,7 @@ impl FileSystemComponentWriter {
         application_id: ApplicationId,
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<ComponentDto> {
         let target_dir = &self.root;
 
@@ -107,6 +108,7 @@ impl FileSystemComponentWriter {
 
         let content = tokio::fs::read(source_path).await?;
         let blake3_hash = blake3::hash(&content);
+        let analysis_cache_key = original_source_hash.unwrap_or(blake3_hash);
         let wasm_hash = golem_common::model::diff::Hash::from(blake3_hash);
 
         tokio::fs::copy(source_path, &target_path)
@@ -130,7 +132,7 @@ impl FileSystemComponentWriter {
         } else {
             let target_path_clone = target_path.clone();
             self.analysis_cache
-                .get_or_insert_simple(&blake3_hash, async || {
+                .get_or_insert_simple(&analysis_cache_key, async || {
                     debug!("Analyzing component {component_id} (hash {blake3_hash})");
 
                     let (raw_component_metadata, memories, exports) =
@@ -239,6 +241,7 @@ impl FileSystemComponentWriter {
         application_id: ApplicationId,
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> ComponentDto {
         self.add_component(
             local_path,
@@ -251,6 +254,7 @@ impl FileSystemComponentWriter {
             application_id,
             account_id,
             environment_roles_from_shares,
+            original_source_hash,
         )
         .await
         .expect("Failed to add component")
@@ -268,6 +272,7 @@ impl FileSystemComponentWriter {
         application_id: ApplicationId,
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<ComponentDto> {
         self.write_component_to_filesystem(
             local_path,
@@ -282,6 +287,7 @@ impl FileSystemComponentWriter {
             application_id,
             account_id,
             environment_roles_from_shares,
+            original_source_hash,
         )
         .await
     }
@@ -309,6 +315,7 @@ impl FileSystemComponentWriter {
             application_id,
             account_id,
             environment_roles_from_shares,
+            None,
         )
         .await
     }
@@ -321,6 +328,7 @@ impl FileSystemComponentWriter {
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<ComponentDto> {
         let target_dir = &self.root;
 
@@ -363,6 +371,7 @@ impl FileSystemComponentWriter {
                 old_metadata.application_id,
                 old_metadata.account_id,
                 old_metadata.environment_roles_from_shares,
+                original_source_hash,
             )
             .await
             .expect("Failed to write component to filesystem");

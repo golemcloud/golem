@@ -141,6 +141,8 @@ impl TestDsl for TestWorkerExecutor {
 
         let source_path = component_directory.join(format!("{wasm_name}.wasm"));
 
+        let original_source_hash = blake3::hash(&std::fs::read(&source_path)?);
+
         let component_name = if unique {
             let uuid = Uuid::new_v4();
             ComponentName(format!("{name}-{uuid}"))
@@ -199,6 +201,7 @@ impl TestDsl for TestWorkerExecutor {
                         self.context.application_id,
                         self.context.account_id,
                         HashSet::new(),
+                        Some(original_source_hash),
                     )
                     .await
                     .expect("Failed to add component")
@@ -216,6 +219,7 @@ impl TestDsl for TestWorkerExecutor {
                         self.context.application_id,
                         self.context.account_id,
                         HashSet::new(),
+                        Some(original_source_hash),
                     )
                     .await
             }
@@ -270,16 +274,17 @@ impl TestDsl for TestWorkerExecutor {
 
         let component_dir = &self.deps.component_directory;
 
-        let source_path = if let Some(wasm_name) = wasm_name {
+        let (source_path, original_source_hash) = if let Some(wasm_name) = wasm_name {
             let source_path = component_dir.join(format!("{wasm_name}.wasm"));
+            let original_hash = blake3::hash(&std::fs::read(&source_path)?);
             let source_path = rename_component_if_needed(
                 self.deps.component_temp_directory.path(),
                 &source_path,
                 &latest_revision.component_name.0,
             )?;
-            Some(source_path)
+            (Some(source_path), Some(original_hash))
         } else {
-            None
+            (None, None)
         };
 
         let mut converted_new_files = Vec::new();
@@ -312,6 +317,7 @@ impl TestDsl for TestWorkerExecutor {
                 removed_files,
                 dynamic_linking,
                 env,
+                original_source_hash,
             )
             .await?;
 
