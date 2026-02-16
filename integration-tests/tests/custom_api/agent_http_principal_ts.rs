@@ -55,7 +55,7 @@ async fn principal_auto_injection(agent: &HttpTestContext) -> anyhow::Result<()>
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agent/echo-principal")?,
+                .join("/principal-agent/test-agent/echo-principal")?,
         )
         .send()
         .await?;
@@ -76,7 +76,7 @@ async fn principal_auto_injection_middle_segment(agent: &HttpTestContext) -> any
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agent/echo-principal-mid/foo-value/1")?,
+                .join("/principal-agent/test-agent/echo-principal-mid/foo-value/1")?,
         )
         .send()
         .await?;
@@ -99,7 +99,7 @@ async fn principal_auto_injection_last_segment(agent: &HttpTestContext) -> anyho
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agent/echo-principal-last/foo-value/2")?,
+                .join("/principal-agent/test-agent/echo-principal-last/foo-value/2")?,
         )
         .send()
         .await?;
@@ -122,7 +122,7 @@ async fn default_test_header_oidc_principal(agent: &HttpTestContext) -> anyhow::
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agent/authed-principal")?,
+                .join("/principal-agent/test-agent/authed-principal")?,
         )
         .header("x-golem-test-session", "{}")
         .send()
@@ -168,7 +168,7 @@ async fn test_header_oidc_principal_with_overrides(agent: &HttpTestContext) -> a
         .get(
             agent
                 .base_url
-                .join("/http-agents/test-agent/authed-principal")?,
+                .join("/principal-agent/test-agent/authed-principal")?,
         )
         .header(
             "x-golem-test-session",
