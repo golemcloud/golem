@@ -20,6 +20,10 @@ pub fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
         return Err("HTTP mount must start with '/'".to_string());
     }
 
+    if path == "/" {
+        return Ok(Vec::new());
+    }
+
     let segments: Vec<&str> = path.split('/').skip(1).collect();
     let mut parsed = Vec::with_capacity(segments.len());
 
