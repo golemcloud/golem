@@ -130,7 +130,7 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust/golem.yaml",
                     "counter-agent",
                     "rust-counter-agent",
-                )
+                ),
             ],
         ),
         AgentMeta::new(
@@ -147,7 +147,7 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-human-in-the-loop/golem.yaml",
                     "approval-workflow",
                     "rust-approval-workflow",
-                )
+                ),
             ],
         ),
         AgentMeta::new(
@@ -164,7 +164,7 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-human-in-the-loop/golem.yaml",
                     "human-agent",
                     "rust-human-agent",
-                )
+                ),
             ],
         ),
         AgentMeta::new(
@@ -181,7 +181,7 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-json/golem.yaml",
                     "tasks(name)",
                     "rust-tasks(name)",
-                )
+                ),
             ],
         ),
         AgentMeta::new(
@@ -198,7 +198,7 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-llm-session/golem.yaml",
                     "chat-agent",
                     "rust-chat-agent",
-                )
+                ),
             ],
         ),
         AgentMeta::new(
@@ -215,7 +215,7 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
                     "research-agent",
                     "rust-research-agent",
-                )
+                ),
             ],
         ),
         AgentMeta::new(
@@ -232,7 +232,7 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-snapshotting/golem.yaml",
                     "counter-agent",
                     "rust-counter-agent-snapshotting",
-                )
+                ),
             ],
         ),
         // TypeScript agents: prefix with Ts
