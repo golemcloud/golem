@@ -20,6 +20,10 @@ export function parsePath(path: string): PathSegment[] {
     throw new Error(`HTTP mount must start with "/"`);
   }
 
+  if (path === '/') {
+    return [];
+  }
+
   const segments = path.split('/').slice(1);
 
   return segments.map((segment, index) => parseSegment(segment, index === segments.length - 1));
