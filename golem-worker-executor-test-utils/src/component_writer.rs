@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::agent::AgentType;
@@ -31,7 +32,6 @@ use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use tokio::sync::Mutex;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -48,7 +48,7 @@ struct CachedAnalysis {
 
 pub struct FileSystemComponentWriter {
     root: PathBuf,
-    analysis_cache: Mutex<HashMap<blake3::Hash, CachedAnalysis>>,
+    analysis_cache: Cache<blake3::Hash, (), CachedAnalysis, String>,
 }
 
 impl FileSystemComponentWriter {
@@ -62,7 +62,12 @@ impl FileSystemComponentWriter {
 
         Self {
             root: root.to_path_buf(),
-            analysis_cache: Mutex::new(HashMap::new()),
+            analysis_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_analysis",
+            ),
         }
     }
 
@@ -123,35 +128,30 @@ impl FileSystemComponentWriter {
                 root_package_version: None,
             }
         } else {
-            let cache = self.analysis_cache.lock().await;
-            if let Some(cached) = cache.get(&blake3_hash) {
-                debug!("Using cached analysis for component {component_id}");
-                cached.clone()
-            } else {
-                drop(cache);
+            let target_path_clone = target_path.clone();
+            self.analysis_cache
+                .get_or_insert_simple(&blake3_hash, async || {
+                    debug!("Analyzing component {component_id} (hash {blake3_hash})");
 
-                let (raw_component_metadata, memories, exports) =
-                    Self::analyze_memories_and_exports(&target_path)
+                    let (raw_component_metadata, memories, exports) =
+                        Self::analyze_memories_and_exports(&target_path_clone)
+                            .await
+                            .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
+
+                    let agent_types = extract_agent_types(&target_path_clone, false, true)
                         .await
-                        .map_err(|err| anyhow!("Failed to analyze component: {err:#}"))?;
+                        .map_err(|err| format!("Failed analyzing component: {err}"))?;
 
-                let agent_types = extract_agent_types(&target_path, false, true)
-                    .await
-                    .map_err(|err| anyhow!("Failed analyzing component: {err}"))?;
-
-                let analysis = CachedAnalysis {
-                    memories,
-                    exports,
-                    agent_types,
-                    root_package_name: raw_component_metadata.root_package_name,
-                    root_package_version: raw_component_metadata.root_package_version,
-                };
-                self.analysis_cache
-                    .lock()
-                    .await
-                    .insert(blake3_hash, analysis.clone());
-                analysis
-            }
+                    Ok(CachedAnalysis {
+                        memories,
+                        exports,
+                        agent_types,
+                        root_package_name: raw_component_metadata.root_package_name,
+                        root_package_version: raw_component_metadata.root_package_version,
+                    })
+                })
+                .await
+                .map_err(|err| anyhow!("{err}"))?
         };
 
         let size = tokio::fs::metadata(&target_path)
