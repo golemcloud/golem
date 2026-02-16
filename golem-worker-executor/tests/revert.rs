@@ -14,15 +14,14 @@
 
 use crate::Tracing;
 use pretty_assertions::{assert_eq, assert_ne};
-use golem_common::agent_id;
+use golem_common::{agent_id, data_value};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::OplogIndex;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::{update_counts, TestDsl};
-use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
-use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_wasm::{IntoValueAndType, Value};
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -45,108 +44,81 @@ async fn revert_successful_invocations(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "counters")
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
-    let worker_id = executor
-        .start_worker(&component.id, "revert_successful_invocations")
+
+    let agent_id1 = agent_id!("rpc-counter", "counter1");
+    let worker_id1 = executor
+        .start_agent(&component.id, agent_id1.clone())
         .await?;
-    executor.log_output(&worker_id).await?;
+    executor.log_output(&worker_id1).await?;
 
-    let counter1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter1".into_value_and_type()],
-        )
-        .await??;
-    let counter2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter2".into_value_and_type()],
-        )
-        .await??;
-    let counter_handle_type = AnalysedType::Handle(TypeHandle {
-        name: None,
-        owner: None,
-        resource_id: AnalysedResourceId(0),
-        mode: AnalysedResourceMode::Borrowed,
-    });
-    let counter_ref1 = ValueAndType::new(counter1[0].clone(), counter_handle_type.clone());
-    let counter_ref2 = ValueAndType::new(counter2[0].clone(), counter_handle_type);
+    let agent_id2 = agent_id!("rpc-counter", "counter2");
+    let worker_id2 = executor
+        .start_agent(&component.id, agent_id2.clone())
+        .await?;
 
+    // counter1.inc_by(5)
     executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![counter_ref1.clone(), 5u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id1, "inc_by", data_value!(5u64))
+        .await?;
 
+    // counter2.inc_by(1)
     executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![counter_ref2.clone(), 1u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id2, "inc_by", data_value!(1u64))
+        .await?;
 
+    // counter2.inc_by(2)
     executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![counter_ref2.clone(), 2u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id2, "inc_by", data_value!(2u64))
+        .await?;
 
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter_ref1.clone()],
-        )
-        .await??;
-
+    // counter2.get_value() -> 3
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter_ref2.clone()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id2, "get_value", data_value!())
+        .await?;
 
+    // Revert last 2 invocations on counter2 (undoes inc_by(2) and get_value)
     executor
         .revert(
-            &worker_id,
+            &worker_id2,
             RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
-                number_of_invocations: 3,
+                number_of_invocations: 2,
             }),
         )
         .await?;
 
-    let result3 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter_ref1.clone()],
-        )
-        .await??;
+    // counter1.get_value() -> 5 (unchanged)
+    let result1 = executor
+        .invoke_and_await_agent(&component.id, &agent_id1, "get_value", data_value!())
+        .await?;
 
-    let result4 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter_ref2.clone()],
-        )
-        .await??;
+    // counter2.get_value() -> 1 (inc_by(2) was reverted)
+    let result2_after = executor
+        .invoke_and_await_agent(&component.id, &agent_id2, "get_value", data_value!())
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id1).await?;
+    executor.check_oplog_is_queryable(&worker_id2).await?;
 
-    assert_eq!(result1, vec![5u64.into_value()]);
-    assert_eq!(result2, vec![3u64.into_value()]);
-    assert_eq!(result3, vec![5u64.into_value()]);
-    assert_eq!(result4, vec![1u64.into_value()]);
+    let result1_value = result1
+        .into_return_value()
+        .expect("Expected a return value");
+    let result2_value = result2
+        .into_return_value()
+        .expect("Expected a return value");
+    let result2_after_value = result2_after
+        .into_return_value()
+        .expect("Expected a return value");
+
+    assert_eq!(result1_value, Value::U64(5));
+    assert_eq!(result2_value, Value::U64(3));
+    assert_eq!(result2_after_value, Value::U64(1));
 
     Ok(())
 }

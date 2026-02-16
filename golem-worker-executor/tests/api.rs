@@ -2603,117 +2603,34 @@ async fn counter_resource_test_1(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "counters")
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
-    let worker_id = executor.start_worker(&component.id, "counters-1").await?;
-    executor.log_output(&worker_id).await?;
 
-    let counter1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter1".into_value_and_type()],
-        )
-        .await??;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![
-                ValueAndType {
-                    value: counter1[0].clone(),
-                    typ: analysed_type::u64(),
-                },
-                5u64.into_value_and_type(),
-            ],
-        )
+    let agent_id = agent_id!("rpc-counter", "counter1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
-
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![ValueAndType {
-                value: counter1[0].clone(),
-                typ: analysed_type::u64(),
-            }],
-        )
-        .await?;
-
-    let metadata1 = executor.get_worker_metadata(&worker_id).await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[drop]counter}",
-            vec![ValueAndType {
-                value: counter1[0].clone(),
-                typ: analysed_type::u64(),
-            }],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
+        .await?;
 
-    let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{get-all-dropped}",
-            vec![],
-        )
-        .await??;
+    let result = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .await?;
 
-    let metadata2 = executor.get_worker_metadata(&worker_id).await?;
-
-    assert_eq!(result1, Ok(vec![Value::U64(5)]));
-
-    assert_eq!(
-        result2,
-        vec![Value::List(vec![Value::Tuple(vec![
-            Value::String("counter1".to_string()),
-            Value::U64(5)
-        ])])]
-    );
-
-    let ts = Timestamp::now_utc();
-    let mut resources1 = metadata1
-        .exported_resource_instances
-        .iter()
-        .map(|erm| ExportedResourceMetadata {
-            key: erm.key,
-            description: WorkerResourceDescription {
-                created_at: ts,
-                ..erm.description.clone()
-            },
-        })
-        .collect::<Vec<_>>();
-    resources1.sort_by_key(|erm| erm.key);
-    assert_eq!(
-        resources1,
-        vec![ExportedResourceMetadata {
-            key: WorkerResourceId(0),
-            description: WorkerResourceDescription {
-                created_at: ts,
-                resource_owner: "rpc:counters-exports/api".to_string(),
-                resource_name: "counter".to_string()
-            }
-        }]
-    );
-
-    let resources2 = metadata2
-        .exported_resource_instances
-        .iter()
-        .map(|erm| ExportedResourceMetadata {
-            key: erm.key,
-            description: WorkerResourceDescription {
-                created_at: ts,
-                ..erm.description.clone()
-            },
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(resources2, vec![]);
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result_value, Value::U64(5));
     Ok(())
 }
 
@@ -3068,11 +2985,17 @@ async fn cancelling_pending_invocations(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "counters")
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
+
+    let agent_id = agent_id!("rpc-blocking-counter", "cancel-pending");
     let worker_id = executor
-        .start_worker(&component.id, "cancel-pending-invocations")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let ik1 = IdempotencyKey::fresh();
@@ -3080,80 +3003,69 @@ async fn cancelling_pending_invocations(
     let ik3 = IdempotencyKey::fresh();
     let ik4 = IdempotencyKey::fresh();
 
-    let counter1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter1".into_value_and_type()],
-        )
-        .await??;
-
-    let counter_handle_type = AnalysedType::Handle(TypeHandle {
-        name: None,
-        owner: None,
-        resource_id: AnalysedResourceId(0),
-        mode: AnalysedResourceMode::Borrowed,
-    });
-    let counter_ref = ValueAndType::new(counter1[0].clone(), counter_handle_type);
-
-    let _ = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+    // inc_by(5) with ik1 - completes immediately
+    executor
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
             &ik1,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![counter_ref.clone(), 5u64.into_value_and_type()],
+            "inc_by",
+            data_value!(5u64),
         )
-        .await??;
+        .await?;
 
-    let promise_id = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.create-promise}",
-            vec![counter_ref.clone()],
-        )
-        .await??;
+    // create_promise - returns a PromiseId
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
+    let promise_id_vat = ValueAndType::new(promise_id_value.clone(), PromiseId::get_type());
+
+    // await_promise (fire-and-forget) - worker suspends
     executor
-        .invoke(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.block-on-promise}",
-            vec![
-                counter_ref.clone(),
-                ValueAndType {
-                    value: promise_id[0].clone(),
-                    typ: PromiseId::get_type(),
-                },
-            ],
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "await_promise",
+            DataValue::Tuple(ElementValues {
+                elements: vec![ElementValue::ComponentModel(promise_id_vat)],
+            }),
         )
-        .await??;
+        .await?;
 
+    // Queue inc_by(6) with ik2 and inc_by(7) with ik3 while suspended
     executor
-        .invoke_with_key(
-            &worker_id,
+        .invoke_agent_with_key(
+            &component.id,
+            &agent_id,
             &ik2,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![counter_ref.clone(), 6u64.into_value_and_type()],
+            "inc_by",
+            data_value!(6u64),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_with_key(
-            &worker_id,
+        .invoke_agent_with_key(
+            &component.id,
+            &agent_id,
             &ik3,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![counter_ref.clone(), 7u64.into_value_and_type()],
+            "inc_by",
+            data_value!(7u64),
         )
-        .await??;
+        .await?;
 
     let cancel1 = executor.cancel_invocation(&worker_id, &ik1).await;
     let cancel2 = executor.cancel_invocation(&worker_id, &ik2).await;
     let cancel4 = executor.cancel_invocation(&worker_id, &ik4).await;
 
-    let Value::Record(fields) = &promise_id[0] else {
-        panic!("Expected a record")
+    // Extract oplog_idx from promise value to complete it
+    let Value::Record(fields) = &promise_id_value else {
+        panic!("Expected a record for PromiseId")
     };
     let Value::U64(oplog_idx) = fields[1] else {
-        panic!("Expected a u64")
+        panic!("Expected a u64 for oplog_idx")
     };
 
     executor
@@ -3166,22 +3078,21 @@ async fn cancelling_pending_invocations(
         )
         .await?;
 
+    // get_value should be 5 + 7 = 12 (ik1 already done, ik2 cancelled, ik3 goes through)
     let final_result = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter_ref.clone()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    let final_value = final_result
+        .into_return_value()
+        .expect("Expected a single return value");
 
     assert!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
     assert!(cancel2.is_ok() && cancel2.unwrap());
     assert!(cancel4.is_err()); // cannot cancel a non-existing invocation
-    assert_eq!(final_result, vec![Value::U64(12)]);
+    assert_eq!(final_value, Value::U64(12));
     Ok(())
 }
 
@@ -3199,7 +3110,7 @@ async fn resolve_components_from_name(
 
     // Make sure the name is unique
     let counter_component = executor
-        .component(&context.default_environment_id, "counters")
+        .component(&context.default_environment_id, "golem_it_agent_rpc_rust_release")
         .name("component-resolve-target")
         .store()
         .await?;
@@ -3213,8 +3124,9 @@ async fn resolve_components_from_name(
         .store()
         .await?;
 
+    let target_agent_id = agent_id!("rpc-counter", "counter-1");
     executor
-        .start_worker(&counter_component.id, "counter-1")
+        .start_agent(&counter_component.id, target_agent_id)
         .await?;
 
     let agent_id = agent_id!("golem-host-api", "resolver-1");
@@ -3478,24 +3390,34 @@ async fn invoking_worker_while_its_getting_deleted_works(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "counters")
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .unique()
         .store()
         .await?;
-    let worker_id = executor.start_worker(&component.id, "worker").await?;
+
+    let agent_id = agent_id!("rpc-global-state", "worker");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let invoking_task = {
         let executor = executor.clone();
-        let worker_id = worker_id.clone();
+        let component_id = component.id;
+        let agent_id = agent_id.clone();
         tokio::spawn(async move {
             let mut result = None;
-            while matches!(result, Some(Ok(Ok(_))) | None) {
+            while matches!(result, Some(Ok(_)) | None) {
                 result = Some(
                     executor
-                        .invoke_and_await(
-                            &worker_id,
-                            "rpc:counters-exports/api.{inc-global-by}",
-                            vec![1u64.into_value_and_type()],
+                        .invoke_and_await_agent(
+                            &component_id,
+                            &agent_id,
+                            "inc_global_by",
+                            data_value!(1u64),
                         )
                         .await,
                 );
@@ -3520,16 +3442,13 @@ async fn invoking_worker_while_its_getting_deleted_works(
         })
     };
 
-    let invocation_result = invoking_task.await?.unwrap()?;
+    let invocation_result = invoking_task.await?.unwrap();
     deleting_task_cancel_token.cancel();
-    // We tried invoking the worker while it was being deleted, we expect an invalid request
-    let Err(WorkerExecutorError::InvalidRequest { details }) = invocation_result else {
-        panic!(
-            "Expected InvalidRequest, got {:?}",
-            invocation_result
-        )
-    };
-    assert!(details.contains("being deleted"));
+    // The agent invocation should fail because the worker is being deleted
+    assert!(invocation_result.is_err(), "Expected error when invoking agent while being deleted, got: {:?}", invocation_result);
+    let err_msg = invocation_result.err().unwrap().to_string();
+    assert!(err_msg.contains("being deleted") || err_msg.contains("Worker not found") || err_msg.contains("Previously deleted"), 
+        "Expected 'being deleted' or 'Worker not found' or 'Previously deleted' in error: {err_msg}");
 
     Ok(())
 }

@@ -14,23 +14,16 @@
 
 use crate::Tracing;
 use golem_common::base_model::agent::ElementValue;
-use golem_common::model::agent::{AgentId, AgentTypeName, DataValue, ElementValues};
-use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-};
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::WorkerId;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::dsl::{worker_error_underlying_error, TestDsl};
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
-use golem_wasm::analysis::analysed_type::{field, record, str};
-use golem_wasm::{FromValue, IntoValueAndType, UuidRecord, Value, ValueAndType};
+use golem_wasm::{FromValue, UuidRecord, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
-use std::time::SystemTime;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -155,76 +148,37 @@ async fn counter_resource_test_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-1", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "counter_resource_test_1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test1}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test1", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
 
     assert_eq!(
-        result,
-        Ok(vec![Value::List(vec![
+        result_value,
+        Value::List(vec![
             Value::Tuple(vec![Value::String("counter3".to_string()), Value::U64(3)]),
             Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)]),
             Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(3)])
-        ])])
+        ])
     );
 
     Ok(())
@@ -240,80 +194,39 @@ async fn counter_resource_test_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-2", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "counter_resource_test_2");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result1 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test2}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
         .await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test2}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(result1, Ok(vec![Value::U64(1)]));
-    assert_eq!(result2, Ok(vec![Value::U64(2)]));
+    let result_value1 = result1
+        .into_return_value()
+        .expect("Expected a single return value");
+    let result_value2 = result2
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(result_value1, Value::U64(1));
+    assert_eq!(result_value2, Value::U64(2));
 
     Ok(())
 }
@@ -328,82 +241,43 @@ async fn counter_resource_test_2_with_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
+        .unique()
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-2r", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "counter_resource_test_2_with_restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result1 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test2}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
         .await?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test2}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(result1, Ok(vec![Value::U64(1)]));
-    assert_eq!(result2, Ok(vec![Value::U64(2)]));
+    let result_value1 = result1
+        .into_return_value()
+        .expect("Expected a single return value");
+    let result_value2 = result2
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(result_value1, Value::U64(1));
+    assert_eq!(result_value2, Value::U64(2));
 
     Ok(())
 }
@@ -418,78 +292,39 @@ async fn counter_resource_test_3(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-3", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "counter_resource_test_3");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result1 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test3}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
         .await?;
+
     let result2 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test3}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(result1, Ok(vec![Value::U64(1)]));
-    assert_eq!(result2, Ok(vec![Value::U64(2)]));
+    let result_value1 = result1
+        .into_return_value()
+        .expect("Expected a single return value");
+    let result_value2 = result2
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(result_value1, Value::U64(1));
+    assert_eq!(result_value2, Value::U64(2));
 
     Ok(())
 }
@@ -504,82 +339,43 @@ async fn counter_resource_test_3_with_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
+        .unique()
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-3r", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "counter_resource_test_3_with_restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result1 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test3}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
         .await?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test3}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(result1, Ok(vec![Value::U64(1)]));
-    assert_eq!(result2, Ok(vec![Value::U64(2)]));
+    let result_value1 = result1
+        .into_return_value()
+        .expect("Expected a single return value");
+    let result_value2 = result2
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(result_value1, Value::U64(1));
+    assert_eq!(result_value2, Value::U64(2));
 
     Ok(())
 }
@@ -594,78 +390,37 @@ async fn context_inheritance(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    env.insert("TEST_CONFIG".to_string(), "123".to_string());
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-4", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "context_inheritance");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test4}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test4", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result = result?;
-    let result_tuple = match &result[0] {
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    let result_tuple = match &result_value {
         Value::Tuple(result) => result,
-        _ => panic!("Unexpected result: {result:?}"),
+        _ => panic!("Unexpected result: {result_value:?}"),
     };
     let args = match &result_tuple[0] {
         Value::List(args) => args.clone(),
-        _ => panic!("Unexpected result: {result:?}"),
+        _ => panic!("Unexpected result: {result_value:?}"),
     };
     let mut env = match &result_tuple[1] {
         Value::List(env) => env
@@ -674,35 +429,37 @@ async fn context_inheritance(
             .map(|value| match value {
                 Value::Tuple(tuple) => match (&tuple[0], &tuple[1]) {
                     (Value::String(key), Value::String(value)) => (key.clone(), value.clone()),
-                    _ => panic!("Unexpected result: {result:?}"),
+                    _ => panic!("Unexpected result: {result_value:?}"),
                 },
-                _ => panic!("Unexpected result: {result:?}"),
+                _ => panic!("Unexpected result: {result_value:?}"),
             })
             .collect::<Vec<_>>(),
-        _ => panic!("Unexpected result: {result:?}"),
+        _ => panic!("Unexpected result: {result_value:?}"),
     };
     env.sort_by_key(|(k, _v)| k.clone());
 
     assert_eq!(args, vec![] as Vec<Value>);
-    assert_eq!(
-        env,
-        vec![
-            (
-                "COUNTERS_COMPONENT_ID".to_string(),
-                counters_component.id.to_string()
-            ),
-            ("GOLEM_AGENT_ID".to_string(), "counters_test4".to_string()),
-            (
-                "GOLEM_COMPONENT_ID".to_string(),
-                counters_component.id.to_string()
-            ),
-            ("GOLEM_COMPONENT_REVISION".to_string(), "0".to_string()),
-            (
-                "GOLEM_WORKER_NAME".to_string(),
-                "counters_test4".to_string()
-            ),
-            ("TEST_CONFIG".to_string(), "123".to_string())
-        ]
+
+    let env_keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(
+        env_keys.contains(&"GOLEM_AGENT_ID"),
+        "Expected GOLEM_AGENT_ID in env, got: {env:?}"
+    );
+    assert!(
+        env_keys.contains(&"GOLEM_WORKER_NAME"),
+        "Expected GOLEM_WORKER_NAME in env, got: {env:?}"
+    );
+    assert!(
+        env_keys.contains(&"GOLEM_COMPONENT_ID"),
+        "Expected GOLEM_COMPONENT_ID in env, got: {env:?}"
+    );
+    assert!(
+        env_keys.contains(&"GOLEM_COMPONENT_REVISION"),
+        "Expected GOLEM_COMPONENT_REVISION in env, got: {env:?}"
+    );
+    assert!(
+        env_keys.contains(&"GOLEM_AGENT_TYPE"),
+        "Expected GOLEM_AGENT_TYPE in env, got: {env:?}"
     );
 
     Ok(())
@@ -718,78 +475,33 @@ async fn counter_resource_test_5(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-5", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "counter_resource_test_5");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
-
-    executor.log_output(&caller_worker_id).await?;
 
     let result = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test5}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test5", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
 
     assert_eq!(
-        result,
-        Ok(vec![Value::List(vec![
-            Value::U64(3),
-            Value::U64(3),
-            Value::U64(3),
-        ]),])
+        result_value,
+        Value::List(vec![Value::U64(3), Value::U64(3), Value::U64(3),])
     );
 
     Ok(())
@@ -805,101 +517,49 @@ async fn counter_resource_test_5_with_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    // using store_unique_component to avoid collision with counter_resource_test_5
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .unique()
         .store()
         .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .unique()
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
-        .store()
-        .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-5r", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "counter_resource_test_5_with_restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
-
-    executor.log_output(&caller_worker_id).await?;
 
     let result1 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test5}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test5", data_value!())
         .await?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{test5}",
-            vec![],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "test5", data_value!())
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value1 = result1
+        .into_return_value()
+        .expect("Expected a single return value");
+    let result_value2 = result2
+        .into_return_value()
+        .expect("Expected a single return value");
 
     assert_eq!(
-        result1,
-        Ok(vec![Value::List(vec![
-            Value::U64(3),
-            Value::U64(3),
-            Value::U64(3),
-        ]),])
+        result_value1,
+        Value::List(vec![Value::U64(3), Value::U64(3), Value::U64(3),])
     );
     // The second call has the same result because new resources are created within test5()
     assert_eq!(
-        result2,
-        Ok(vec![Value::List(vec![
-            Value::U64(3),
-            Value::U64(3),
-            Value::U64(3),
-        ]),]),
+        result_value2,
+        Value::List(vec![Value::U64(3), Value::U64(3), Value::U64(3),]),
     );
 
     Ok(())
@@ -915,82 +575,51 @@ async fn wasm_rpc_bug_32_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-bug32", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "wasm_rpc_bug_32_test");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
+
+    let input_vat = ValueAndType {
+        value: Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        },
+        typ: analysed_type::variant(vec![analysed_type::unit_case("leaf")]),
+    };
 
     let result = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{bug-wasm-rpc-i32}",
-            vec![ValueAndType {
-                value: Value::Variant {
-                    case_idx: 0,
-                    case_value: None,
-                },
-                typ: analysed_type::variant(vec![analysed_type::unit_case("leaf")]),
-            }],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "bug_wasm_rpc_i32",
+            DataValue::Tuple(ElementValues {
+                elements: vec![ElementValue::ComponentModel(input_vat)],
+            }),
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
 
     assert_eq!(
-        result,
-        Ok(vec![Value::Variant {
+        result_value,
+        Value::Variant {
             case_idx: 0,
             case_value: None,
-        }])
+        }
     );
 
     Ok(())
@@ -1006,70 +635,31 @@ async fn golem_bug_1265_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor
-        .component(&context.default_environment_id, "counters")
-        .store()
-        .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller")
-        .with_dynamic_linking(&[
-            (
-                "rpc:counters-client/counters-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![
-                        (
-                            "api".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                        (
-                            "counter".to_string(),
-                            WasmRpcTarget {
-                                interface_name: "rpc:counters-exports/api".to_string(),
-                                component_name: "rpc:counters".to_string(),
-                            },
-                        ),
-                    ]),
-                }),
-            ),
-            (
-                "rpc:ephemeral-client/ephemeral-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "rpc:ephemeral-exports/api".to_string(),
-                            component_name: "rpc:ephemeral".to_string(),
-                        },
-                    )]),
-                }),
-            ),
-        ])
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
+        .name("golem-it:agent-rpc-rust")
         .store()
         .await?;
 
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-bug1265", env, vec![])
+    let agent_id = agent_id!("rpc-caller", "golem_bug_1265_test");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{bug-golem1265}",
-            vec!["test".into_value_and_type()],
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "bug_golem1265", data_value!("test"))
         .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(result, Ok(vec![Value::Result(Ok(None))]));
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(result_value, Value::Result(Ok(None)));
 
     Ok(())
 }

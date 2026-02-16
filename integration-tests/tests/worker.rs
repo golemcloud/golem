@@ -128,105 +128,31 @@ async fn counter_resource_test_1(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "counters").unique().store().await?;
-    let worker_id = user.start_worker(&component.id, "counters-1").await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("rpc-counter", "counter1");
+    let worker_id = user
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
     user.log_output(&worker_id).await?;
 
-    let counter1 = user
-        .invoke_and_await_typed(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter1".into_value_and_type()],
-        )
-        .await
-        .collapse()?
-        .unwrap();
+    user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
+        .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "rpc:counters-exports/api.{[method]counter.inc-by}",
-        vec![counter1.clone(), 5u64.into_value_and_type()],
-    )
-    .await
-    .collapse()?;
+    let result = user
+        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .await?;
 
-    let result1 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter1.clone()],
-        )
-        .await
-        .collapse()?;
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a return value");
 
-    let metadata1 = user.get_worker_metadata(&worker_id).await?;
-
-    user.invoke_and_await(
-        &worker_id,
-        "rpc:counters-exports/api.{[drop]counter}",
-        vec![counter1.clone()],
-    )
-    .await
-    .collapse()?;
-
-    let result2 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{get-all-dropped}",
-            vec![],
-        )
-        .await
-        .collapse()?;
-
-    let metadata2 = user.get_worker_metadata(&worker_id).await?;
-
-    assert_eq!(result1, vec![Value::U64(5)]);
-
-    assert_eq!(
-        result2,
-        vec![Value::List(vec![Value::Tuple(vec![
-            Value::String("counter1".to_string()),
-            Value::U64(5)
-        ])])]
-    );
-
-    let ts = Timestamp::now_utc();
-    let mut resources1 = metadata1
-        .exported_resource_instances
-        .iter()
-        .map(|erm| ExportedResourceMetadata {
-            key: erm.key,
-            description: WorkerResourceDescription {
-                created_at: ts,
-                ..erm.description.clone()
-            },
-        })
-        .collect::<Vec<_>>();
-    resources1.sort_by_key(|erm| erm.key);
-    assert_eq!(
-        resources1,
-        vec![ExportedResourceMetadata {
-            key: WorkerResourceId(0),
-            description: WorkerResourceDescription {
-                created_at: ts,
-                resource_owner: "rpc:counters-exports/api".to_string(),
-                resource_name: "counter".to_string()
-            }
-        }]
-    );
-
-    let resources2 = metadata2
-        .exported_resource_instances
-        .iter()
-        .map(|erm| ExportedResourceMetadata {
-            key: erm.key,
-            description: WorkerResourceDescription {
-                created_at: ts,
-                ..erm.description.clone()
-            },
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(resources2, vec![]);
+    assert_eq!(result_value, Value::U64(5));
 
     user.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -241,107 +167,31 @@ async fn counter_resource_test_1_json(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "counters").unique().store().await?;
-    let worker_id = user.start_worker(&component.id, "counters-1j").await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("rpc-counter", "counter1j");
+    let worker_id = user
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
     user.log_output(&worker_id).await?;
 
-    let counter1 = user
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec![json!("counter1")],
-        )
-        .await
-        .collapse()?;
+    user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
+        .await?;
 
-    let counter1 = counter1
-        .unwrap()
-        .to_json_value()
-        .map_err(|e| anyhow!("failed converting value: {e}"))?;
+    let result = user
+        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .await?;
 
-    info!("Using counter1 resource handle {counter1}");
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a return value");
 
-    user.invoke_and_await_json(
-        &worker_id,
-        "rpc:counters-exports/api.{[method]counter.inc-by}",
-        vec![counter1.clone(), json!(5)],
-    )
-    .await
-    .collapse()?;
-
-    let result1 = user
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter1.clone()],
-        )
-        .await
-        .collapse()?;
-
-    let metadata1 = user.get_worker_metadata(&worker_id).await?;
-
-    user.invoke_and_await_json(
-        &worker_id,
-        "rpc:counters-exports/api.{[drop]counter}",
-        vec![counter1.clone()],
-    )
-    .await
-    .collapse()?;
-
-    let result2 = user
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{get-all-dropped}",
-            vec![],
-        )
-        .await
-        .collapse()?;
-
-    let metadata2 = user.get_worker_metadata(&worker_id).await?;
-
-    assert_eq!(result1, Some(5u64.into_value_and_type()));
-    assert_eq!(
-        result2,
-        Some(vec![("counter1".to_string(), 5u64)].into_value_and_type())
-    );
-
-    let ts = Timestamp::now_utc();
-    let mut resources1 = metadata1
-        .exported_resource_instances
-        .iter()
-        .map(|erm| ExportedResourceMetadata {
-            key: erm.key,
-            description: WorkerResourceDescription {
-                created_at: ts,
-                ..erm.description.clone()
-            },
-        })
-        .collect::<Vec<_>>();
-    resources1.sort_by_key(|erm| erm.key);
-    assert_eq!(
-        resources1,
-        vec![ExportedResourceMetadata {
-            key: WorkerResourceId(0),
-            description: WorkerResourceDescription {
-                created_at: ts,
-                resource_owner: "rpc:counters-exports/api".to_string(),
-                resource_name: "counter".to_string()
-            }
-        }]
-    );
-
-    let resources2 = metadata2
-        .exported_resource_instances
-        .iter()
-        .map(|erm| ExportedResourceMetadata {
-            key: erm.key,
-            description: WorkerResourceDescription {
-                created_at: ts,
-                ..erm.description.clone()
-            },
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(resources2, vec![]);
+    assert_eq!(result_value, Value::U64(5));
 
     user.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -1039,130 +889,57 @@ async fn worker_recreation(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "counters").store().await?;
-
-    let worker_id = user
-        .start_worker(&component.id, "counters-recreation")
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .store()
         .await?;
 
-    let counter1 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter1".into_value_and_type()],
-        )
-        .await
-        .collapse()?;
-
-    let counter1 = ValueAndType::new(
-        counter1[0].clone(),
-        AnalysedType::Handle(TypeHandle {
-            name: None,
-            owner: None,
-            resource_id: AnalysedResourceId(0),
-            mode: AnalysedResourceMode::Borrowed,
-        }),
-    );
+    let agent_id = agent_id!("rpc-counter", "recreation");
+    let worker_id = user
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     // Doing many requests, so parts of the oplog gets archived
     for _ in 1..=1200 {
-        user.invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.inc-by}",
-            vec![counter1.clone(), 1u64.into_value_and_type()],
-        )
-        .await
-        .collapse()?;
+        user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(1u64))
+            .await?;
     }
 
     let result1 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter1.clone()],
-        )
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .await?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     user.delete_worker(&worker_id).await?;
 
     // Invoking again should create a new worker
-    let counter1 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter1".into_value_and_type()],
-        )
-        .await
-        .collapse()?;
-
-    let counter1 = ValueAndType::new(
-        counter1[0].clone(),
-        AnalysedType::Handle(TypeHandle {
-            name: None,
-            owner: None,
-            resource_id: AnalysedResourceId(0),
-            mode: AnalysedResourceMode::Borrowed,
-        }),
-    );
-
-    user.invoke_and_await(
-        &worker_id,
-        "rpc:counters-exports/api.{[method]counter.inc-by}",
-        vec![counter1.clone(), 1u64.into_value_and_type()],
-    )
-    .await
-    .collapse()?;
+    user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(1u64))
+        .await?;
 
     let result2 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter1.clone()],
-        )
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .await?;
 
     user.delete_worker(&worker_id).await?;
 
     // Also if we explicitly create a new one
     let worker_id = user
-        .start_worker(&component.id, "counters-recreation")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let counter1 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[constructor]counter}",
-            vec!["counter1".into_value_and_type()],
-        )
-        .await
-        .collapse()?;
-
-    let counter1 = ValueAndType::new(
-        counter1[0].clone(),
-        AnalysedType::Handle(TypeHandle {
-            name: None,
-            owner: None,
-            resource_id: AnalysedResourceId(0),
-            mode: AnalysedResourceMode::Borrowed,
-        }),
-    );
-
     let result3 = user
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{[method]counter.get-value}",
-            vec![counter1.clone()],
-        )
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .await?;
 
-    assert_eq!(result1, vec![Value::U64(1200)]);
-    assert_eq!(result2, vec![Value::U64(1)]);
-    assert_eq!(result3, vec![Value::U64(0)]);
+    let result1_value = result1.into_return_value().expect("Expected a return value");
+    let result2_value = result2.into_return_value().expect("Expected a return value");
+    let result3_value = result3.into_return_value().expect("Expected a return value");
+
+    assert_eq!(result1_value, Value::U64(1200));
+    assert_eq!(result2_value, Value::U64(1));
+    assert_eq!(result3_value, Value::U64(0));
 
     Ok(())
 }
@@ -1503,7 +1280,7 @@ async fn resolve_components_from_name(
     let (_, env) = user.app_and_env().await?;
 
     let counter_component = user
-        .component(&env.id, "counters")
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
         .name("component-resolve-target")
         .store()
         .await?;
@@ -1514,7 +1291,8 @@ async fn resolve_components_from_name(
         .store()
         .await?;
 
-    user.start_worker(&counter_component.id, "counter-1")
+    let target_agent_id = agent_id!("rpc-counter", "counter-1");
+    user.start_agent(&counter_component.id, target_agent_id)
         .await?;
 
     let agent_id = agent_id!("golem-host-api", "resolver-1");
