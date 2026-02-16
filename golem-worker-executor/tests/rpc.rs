@@ -174,9 +174,9 @@ async fn counter_resource_test_1(
     assert_eq!(
         result_value,
         Value::List(vec![
-            Value::Tuple(vec![Value::String("counter3".to_string()), Value::U64(3)]),
-            Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)]),
-            Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(3)])
+            Value::Tuple(vec![Value::String("counter_resource_test_1_test1_counter3".to_string()), Value::U64(3)]),
+            Value::Tuple(vec![Value::String("counter_resource_test_1_test1_counter2".to_string()), Value::U64(3)]),
+            Value::Tuple(vec![Value::String("counter_resource_test_1_test1_counter1".to_string()), Value::U64(3)])
         ])
     );
 
@@ -246,7 +246,6 @@ async fn counter_resource_test_2_with_restart(
             "golem_it_agent_rpc_rust_release",
         )
         .name("golem-it:agent-rpc-rust")
-        .unique()
         .store()
         .await?;
 
@@ -344,7 +343,6 @@ async fn counter_resource_test_3_with_restart(
             "golem_it_agent_rpc_rust_release",
         )
         .name("golem-it:agent-rpc-rust")
-        .unique()
         .store()
         .await?;
 
@@ -522,7 +520,6 @@ async fn counter_resource_test_5_with_restart(
             "golem_it_agent_rpc_rust_release",
         )
         .name("golem-it:agent-rpc-rust")
-        .unique()
         .store()
         .await?;
 
@@ -589,11 +586,8 @@ async fn wasm_rpc_bug_32_test(
         .await?;
 
     let input_vat = ValueAndType {
-        value: Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        typ: analysed_type::variant(vec![analysed_type::unit_case("leaf")]),
+        value: Value::Enum(0),
+        typ: analysed_type::r#enum(&["leaf"]),
     };
 
     let result = executor
@@ -613,13 +607,7 @@ async fn wasm_rpc_bug_32_test(
         .into_return_value()
         .expect("Expected a single return value");
 
-    assert_eq!(
-        result_value,
-        Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        }
-    );
+    assert_eq!(result_value, Value::Enum(0));
 
     Ok(())
 }
@@ -692,7 +680,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "increment-through-rpc-to-ephemeral",
+            "increment_through_rpc_to_ephemeral",
             data_value!(),
         )
         .await?;
@@ -700,7 +688,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "increment-through-rpc-to-ephemeral",
+            "increment_through_rpc_to_ephemeral",
             data_value!(),
         )
         .await?;
@@ -740,7 +728,7 @@ async fn ephemeral_worker_invocation_via_rpc2(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "increment-through-rpc-to-ephemeral-phantom",
+            "increment_through_rpc_to_ephemeral_phantom",
             data_value!(),
         )
         .await;
@@ -748,7 +736,7 @@ async fn ephemeral_worker_invocation_via_rpc2(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "increment-through-rpc-to-ephemeral-phantom",
+            "increment_through_rpc_to_ephemeral_phantom",
             data_value!(),
         )
         .await?;

@@ -75,7 +75,7 @@ async fn write_stdout(
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "write-stdout", data_value!())
+        .invoke_and_await_agent(&component.id, &agent_id, "write_stdout", data_value!())
         .await?;
 
     let mut events = vec![];
@@ -125,7 +125,7 @@ async fn write_stderr(
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "write-stderr", data_value!())
+        .invoke_and_await_agent(&component.id, &agent_id, "write_stderr", data_value!())
         .await?;
 
     let mut events = vec![];

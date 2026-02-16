@@ -269,30 +269,30 @@ async fn ephemeral_agent_works(
     executor.log_output(&worker_id2).await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id1, "change-and-get", data_value!())
+        .invoke_and_await_agent(&component.id, &agent_id1, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id1, "change-and-get", data_value!())
+        .invoke_and_await_agent(&component.id, &agent_id1, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "change-and-get", data_value!())
+        .invoke_and_await_agent(&component.id, &agent_id2, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result4 = executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "change-and-get", data_value!())
+        .invoke_and_await_agent(&component.id, &agent_id2, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
-    // As the agent is ephemeral, no matter how many times we call change-and-get it always starts from scratch (no additional '!' suffix)
+    // As the agent is ephemeral, no matter how many times we call changeAndGet it always starts from scratch (no additional '!' suffix)
     assert_eq!(result1, Value::String("param1!".to_string()));
     assert_eq!(result2, Value::String("param1!".to_string()));
     assert_eq!(result3, Value::String("param2!".to_string()));

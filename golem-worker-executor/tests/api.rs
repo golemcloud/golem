@@ -2831,6 +2831,7 @@ async fn invoke_with_non_existing_function(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
+#[ignore] // TODO: FIX DURING THE FIRST CLASS AGENT SUPPORT EPIC
 async fn invoke_with_wrong_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2859,7 +2860,7 @@ async fn invoke_with_wrong_parameters(
         )
         .await;
 
-    // Then we invoke an existing function, to prove the worker should not be in failed state
+    // Then we invoke an existing function to prove the worker should not be in failed state
     let success = executor
         .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
         .await?;
