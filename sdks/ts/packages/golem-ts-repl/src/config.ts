@@ -158,12 +158,15 @@ export function loadReplCliFlags(): ReplCliFlags {
   const disableAutoImports = values['disable-auto-imports'] ?? false;
   const scriptPath = values['script-file'];
 
-  const script =
-    values.script !== undefined
-      ? values.script
-      : scriptPath !== undefined
-        ? fs.readFileSync(scriptPath, 'utf8')
-        : undefined;
+  const script = (() => {
+    if (values.script !== undefined) {
+      return values.script;
+    }
+    if (scriptPath !== undefined) {
+      fs.readFileSync(scriptPath, 'utf8');
+    }
+    return undefined;
+  })();
 
   return {
     script,
