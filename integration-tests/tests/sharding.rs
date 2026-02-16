@@ -34,6 +34,7 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::task::JoinSet;
     use tracing::{error, info, Instrument};
+    use golem_common::model::agent::AgentId;
 
     pub struct Tracing;
 
@@ -333,7 +334,8 @@ mod tests {
         async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId>;
         async fn invoke_and_await_workers(
             &self,
-            workers: &[WorkerId],
+            component_id: &ComponentId,
+            agent_ids: &[AgentId],
         ) -> Result<(), worker::v1::worker_error::Error>;
         async fn start_all_worker_executors(&self);
         async fn stop_random_worker_executor(&self);
@@ -396,20 +398,24 @@ mod tests {
 
         async fn invoke_and_await_workers(
             &self,
-            workers: &[WorkerId],
+            component_id: &ComponentId,
+            agent_ids: &[AgentId],
         ) -> Result<(), worker::v1::worker_error::Error> {
             let mut tasks = JoinSet::new();
-            for worker_id in workers {
+            for agent_id in agent_ids {
                 let self_clone = self.admin().await;
                 tasks.spawn({
-                    let worker_id = worker_id.clone();
+                    let agent_id = agent_id.clone();
+                    let component_id = component_id.clone();
                     async move {
                         let idempotency_key = IdempotencyKey::fresh();
                         (
-                            worker_id.clone(),
+                            component_id.clone(),
+                            agent_id.clone(),
                             self_clone
-                                .invoke_and_await_with_key(
-                                    &worker_id,
+                                .invoke_and_await_agent_with_key(
+                                    &component_id,
+                                    agent_id,
                                     &idempotency_key,
                                     "it:agent-counters/counter.{increment}",
                                     vec![],
@@ -422,9 +428,9 @@ mod tests {
             }
 
             info!("Workers invoked");
-            let mut pending_workers: HashSet<WorkerId> = workers.iter().cloned().collect();
+            let mut pending_workers: HashSet<AgentId> = agent_ids.iter().cloned().collect();
             while let Some(result) = tasks.join_next().await {
-                let (worker_id, result) = result.unwrap();
+                let (_component_id, worker_id, result) = result.unwrap();
                 match result {
                     Ok(_) => {
                         pending_workers.remove(&worker_id);
@@ -656,7 +662,8 @@ mod tests {
     enum WorkerCommand {
         InvokeAndAwaitWorkers {
             name: String,
-            worker_ids: Vec<WorkerId>,
+            component_id: ComponentId,
+            agent_ids: Vec<AgentId>,
         },
         Stop,
     }
